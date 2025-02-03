@@ -1,13 +1,16 @@
 ### Whisper Local App  
 
-Whisper Local App is a lightweight, fully local recording and transcription application powered by OpenAI's Whisper "large" model. All processing happens on your machine, ensuring full privacy with no data sent to the cloud.  
+🚀 **This application runs with Python and requires multiple dependencies** to function properly. It is not yet a standalone, lightweight application, but a **work-in-progress** with room for significant improvements. **That’s why I am making it available on GitHub—so it can evolve with community contributions!**  
+
+Whisper Local App is a fully local recording and transcription tool powered by OpenAI's Whisper **"large"** model. All processing happens on your machine, ensuring complete privacy with **no cloud dependencies**.  
 
 ---
 
 ### Features  
 
-- **Local Recording & Transcription**  
-  Record audio locally, and once you stop, the app automatically transcribes it.  
+- **Python-Based Local Recording & Transcription**  
+  - Requires Python and dependencies to work (see installation guide).  
+  - Not yet a lightweight app—this is an **early-stage** release.  
 
 - **Pause & Resume Recording**  
   Pause and resume the recording without losing previously recorded audio.  
@@ -32,13 +35,13 @@ Whisper Local App is a lightweight, fully local recording and transcription appl
 ### **Installation Guide (Step-by-Step)**  
 
 #### **1. Install Python 3.10** *(Mandatory)*  
-The application requires **Python 3.10** to run properly.  
+This application **requires Python 3.10** to function.  
 
 1. **Download Python 3.10**  
-   - Go to the official Python website:  
+   - Go to:  
      [https://www.python.org/downloads/release/python-31010/](https://www.python.org/downloads/release/python-31010/)  
    - Download and install Python **3.10.10** (64-bit version is recommended).  
-   - During installation, **check the box** that says "Add Python to PATH".  
+   - During installation, **check the box** that says **"Add Python to PATH"**.  
 
 2. **Verify Python installation**  
    Open **Command Prompt (CMD)** or **PowerShell** and run:  
