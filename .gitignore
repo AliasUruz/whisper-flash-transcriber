@@ -1,0 +1,23 @@
+# Arquivos de configuração com informações sensíveis
+config.json
+
+# Arquivos de log
+*.log
+
+# Arquivos de cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Arquivos de script específicos do ambiente
+*.bat
+*.lnk
+
+# Arquivos temporários de áudio
+*.wav
+recording_*.wav
+temp_recording_*.wav
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
