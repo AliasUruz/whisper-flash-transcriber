@@ -42,7 +42,7 @@ Uma aplicação desktop para transcrição de áudio em tempo real usando o mode
 
 ## Configuração
 
-Na primeira execução, um arquivo `config.json` será criado automaticamente com configurações padrão. 
+Na primeira execução, um arquivo `config.json` será criado automaticamente com configurações padrão.
 
 Para usar a correção de texto via OpenRouter:
 1. Obtenha uma chave de API em [OpenRouter](https://openrouter.ai)
@@ -57,6 +57,20 @@ Para usar a correção de texto via OpenRouter:
 2. Fale o texto que deseja transcrever
 3. Pressione a tecla novamente para parar a gravação
 4. O texto transcrito será automaticamente copiado para a área de transferência e colado no aplicativo ativo
+
+## Problemas Conhecidos e Soluções
+
+### Bug da Biblioteca Keyboard no Windows 11
+
+Em alguns sistemas Windows 11, a biblioteca Keyboard pode parar de responder após o primeiro uso da tecla de atalho. Para resolver este problema, o aplicativo inclui:
+
+1. **Tecla de recarga (F4 por padrão)**: Pressione esta tecla para recarregar a biblioteca de teclado e restaurar a funcionalidade das teclas de atalho
+
+2. **Opção no menu de contexto**: Clique com o botão direito no ícone da bandeja do sistema e selecione "Recarregar Teclado/Hotkey"
+
+3. **Recarga automática periódica**: O aplicativo tenta recarregar automaticamente as teclas de atalho periodicamente para evitar problemas
+
+Se as teclas de atalho pararem de funcionar, use um desses métodos para restaurar a funcionalidade.
 
 ## Licença
 
