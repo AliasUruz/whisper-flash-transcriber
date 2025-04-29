@@ -128,7 +128,7 @@ You are now ready to run the Whisper Transcription App!
 
 The application's settings are managed through its graphical interface and stored in a file named `config.json` in the project directory. This file is automatically created the first time you run `whisper_tkinter.py`.
 
-![Screenshot](images/Image 1.png)
+![Screenshot do Aplicativo](images/Image 1.png)
 
 To access and change settings:
 
