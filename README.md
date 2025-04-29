@@ -1,86 +1,124 @@
 # Whisper Transcription App
 
-Uma aplicação desktop para transcrição de áudio em tempo real usando o modelo Whisper da OpenAI, com correção de texto opcional via OpenRouter API.
+A desktop application for real-time audio transcription using OpenAI's Whisper model, with optional text correction via OpenRouter or Google Gemini APIs.
 
-## Funcionalidades
+## Features
 
-- Transcrição de áudio em tempo real usando o modelo Whisper Large v3
-- Ativação via tecla de atalho configurável (padrão: F3)
-- Modo de gravação toggle (iniciar/parar com a mesma tecla)
-- Colagem automática do texto transcrito
-- Feedback sonoro configurável
-- Correção de texto opcional via OpenRouter API ou Google Gemini API (melhora pontuação e formatação)
-- Interface gráfica para configurações
+- Real-time audio transcription using the Whisper Large v3 model.
+- Activation via a configurable hotkey (default: F3).
+- Toggle recording mode (start/stop with the same key).
+- Automatic pasting of transcribed text to the active application.
+- Configurable sound feedback.
+- Optional text correction via OpenRouter API or Google Gemini API (improves punctuation, capitalization, and formatting).
+- Graphical user interface (GUI) for easy configuration.
 
-## Requisitos
+## Requirements
 
-- Python 3.8+
-- PyTorch
-- Transformers (Hugging Face)
-- Sounddevice
-- Tkinter
-- Pystray
-- Requests (para a API OpenRouter)
+To run this application, you need:
 
-## Instalação
+- Python 3.8 or higher.
+- The dependencies listed in `requirements.txt`.
 
-1. Clone este repositório:
-   ```
-   git clone https://github.com/seu-usuario/whisper-transcription-app.git
-   cd whisper-transcription-app
-   ```
+## Installation
 
-2. Instale as dependências:
-   ```
-   pip install torch transformers sounddevice numpy pyautogui keyboard pystray pillow pyperclip requests
-   ```
+Follow these steps to set up the application:
 
-3. Execute o aplicativo:
-   ```
-   python whisper_tkinter.py
-   ```
+1.  **Clone the repository:**
+    If you haven't already, clone the project repository from GitHub:
+    ```bash
+    git clone https://github.com/AliasUruz/Whisper-local-app.git
+    cd Whisper-local-app
+    ```
 
-## Configuração
+2.  **Set up a virtual environment (Recommended):**
+    It's highly recommended to use a virtual environment to avoid conflicts with other Python projects.
+    ```bash
+    # Create a virtual environment
+    python -m venv venv
 
-Na primeira execução, um arquivo `config.json` será criado automaticamente com configurações padrão.
+    # Activate the virtual environment
+    # On Windows:
+    .\venv\Scripts\activate
+    # On macOS/Linux:
+    source venv/bin/activate
+    ```
 
-Para usar a correção de texto:
-1. Abra as configurações do aplicativo
-2. Ative a opção "Enable Text Correction"
-3. Selecione o serviço desejado (OpenRouter ou Gemini)
-4. Configure o serviço selecionado conforme instruções abaixo
+3.  **Install dependencies:**
+    With the virtual environment activated, install the required libraries using pip:
+    ```bash
+    pip install -r requirements.txt
+    ```
+    This will install all necessary packages, including `torch`, `transformers`, `sounddevice`, etc.
 
-Para configurar o OpenRouter:
-1. Obtenha uma chave de API em [OpenRouter](https://openrouter.ai)
-2. Insira sua chave de API no campo correspondente
-3. O modelo padrão é "deepseek/deepseek-chat-v3-0324:free"
+4.  **Install PyTorch (if not installed by requirements.txt):**
+    Depending on your system and `requirements.txt`, you might need to install PyTorch separately with CUDA support for GPU acceleration. Visit the official PyTorch website ([https://pytorch.org/](https://pytorch.org/)) for specific installation instructions based on your operating system and CUDA version.
+    Example (for CUDA 11.8):
+    ```bash
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    ```
+    If you don't have a compatible GPU or prefer to use your CPU, the basic `pip install -r requirements.txt` should suffice for the CPU version of PyTorch.
 
-Para configurar o Google Gemini:
-1. Obtenha uma chave de API em [Google AI Studio](https://makersuite.google.com/app/apikey)
-2. Insira sua chave de API no campo correspondente
-3. O modelo padrão é "gemini-2.0-flash-001"
+5.  **Run the application:**
+    After installing dependencies, you can run the main application script:
+    ```bash
+    python whisper_tkinter.py
+    ```
 
-## Uso
+## Configuration
 
-1. Pressione a tecla de atalho configurada (padrão: F3) para iniciar a gravação
-2. Fale o texto que deseja transcrever
-3. Pressione a tecla novamente para parar a gravação
-4. O texto transcrito será automaticamente copiado para a área de transferência e colado no aplicativo ativo
+Upon the first execution, a `config.json` file will be automatically created in the application directory with default settings.
 
-## Problemas Conhecidos e Soluções
+To configure the application, including hotkeys and API settings, run `whisper_tkinter.py` and use the graphical interface.
 
-### Bug da Biblioteca Keyboard no Windows 11
+**Configuring Text Correction (OpenRouter or Gemini):**
 
-Em alguns sistemas Windows 11, a biblioteca Keyboard pode parar de responder após o primeiro uso da tecla de atalho. Para resolver este problema, o aplicativo inclui:
+1.  Open the application's settings via the GUI.
+2.  Enable the "Enable Text Correction" option.
+3.  Select your desired service (OpenRouter or Gemini).
+4.  Configure the selected service as instructed below:
 
-1. **Tecla de recarga (F4 por padrão)**: Pressione esta tecla para recarregar a biblioteca de teclado e restaurar a funcionalidade das teclas de atalho
+    *   **OpenRouter Configuration:**
+        1.  Obtain an API key from [OpenRouter](https://openrouter.ai).
+        2.  Enter your API key in the corresponding field in the application settings.
+        3.  The default model is "deepseek/deepseek-chat-v3-0324:free". You can change this if needed.
 
-2. **Opção no menu de contexto**: Clique com o botão direito no ícone da bandeja do sistema e selecione "Recarregar Teclado/Hotkey"
+    *   **Google Gemini Configuration:**
+        1.  Obtain an API key from [Google AI Studio](https://makersuite.google.com/app/apikey).
+        2.  Enter your API key in the corresponding field in the application settings.
+        3.  The default model is "gemini-2.0-flash-001". You can change this if needed.
 
-3. **Recarga automática periódica**: O aplicativo tenta recarregar automaticamente as teclas de atalho periodicamente para evitar problemas
+**Important Note on API Keys:** Your API keys are stored locally in the `config.json` file. This file is included in the `.gitignore` and will **not** be uploaded to GitHub, ensuring your privacy.
 
-Se as teclas de atalho pararem de funcionar, use um desses métodos para restaurar a funcionalidade.
+## Usage
 
-## Licença
+1.  Run the application (`python whisper_tkinter.py`).
+2.  The application will appear as an icon in your system tray.
+3.  Press the configured hotkey (default: F3) to start recording audio. The icon might change or a notification might appear (depending on implementation) to indicate recording is active.
+4.  Speak the text you want to transcribe.
+5.  Press the same hotkey again to stop the recording.
+6.  The transcribed text will be processed. If text correction is enabled, it will be sent to the selected API.
+7.  The final transcribed (and corrected, if applicable) text will be automatically copied to your clipboard and pasted into the application that was active when you stopped recording.
 
-Este projeto está licenciado sob a licença MIT - veja o arquivo LICENSE para detalhes.
+## Known Issues and Solutions
+
+### Keyboard Library Bug on Windows 11
+
+On some Windows 11 systems, the `keyboard` library might stop responding after the first use of the hotkey. To address this, the application includes workarounds:
+
+1.  **Reload Hotkey (Default: F4):** Press this dedicated hotkey to attempt to reload the keyboard library and restore hotkey functionality.
+2.  **System Tray Context Menu Option:** Right-click the application's system tray icon and select a "Reload Keyboard/Hotkey" or similar option.
+3.  **Periodic Automatic Reload:** The application attempts to automatically reload hotkeys periodically in the background to mitigate this issue.
+
+If your hotkeys stop working, try one of these methods to restore them.
+
+## License
+
+This project is licensed under the MIT License. See the `LICENSE` file for full details.
+
+## Contributing
+
+(Optional section - can be added later if you plan to accept contributions)
+
+## Support
+
+(Optional section - can be added later with information on how to get help)
