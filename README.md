@@ -148,6 +148,8 @@ Remember to save your changes in the settings window.
 
 ## How to Use the App
 
+![Screenshot do Aplicativo](Images/Image 1.png)
+
 Once the application is running and configured:
 
 1.  **Ensure the app is running:** Check for its icon in the system tray.
