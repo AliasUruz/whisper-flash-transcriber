@@ -148,7 +148,7 @@ Remember to save your changes in the settings window.
 
 ## How to Use the App
 
-![Screenshot do Aplicativo](Images/Image 1.png)
+![Screenshot do Aplicativo](images/Image 1.png)
 
 Once the application is running and configured:
 
