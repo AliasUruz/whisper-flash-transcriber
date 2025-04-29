@@ -21,3 +21,15 @@ temp_recording_*.wav
 # Arquivos de sistema
 .DS_Store
 Thumbs.db
+
+# Pasta da Memory Bank
+memory-bank/
+
+# Arquivos de segredos e variáveis de ambiente
+.env
+*.env
+secrets.yaml
+secrets.json
+*.keys
+*.secret
+# Adicione aqui outros arquivos que contenham suas chaves de API ou informações sensíveis

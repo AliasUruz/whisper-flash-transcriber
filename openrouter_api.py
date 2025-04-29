@@ -25,7 +25,7 @@ class OpenRouterAPI:
             "X-Title": "Whisper Recorder"  # Replace with your actual app name
         }
 
-    def correct_text(self, text, max_retries=3, retry_delay=1):
+    def correct_text(self, text: str, max_retries: int = 3, retry_delay: float = 1) -> str:
         """
         Send text to the Deepseek model for correction of punctuation, capitalization, and names.
 
@@ -56,7 +56,7 @@ class OpenRouterAPI:
                 {"role": "user", "content": f"Please correct this transcribed text: {text}"}
             ],
             "temperature": 0.0,  # Low temperature for more deterministic outputs
-            "max_tokens": 5000   # Adjust based on your expected output length
+            "max_tokens": 10000   # Adjust based on your expected output length
         }
 
         # Try to make the API call with retries
@@ -76,9 +76,14 @@ class OpenRouterAPI:
                 if 'choices' in result and len(result['choices']) > 0:
                     corrected_text = result['choices'][0]['message']['content']
                     logging.info("Successfully received corrected text from OpenRouter API")
+                    if corrected_text != text:
+                        logging.info("OpenRouter API made corrections to the text")
+                    else:
+                        logging.info("OpenRouter API returned text unchanged")
                     return corrected_text
                 else:
                     logging.error(f"Unexpected response format from OpenRouter API: {result}")
+                    logging.debug(f"Full response: {json.dumps(result, indent=2)}")
 
             except requests.exceptions.RequestException as e:
                 logging.error(f"Error calling OpenRouter API: {e}")

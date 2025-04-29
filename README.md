@@ -9,7 +9,7 @@ Uma aplicação desktop para transcrição de áudio em tempo real usando o mode
 - Modo de gravação toggle (iniciar/parar com a mesma tecla)
 - Colagem automática do texto transcrito
 - Feedback sonoro configurável
-- Correção de texto opcional via OpenRouter API (melhora pontuação e formatação)
+- Correção de texto opcional via OpenRouter API ou Google Gemini API (melhora pontuação e formatação)
 - Interface gráfica para configurações
 
 ## Requisitos
@@ -44,12 +44,21 @@ Uma aplicação desktop para transcrição de áudio em tempo real usando o mode
 
 Na primeira execução, um arquivo `config.json` será criado automaticamente com configurações padrão.
 
-Para usar a correção de texto via OpenRouter:
+Para usar a correção de texto:
+1. Abra as configurações do aplicativo
+2. Ative a opção "Enable Text Correction"
+3. Selecione o serviço desejado (OpenRouter ou Gemini)
+4. Configure o serviço selecionado conforme instruções abaixo
+
+Para configurar o OpenRouter:
 1. Obtenha uma chave de API em [OpenRouter](https://openrouter.ai)
-2. Abra as configurações do aplicativo
-3. Ative a opção "Enable Text Correction with OpenRouter"
-4. Insira sua chave de API
-5. O modelo padrão é "deepseek/deepseek-chat-v3-0324:free"
+2. Insira sua chave de API no campo correspondente
+3. O modelo padrão é "deepseek/deepseek-chat-v3-0324:free"
+
+Para configurar o Google Gemini:
+1. Obtenha uma chave de API em [Google AI Studio](https://makersuite.google.com/app/apikey)
+2. Insira sua chave de API no campo correspondente
+3. O modelo padrão é "gemini-2.0-flash-001"
 
 ## Uso
 

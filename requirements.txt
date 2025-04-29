@@ -1,0 +1,11 @@
+torch
+transformers
+sounddevice
+numpy
+pyautogui
+pystray
+pillow
+pyperclip
+requests
+psutil
+google-generativeai
