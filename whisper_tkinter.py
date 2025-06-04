@@ -6,6 +6,7 @@ import threading
 import time
 # Import tkinter apenas quando necessário dentro das funções
 import tkinter.messagebox as messagebox
+from tkinter import TclError
 import sounddevice as sd
 import numpy as np
 import wave
@@ -2647,6 +2648,9 @@ def run_settings_gui():
             if not (20 <= sound_freq_to_apply <= 20000):
                 messagebox.showwarning("Invalid Value", "Frequency must be between 20 and 20000 Hz", parent=settings_win) # Already English
                 return
+        except TclError:
+            sound_freq_to_apply = core_instance.sound_frequency
+            logging.warning(f"Sound frequency field empty or invalid, using current value: {sound_freq_to_apply}")
         except (ValueError, TypeError):
             messagebox.showwarning("Invalid Value", "Frequency must be a number", parent=settings_win) # Already English
             return
@@ -2656,6 +2660,9 @@ def run_settings_gui():
             if not (0.05 <= sound_duration_to_apply <= 2.0):
                 messagebox.showwarning("Invalid Value", "Duration must be between 0.05 and 2.0 seconds", parent=settings_win) # Already English
                 return
+        except TclError:
+            sound_duration_to_apply = core_instance.sound_duration
+            logging.warning(f"Sound duration field empty or invalid, using current value: {sound_duration_to_apply}")
         except (ValueError, TypeError):
             messagebox.showwarning("Invalid Value", "Duration must be a number", parent=settings_win) # Already English
             return
@@ -2665,8 +2672,29 @@ def run_settings_gui():
             if not (0.0 <= sound_volume_to_apply <= 1.0):
                 messagebox.showwarning("Invalid Value", "Volume must be between 0.0 and 1.0", parent=settings_win) # Already English
                 return
+        except TclError:
+            sound_volume_to_apply = core_instance.sound_volume
+            logging.warning(f"Sound volume field empty or invalid, using current value: {sound_volume_to_apply}")
         except (ValueError, TypeError):
             messagebox.showwarning("Invalid Value", "Volume must be a number", parent=settings_win) # Already English
+            return
+
+        try:
+            batch_size_to_apply = int(batch_size_var.get())
+        except TclError:
+            batch_size_to_apply = core_instance.batch_size
+            logging.warning(f"Batch size field empty or invalid, using current value: {batch_size_to_apply}")
+        except (ValueError, TypeError):
+            messagebox.showwarning("Invalid Value", "Batch size must be a number", parent=settings_win)
+            return
+
+        try:
+            gpu_index_to_apply = int(gpu_index_var.get())
+        except TclError:
+            gpu_index_to_apply = core_instance.gpu_index
+            logging.warning(f"GPU index field empty or invalid, using current value: {gpu_index_to_apply}")
+        except (ValueError, TypeError):
+            messagebox.showwarning("Invalid Value", "GPU index must be a number", parent=settings_win)
             return
 
 
@@ -2688,8 +2716,8 @@ def run_settings_gui():
                     new_openrouter_model=openrouter_model_var.get(),
                     new_gemini_api_key=gemini_api_key_var.get(),
                     new_gemini_model=gemini_model_var.get(),
-                    new_batch_size=batch_size_var.get(),
-                    new_gpu_index=gpu_index_var.get()
+                    new_batch_size=batch_size_to_apply,
+                    new_gpu_index=gpu_index_to_apply
                 ) # Fechar parênteses da chamada da função
             else:
                 logging.critical("CRITICAL: apply_settings_from_external method not found on core_instance!")
@@ -2706,7 +2734,7 @@ def run_settings_gui():
 
     def close_settings():
         """Closes the settings window and its temporary root (runs in Tkinter thread)."""
-        global settings_window_instance
+        global settings_window_instance, settings_thread_running
         logging.info("Settings window closing sequence started (in Tkinter thread).")
 
         # Verificação mais segura para evitar erros de threading
@@ -2731,8 +2759,9 @@ def run_settings_gui():
 
         # Destruir temp_tk_root apenas se ele existir e for válido
         if temp_tk_root and temp_tk_root.winfo_exists():
-            logging.debug("Destroying temporary Tk root for settings window...")
+            logging.debug("Quitting and destroying temporary Tk root for settings window...")
             try:
+                temp_tk_root.quit()
                 temp_tk_root.destroy()
             except Exception as e:
                 logging.warning(f"Error destroying temp root: {e}")
@@ -2741,7 +2770,6 @@ def run_settings_gui():
         logging.info("Settings window closing sequence finished (in Tkinter thread).")
 
         # Garantir que a flag settings_thread_running seja redefinida
-        global settings_thread_running
         settings_thread_running = False
 
     # --- UI Construction ---
