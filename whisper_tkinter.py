@@ -339,6 +339,9 @@ class WhisperCore: # Renamed from WhisperApp
             return DEFAULT_CONFIG[BATCH_SIZE_CONFIG_KEY]
 
         try:
+            if self.gpu_index >= torch.cuda.device_count():
+                logging.warning(f"GPU index {self.gpu_index} out of range. Using GPU 0 for memory check.")
+                self.gpu_index = 0
             torch.cuda.set_device(self.gpu_index)
             props = torch.cuda.get_device_properties(self.gpu_index)
             total_gb = props.total_memory / 1024**3
@@ -615,7 +618,6 @@ class WhisperCore: # Renamed from WhisperApp
             # Gemini API settings
             GEMINI_API_KEY_CONFIG_KEY: self.gemini_api_key,
             GEMINI_MODEL_CONFIG_KEY: self.gemini_model,
-            "gemini_prompt": self.gemini_prompt,
             "gemini_mode": self.gemini_mode,
             "gemini_general_prompt": self.gemini_general_prompt,
             BATCH_SIZE_CONFIG_KEY: self.batch_size,
@@ -854,6 +856,9 @@ class WhisperCore: # Renamed from WhisperApp
             logging.info(f"CUDA available: {torch.cuda.is_available()}")
             if device_str_local == "cuda":
                 try:
+                    if self.gpu_index >= torch.cuda.device_count():
+                        logging.warning(f"GPU index {self.gpu_index} out of range. Using GPU 0.")
+                        self.gpu_index = 0
                     torch.cuda.set_device(self.gpu_index)
                     props = torch.cuda.get_device_properties(self.gpu_index)
                     total_gb = props.total_memory / 1024**3
@@ -872,6 +877,11 @@ class WhisperCore: # Renamed from WhisperApp
             if not self.batch_size_specified:
                 self.batch_size = self._suggest_batch_size()
 
+            if not self.batch_size_specified:
+                self.batch_size = self._suggest_batch_size()
+
+            if device_str_local == "cuda":
+                device_param = self.gpu_index
             loaded_pipe = pipeline(
                 "automatic-speech-recognition",
                 model="openai/whisper-large-v3",
@@ -2001,9 +2011,6 @@ class WhisperCore: # Renamed from WhisperApp
                 logging.info("Gemini general prompt updated.")
 
         # Reinitialize API clients if settings changed
-        if text_correction_changed or openrouter_changed:
-            self._init_openrouter_client()
-
         if text_correction_changed or openrouter_changed:
             self._init_openrouter_client()
 
