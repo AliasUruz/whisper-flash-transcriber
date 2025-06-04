@@ -346,12 +346,6 @@ class WhisperCore: # Renamed from WhisperApp
                 idx = 0
             torch.cuda.set_device(idx)
             props = torch.cuda.get_device_properties(idx)
-=======
-            if self.gpu_index >= torch.cuda.device_count():
-                logging.warning(f"GPU index {self.gpu_index} out of range. Using GPU 0 for memory check.")
-                self.gpu_index = 0
-            torch.cuda.set_device(self.gpu_index)
-            props = torch.cuda.get_device_properties(self.gpu_index)
             total_gb = props.total_memory / 1024**3
             if total_gb >= 20:
                 bs = 32
@@ -863,20 +857,6 @@ class WhisperCore: # Renamed from WhisperApp
 
             logging.info(f"CUDA available: {torch.cuda.is_available()}")
             if device_str_local == "cuda":
-                gpu_index_to_use = self.gpu_index
-                try:
-                    if gpu_index_to_use >= torch.cuda.device_count():
-                        logging.warning(
-                            f"GPU index {gpu_index_to_use} out of range. Using GPU 0.")
-                        gpu_index_to_use = 0
-                    torch.cuda.set_device(gpu_index_to_use)
-                    props = torch.cuda.get_device_properties(gpu_index_to_use)
-                    total_gb = props.total_memory / 1024**3
-                    logging.info(
-                        f"Using GPU {gpu_index_to_use}: {props.name} ({total_gb:.2f} GB)")
-                    if total_gb < 4:
-                        logging.warning(
-                            "GPU memory appears low (<4GB). Falling back to CPU.")
                 try:
                     if self.gpu_index >= torch.cuda.device_count():
                         logging.warning(f"GPU index {self.gpu_index} out of range. Using GPU 0.")
@@ -891,11 +871,6 @@ class WhisperCore: # Renamed from WhisperApp
                         device_param = "cpu"
                         torch_dtype_local = torch.float32
                 except Exception as e:
-                    logging.error(
-                        f"Failed to select GPU {gpu_index_to_use}: {e}")
-                    device_str_local = "cpu"
-                    device_param = "cpu"
-                    torch_dtype_local = torch.float32
                     logging.error(f"Failed to select GPU {self.gpu_index}: {e}")
                     device_str_local = "cpu"
                     device_param = "cpu"
@@ -908,7 +883,6 @@ class WhisperCore: # Renamed from WhisperApp
                 self.batch_size = self._suggest_batch_size()
 
             if device_str_local == "cuda":
-                device_param = gpu_index_to_use
                 device_param = self.gpu_index
             loaded_pipe = pipeline(
                 "automatic-speech-recognition",
