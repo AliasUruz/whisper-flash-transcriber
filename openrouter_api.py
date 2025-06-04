@@ -46,8 +46,7 @@ class OpenRouterAPI:
 1. Fix punctuation (commas, periods, question marks, etc.)
 2. Maintain the original meaning and all content
 3. Do not add, edit, or remove information/words.
-4. Return only the corrected text without any explanations or additional comments
-5, Return only the corrected text without any explanations or additional comments"""
+4. Return only the corrected text without any explanations or additional comments"""
 
         payload = {
             "model": self.model_id,
