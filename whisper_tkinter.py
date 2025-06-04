@@ -879,9 +879,6 @@ class WhisperCore: # Renamed from WhisperApp
             if not self.batch_size_specified:
                 self.batch_size = self._suggest_batch_size()
 
-            if not self.batch_size_specified:
-                self.batch_size = self._suggest_batch_size()
-
             if device_str_local == "cuda":
                 device_param = self.gpu_index
             loaded_pipe = pipeline(
