@@ -1,22 +1,47 @@
 # Whisper Transcription App
 
-Welcome to the Whisper Transcription App! This is a user-friendly desktop application for Windows that allows you to quickly and accurately transcribe spoken audio into text in real-time. It leverages the power of OpenAI's advanced Whisper model and offers optional integration with OpenRouter or Google Gemini APIs for enhanced text correction. Whether you're a student, professional, or anyone who needs to convert speech to text efficiently, this app is designed to streamline your workflow.
+A lightweight desktop tool for Windows that turns speech into text using OpenAI's Whisper model. Optional integration with OpenRouter or Google Gemini can automatically polish the output with better punctuation and grammar.
 
-## What Does It Do?
+## Table of Contents
 
-In simple terms, this application listens to your microphone when you press a specific key, converts what you say into written text using artificial intelligence, and then automatically types that text for you wherever your cursor is (like in a document, email, or search bar). You can also connect it to other AI services to automatically fix grammar and punctuation in the transcribed text.
+1. [Features](#features)
+2. [Installation](#installation)
+3. [Configuration](#configuration)
+4. [Usage](#how-to-use-the-app)
+5. [Troubleshooting](#troubleshooting-common-issues)
+6. [Contributing](#contributing)
+7. [License](#license)
 
-## Key Features
+## Features
 
-*   **Real-time Audio Transcription:** Captures audio from your microphone and instantly converts it into text using the highly accurate Whisper Large v3 model.
-*   **Customizable Hotkey Activation:** Start and stop recording effortlessly with a single press of a keyboard shortcut that you can choose yourself (default is F3).
-*   **Toggle Recording:** The hotkey works as a simple on/off switch for recording.
-*   **Automatic Text Pasting:** The transcribed text is automatically copied to your computer's clipboard and then pasted directly into the application window that was active when you finished speaking.
-*   **Auditory Feedback:** Optional sound cues play when recording starts and stops, so you know exactly when the app is listening.
-*   **Intelligent Text Correction (Optional):** Integrate with OpenRouter or Google Gemini APIs to automatically improve the transcribed text's punctuation, capitalization, and overall flow.
-*   **Easy Configuration GUI:** A straightforward graphical interface makes it simple to customize hotkeys, select transcription options, and manage API settings without editing code files.
+* **Real-time Audio Transcription:** Captures audio from your microphone and instantly converts it into text using the highly accurate Whisper Large v3 model.
+* **Customizable Hotkey Activation:** Start and stop recording with a single press of a keyboard shortcut (default **F3**).
+* **Toggle Recording:** Use the same hotkey to start and stop.
+* **Automatic Text Pasting:** The transcribed text is copied to the clipboard and pasted into the last active window.
+* **Auditory Feedback:** Optional sound cues play when recording starts and stops.
+* **Intelligent Text Correction (Optional):** Integrate with OpenRouter or Google Gemini for improved punctuation and capitalization.
+* **Easy Configuration GUI:** Adjust hotkeys and API settings without touching code.
 
-## Getting Started: A Detailed Installation Guide
+## Installation
+
+1. **Install Python 3.8+ and Git.** Ensure Python is added to your `PATH`.
+2. **Clone this repository.**
+   ```bash
+   git clone https://github.com/AliasUruz/Whisper-local-app.git
+   cd Whisper-local-app
+   ```
+3. **Create a virtual environment** (recommended):
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+   ```
+4. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+
+## Detailed Installation Guide
 
 Follow these steps carefully to get the Whisper Transcription App up and running on your Windows computer.
 
@@ -135,7 +160,7 @@ To access and change settings:
 
 ### Key Configuration Options:
 
-![Screenshot do Aplicativo](image_1.png)
+![Application Screenshot](image_1.png)
 
 *   **Hotkey:** Change the keyboard shortcut used to start and stop recording. The default is F3. Choose a key combination that doesn't conflict with other applications you use frequently.
 *   **Enable Text Correction:** Check this box if you want to use an external AI model (OpenRouter or Gemini) to improve the transcribed text.
