@@ -310,11 +310,13 @@ class WhisperCore: # Renamed from WhisperApp
 
         try:
             logging.info(f"Initializing Gemini API client with model: {self.gemini_model}")
-            self.gemini_client = GeminiAPI(
-                api_key=self.gemini_api_key,
-                model_id=self.gemini_model,
-                prompt=self.gemini_prompt
-            )
+            idx = self.gpu_index
+            if idx >= torch.cuda.device_count():
+                logging.warning(
+                    f"GPU index {idx} out of range. Using GPU 0 for memory check.")
+                idx = 0
+            torch.cuda.set_device(idx)
+            props = torch.cuda.get_device_properties(idx)
             logging.info("Gemini API client initialized successfully.")
         except Exception as e:
             logging.error(f"Error initializing Gemini API client: {e}")
@@ -826,15 +828,20 @@ class WhisperCore: # Renamed from WhisperApp
     def _do_paste(self):
         """Performs the paste action."""
         try:
-            pyautogui.hotkey('ctrl', 'v')
-            logging.info("Pasted transcription.")
-            self._log_status("Transcription complete. Text pasted.") # Log only
-        except Exception as e:
-            logging.error(f"Error pasting: {e}")
-            self._log_status("Transcription complete. Error pasting.", error=True)
-
-    # --- Model Loading ---
-    def _start_model_loading(self):
+                gpu_index_to_use = self.gpu_index
+                    if gpu_index_to_use >= torch.cuda.device_count():
+                        logging.warning(
+                            f"GPU index {gpu_index_to_use} out of range. Using GPU 0.")
+                        gpu_index_to_use = 0
+                    torch.cuda.set_device(gpu_index_to_use)
+                    props = torch.cuda.get_device_properties(gpu_index_to_use)
+                    logging.info(
+                        f"Using GPU {gpu_index_to_use}: {props.name} ({total_gb:.2f} GB)")
+                        logging.warning(
+                            "GPU memory appears low (<4GB). Falling back to CPU.")
+                    logging.error(
+                        f"Failed to select GPU {gpu_index_to_use}: {e}")
+                device_param = gpu_index_to_use
         """Starts loading the Whisper model in a background thread."""
         self._set_state(STATE_LOADING_MODEL)
         threading.Thread(target=self._load_model_task, daemon=True, name="ModelLoadThread").start()
