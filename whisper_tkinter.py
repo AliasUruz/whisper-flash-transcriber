@@ -5,7 +5,7 @@ import json
 import threading
 import time
 # Import tkinter apenas quando necessário dentro das funções
-# import tkinter.messagebox as messagebox
+import tkinter.messagebox as messagebox
 import sounddevice as sd
 import numpy as np
 import wave
@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw
 import torch
 from transformers import pipeline
 import pyautogui
+import soundfile as sf # Importar soundfile para carregar áudio
 # Bibliotecas keyboard e pynput removidas completamente
 # Usando apenas Win32HotkeyManager para gerenciamento de hotkeys
 import logging
@@ -70,7 +71,25 @@ DEFAULT_CONFIG = {
     "openrouter_api_key": "",
     "openrouter_model": "deepseek/deepseek-chat-v3-0324:free",
     "gemini_api_key": "",
-    "gemini_model": "gemini-2.0-flash-001"
+    "gemini_model": "gemini-2.0-flash-001",
+    "gemini_mode": "correction",
+    "gemini_general_prompt": "Based on the following text, generate a short response: {text}",
+    "gemini_prompt": """You are a speech-to-text correction specialist. Your task is to refine the following transcribed speech.
+
+Key instructions:
+- Remove self-corrections (when I say something wrong and then correct myself)
+- Focus on removing speech-specific redundancies (repeated words, filler phrases, false starts)
+- Make the text MUCH MORE FLUID AND COHERENT
+- Remove possible errors in speech
+- Maintain the speaker's emotional tone
+- Keep the text as fluid as possible (IMPORTANT!)
+- Preserve all language transitions (Portuguese/Spanish/English) exactly as they occur
+- Connect related thoughts that may be fragmented in the transcription
+- Maintain the core message and meaning, but fix speech errors and disfluencies
+
+Return only the improved text without explanations.
+
+Transcribed speech: {text}"""
 }
 HOTKEY_DEBOUNCE_INTERVAL = 0.3
 AUDIO_SAMPLE_RATE = 16000
@@ -128,6 +147,7 @@ STATE_ERROR_SETTINGS = "ERROR_SETTINGS" # Keep for settings/hotkey issues
 
 class WhisperCore: # Renamed from WhisperApp
     def __init__(self): # Removed root parameter
+        self.hotkey_lock = RLock() # Lock para sincronizar acesso a recursos de hotkey
         # --- Locks ---
         self.recording_lock = RLock()
         self.transcription_lock = RLock()
@@ -161,6 +181,9 @@ class WhisperCore: # Renamed from WhisperApp
         self.gemini_api_key = DEFAULT_CONFIG[GEMINI_API_KEY_CONFIG_KEY]
         self.gemini_model = DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY]
         self.gemini_client = None
+        self.gemini_prompt = DEFAULT_CONFIG["gemini_prompt"]
+        self.gemini_mode = DEFAULT_CONFIG["gemini_mode"]
+        self.gemini_general_prompt = DEFAULT_CONFIG["gemini_general_prompt"]
         self.sound_lock = RLock()  # Lock for sound playback
 
         # Reload key configuration
@@ -274,7 +297,8 @@ class WhisperCore: # Renamed from WhisperApp
             logging.info(f"Initializing Gemini API client with model: {self.gemini_model}")
             self.gemini_client = GeminiAPI(
                 api_key=self.gemini_api_key,
-                model_id=self.gemini_model
+                model_id=self.gemini_model,
+                prompt=self.gemini_prompt
             )
             logging.info("Gemini API client initialized successfully.")
         except Exception as e:
@@ -315,7 +339,11 @@ class WhisperCore: # Renamed from WhisperApp
 
         try:
             logging.info("Sending text to Gemini API for correction...")
-            corrected_text = self.gemini_client.correct_text(text)
+            if self.gemini_mode == "correction":
+                prompt_to_use = self.gemini_prompt
+            else: # Assuming "general" mode
+                prompt_to_use = self.gemini_general_prompt
+            corrected_text = self.gemini_client.correct_text(text, override_prompt=prompt_to_use)
             logging.info("Text correction completed successfully.")
             return corrected_text
         except Exception as e:
@@ -352,6 +380,7 @@ class WhisperCore: # Renamed from WhisperApp
         self.record_key = str(self.config.get("record_key", DEFAULT_CONFIG["record_key"])).lower()
         self.record_mode = str(self.config.get("record_mode", DEFAULT_CONFIG["record_mode"])).lower()
         self.auto_paste = bool(self.config.get("auto_paste", DEFAULT_CONFIG["auto_paste"]))
+        self.gemini_prompt = str(self.config.get("gemini_prompt", DEFAULT_CONFIG["gemini_prompt"]))
 
         # Mode validation
         if self.record_mode not in ["toggle", "press"]:
@@ -464,11 +493,33 @@ class WhisperCore: # Renamed from WhisperApp
             self.gemini_model = DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY]
             self.config[GEMINI_MODEL_CONFIG_KEY] = self.gemini_model
 
+        # Load and validate Gemini mode
+        try:
+            gemini_mode_val = str(self.config.get("gemini_mode", DEFAULT_CONFIG["gemini_mode"])).lower()
+            if gemini_mode_val in ["correction", "general"]:
+                self.gemini_mode = gemini_mode_val
+            else:
+                logging.warning(f"Invalid gemini_mode '{self.config.get('gemini_mode')}' in config. Falling back to '{DEFAULT_CONFIG['gemini_mode']}'.")
+                self.gemini_mode = DEFAULT_CONFIG["gemini_mode"]
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid gemini_mode type in config. Falling back to '{DEFAULT_CONFIG['gemini_mode']}'.")
+            self.gemini_mode = DEFAULT_CONFIG["gemini_mode"]
+
+
+        # Load Gemini general prompt
+        try:
+            self.gemini_general_prompt = str(self.config.get("gemini_general_prompt", DEFAULT_CONFIG["gemini_general_prompt"]))
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid gemini_general_prompt type in config. Falling back to default.")
+            self.gemini_general_prompt = DEFAULT_CONFIG["gemini_general_prompt"]
+
         logging.info(f"Config source: {config_source}. Applied: Key='{self.record_key}', Mode='{self.record_mode}', AutoPaste={self.auto_paste}, MinDuration={self.min_record_duration}s")
         logging.info(f"Keyboard library: {self.keyboard_library}")
         logging.info(f"Text correction settings: Enabled={self.text_correction_enabled}, Service={self.text_correction_service}")
         logging.info(f"OpenRouter settings: Model={self.openrouter_model}")
         logging.info(f"Gemini settings: Model={self.gemini_model}")
+        logging.info(f"Gemini mode: {self.gemini_mode}") # Added logging for new settings
+        logging.info(f"Gemini general prompt: {self.gemini_general_prompt}") # Added logging for new settings
 
         # Save only if the source was defaults (file didn't exist or was invalid)
         if config_source.startswith("defaults"):
@@ -493,12 +544,17 @@ class WhisperCore: # Renamed from WhisperApp
             # Text correction settings
             TEXT_CORRECTION_ENABLED_CONFIG_KEY: self.text_correction_enabled,
             TEXT_CORRECTION_SERVICE_CONFIG_KEY: self.text_correction_service,
+            # Gemini Prompt setting
+            "gemini_prompt": self.gemini_prompt,
             # OpenRouter API settings
             OPENROUTER_API_KEY_CONFIG_KEY: self.openrouter_api_key,
             OPENROUTER_MODEL_CONFIG_KEY: self.openrouter_model,
             # Gemini API settings
             GEMINI_API_KEY_CONFIG_KEY: self.gemini_api_key,
-            GEMINI_MODEL_CONFIG_KEY: self.gemini_model
+            GEMINI_MODEL_CONFIG_KEY: self.gemini_model,
+            "gemini_prompt": self.gemini_prompt,
+            "gemini_mode": self.gemini_mode,
+            "gemini_general_prompt": self.gemini_general_prompt
         }
         self.config = config_to_save # Update in-memory config as well
         try:
@@ -510,9 +566,67 @@ class WhisperCore: # Renamed from WhisperApp
             logging.error(f"Error saving configuration to {CONFIG_FILE}: {e}")
             self._log_status(f"Error saving config: {e}", error=True)
 
-    # --- Sound Generation and Playback ---
-    def _play_sound(self, frequency=None, duration=None, volume=None, is_start=True):
-        """Generates and plays a tone with the specified parameters.
+    # --- Sound Generation and Playback (New OutputStream based) ---
+    def _generate_tone_data(self, frequency, duration, volume_factor):
+        """Generates a sine wave tone with fade in/out.
+
+        Args:
+            frequency (int): Tone frequency in Hz.
+            duration (float): Tone duration in seconds.
+            volume_factor (float): Volume level (0.0 to 1.0).
+
+        Returns:
+            np.ndarray: NumPy array containing the tone samples (float32).
+        """
+        # Generate a sine wave
+        num_samples = int(duration * AUDIO_SAMPLE_RATE)
+        t = np.linspace(0, duration, num_samples, False)
+        tone = np.sin(2 * np.pi * frequency * t) * volume_factor
+
+        # Apply fade in/out to avoid clicks
+        fade_samples = int(0.01 * AUDIO_SAMPLE_RATE)  # 10ms fade
+        if fade_samples * 2 < len(tone):
+            fade_in = np.linspace(0, 1, fade_samples)
+            fade_out = np.linspace(1, 0, fade_samples)
+            tone[:fade_samples] *= fade_in
+            tone[-fade_samples:] *= fade_out
+
+        return tone.astype(np.float32)
+
+    class _TonePlaybackCallback:
+        """Helper class to manage tone playback within an OutputStream callback."""
+        def __init__(self, tone_data, finished_event):
+            self.tone_data = tone_data
+            self.read_offset = 0
+            self.finished_event = finished_event
+
+        def __call__(self, outdata, frames, time, status):
+            if status:
+                logging.warning(f"Tone playback callback status: {status}")
+
+            remaining_samples = len(self.tone_data) - self.read_offset
+            if remaining_samples == 0:
+                # No more data, fill with zeros and stop
+                outdata.fill(0)
+                self.finished_event.set()
+                raise sd.CallbackStop()
+
+            # Determine how many samples to copy in this block
+            chunk_size = min(frames, remaining_samples)
+
+            # Copy data to outdata
+            outdata[:chunk_size] = self.tone_data[self.read_offset : self.read_offset + chunk_size].reshape(-1, 1)
+            
+            # Fill the rest with zeros if chunk_size is less than frames
+            if chunk_size < frames:
+                outdata[chunk_size:].fill(0)
+                self.finished_event.set()
+                raise sd.CallbackStop()
+
+            self.read_offset += chunk_size
+
+    def _play_generated_tone_stream(self, frequency=None, duration=None, volume=None, is_start=True):
+        """Plays a generated tone using sd.OutputStream.
 
         Args:
             frequency: Tone frequency in Hz. If None, uses the configured value.
@@ -524,37 +638,56 @@ class WhisperCore: # Renamed from WhisperApp
             logging.debug("Sound playback skipped (disabled in settings)")
             return
 
-        # Use configured values if not specified
         freq = frequency if frequency is not None else self.sound_frequency
         dur = duration if duration is not None else self.sound_duration
         vol = volume if volume is not None else self.sound_volume
 
-        # Adjust frequency for start/stop differentiation
         if not is_start:
             freq = int(freq * 0.8)  # Lower pitch for stop tone
 
+        # For reload sound, adjust frequency as per original _play_sound logic
+        # This method will be called with specific freq/dur for reload, so no need for is_start check here.
+        # The `is_start` parameter is primarily for the default start/stop tones.
+
+        logging.debug(f"Attempting to play tone via OutputStream: {freq}Hz, {dur}s, vol={vol}")
+
+        # Use a separate event to signal completion from the callback
+        finished_event = threading.Event()
+        stream = None
         try:
-            with self.sound_lock:  # Prevent concurrent sound playback
-                # Generate a sine wave
-                t = np.linspace(0, dur, int(dur * AUDIO_SAMPLE_RATE), False)
-                tone = np.sin(2 * np.pi * freq * t) * vol
+            with self.sound_lock:  # Protect sound device access
+                # Generate the full tone data once
+                tone_data = self._generate_tone_data(freq, dur, vol)
 
-                # Apply fade in/out to avoid clicks
-                fade_samples = int(0.01 * AUDIO_SAMPLE_RATE)  # 10ms fade
-                if fade_samples * 2 < len(tone):
-                    fade_in = np.linspace(0, 1, fade_samples)
-                    fade_out = np.linspace(1, 0, fade_samples)
-                    tone[:fade_samples] *= fade_in
-                    tone[-fade_samples:] *= fade_out
+                # Create the callback instance
+                callback_instance = self._TonePlaybackCallback(tone_data, finished_event)
 
-                # Play the tone
-                sd.play(tone, AUDIO_SAMPLE_RATE)
-                sd.wait()  # Wait for playback to finish
+                # Open the OutputStream
+                stream = sd.OutputStream(
+                    samplerate=AUDIO_SAMPLE_RATE,
+                    channels=AUDIO_CHANNELS,
+                    callback=callback_instance,
+                    dtype='float32'
+                )
+                stream.start()
+                logging.debug("OutputStream started for tone playback.")
 
-                logging.debug(f"Played {'start' if is_start else 'stop'} tone: {freq}Hz, {dur}s, vol={vol}")
+            # Wait for the tone to finish playing (signaled by the callback)
+            finished_event.wait()
+            logging.debug("Tone playback finished (OutputStream).")
+
         except Exception as e:
-            logging.error(f"Error playing sound: {e}")
-            # Don't raise - sound playback is non-critical
+            logging.error(f"Error playing tone via OutputStream: {e}", exc_info=True)
+        finally:
+            if stream is not None:
+                try:
+                    if stream.active:
+                        stream.stop()
+                    stream.close()
+                    logging.debug("OutputStream stopped and closed.")
+                except Exception as e:
+                    logging.error(f"Error stopping/closing OutputStream: {e}")
+
 
     # --- State and Status Handling ---
     def set_state_update_callback(self, callback):
@@ -687,14 +820,14 @@ class WhisperCore: # Renamed from WhisperApp
                 logging.error(error_message)
 
         except ImportError as e:
-             error_message = f"Model dependencies missing? {e}"
-             logging.error(f"Pipeline load failed: {error_message}", exc_info=True)
+            error_message = f"Dependências do modelo ausentes. Por favor, verifique sua instalação. Erro: {e}"
+            logging.error(f"Falha no carregamento do pipeline: {error_message}", exc_info=True)
         except torch.cuda.OutOfMemoryError as e:
-             error_message = f"CUDA Out of Memory. {e}"
-             logging.error(f"Pipeline load failed: {error_message}", exc_info=True)
+            error_message = f"Memória CUDA insuficiente. Tente usar um modelo menor ou liberar recursos da GPU. Erro: {e}"
+            logging.error(f"Falha no carregamento do pipeline: {error_message}", exc_info=True)
         except Exception as e:
-            error_message = f"Failed to load model: {e}"
-            logging.error(f"Pipeline load failed: {error_message}", exc_info=True)
+            error_message = f"Falha ao carregar o modelo. Verifique sua conexão com a internet ou o nome do modelo. Erro: {e}"
+            logging.error(f"Falha no carregamento do pipeline: {error_message}", exc_info=True)
 
         load_end_time = time.time()
         logging.info(f"Model loading attempt finished in {load_end_time - load_start_time:.2f}s. Success: {model_loaded_successfully}")
@@ -717,50 +850,55 @@ class WhisperCore: # Renamed from WhisperApp
     def _on_model_load_failed(self, error_msg):
          """Handles model loading failure."""
          logging.error(f"Model load failed: {error_msg}")
-         self._set_state(STATE_ERROR_MODEL)
-         self._log_status(f"Error: Model failed to load. {error_msg}", error=True)
+         self.pipe = None # Ensure pipe is None on failure
+         self._set_state(STATE_ERROR_MODEL) # Set state to indicate error
+         self._log_status(f"Erro: Falha ao carregar o modelo. {error_msg}", error=True)
+         if hasattr(self, 'root') and self.root.winfo_exists():
+             self.root.after(0, lambda: messagebox.showerror("Erro de Carregamento do Modelo", f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\nPor favor, verifique sua conexão com a internet, o nome do modelo nas configurações ou a memória da sua GPU."))
 
     def _start_autohotkey(self):
         """Inicia o gerenciador de hotkeys e configura os callbacks."""
-        try:
-            # Verificar se o KeyboardHotkeyManager já está em execução
-            if self.ahk_running:
-                logging.info("KeyboardHotkeyManager já está em execução.")
-                return True
+        with self.hotkey_lock: # Proteger operações de inicialização/configuração
+            try:
+                # Verificar se o KeyboardHotkeyManager já está em execução
+                if self.ahk_running:
+                    logging.info("KeyboardHotkeyManager já está em execução.")
+                    return True
 
-            # Atualizar a configuração do KeyboardHotkeyManager
-            self.ahk_manager.update_config(
-                record_key=self.record_key,
-                reload_key=self.reload_key,
-                record_mode=self.record_mode
-            )
+                # Atualizar a configuração do KeyboardHotkeyManager
+                self.ahk_manager.update_config(
+                    record_key=self.record_key,
+                    reload_key=self.reload_key,
+                    record_mode=self.record_mode
+                )
 
-            # Configurar callbacks
-            self.ahk_manager.set_callbacks(
-                toggle=self.toggle_recording,
-                start=self.start_recording,
-                stop=self.stop_recording_if_needed,
-                reload=self.force_reregister_hotkeys
-            )
+                # Configurar callbacks
+                self.ahk_manager.set_callbacks(
+                    toggle=self.toggle_recording,
+                    start=self.start_recording,
+                    stop=self.stop_recording_if_needed,
+                    reload=self.force_reregister_hotkeys
+                )
 
-            # Iniciar o KeyboardHotkeyManager
-            success = self.ahk_manager.start()
-            if success:
-                self.ahk_running = True
-                logging.info("KeyboardHotkeyManager iniciado com sucesso.")
-                self._log_status(f"Hotkey registrada: {self.record_key.upper()} (modo: {self.record_mode})")
-                return True
-            else:
-                logging.error("Falha ao iniciar KeyboardHotkeyManager.")
+                # Iniciar o KeyboardHotkeyManager
+                success = self.ahk_manager.start()
+                if success:
+                    self.ahk_running = True
+                    logging.info("KeyboardHotkeyManager iniciado com sucesso.")
+                    self._log_status(f"Hotkey registrada: {self.record_key.upper()} (modo: {self.record_mode})")
+                    return True
+                else:
+                    logging.error("Falha ao iniciar KeyboardHotkeyManager.")
+                    self._set_state(STATE_ERROR_SETTINGS)
+                    self._log_status("Erro: Falha ao iniciar KeyboardHotkeyManager.", error=True)
+                    return False
+
+            except Exception as e:
+                logging.error(f"Erro ao iniciar KeyboardHotkeyManager: {e}", exc_info=True)
+                messagebox.showerror("Erro de Hotkey", f"Falha ao iniciar o gerenciador de hotkeys: {e}", parent=settings_window_instance)
                 self._set_state(STATE_ERROR_SETTINGS)
-                self._log_status("Erro: Falha ao iniciar KeyboardHotkeyManager.", error=True)
+                self._log_status(f"Erro: {e}", error=True)
                 return False
-
-        except Exception as e:
-            logging.error(f"Erro ao iniciar KeyboardHotkeyManager: {e}", exc_info=True)
-            self._set_state(STATE_ERROR_SETTINGS)
-            self._log_status(f"Erro: {e}", error=True)
-            return False
 
 
     # --- Hotkeys ---
@@ -837,9 +975,9 @@ class WhisperCore: # Renamed from WhisperApp
 
                 # Play a sound to indicate reload is happening
                 if self.sound_enabled:
-                    threading.Thread(target=self._play_sound, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
+                    threading.Thread(target=self._play_generated_tone_stream, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
                     time.sleep(0.2)  # Small delay between sounds
-                    threading.Thread(target=self._play_sound, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
+                    threading.Thread(target=self._play_generated_tone_stream, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
 
                 # Force re-register in a separate thread to avoid blocking
                 threading.Thread(target=self.force_reregister_hotkeys, daemon=True, name="ReloadHotkeyThread").start()
@@ -984,9 +1122,9 @@ class WhisperCore: # Renamed from WhisperApp
 
         # Play a sound to indicate reload is happening
         if self.sound_enabled:
-            threading.Thread(target=self._play_sound, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
+            threading.Thread(target=self._play_generated_tone_stream, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
             time.sleep(0.2)  # Small delay between sounds
-            threading.Thread(target=self._play_sound, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
+            threading.Thread(target=self._play_generated_tone_stream, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
 
         # Force re-register in a separate thread to avoid blocking
         threading.Thread(target=self.force_reregister_hotkeys, daemon=True, name="ReloadHotkeyThread").start()
@@ -1065,56 +1203,62 @@ class WhisperCore: # Renamed from WhisperApp
         logging.info("Periodic hotkey re-registration thread stopped.")
 
     def force_reregister_hotkeys(self):
-        """Manually attempts to re-register hotkeys if state allows. Returns True on success, False on failure."""
+        """Manually attempts to re-register hotkeys if state allows. Returns True on success, False on failure.
+        
+        Uses self.hotkey_lock to ensure atomic operations on KeyboardHotkeyManager,
+        preventing race conditions during hotkey re-registration.
+        """
         with self.state_lock:
             current_state = self.current_state
 
         # Allow retry from any state except active recording/saving/loading
         if current_state not in [STATE_RECORDING, STATE_SAVING, STATE_LOADING_MODEL]:
             logging.info(f"Manual trigger: State is {current_state}. Attempting hotkey re-registration.")
-            try:
-                # Parar o KeyboardHotkeyManager atual
-                if self.ahk_running:
-                    self.ahk_manager.stop()
-                    self.ahk_running = False
-                    time.sleep(0.5)  # Pequeno delay para garantir que o processo foi encerrado
+            with self.hotkey_lock: # Proteger operações de hotkey
+                try:
+                    # Parar o KeyboardHotkeyManager atual
+                    if self.ahk_running:
+                        self.ahk_manager.stop()
+                        self.ahk_running = False # Definir como False após o stop ser bem sucedido
+                        time.sleep(0.5)  # Pequeno delay para garantir que o processo foi encerrado
 
-                # Atualizar a configuração e reiniciar o KeyboardHotkeyManager
-                self.ahk_manager.update_config(
-                    record_key=self.record_key,
-                    reload_key=self.reload_key,
-                    record_mode=self.record_mode
-                )
+                    # Atualizar a configuração e reiniciar o KeyboardHotkeyManager
+                    self.ahk_manager.update_config(
+                        record_key=self.record_key,
+                        reload_key=self.reload_key,
+                        record_mode=self.record_mode
+                    )
 
-                # Configurar callbacks
-                self.ahk_manager.set_callbacks(
-                    toggle=self.toggle_recording,
-                    start=self.start_recording,
-                    stop=self.stop_recording_if_needed,
-                    reload=self.force_reregister_hotkeys
-                )
+                    # Configurar callbacks
+                    self.ahk_manager.set_callbacks(
+                        toggle=self.toggle_recording,
+                        start=self.start_recording,
+                        stop=self.stop_recording_if_needed,
+                        reload=self.force_reregister_hotkeys # Mantém a capacidade de auto-chamada se necessário no futuro
+                    )
 
-                success = self.ahk_manager.start()
-                if success:
-                    self.ahk_running = True
-                    logging.info("Manual KeyboardHotkeyManager re-registration successful.")
-                    # If successful, try to move back to IDLE state if we were in error
-                    if current_state.startswith("ERROR"):
-                        self._set_state(STATE_IDLE)
-                    self._log_status("Recarregamento do KeyboardHotkeyManager concluído.", error=False)
-                    return True # Indicate success
-                else:
-                    logging.error("Manual KeyboardHotkeyManager re-registration failed.")
-                    self._log_status("Falha ao recarregar KeyboardHotkeyManager.", error=True)
-                    # Ensure state reflects error if reload failed
-                    self._set_state(STATE_ERROR_SETTINGS)
+                    success = self.ahk_manager.start()
+                    if success:
+                        self.ahk_running = True # Definir como True somente se start() for bem-sucedido
+                        logging.info("Manual KeyboardHotkeyManager re-registration successful.")
+                        # If successful, try to move back to IDLE state if we were in error
+                        if current_state.startswith("ERROR"):
+                            self._set_state(STATE_IDLE)
+                        self._log_status("Recarregamento do KeyboardHotkeyManager concluído.", error=False)
+                        return True # Indicate success
+                    else:
+                        # self.ahk_running já deve ser False ou não definido como True
+                        logging.error("Manual KeyboardHotkeyManager re-registration failed.")
+                        self._log_status("Falha ao recarregar KeyboardHotkeyManager.", error=True)
+                        # Ensure state reflects error if reload failed
+                        self._set_state(STATE_ERROR_SETTINGS)
+                        return False # Indicate failure
+                except Exception as e:
+                    self.ahk_running = False # Garantir que ahk_running seja False em caso de exceção
+                    logging.error(f"Exception during manual KeyboardHotkeyManager re-registration: {e}", exc_info=True)
+                    self._log_status(f"Erro ao recarregar KeyboardHotkeyManager: {e}", error=True)
+                    self._set_state(STATE_ERROR_SETTINGS) # Indicate an issue
                     return False # Indicate failure
-
-            except Exception as e:
-                logging.error(f"Exception during manual KeyboardHotkeyManager re-registration: {e}", exc_info=True)
-                self._log_status(f"Erro ao recarregar KeyboardHotkeyManager: {e}", error=True)
-                self._set_state(STATE_ERROR_SETTINGS) # Indicate an issue
-                return False # Indicate failure
         else:
             logging.warning(f"Manual trigger: Cannot re-register hotkeys. Current state is {current_state}.")
             self._log_status(f"Não é possível recarregar agora (Estado: {current_state}).", error=True)
@@ -1215,7 +1359,7 @@ class WhisperCore: # Renamed from WhisperApp
         self._set_state(STATE_RECORDING)
 
         # Play start sound in a separate thread to avoid blocking
-        threading.Thread(target=self._play_sound, kwargs={"is_start": True}, daemon=True, name="StartSoundThread").start()
+        threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": True}, daemon=True, name="StartSoundThread").start()
 
         # Start audio capture thread
         threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread").start()
@@ -1258,7 +1402,7 @@ class WhisperCore: # Renamed from WhisperApp
             self.is_recording = False
 
             # Play stop sound in a separate thread
-            threading.Thread(target=self._play_sound, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
+            threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
 
             # Copy data BEFORE clearing buffer
             try:
@@ -1472,6 +1616,10 @@ class WhisperCore: # Renamed from WhisperApp
             # Example if English translation was always needed:
             # result = self.pipe(audio_filename, chunk_length_s=30, batch_size=16, return_timestamps=False, generate_kwargs={"language": "en"})
             # Default behavior (language detection):
+            # ATENÇÃO: Revertido para 'inputs' (parâmetro posicional) e removida a lógica de soundfile/attention_mask
+            # devido a TypeError na versão atual do transformers.
+            # A correção para 'input_features' e 'attention_mask' será reintroduzida
+            # após a atualização da biblioteca transformers para uma versão compatível.
             result = self.pipe(audio_filename, chunk_length_s=30, batch_size=16, return_timestamps=False)
 
             logging.debug(f"Pipeline raw result: {result}")
@@ -1574,12 +1722,14 @@ class WhisperCore: # Renamed from WhisperApp
                                    new_reload_key=None,
                                    new_text_correction_enabled=None, new_text_correction_service=None,
                                    new_openrouter_api_key=None, new_openrouter_model=None,
-                                   new_gemini_api_key=None, new_gemini_model=None):
+                                   new_gemini_api_key=None, new_gemini_model=None,
+                                   new_gemini_mode=None, new_gemini_prompt=None, new_gemini_general_prompt=None):
         """Applies settings passed from the external settings window/thread."""
         logging.info("Applying new configuration from external source.")
         key_changed = False
         mode_changed = False
         config_needs_saving = False
+        gemini_changed = False # Initialize gemini_changed here
 
         # Apply key
         if new_key is not None and new_key.lower() != self.record_key:
@@ -1712,12 +1862,55 @@ class WhisperCore: # Renamed from WhisperApp
                 config_needs_saving = True
                 logging.info(f"Gemini model changed to: {self.gemini_model}")
 
+        # Apply Gemini mode
+        if new_gemini_mode is not None:
+            mode_str = str(new_gemini_mode).lower()
+            if mode_str in ["correction", "general"] and mode_str != self.gemini_mode:
+                self.gemini_mode = mode_str
+                gemini_changed = True
+                config_needs_saving = True
+                logging.info(f"Gemini mode changed to: {self.gemini_mode}")
+
+        # Apply Gemini correction prompt
+        if new_gemini_prompt is not None:
+            prompt_str = str(new_gemini_prompt)
+            if prompt_str != self.gemini_prompt:
+                self.gemini_prompt = prompt_str
+                gemini_changed = True
+                config_needs_saving = True
+                logging.info("Gemini correction prompt updated.")
+
+        # Apply Gemini general prompt
+        if new_gemini_general_prompt is not None:
+            general_prompt_str = str(new_gemini_general_prompt)
+            if general_prompt_str != self.gemini_general_prompt:
+                self.gemini_general_prompt = general_prompt_str
+                gemini_changed = True
+                config_needs_saving = True
+                logging.info("Gemini general prompt updated.")
+
         # Reinitialize API clients if settings changed
         if text_correction_changed or openrouter_changed:
             self._init_openrouter_client()
 
+        if text_correction_changed or openrouter_changed:
+            self._init_openrouter_client()
+
         if text_correction_changed or gemini_changed:
-            self._init_gemini_client()
+            # Reinitialize Gemini client if any relevant setting changed
+            if new_gemini_api_key is not None and new_gemini_api_key != self.gemini_api_key:
+                gemini_changed = True
+            if new_gemini_model is not None and new_gemini_model != self.gemini_model:
+                gemini_changed = True
+            if new_gemini_mode is not None and new_gemini_mode != self.gemini_mode:
+                gemini_changed = True
+            if new_gemini_prompt is not None and new_gemini_prompt != self.gemini_prompt:
+                gemini_changed = True
+            if new_gemini_general_prompt is not None and new_gemini_general_prompt != self.gemini_general_prompt:
+                gemini_changed = True
+
+            if gemini_changed:
+                self._init_gemini_client()
 
         # Save config only if something actually changed
         if config_needs_saving:
@@ -1919,6 +2112,10 @@ def run_settings_gui():
     import threading
     import time
 
+    # Definir a flag settings_thread_running como True imediatamente no início da thread
+    settings_thread_running = True
+    logging.info("SettingsGUIThread started, settings_thread_running set to True.")
+
     # Garantir que a flag settings_thread_running seja redefinida quando a função terminar
     try:
         # Verificação de segurança para evitar múltiplas instâncias
@@ -1934,8 +2131,10 @@ def run_settings_gui():
             try:
                 settings_window_instance.lift()
                 settings_window_instance.focus_force()
-                # Redefinir a flag antes de retornar
-                settings_thread_running = False
+                # A flag settings_thread_running já foi definida como True no início.
+                # Se a janela já existe e foi focada, não precisamos redefini-la para False aqui,
+                # pois a thread continua ativa e a janela está sendo usada.
+                # A limpeza para False ocorrerá no finally ou em close_settings quando a janela for fechada.
                 return
             except Exception as e:
                 logging.warning(f"Could not focus existing settings window: {e}")
@@ -1943,7 +2142,7 @@ def run_settings_gui():
                 settings_window_instance = None
     except Exception as e:
         logging.error(f"Error checking for existing settings window: {e}")
-        # Redefinir a flag em caso de erro
+        # Em caso de erro muito precoce, garantir que a flag seja limpa
         settings_thread_running = False
         return
 
@@ -1984,7 +2183,7 @@ def run_settings_gui():
         return
 
     # --- Configure the Toplevel window (INDENTED under the try) ---
-    settings_win.title("Whisper Recorder Settings")
+    settings_win.title("Whisper Recorder Settings") # Already English
     settings_win.resizable(False, True)
     settings_win.attributes("-topmost", True)
 
@@ -2016,11 +2215,54 @@ def run_settings_gui():
     openrouter_model_var = ctk.StringVar(value=core_instance.openrouter_model)
     gemini_api_key_var = ctk.StringVar(value=core_instance.gemini_api_key)
     gemini_model_var = ctk.StringVar(value=core_instance.gemini_model)
+    gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode) # Variável para o modo Gemini
     # keyboard_library_var removida pois não é mais usada
 
+    # Function to toggle visibility of Gemini prompt widgets
+    def toggle_gemini_prompt_visibility(*args):
+        selected_mode = gemini_mode_var.get()
+        try:
+            # Esconder todos os widgets de prompt primeiro para evitar sobreposição ou ordem errada
+            # Correction prompt widgets
+            if 'gemini_prompt_correction_frame' in locals() and gemini_prompt_correction_frame.winfo_exists():
+                gemini_prompt_correction_frame.pack_forget()
+            if 'restore_correction_prompt_button' in locals() and restore_correction_prompt_button.winfo_exists():
+                restore_correction_prompt_button.pack_forget()
+
+            # General prompt widgets
+            # General prompt widgets
+            if 'gemini_prompt_general_frame' in locals() and gemini_prompt_general_frame.winfo_exists():
+                gemini_prompt_general_frame.pack_forget()
+            # O restore_button é empacotado separadamente, então sua visibilidade é controlada abaixo
+
+            # Exibir apenas os widgets relevantes para o modo selecionado
+            if selected_mode == "correction":
+                if 'gemini_prompt_correction_frame' in locals() and gemini_prompt_correction_frame.winfo_exists():
+                    gemini_prompt_correction_frame.pack(fill="x", padx=0, pady=(5, 0))
+                if 'restore_correction_prompt_button' in locals() and restore_correction_prompt_button.winfo_exists():
+                    restore_correction_prompt_button.pack(anchor="w", padx=5, pady=(0, 10))
+                # Esconder o botão de restauração do prompt geral no modo correção
+                if 'restore_button' in locals() and restore_button.winfo_exists():
+                    restore_button.pack_forget()
+
+            elif selected_mode == "general":
+                if 'gemini_prompt_general_frame' in locals() and gemini_prompt_general_frame.winfo_exists():
+                    gemini_prompt_general_frame.pack(fill="x", padx=0, pady=(5, 0))
+                # Exibir o botão de restauração do prompt geral no modo geral
+                if 'restore_button' in locals() and restore_button.winfo_exists():
+                    restore_button.pack(anchor="w", padx=5, pady=(0, 10))
+
+        except NameError as e: # Captura caso os widgets não estejam definidos ainda
+            logging.debug(f"toggle_gemini_prompt_visibility: Widget not defined yet during initial call - {e}")
+        except Exception as e:
+            logging.error(f"Error in toggle_gemini_prompt_visibility: {e}")
+
+    # Trace changes to gemini_mode_var
+    gemini_mode_var.trace_add("write", toggle_gemini_prompt_visibility)
+ 
     # --- Functions ---
     detect_key_thread = None  # Keep track of the detection thread
-
+ 
     def detect_key_task_internal():
         """Internal task to detect key press, runs in a thread."""
         nonlocal new_record_key_temp
@@ -2167,24 +2409,26 @@ def run_settings_gui():
             detected_key = None
             try:
                 # Pausar o KeyboardHotkeyManager atual
-                if core_instance and core_instance.ahk_running and core_instance.ahk_manager:
-                    core_instance.ahk_manager.stop()
-                    core_instance.ahk_running = False
-                    time.sleep(0.2)  # Aguardar para garantir que o processo foi encerrado
+                with core_instance.hotkey_lock:
+                    if core_instance and core_instance.ahk_running and core_instance.ahk_manager:
+                        core_instance.ahk_manager.stop()
+                        core_instance.ahk_running = False
+                        time.sleep(0.2)  # Aguardar para garantir que o processo foi encerrado
 
                 # Detectar a tecla com KeyboardHotkeyManager
                 logging.info("Tentando detectar tecla com KeyboardHotkeyManager...")
-                from keyboard_hotkey_manager import KeyboardHotkeyManager
                 temp_manager = KeyboardHotkeyManager()
                 detected_key = temp_manager.detect_key()
                 temp_manager.stop()
 
                 # Reiniciar os gerenciadores de hotkeys originais
-                if core_instance:
-                    logging.info("Restaurando hotkeys após detecção...")
-                    core_instance.register_hotkeys()
+                with core_instance.hotkey_lock:
+                    if core_instance:
+                        logging.info("Restaurando hotkeys após detecção...")
+                        core_instance.register_hotkeys()
             except Exception as e:
-                logging.error(f"Erro ao detectar tecla com KeyboardHotkeyManager: {e}")
+                logging.error(f"Erro ao detectar tecla com KeyboardHotkeyManager: {e}", exc_info=True)
+                messagebox.showerror("Erro de Detecção de Tecla", f"Falha ao detectar a tecla de atalho: {e}", parent=settings_window_instance)
                 detected_key = None
 
             # Verificar se a tecla detectada é válida
@@ -2205,14 +2449,16 @@ def run_settings_gui():
                 detected_key_str = "DETECTION FAILED"
         except Exception as e:
             logging.error(f"Error detecting reload key: {e}", exc_info=True)
+            messagebox.showerror("Erro de Detecção de Tecla", f"Ocorreu um erro inesperado durante a detecção da tecla de recarga: {e}", parent=settings_window_instance)
             detected_key_str = "ERROR"
             new_reload_key_temp = None
-            if core_instance:
-                logging.error("Re-registering original hotkeys after reload key detection error...")
-                try:
-                    core_instance.register_hotkeys()
-                except Exception as reg_error:
-                    logging.error(f"Error re-registering hotkeys: {reg_error}")
+            with core_instance.hotkey_lock:
+                if core_instance:
+                    logging.error("Re-registering original hotkeys after reload key detection error...")
+                    try:
+                        core_instance.register_hotkeys()
+                    except Exception as reg_error:
+                        logging.error(f"Error re-registering hotkeys: {reg_error}")
         finally:
             if settings_window_instance and settings_window_instance.winfo_exists():
                 temp_tk_root.after(0, lambda: update_detection_ui(detected_key_str, is_reload_key=True))
@@ -2235,15 +2481,15 @@ def run_settings_gui():
         logging.info("Apply settings clicked (in Tkinter thread).")
 
         if core_instance.pipe is None:
-            messagebox.showwarning("Apply Settings", "Model not loaded yet. Cannot apply.", parent=settings_win)
+            messagebox.showwarning("Apply Settings", "Model not loaded yet. Cannot apply.", parent=settings_win) # Already English
             return
         with core_instance.recording_lock:
             if core_instance.is_recording:
-                messagebox.showwarning("Apply Settings", "Cannot apply while recording.", parent=settings_win)
+                messagebox.showwarning("Apply Settings", "Cannot apply while recording.", parent=settings_win) # Already English
                 return
         with core_instance.transcription_lock:
             if core_instance.transcription_in_progress:
-                messagebox.showwarning("Apply Settings", "Cannot apply while transcribing.", parent=settings_win)
+                messagebox.showwarning("Apply Settings", "Cannot apply while transcribing.", parent=settings_win) # Already English
                 return
 
         key_to_apply = new_record_key_temp
@@ -2256,33 +2502,35 @@ def run_settings_gui():
         try:
             sound_freq_to_apply = int(sound_frequency_var.get())
             if not (20 <= sound_freq_to_apply <= 20000):
-                messagebox.showwarning("Invalid Value", "Frequency must be between 20 and 20000 Hz", parent=settings_win)
+                messagebox.showwarning("Invalid Value", "Frequency must be between 20 and 20000 Hz", parent=settings_win) # Already English
                 return
         except (ValueError, TypeError):
-            messagebox.showwarning("Invalid Value", "Frequency must be a number", parent=settings_win)
+            messagebox.showwarning("Invalid Value", "Frequency must be a number", parent=settings_win) # Already English
             return
 
         try:
             sound_duration_to_apply = float(sound_duration_var.get())
             if not (0.05 <= sound_duration_to_apply <= 2.0):
-                messagebox.showwarning("Invalid Value", "Duration must be between 0.05 and 2.0 seconds", parent=settings_win)
+                messagebox.showwarning("Invalid Value", "Duration must be between 0.05 and 2.0 seconds", parent=settings_win) # Already English
                 return
         except (ValueError, TypeError):
-            messagebox.showwarning("Invalid Value", "Duration must be a number", parent=settings_win)
+            messagebox.showwarning("Invalid Value", "Duration must be a number", parent=settings_win) # Already English
             return
 
         try:
             sound_volume_to_apply = float(sound_volume_var.get())
             if not (0.0 <= sound_volume_to_apply <= 1.0):
-                messagebox.showwarning("Invalid Value", "Volume must be between 0.0 and 1.0", parent=settings_win)
+                messagebox.showwarning("Invalid Value", "Volume must be between 0.0 and 1.0", parent=settings_win) # Already English
                 return
         except (ValueError, TypeError):
-            messagebox.showwarning("Invalid Value", "Volume must be a number", parent=settings_win)
+            messagebox.showwarning("Invalid Value", "Volume must be a number", parent=settings_win) # Already English
             return
+
 
         try:
             if hasattr(core_instance, 'apply_settings_from_external'):
                 core_instance.apply_settings_from_external(
+                    # Pass all relevant settings to the core instance method
                     new_key=key_to_apply,
                     new_mode=mode_to_apply,
                     new_auto_paste=auto_paste_to_apply,
@@ -2297,17 +2545,18 @@ def run_settings_gui():
                     new_openrouter_model=openrouter_model_var.get(),
                     new_gemini_api_key=gemini_api_key_var.get(),
                     new_gemini_model=gemini_model_var.get()
-                )
+                ) # Fechar parênteses da chamada da função
             else:
                 logging.critical("CRITICAL: apply_settings_from_external method not found on core_instance!")
-                messagebox.showerror("Internal Error", "Cannot apply settings: Core method missing.", parent=settings_win)
+                messagebox.showerror("Internal Error", "Cannot apply settings: Core method missing.", parent=settings_win) # Already English
                 return
         except Exception as e:
             logging.error(f"Error calling apply_settings_from_external from settings thread: {e}", exc_info=True)
-            messagebox.showerror("Error", f"Failed to apply settings:\n{e}", parent=settings_win)
+            messagebox.showerror("Error", f"Failed to apply settings:\n{e}", parent=settings_win) # Already English
             return
 
         new_record_key_temp = None
+        new_reload_key_temp = None # Resetar também a variável temporária da reload key
         close_settings()
 
     def close_settings():
@@ -2331,51 +2580,18 @@ def run_settings_gui():
         else:
             logging.warning("Tried to close settings window, but instance or window no longer exists.")
 
-        # Explicitamente definir todas as variáveis Tkinter como None para evitar erros "main thread is not in main loop"
-        try:
-            # Limpar todas as variáveis Tkinter
-            for var in [auto_paste_var, mode_var, detected_key_var, reload_key_var,
-                        sound_enabled_var, sound_frequency_var, sound_duration_var, sound_volume_var,
-                        text_correction_enabled_var, text_correction_service_var,
-                        openrouter_api_key_var, openrouter_model_var,
-                        gemini_api_key_var, gemini_model_var]:
-                if var is not None:
-                    try:
-                        # Desconectar a variável do Tkinter
-                        var._name = None
-                        var._tk = None
-                    except Exception:
-                        pass
-        except Exception as e:
-            logging.debug(f"Non-critical error during Tkinter variable cleanup: {e}")
 
-        # Sempre definir como None, independentemente de erros
+        # Definir settings_window_instance como None após a destruição
         settings_window_instance = None
 
-        auto_paste_var = None
-        mode_var = None
-        detected_key_var = None
-        new_record_key_temp = None
-        reload_key_var = None
-        new_reload_key_temp = None
-        sound_enabled_var = None
-        sound_frequency_var = None
-        sound_duration_var = None
-        sound_volume_var = None
-        text_correction_enabled_var = None
-        text_correction_service_var = None
-        openrouter_api_key_var = None
-        openrouter_model_var = None
-        gemini_api_key_var = None
-        gemini_model_var = None
-        keyboard_library_var = None
-
+        # Destruir temp_tk_root apenas se ele existir e for válido
         if temp_tk_root and temp_tk_root.winfo_exists():
             logging.debug("Destroying temporary Tk root for settings window...")
             try:
                 temp_tk_root.destroy()
             except Exception as e:
                 logging.warning(f"Error destroying temp root: {e}")
+
 
         logging.info("Settings window closing sequence finished (in Tkinter thread).")
 
@@ -2397,85 +2613,85 @@ def run_settings_gui():
     # --- Auto Paste Section ---
     auto_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
     auto_frame.pack(fill="x", pady=(0, 10), padx=0)
-    ctk.CTkLabel(auto_frame, text="Auto Paste Text", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
-    ctk.CTkSwitch(auto_frame, text="Enabled", variable=auto_paste_var, onvalue=True, offvalue=False).pack(side="left")
+    ctk.CTkLabel(auto_frame, text="Auto Paste Text", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15)) # Already English
+    ctk.CTkSwitch(auto_frame, text="Enabled", variable=auto_paste_var, onvalue=True, offvalue=False).pack(side="left") # Already English
 
     # --- Record Hotkey Section ---
     key_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
     key_frame.pack(fill="x", pady=(0, 10), padx=0)
-    ctk.CTkLabel(key_frame, text="Record Hotkey", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
+    ctk.CTkLabel(key_frame, text="Record Hotkey", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15)) # Already English
     key_display_label = ctk.CTkLabel(key_frame, textvariable=detected_key_var, font=("Segoe UI", 12, "bold"), width=120, fg_color="#393E46", text_color="#00a0ff", corner_radius=8)
     key_display_label.pack(side="left", padx=5)
-    detect_key_button = ctk.CTkButton(key_frame, text="Detect Key", command=lambda: start_detect_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7")
+    detect_key_button = ctk.CTkButton(key_frame, text="Detect Key", command=lambda: start_detect_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7") # Already English
     detect_key_button.pack(side="left", padx=5)
 
     # --- Reload Hotkey Section ---
     reload_key_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
     reload_key_frame.pack(fill="x", pady=(0, 10), padx=0)
-    ctk.CTkLabel(reload_key_frame, text="Reload Hotkey", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
+    ctk.CTkLabel(reload_key_frame, text="Reload Hotkey", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15)) # Already English
     reload_key_display_label = ctk.CTkLabel(reload_key_frame, textvariable=reload_key_var, font=("Segoe UI", 12, "bold"), width=120, fg_color="#393E46", text_color="#00a0ff", corner_radius=8)
     reload_key_display_label.pack(side="left", padx=5)
-    detect_reload_key_button = ctk.CTkButton(reload_key_frame, text="Detect Key", command=lambda: start_detect_reload_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7")
+    detect_reload_key_button = ctk.CTkButton(reload_key_frame, text="Detect Key", command=lambda: start_detect_reload_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7") # Already English
     detect_reload_key_button.pack(side="left", padx=5)
 
     # --- Record Mode Section ---
     mode_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
     mode_frame.pack(fill="x", pady=(0, 10), padx=0)
-    ctk.CTkLabel(mode_frame, text="Record Mode", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
-    ctk.CTkRadioButton(mode_frame, text="Toggle", variable=mode_var, value="toggle").pack(side="left", padx=5)
-    ctk.CTkRadioButton(mode_frame, text="Press/Hold", variable=mode_var, value="press").pack(side="left", padx=5)
+    ctk.CTkLabel(mode_frame, text="Record Mode", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15)) # Already English
+    ctk.CTkRadioButton(mode_frame, text="Toggle", variable=mode_var, value="toggle").pack(side="left", padx=5) # Already English
+    ctk.CTkRadioButton(mode_frame, text="Press/Hold", variable=mode_var, value="press").pack(side="left", padx=5) # Already English
 
     # Seção de biblioteca de teclado removida, pois não é configurável pelo usuário
 
     # --- Sound Settings Section ---
     sound_section_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
     sound_section_frame.pack(fill="x", pady=(0, 10), padx=0)
-    ctk.CTkLabel(sound_section_frame, text="Sound Settings", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(anchor="w", padx=5)
-    ctk.CTkSwitch(sound_section_frame, text="Enable Sound Feedback", variable=sound_enabled_var, onvalue=True, offvalue=False).pack(anchor="w", padx=5, pady=(5, 0))
+    ctk.CTkLabel(sound_section_frame, text="Sound Settings", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(anchor="w", padx=5) # Already English
+    ctk.CTkSwitch(sound_section_frame, text="Enable Sound Feedback", variable=sound_enabled_var, onvalue=True, offvalue=False).pack(anchor="w", padx=5, pady=(5, 0)) # Already English
     # Volume
-    ctk.CTkLabel(sound_section_frame, text="Volume", font=("Segoe UI", 11), text_color="#fff").pack(anchor="w", padx=5)
+    ctk.CTkLabel(sound_section_frame, text="Volume", font=("Segoe UI", 11), text_color="#fff").pack(anchor="w", padx=5) # Already English
     ctk.CTkSlider(sound_section_frame, variable=sound_volume_var, from_=0.0, to=1.0, number_of_steps=100).pack(fill="x", padx=10)
     # Frequency
     freq_row = ctk.CTkFrame(sound_section_frame, fg_color="#222831")
     freq_row.pack(fill="x", padx=0, pady=(5, 0))
-    ctk.CTkLabel(freq_row, text="Frequency (Hz):", width=120).pack(side="left", padx=5)
+    ctk.CTkLabel(freq_row, text="Frequency (Hz):", width=120).pack(side="left", padx=5) # Already English
     ctk.CTkEntry(freq_row, textvariable=sound_frequency_var, width=80).pack(side="left", padx=5)
     # Duration
     dur_row = ctk.CTkFrame(sound_section_frame, fg_color="#222831")
     dur_row.pack(fill="x", padx=0, pady=(5, 0))
-    ctk.CTkLabel(dur_row, text="Duration (s):", width=120).pack(side="left", padx=5)
+    ctk.CTkLabel(dur_row, text="Duration (s):", width=120).pack(side="left", padx=5) # Already English
     ctk.CTkEntry(dur_row, textvariable=sound_duration_var, width=80).pack(side="left", padx=5)
     # Test Sound
     def play_test_sound():
         if not core_instance:
-            messagebox.showerror("Error", "Core instance not available", parent=settings_win)
+            messagebox.showerror("Error", "Core instance not available", parent=settings_win) # Already English
             return
         enabled = sound_enabled_var.get()
         if not enabled:
-            messagebox.showinfo("Sound Test", "Sound is disabled. Enable it first to test.", parent=settings_win)
+            messagebox.showinfo("Sound Test", "Sound is disabled. Enable it first to test.", parent=settings_win) # Already English
             return
         try:
             freq = int(sound_frequency_var.get())
             duration = float(sound_duration_var.get())
             volume = float(sound_volume_var.get())
             if not (20 <= freq <= 20000):
-                messagebox.showwarning("Invalid Value", "Frequency must be between 20 and 20000 Hz", parent=settings_win)
+                messagebox.showwarning("Invalid Value", "Frequency must be between 20 and 20000 Hz", parent=settings_win) # Already English
                 return
             if not (0.05 <= duration <= 2.0):
-                messagebox.showwarning("Invalid Value", "Duration must be between 0.05 and 2.0 seconds", parent=settings_win)
+                messagebox.showwarning("Invalid Value", "Duration must be between 0.05 and 2.0 seconds", parent=settings_win) # Already English
                 return
             if not (0.0 <= volume <= 1.0):
-                messagebox.showwarning("Invalid Value", "Volume must be between 0.0 and 1.0", parent=settings_win)
+                messagebox.showwarning("Invalid Value", "Volume must be between 0.0 and 1.0", parent=settings_win) # Already English
                 return
             threading.Thread(
-                target=core_instance._play_sound,
+                target=core_instance._play_generated_tone_stream,
                 kwargs={"frequency": freq, "duration": duration, "volume": volume, "is_start": True},
                 daemon=True,
                 name="TestSoundThread"
             ).start()
         except (ValueError, TypeError) as e:
-            messagebox.showerror("Error", f"Invalid sound settings: {e}", parent=settings_win)
-    ctk.CTkButton(sound_section_frame, text="Test Sound", command=play_test_sound, fg_color="#00a0ff", hover_color="#0078d7", width=120).pack(anchor="w", padx=5, pady=(5, 0))
+            messagebox.showerror("Error", f"Invalid sound settings: {e}", parent=settings_win) # Already English
+    ctk.CTkButton(sound_section_frame, text="Test Sound", command=play_test_sound, fg_color="#00a0ff", hover_color="#0078d7", width=120).pack(anchor="w", padx=5, pady=(5, 0)) # Already English
 
     # --- Text Correction Section ---
     text_correction_section_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
@@ -2495,47 +2711,110 @@ def run_settings_gui():
     # --- Gemini API Section ---
     gemini_section_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
     gemini_section_frame.pack(fill="x", pady=(0, 10), padx=0)
-    ctk.CTkLabel(gemini_section_frame, text="Gemini API Settings", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(anchor="w", padx=5)
+    ctk.CTkLabel(gemini_section_frame, text="Gemini API Settings", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(anchor="w", padx=5) # Already English
     gemini_api_row = ctk.CTkFrame(gemini_section_frame, fg_color="#222831")
     gemini_api_row.pack(fill="x", padx=0, pady=(5, 0))
-    ctk.CTkLabel(gemini_api_row, text="API Key:", width=120).pack(side="left", padx=5)
+    ctk.CTkLabel(gemini_api_row, text="API Key:", width=120).pack(side="left", padx=5) # Already English
     ctk.CTkEntry(gemini_api_row, textvariable=gemini_api_key_var).pack(side="left", fill="x", expand=True, padx=5)
     gemini_model_row = ctk.CTkFrame(gemini_section_frame, fg_color="#222831")
     gemini_model_row.pack(fill="x", padx=0, pady=(5, 0))
-    ctk.CTkLabel(gemini_model_row, text="Model:", width=120).pack(side="left", padx=5)
+    ctk.CTkLabel(gemini_model_row, text="Model:", width=120).pack(side="left", padx=5) # Already English
     ctk.CTkEntry(gemini_model_row, textvariable=gemini_model_var).pack(side="left", fill="x", expand=True, padx=5)
+ 
+    gemini_prompt_correction_var = ctk.StringVar(value=core_instance.gemini_prompt) # Variable for correction prompt
 
+    # Correction Prompt Textbox and Label
+    # Correction Prompt Label and Textbox
+    # Frame para o rótulo e textbox de correção
+    gemini_prompt_correction_frame = ctk.CTkFrame(gemini_section_frame, fg_color="#222831")
+    # O frame será empacotado em toggle_gemini_prompt_visibility
 
+    # Rótulo para o prompt de correção (empacotado acima do textbox)
+    ctk.CTkLabel(gemini_prompt_correction_frame, text="Correction Prompt:", font=("Segoe UI", 12), text_color="#fff").pack(anchor="w", padx=5, pady=(5, 0)) # Empacotar acima
+
+    # Textbox para o prompt de correção
+    gemini_prompt_correction_textbox = ctk.CTkTextbox(gemini_prompt_correction_frame, width=500, height=150, wrap="word")
+    gemini_prompt_correction_textbox.pack(fill="x", expand=True, padx=5, pady=(0, 5)) # Empacotar abaixo do rótulo, preenchendo horizontalmente
+
+    # Load initial correction prompt value
+    gemini_prompt_correction_textbox.insert("0.0", core_instance.gemini_prompt)
+
+    # Add Restore Default Correction Prompt button
+    def restore_default_correction_prompt():
+        logging.info("Restoring Gemini correction prompt to default.")
+        gemini_prompt_correction_textbox.delete("1.0", "end") # CORRIGIDO
+        gemini_prompt_correction_textbox.insert("0.0", DEFAULT_CONFIG["gemini_prompt"]) # CORRIGIDO
+
+    restore_correction_prompt_button = ctk.CTkButton(gemini_section_frame, text="Restore Default Correction Prompt", command=restore_default_correction_prompt, width=250, fg_color="#00a0ff", hover_color="#0078d7")
+    # .pack() will be called in toggle_gemini_prompt_visibility
+
+    # --- Gemini Mode Section ---
+    gemini_mode_row = ctk.CTkFrame(gemini_section_frame, fg_color="#222831")
+    gemini_mode_row.pack(fill="x", padx=0, pady=(5, 0))
+    ctk.CTkLabel(gemini_mode_row, text="Gemini Mode:", width=120).pack(side="left", padx=5) # Already English
+    ctk.CTkRadioButton(gemini_mode_row, text="Correction", variable=gemini_mode_var, value="correction").pack(side="left", padx=5) # Already English
+    ctk.CTkRadioButton(gemini_mode_row, text="General", variable=gemini_mode_var, value="general").pack(side="left", padx=5) # Already English
+ 
+ 
+ 
+ 
+ 
+    # General Prompt Label and Textbox
+    # Frame para o rótulo e textbox geral
+    gemini_prompt_general_frame = ctk.CTkFrame(gemini_section_frame, fg_color="#222831")
+    # O frame será empacotado em toggle_gemini_prompt_visibility
+
+    # Rótulo para o prompt geral (empacotado acima do textbox)
+    ctk.CTkLabel(gemini_prompt_general_frame, text="General Prompt:", font=("Segoe UI", 12), text_color="#fff").pack(anchor="w", padx=5, pady=(5, 0)) # Empacotar acima
+
+    # Textbox para o prompt geral
+    gemini_prompt_textbox = ctk.CTkTextbox(gemini_prompt_general_frame, width=500, height=150, wrap="word")
+    gemini_prompt_textbox.pack(fill="x", expand=True, padx=5, pady=(0, 5)) # Empacotar abaixo do rótulo, preenchendo horizontalmente
+
+    # Load current General Prompt text
+    gemini_prompt_textbox.insert("0.0", core_instance.gemini_general_prompt)
+
+    # Function to restore default Gemini prompt (for "Load Correction Prompt as Base" button)
+    def restore_gemini_prompt():
+        logging.info("Restoring Gemini prompt to default.")
+        gemini_prompt_textbox.delete("1.0", "end")
+        gemini_prompt_textbox.insert("0.0", DEFAULT_CONFIG["gemini_prompt"])
+
+    # Add Restore Default button
+    restore_button = ctk.CTkButton(gemini_section_frame, text="Load Correction Prompt as Base", command=restore_gemini_prompt, width=120, fg_color="#00a0ff", hover_color="#0078d7") # Renamed for clarity
 
     # --- OpenRouter API Section ---
     openrouter_section_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
     openrouter_section_frame.pack(fill="x", pady=(0, 10), padx=0)
-    ctk.CTkLabel(openrouter_section_frame, text="OpenRouter API Settings", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(anchor="w", padx=5)
+    ctk.CTkLabel(openrouter_section_frame, text="OpenRouter API Settings", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(anchor="w", padx=5) # Already English
     openrouter_api_row = ctk.CTkFrame(openrouter_section_frame, fg_color="#222831")
     openrouter_api_row.pack(fill="x", padx=0, pady=(5, 0))
-    ctk.CTkLabel(openrouter_api_row, text="API Key:", width=120).pack(side="left", padx=5)
+    ctk.CTkLabel(openrouter_api_row, text="API Key:", width=120).pack(side="left", padx=5) # Already English
     ctk.CTkEntry(openrouter_api_row, textvariable=openrouter_api_key_var).pack(side="left", fill="x", expand=True, padx=5)
     openrouter_model_row = ctk.CTkFrame(openrouter_section_frame, fg_color="#222831")
     openrouter_model_row.pack(fill="x", padx=0, pady=(5, 0))
-    ctk.CTkLabel(openrouter_model_row, text="Model:", width=120).pack(side="left", padx=5)
+    ctk.CTkLabel(openrouter_model_row, text="Model:", width=120).pack(side="left", padx=5) # Already English
     ctk.CTkEntry(openrouter_model_row, textvariable=openrouter_model_var).pack(side="left", fill="x", expand=True, padx=5)
-
+ 
     # --- Action Buttons ---
     # Note: The button_frame was defined earlier in the original code but is placed outside the scrollable frame in CTk
     button_frame = ctk.CTkFrame(settings_win, fg_color="#222831", corner_radius=12) # Recreate outside scrollable
     button_frame.pack(side="bottom", fill="x", padx=10, pady=10)
-    ctk.CTkButton(button_frame, text="Apply", command=lambda: apply_settings(), width=120, fg_color="#00a0ff", hover_color="#0078d7").pack(side="right", padx=5)
-    ctk.CTkButton(button_frame, text="Cancel", command=lambda: close_settings(), width=120, fg_color="#393E46", hover_color="#444444").pack(side="right", padx=5)
-
+    ctk.CTkButton(button_frame, text="Apply", command=lambda: apply_settings(), width=120, fg_color="#00a0ff", hover_color="#0078d7").pack(side="right", padx=5) # Already English
+    ctk.CTkButton(button_frame, text="Cancel", command=lambda: close_settings(), width=120, fg_color="#393E46", hover_color="#444444").pack(side="right", padx=5) # Already English
+ 
     # --- Force UI Update before Making Visible ---
     settings_win.update_idletasks()
     settings_win.update()
-
+ 
     # --- Make Visible and Start Mainloop ---
     settings_win.transient(temp_tk_root)
     settings_win.deiconify()
     settings_win.lift()
     settings_win.focus_force()
+ 
+    # Set initial visibility of Gemini prompt based on loaded config
+    toggle_gemini_prompt_visibility()
 
     logging.info("Starting mainloop for settings window thread...")
     try:
@@ -2545,7 +2824,6 @@ def run_settings_gui():
     finally:
         logging.info("Settings window thread mainloop finished.")
         # Ensure cleanup happens even if mainloop crashes (close_settings handles this now)
-
 
 # --- Callbacks for pystray Menu Items ---
 def on_start_recording_menu_click(*_):
@@ -2609,48 +2887,27 @@ def on_settings_menu_click(*_):
 
     # Usar um lock para evitar condições de corrida ao verificar/criar a janela
     with settings_window_lock:
-        # Se já existe um thread de configurações em execução, não inicie outro
-        if settings_thread_running:
-            logging.warning("Settings thread already running. Ignoring request to open settings.")
-            # Tente focar a janela existente
-            try:
-                if settings_window_instance and settings_window_instance.winfo_exists():
-                    settings_window_instance.lift()
-                    settings_window_instance.focus_force()
-                    logging.info("Focused existing settings window.")
-            except Exception as e:
-                logging.warning(f"Could not focus existing settings window: {e}")
-            return
-
-        # Verificação mais segura para evitar erros de threading
-        settings_window_exists = False
-        try:
-            settings_window_exists = settings_window_instance is not None and settings_window_instance.winfo_exists()
-        except Exception as e:
-            # Se ocorrer qualquer erro na verificação, assumimos que a janela não existe
-            logging.debug(f"Error checking if settings window exists: {e}")
-            settings_window_instance = None
-
-        if settings_window_exists:
-            logging.warning("Settings window thread likely already running. Focusing existing window.")
+        # 1. Verificar settings_window_instance e sua atividade (winfo_exists)
+        if settings_window_instance and settings_window_instance.winfo_exists():
             try:
                 settings_window_instance.lift()
                 settings_window_instance.focus_force()
+                logging.info("Focused existing settings window.")
+                return # Retorna imediatamente se a janela já existe e foi focada
             except Exception as e:
-                logging.warning(f"Could not focus existing settings window: {e}")
-                # Se não conseguir focar a janela existente, vamos criar uma nova
-                settings_window_instance = None
-            else:
-                # Se conseguiu focar a janela existente, retorna
-                return
+                logging.warning(f"Could not focus existing settings window: {e}. Attempting to create new one.")
+                settings_window_instance = None # Resetar para tentar criar uma nova
 
-        # Marcar que um thread de configurações está em execução
-        settings_thread_running = True
+        # 2. Verificar settings_thread_running
+        if settings_thread_running:
+            logging.warning("Settings window creation might be in progress by another thread or a previous attempt failed to clean up. Ignoring request.")
+            return # Retorna para evitar iniciar outra thread concorrente
 
-    # Se chegou aqui, precisamos criar uma nova janela
-    logging.info("Starting settings window thread...")
-    settings_thread = threading.Thread(target=run_settings_gui, daemon=True, name="SettingsGUIThread")
-    settings_thread.start()
+        # 3. Se chegou aqui, pode iniciar uma nova thread
+        # A responsabilidade de definir settings_thread_running = True será da própria run_settings_gui
+        logging.info("Starting settings window thread...")
+        settings_thread = threading.Thread(target=run_settings_gui, daemon=True, name="SettingsGUIThread")
+        settings_thread.start()
 
 # --- NEW: Callback for Force Re-register Menu Item ---
 def on_force_reregister_menu_click(*_):
@@ -2683,8 +2940,8 @@ def create_dynamic_menu(_):
     # Default menu if core_instance is not ready
     if not core_instance:
         logging.warning("create_dynamic_menu called but core_instance is None.")
-        return (pystray.MenuItem('Carregando...', None, enabled=False),)
-
+        return (pystray.MenuItem('Loading...', None, enabled=False),)
+    
     # Determine state safely
     try:
         with core_instance.state_lock:
@@ -2700,26 +2957,26 @@ def create_dynamic_menu(_):
     is_saving = current_state == STATE_SAVING
     is_error = current_state.startswith("ERROR")
 
-    default_action_text = 'Carregando...'
+    default_action_text = 'Loading...'
     default_action_callback = None
     default_enabled = False # Disable by default
 
     if is_recording:
-        default_action_text = '⏹️ Parar Gravação'
+        default_action_text = '⏹️ Stop Recording'
         default_action_callback = on_toggle_recording_menu_click
         default_enabled = True
     elif is_idle:
-        default_action_text = '▶️ Iniciar Gravação'
+        default_action_text = '▶️ Start Recording'
         default_action_callback = on_toggle_recording_menu_click
         default_enabled = True
     elif is_loading:
-        default_action_text = 'Carregando Modelo...'
+        default_action_text = 'Loading Model...'
     elif is_transcribing:
-        default_action_text = 'Transcrevendo...'
+        default_action_text = 'Transcribing...'
     elif is_saving:
-        default_action_text = 'Salvando...'
+        default_action_text = 'Saving...'
     elif is_error:
-        default_action_text = 'Erro (Ver Logs/⚙️)'
+        default_action_text = 'Error (Check Logs/⚙️)'
     # Add other states if needed
 
     # Determine if force reload should be enabled
@@ -2735,35 +2992,21 @@ def create_dynamic_menu(_):
         ),
         # --- Items below only appear on right-click ---
         pystray.MenuItem(
-            '⚙️ Configurações',
+            '⚙️ Settings',
             on_settings_menu_click,
             enabled=(not is_loading and not is_recording) # Allow settings unless loading/recording
         ),
         # --- NEW: Force Reload Item ---
         pystray.MenuItem(
-            '🔄 Recarregar Teclado/Hotkey',
+            '🔄 Reload Keyboard/Hotkey',
             on_force_reregister_menu_click,
             enabled=can_force_reload # Enable based on state
         ),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem('❌ Sair', on_exit_app)
+        pystray.MenuItem('❌ Exit', on_exit_app)
     ]
 
     return tuple(menu_items) # Return as a tuple
-
-# --- Cleanup Tkinter Variables ---
-def cleanup_tkinter_variables():
-    """Limpa as variáveis Tkinter para evitar erros durante o encerramento."""
-    global settings_window_instance
-
-    # Se a janela de configurações estiver aberta, feche-a
-    if settings_window_instance is not None:
-        try:
-            if settings_window_instance.winfo_exists():
-                settings_window_instance.destroy()
-        except Exception as e:
-            logging.debug(f"Error destroying settings window during cleanup: {e}")
-        settings_window_instance = None
 
 # --- Tray Exit Function ---
 def on_exit_app(*_):
@@ -2772,7 +3015,6 @@ def on_exit_app(*_):
     logging.info("Exit requested from tray icon.")
 
     # Limpar variáveis Tkinter primeiro
-    cleanup_tkinter_variables()
 
     if core_instance:
         if hasattr(core_instance, 'shutdown'):
@@ -2793,7 +3035,6 @@ def on_exit_app(*_):
 if __name__ == "__main__":
     # Register atexit handlers
     atexit.register(lambda: logging.info("atexit handler reached. Main shutdown should have occurred via on_exit_app."))
-    atexit.register(cleanup_tkinter_variables)  # Registrar a função de limpeza de variáveis Tkinter
 
     try:
         # Initialize core logic

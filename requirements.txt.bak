@@ -9,5 +9,3 @@ pyperclip
 requests
 psutil
 google-generativeai
-
-soundfile
