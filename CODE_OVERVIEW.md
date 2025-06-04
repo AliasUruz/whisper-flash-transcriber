@@ -1,6 +1,6 @@
 # Code Overview
 
-This document provides a quick reference to the main modules in this repository. It was generated to help new contributors understand the project structure.
+This document provides a short summary of the modules in this repository. Use it as a starting point when exploring the code base.
 
 ## Main Scripts
 
