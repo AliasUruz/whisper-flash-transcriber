@@ -135,6 +135,8 @@ To access and change settings:
 
 ### Key Configuration Options:
 
+![Screenshot do Aplicativo](image_1.png)
+
 *   **Hotkey:** Change the keyboard shortcut used to start and stop recording. The default is F3. Choose a key combination that doesn't conflict with other applications you use frequently.
 *   **Enable Text Correction:** Check this box if you want to use an external AI model (OpenRouter or Gemini) to improve the transcribed text.
 *   **Text Correction Service:** If text correction is enabled, select whether you want to use "OpenRouter" or "Google Gemini".
@@ -147,8 +149,6 @@ To access and change settings:
 Remember to save your changes in the settings window.
 
 ## How to Use the App
-
-![Screenshot do Aplicativo](./images/image_1.png)
 
 Once the application is running and configured:
 
