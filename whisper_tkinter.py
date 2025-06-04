@@ -3022,28 +3022,28 @@ def on_settings_menu_click(*_):
     """Starts the settings GUI in a separate thread."""
     global settings_window_instance, settings_thread_running
 
-    # Usar um lock para evitar condições de corrida ao verificar/criar a janela
+    # Use a lock to avoid race conditions when checking/creating the window
     with settings_window_lock:
-        # 1. Verificar settings_window_instance e sua atividade (winfo_exists)
-        if settings_window_instance and settings_window_instance.winfo_exists():
-            try:
-                settings_window_instance.lift()
-                settings_window_instance.focus_force()
-                logging.info("Focused existing settings window.")
-                return # Retorna imediatamente se a janela já existe e foi focada
-            except Exception as e:
-                logging.warning(f"Could not focus existing settings window: {e}. Attempting to create new one.")
-                settings_window_instance = None # Resetar para tentar criar uma nova
-
-        # 2. Verificar settings_thread_running
+        # If the settings GUI is already running, just try to focus it using the
+        # thread-safe `after` method and return.
         if settings_thread_running:
-            logging.warning("Settings window creation might be in progress by another thread or a previous attempt failed to clean up. Ignoring request.")
-            return # Retorna para evitar iniciar outra thread concorrente
+            logging.info("Settings window already running. Attempting to focus.")
+            if settings_window_instance:
+                try:
+                    settings_window_instance.after(0, lambda: (
+                        settings_window_instance.lift(),
+                        settings_window_instance.focus_force()
+                    ))
+                except Exception as e:
+                    logging.debug(f"Could not focus settings window: {e}")
+            return
 
-        # 3. Se chegou aqui, pode iniciar uma nova thread
-        # A responsabilidade de definir settings_thread_running = True será da própria run_settings_gui
+        # Otherwise, start a new settings thread. Set the running flag here to
+        # minimise the chance of double threads before the thread sets it.
         logging.info("Starting settings window thread...")
-        settings_thread = threading.Thread(target=run_settings_gui, daemon=True, name="SettingsGUIThread")
+        settings_thread_running = True
+        settings_thread = threading.Thread(
+            target=run_settings_gui, daemon=True, name="SettingsGUIThread")
         settings_thread.start()
 
 # --- NEW: Callback for Force Re-register Menu Item ---
