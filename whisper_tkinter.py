@@ -228,6 +228,10 @@ class WhisperCore: # Renamed from WhisperApp
         self.reregister_timer_thread = None
         self.stop_reregister_event = threading.Event()
 
+        # --- Hotkey Health Monitoring ---
+        self.health_check_thread = None
+        self.stop_health_check_event = threading.Event()
+
         # --- Application State ---
         self.current_state = STATE_LOADING_MODEL # Initial state
         self.shutting_down = False # <<< FIX: Flag to prevent double shutdown
