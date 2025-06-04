@@ -2000,9 +2000,6 @@ class WhisperCore: # Renamed from WhisperApp
         if text_correction_changed or openrouter_changed:
             self._init_openrouter_client()
 
-        if text_correction_changed or openrouter_changed:
-            self._init_openrouter_client()
-
         if text_correction_changed or gemini_changed:
             # Reinitialize Gemini client if any relevant setting changed
             if new_gemini_api_key is not None and new_gemini_api_key != self.gemini_api_key:
