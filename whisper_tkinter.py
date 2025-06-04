@@ -89,7 +89,9 @@ Key instructions:
 
 Return only the improved text without explanations.
 
-Transcribed speech: {text}"""
+Transcribed speech: {text}""",
+    "batch_size": 16,
+    "gpu_index": 0
 }
 HOTKEY_DEBOUNCE_INTERVAL = 0.3
 AUDIO_SAMPLE_RATE = 16000
@@ -100,6 +102,9 @@ SOUND_ENABLED_CONFIG_KEY = "sound_enabled"
 SOUND_FREQUENCY_CONFIG_KEY = "sound_frequency"
 SOUND_DURATION_CONFIG_KEY = "sound_duration"
 SOUND_VOLUME_CONFIG_KEY = "sound_volume"
+# Batch size and GPU index configuration keys
+BATCH_SIZE_CONFIG_KEY = "batch_size"
+GPU_INDEX_CONFIG_KEY = "gpu_index"
 # Reload key configuration
 RELOAD_KEY_CONFIG_KEY = "reload_key"
 # Keyboard library configuration - Usando apenas Win32 API
@@ -171,6 +176,12 @@ class WhisperCore: # Renamed from WhisperApp
         # Text correction configuration
         self.text_correction_enabled = DEFAULT_CONFIG[TEXT_CORRECTION_ENABLED_CONFIG_KEY]
         self.text_correction_service = DEFAULT_CONFIG[TEXT_CORRECTION_SERVICE_CONFIG_KEY]
+
+        # Batch size and GPU index
+        self.batch_size = DEFAULT_CONFIG[BATCH_SIZE_CONFIG_KEY]
+        self.gpu_index = DEFAULT_CONFIG[GPU_INDEX_CONFIG_KEY]
+        self.batch_size_specified = False
+        self.gpu_index_specified = False
 
         # OpenRouter API configuration
         self.openrouter_api_key = DEFAULT_CONFIG[OPENROUTER_API_KEY_CONFIG_KEY]
@@ -322,6 +333,29 @@ class WhisperCore: # Renamed from WhisperApp
 
         return SERVICE_NONE
 
+    def _suggest_batch_size(self):
+        """Suggests a batch size based on available GPU memory."""
+        if not torch.cuda.is_available():
+            return DEFAULT_CONFIG[BATCH_SIZE_CONFIG_KEY]
+
+        try:
+            torch.cuda.set_device(self.gpu_index)
+            props = torch.cuda.get_device_properties(self.gpu_index)
+            total_gb = props.total_memory / 1024**3
+            if total_gb >= 20:
+                bs = 32
+            elif total_gb >= 12:
+                bs = 16
+            elif total_gb >= 8:
+                bs = 8
+            else:
+                bs = 4
+            logging.info(f"Suggested batch size {bs} for GPU with {total_gb:.2f} GB")
+            return bs
+        except Exception as e:
+            logging.warning(f"Could not determine GPU memory for batch size suggestion: {e}")
+            return DEFAULT_CONFIG[BATCH_SIZE_CONFIG_KEY]
+
     def _correct_text_with_openrouter(self, text):
         """Correct the transcribed text using OpenRouter API."""
         if not self.openrouter_client or not text:
@@ -360,6 +394,7 @@ class WhisperCore: # Renamed from WhisperApp
         # Start with a fresh copy of defaults
         cfg = DEFAULT_CONFIG.copy()
         config_source = "defaults"
+        loaded_config = {}
 
         if os.path.exists(CONFIG_FILE):
             try:
@@ -497,6 +532,28 @@ class WhisperCore: # Renamed from WhisperApp
             self.gemini_model = DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY]
             self.config[GEMINI_MODEL_CONFIG_KEY] = self.gemini_model
 
+        # Batch size
+        self.batch_size_specified = BATCH_SIZE_CONFIG_KEY in loaded_config
+        try:
+            bs_val = int(self.config.get(BATCH_SIZE_CONFIG_KEY, DEFAULT_CONFIG[BATCH_SIZE_CONFIG_KEY]))
+            if bs_val <= 0:
+                raise ValueError("Batch size must be positive")
+            self.batch_size = bs_val
+        except (ValueError, TypeError):
+            self.batch_size = DEFAULT_CONFIG[BATCH_SIZE_CONFIG_KEY]
+            self.config[BATCH_SIZE_CONFIG_KEY] = self.batch_size
+
+        # GPU index
+        self.gpu_index_specified = GPU_INDEX_CONFIG_KEY in loaded_config
+        try:
+            gpu_idx_val = int(self.config.get(GPU_INDEX_CONFIG_KEY, DEFAULT_CONFIG[GPU_INDEX_CONFIG_KEY]))
+            if gpu_idx_val < 0:
+                raise ValueError("GPU index must be >=0")
+            self.gpu_index = gpu_idx_val
+        except (ValueError, TypeError):
+            self.gpu_index = DEFAULT_CONFIG[GPU_INDEX_CONFIG_KEY]
+            self.config[GPU_INDEX_CONFIG_KEY] = self.gpu_index
+
         # Load and validate Gemini mode
         try:
             gemini_mode_val = str(self.config.get("gemini_mode", DEFAULT_CONFIG["gemini_mode"])).lower()
@@ -524,6 +581,8 @@ class WhisperCore: # Renamed from WhisperApp
         logging.info(f"Gemini settings: Model={self.gemini_model}")
         logging.info(f"Gemini mode: {self.gemini_mode}") # Added logging for new settings
         logging.info(f"Gemini general prompt: {self.gemini_general_prompt}") # Added logging for new settings
+        logging.info(f"Batch size: {self.batch_size} (specified: {self.batch_size_specified})")
+        logging.info(f"GPU index: {self.gpu_index} (specified: {self.gpu_index_specified})")
 
         # Save only if the source was defaults (file didn't exist or was invalid)
         if config_source.startswith("defaults"):
@@ -558,7 +617,9 @@ class WhisperCore: # Renamed from WhisperApp
             GEMINI_MODEL_CONFIG_KEY: self.gemini_model,
             "gemini_prompt": self.gemini_prompt,
             "gemini_mode": self.gemini_mode,
-            "gemini_general_prompt": self.gemini_general_prompt
+            "gemini_general_prompt": self.gemini_general_prompt,
+            BATCH_SIZE_CONFIG_KEY: self.batch_size,
+            GPU_INDEX_CONFIG_KEY: self.gpu_index
         }
         self.config = config_to_save # Update in-memory config as well
         try:
@@ -785,19 +846,37 @@ class WhisperCore: # Renamed from WhisperApp
 
         try:
             logging.info("Attempting to load pipeline...")
-            # Verificação inicial do CUDA
+
+            device_str_local = "cuda" if torch.cuda.is_available() else "cpu"
+            device_param = device_str_local
+            torch_dtype_local = torch.float16 if device_str_local == "cuda" else torch.float32
+
             logging.info(f"CUDA available: {torch.cuda.is_available()}")
-            if torch.cuda.is_available():
-                logging.info(f"CUDA device count: {torch.cuda.device_count()}")
-                logging.info(f"Current CUDA device: {torch.cuda.current_device()}")
-                logging.info(f"Device name: {torch.cuda.get_device_name(0)}")
-                logging.info(f"CUDA version: {torch.version.cuda}")
+            if device_str_local == "cuda":
+                try:
+                    torch.cuda.set_device(self.gpu_index)
+                    props = torch.cuda.get_device_properties(self.gpu_index)
+                    total_gb = props.total_memory / 1024**3
+                    logging.info(f"Using GPU {self.gpu_index}: {props.name} ({total_gb:.2f} GB)")
+                    if total_gb < 4:
+                        logging.warning("GPU memory appears low (<4GB). Falling back to CPU.")
+                        device_str_local = "cpu"
+                        device_param = "cpu"
+                        torch_dtype_local = torch.float32
+                except Exception as e:
+                    logging.error(f"Failed to select GPU {self.gpu_index}: {e}")
+                    device_str_local = "cpu"
+                    device_param = "cpu"
+                    torch_dtype_local = torch.float32
+
+            if not self.batch_size_specified:
+                self.batch_size = self._suggest_batch_size()
 
             loaded_pipe = pipeline(
                 "automatic-speech-recognition",
                 model="openai/whisper-large-v3",
-                torch_dtype=torch_dtype,
-                device=device_str  # Força o uso do dispositivo especificado
+                torch_dtype=torch_dtype_local,
+                device=device_param
             )
 
             # Verificação detalhada do dispositivo
@@ -1624,7 +1703,7 @@ class WhisperCore: # Renamed from WhisperApp
             # devido a TypeError na versão atual do transformers.
             # A correção para 'input_features' e 'attention_mask' será reintroduzida
             # após a atualização da biblioteca transformers para uma versão compatível.
-            result = self.pipe(audio_filename, chunk_length_s=30, batch_size=16, return_timestamps=False)
+            result = self.pipe(audio_filename, chunk_length_s=30, batch_size=self.batch_size, return_timestamps=False)
 
             logging.debug(f"Pipeline raw result: {result}")
 
@@ -1717,6 +1796,9 @@ class WhisperCore: # Renamed from WhisperApp
 
             # --- Cleanup ---
             self._delete_audio_file(audio_filename) # Delete file after processing
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logging.debug("Cleared GPU cache after transcription task.")
 
 
     # --- Settings Application Logic (Called from Settings Thread) ---
@@ -1727,7 +1809,8 @@ class WhisperCore: # Renamed from WhisperApp
                                    new_text_correction_enabled=None, new_text_correction_service=None,
                                    new_openrouter_api_key=None, new_openrouter_model=None,
                                    new_gemini_api_key=None, new_gemini_model=None,
-                                   new_gemini_mode=None, new_gemini_prompt=None, new_gemini_general_prompt=None):
+                                   new_gemini_mode=None, new_gemini_prompt=None, new_gemini_general_prompt=None,
+                                   new_batch_size=None, new_gpu_index=None):
         """Applies settings passed from the external settings window/thread."""
         logging.info("Applying new configuration from external source.")
         key_changed = False
@@ -1805,6 +1888,30 @@ class WhisperCore: # Renamed from WhisperApp
 
                 # Re-register the reload key hotkey
                 self._register_reload_hotkey()
+
+        # Batch size
+        if new_batch_size is not None:
+            try:
+                bs_val = int(new_batch_size)
+                if bs_val > 0 and bs_val != self.batch_size:
+                    self.batch_size = bs_val
+                    config_needs_saving = True
+                    self.batch_size_specified = True
+                    logging.info(f"Batch size changed to: {self.batch_size}")
+            except (ValueError, TypeError):
+                logging.warning(f"Invalid batch size value: {new_batch_size}")
+
+        # GPU index
+        if new_gpu_index is not None:
+            try:
+                gpu_idx_val = int(new_gpu_index)
+                if gpu_idx_val >= 0 and gpu_idx_val != self.gpu_index:
+                    self.gpu_index = gpu_idx_val
+                    config_needs_saving = True
+                    self.gpu_index_specified = True
+                    logging.info(f"GPU index changed to: {self.gpu_index}")
+            except (ValueError, TypeError):
+                logging.warning(f"Invalid GPU index value: {new_gpu_index}")
 
         # Keyboard library is always Win32
         self.keyboard_library = KEYBOARD_LIB_WIN32
@@ -2220,6 +2327,8 @@ def run_settings_gui():
     gemini_api_key_var = ctk.StringVar(value=core_instance.gemini_api_key)
     gemini_model_var = ctk.StringVar(value=core_instance.gemini_model)
     gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode) # Variável para o modo Gemini
+    batch_size_var = ctk.IntVar(value=core_instance.batch_size)
+    gpu_index_var = ctk.IntVar(value=core_instance.gpu_index)
     # keyboard_library_var removida pois não é mais usada
 
     # Function to toggle visibility of Gemini prompt widgets
@@ -2548,7 +2657,9 @@ def run_settings_gui():
                     new_openrouter_api_key=openrouter_api_key_var.get(),
                     new_openrouter_model=openrouter_model_var.get(),
                     new_gemini_api_key=gemini_api_key_var.get(),
-                    new_gemini_model=gemini_model_var.get()
+                    new_gemini_model=gemini_model_var.get(),
+                    new_batch_size=batch_size_var.get(),
+                    new_gpu_index=gpu_index_var.get()
                 ) # Fechar parênteses da chamada da função
             else:
                 logging.critical("CRITICAL: apply_settings_from_external method not found on core_instance!")
@@ -2786,6 +2897,19 @@ def run_settings_gui():
 
     # Add Restore Default button
     restore_button = ctk.CTkButton(gemini_section_frame, text="Load Correction Prompt as Base", command=restore_gemini_prompt, width=120, fg_color="#00a0ff", hover_color="#0078d7") # Renamed for clarity
+
+    # --- GPU Settings Section ---
+    gpu_section_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
+    gpu_section_frame.pack(fill="x", pady=(0, 10), padx=0)
+    ctk.CTkLabel(gpu_section_frame, text="GPU Settings", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(anchor="w", padx=5)
+    gpu_index_row = ctk.CTkFrame(gpu_section_frame, fg_color="#222831")
+    gpu_index_row.pack(fill="x", padx=0, pady=(5, 0))
+    ctk.CTkLabel(gpu_index_row, text="GPU Index:", width=120).pack(side="left", padx=5)
+    ctk.CTkEntry(gpu_index_row, textvariable=gpu_index_var, width=80).pack(side="left", padx=5)
+    batch_row = ctk.CTkFrame(gpu_section_frame, fg_color="#222831")
+    batch_row.pack(fill="x", padx=0, pady=(5, 0))
+    ctk.CTkLabel(batch_row, text="Batch Size:", width=120).pack(side="left", padx=5)
+    ctk.CTkEntry(batch_row, textvariable=batch_size_var, width=80).pack(side="left", padx=5)
 
     # --- OpenRouter API Section ---
     openrouter_section_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
