@@ -239,6 +239,10 @@ class WhisperCore: # Renamed from WhisperApp
         self.reregister_timer_thread = None
         self.stop_reregister_event = threading.Event()
 
+        # --- Hotkey Health Monitoring ---
+        self.health_check_thread = None
+        self.stop_health_check_event = threading.Event()
+
         # --- Application State ---
         self.current_state = STATE_LOADING_MODEL # Initial state
         self.shutting_down = False # <<< FIX: Flag to prevent double shutdown
@@ -869,6 +873,9 @@ class WhisperCore: # Renamed from WhisperApp
                     device_str_local = "cpu"
                     device_param = "cpu"
                     torch_dtype_local = torch.float32
+
+            if not self.batch_size_specified:
+                self.batch_size = self._suggest_batch_size()
 
             if not self.batch_size_specified:
                 self.batch_size = self._suggest_batch_size()
