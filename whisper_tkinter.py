@@ -2064,7 +2064,6 @@ class WhisperCore: # Renamed from WhisperApp
                 logging.info(f"OpenRouter model changed to: {self.openrouter_model}")
 
         # Apply Gemini settings if provided
-        gemini_changed = False
         if new_gemini_api_key is not None:
             api_key_str = str(new_gemini_api_key)
             if api_key_str != self.gemini_api_key:
