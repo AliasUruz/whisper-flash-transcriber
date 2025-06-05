@@ -1868,14 +1868,14 @@ class WhisperCore: # Renamed from WhisperApp
                             corrected_text = self._correct_text_with_gemini(text_result)
                             if corrected_text != original_text:
                                 logging.info("Text was corrected by Gemini")
-                                print("[INFO] Text was successfully corrected by Gemini API")
+                                logging.info("Text was successfully corrected by Gemini API")
                                 text_result = corrected_text
                             else:
                                 logging.info("Gemini API returned text unchanged")
-                                print("[INFO] Gemini API processed text but made no changes")
+                                logging.info("Gemini API processed text but made no changes")
                         except Exception as e:
                             logging.error(f"Error during Gemini text correction: {e}")
-                            print(f"[ERROR] Gemini text correction failed: {e}")
+                            logging.error(f"Gemini text correction failed: {e}")
                             # Continue with original text on error
 
                     elif correction_service == SERVICE_OPENROUTER:
@@ -1885,14 +1885,14 @@ class WhisperCore: # Renamed from WhisperApp
                             corrected_text = self._correct_text_with_openrouter(text_result)
                             if corrected_text != original_text:
                                 logging.info("Text was corrected by OpenRouter")
-                                print("[INFO] Text was successfully corrected by OpenRouter API")
+                                logging.info("Text was successfully corrected by OpenRouter API")
                                 text_result = corrected_text
                             else:
                                 logging.info("OpenRouter API returned text unchanged")
-                                print("[INFO] OpenRouter API processed text but made no changes")
+                                logging.info("OpenRouter API processed text but made no changes")
                         except Exception as e:
                             logging.error(f"Error during OpenRouter text correction: {e}")
-                            print(f"[ERROR] OpenRouter text correction failed: {e}")
+                            logging.error(f"OpenRouter text correction failed: {e}")
                             # Continue with original text on error
 
                     self._handle_transcription_result(text_result) # Handle copy/paste
