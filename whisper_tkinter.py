@@ -3013,7 +3013,7 @@ def run_settings_gui():
     ctk.CTkLabel(gemini_model_row, text="Model:", width=120).pack(side="left", padx=5) # Already English
     ctk.CTkEntry(gemini_model_row, textvariable=gemini_model_var).pack(side="left", fill="x", expand=True, padx=5)
  
-    gemini_prompt_correction_var = ctk.StringVar(value=core_instance.gemini_prompt) # Variable for correction prompt
+    gemini_prompt_correction_var = ctk.StringVar(value=core_instance.gemini_prompt); settings_vars.append(gemini_prompt_correction_var) # Variable for correction prompt
 
     # Correction Prompt Textbox and Label
     # Correction Prompt Label and Textbox
