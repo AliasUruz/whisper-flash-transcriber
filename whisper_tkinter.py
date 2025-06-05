@@ -1237,6 +1237,17 @@ class WhisperCore: # Renamed from WhisperApp
             # Ensure state reflects idle state correctly after registration
             if self.current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
                  self._set_state(STATE_IDLE)
+
+            # Start health monitoring thread if not already running
+            if not self.health_check_thread or not self.health_check_thread.is_alive():
+                self.stop_health_check_event.clear()
+                self.health_check_thread = threading.Thread(
+                    target=self._hotkey_health_check_task,
+                    daemon=True,
+                    name="HotkeyHealthThread",
+                )
+                self.health_check_thread.start()
+                logging.info("Hotkey health monitoring thread launched.")
         else:
             # All registration attempts failed
             status_msg = f"Error: Hotkey registration failed with all libraries."
@@ -2187,6 +2198,12 @@ class WhisperCore: # Renamed from WhisperApp
         except Exception as e:
             logging.error(f"Error signaling re-register thread to stop: {e}")
 
+        # Signal health monitoring thread to stop
+        try:
+            self.stop_health_check_event.set()
+        except Exception as e:
+            logging.error(f"Error signaling health check thread to stop: {e}")
+
         # 2. Stop KeyboardHotkeyManager - usando _cleanup_hotkeys que já tem tratamento de erros melhorado
         try:
             logging.info("Stopping KeyboardHotkeyManager...")
@@ -2238,6 +2255,16 @@ class WhisperCore: # Renamed from WhisperApp
                     logging.warning("Periodic re-register thread did not stop gracefully.")
         except Exception as e:
             logging.error(f"Error waiting for timer thread during shutdown: {e}")
+
+        # Wait for health monitoring thread to exit
+        try:
+            if self.health_check_thread and self.health_check_thread.is_alive():
+                logging.debug("Waiting for health check thread to stop...")
+                self.health_check_thread.join(timeout=1.5)
+                if self.health_check_thread.is_alive():
+                    logging.warning("Health check thread did not stop gracefully.")
+        except Exception as e:
+            logging.error(f"Error waiting for health check thread during shutdown: {e}")
 
         logging.info("Core shutdown sequence complete.")
 
