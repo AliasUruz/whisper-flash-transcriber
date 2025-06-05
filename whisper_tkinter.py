@@ -1012,6 +1012,19 @@ class WhisperCore: # Renamed from WhisperApp
         # Iniciar o KeyboardHotkeyManager e registrar callbacks
         self._start_autohotkey()
 
+        # Iniciar thread de re-registro periódico das hotkeys
+        try:
+            self.stop_reregister_event.clear()
+            self.reregister_timer_thread = threading.Thread(
+                target=self._periodic_reregister_task,
+                daemon=True,
+                name="PeriodicHotkeyReregister",
+            )
+            self.reregister_timer_thread.start()
+            logging.info("Periodic re-register thread started.")
+        except Exception as e:
+            logging.error(f"Erro ao iniciar thread de re-registro periódico: {e}")
+
         logging.info("Hotkeys registered using keyboard library.")
 
     def _on_model_load_failed(self, error_msg):
