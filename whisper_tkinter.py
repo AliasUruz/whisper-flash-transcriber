@@ -2457,7 +2457,6 @@ def run_settings_gui():
     sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled)
     sound_frequency_var = ctk.StringVar(value=str(core_instance.sound_frequency))
     sound_duration_var = ctk.StringVar(value=str(core_instance.sound_duration))
-    sound_volume_var = ctk.StringVar(value=str(core_instance.sound_volume))
     text_correction_enabled_var = ctk.BooleanVar(value=core_instance.text_correction_enabled)
     text_correction_service_var = ctk.StringVar(value=core_instance.text_correction_service)
     openrouter_api_key_var = ctk.StringVar(value=core_instance.openrouter_api_key)
@@ -2802,19 +2801,10 @@ def run_settings_gui():
                 messagebox.showwarning("Invalid Value", "Duration must be a number", parent=settings_win) # Already English
                 return
 
-        volume_value = sound_volume_var.get().strip()
-        if volume_value == "":
-            sound_volume_to_apply = core_instance.sound_volume
-            logging.warning(f"Sound volume field empty or invalid, using current value: {sound_volume_to_apply}")
-        else:
-            try:
-                sound_volume_to_apply = float(volume_value)
-                if not (0.0 <= sound_volume_to_apply <= 1.0):
-                    messagebox.showwarning("Invalid Value", "Volume must be between 0.0 and 1.0", parent=settings_win) # Already English
-                    return
-            except (ValueError, TypeError):
-                messagebox.showwarning("Invalid Value", "Volume must be a number", parent=settings_win) # Already English
-                return
+        sound_volume_to_apply = float(sound_volume_var.get())
+        if not (0.0 <= sound_volume_to_apply <= 1.0):
+            messagebox.showwarning("Invalid Value", "Volume must be between 0.0 and 1.0", parent=settings_win) # Already English
+            return
 
         batch_value = batch_size_var.get().strip()
         if batch_value == "":
@@ -2992,11 +2982,10 @@ def run_settings_gui():
         try:
             freq_value = sound_frequency_var.get().strip()
             duration_value = sound_duration_var.get().strip()
-            volume_value = sound_volume_var.get().strip()
+            volume = float(sound_volume_var.get())
 
             freq = int(freq_value)
             duration = float(duration_value)
-            volume = float(volume_value)
             if not (20 <= freq <= 20000):
                 messagebox.showwarning("Invalid Value", "Frequency must be between 20 and 20000 Hz", parent=settings_win) # Already English
                 return
