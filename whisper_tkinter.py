@@ -549,16 +549,30 @@ class WhisperCore: # Renamed from WhisperApp
             self.batch_size = DEFAULT_CONFIG[BATCH_SIZE_CONFIG_KEY]
             self.config[BATCH_SIZE_CONFIG_KEY] = self.batch_size
 
-        # GPU index
+        # GPU index with automatic selection support (-1)
         self.gpu_index_specified = GPU_INDEX_CONFIG_KEY in loaded_config
         try:
-            gpu_idx_val = int(self.config.get(GPU_INDEX_CONFIG_KEY, DEFAULT_CONFIG[GPU_INDEX_CONFIG_KEY]))
-            if gpu_idx_val < 0:
-                raise ValueError("GPU index must be >=0")
-            self.gpu_index = gpu_idx_val
+            raw_gpu_idx_val = loaded_config.get(GPU_INDEX_CONFIG_KEY, -1)
+            gpu_idx_val = int(raw_gpu_idx_val)
+            if gpu_idx_val < -1:
+                logging.warning(
+                    f"Invalid GPU index '{gpu_idx_val}' in config. Must be -1 (auto) or >= 0. Using auto (-1)."
+                )
+                self.gpu_index = -1
+            else:
+                self.gpu_index = gpu_idx_val
+
+            if not self.gpu_index_specified:
+                self.gpu_index = -1
+                logging.info(
+                    "GPU index not specified in config. Defaulting to automatic selection (gpu_index set to -1)."
+                )
         except (ValueError, TypeError):
-            self.gpu_index = DEFAULT_CONFIG[GPU_INDEX_CONFIG_KEY]
-            self.config[GPU_INDEX_CONFIG_KEY] = self.gpu_index
+            logging.warning(
+                f"Invalid GPU index value '{self.config.get(GPU_INDEX_CONFIG_KEY)}' in config. Falling back to automatic selection (-1)."
+            )
+            self.gpu_index = -1
+            self.gpu_index_specified = False
 
         # Load and validate Gemini mode
         try:
@@ -858,30 +872,90 @@ class WhisperCore: # Renamed from WhisperApp
 
             logging.info(f"CUDA available: {torch.cuda.is_available()}")
             if device_str_local == "cuda":
-                try:
-                    if self.gpu_index >= torch.cuda.device_count():
-                        logging.warning(f"GPU index {self.gpu_index} out of range. Using GPU 0.")
-                        self.gpu_index = 0
-                    torch.cuda.set_device(self.gpu_index)
-                    props = torch.cuda.get_device_properties(self.gpu_index)
-                    total_gb = props.total_memory / 1024**3
-                    logging.info(f"Using GPU {self.gpu_index}: {props.name} ({total_gb:.2f} GB)")
-                    if total_gb < 4:
-                        logging.warning("GPU memory appears low (<4GB). Falling back to CPU.")
+                if self.gpu_index == -1:
+                    logging.info("Attempting automatic GPU selection...")
+                    try:
+                        num_gpus = torch.cuda.device_count()
+                        if num_gpus == 0:
+                            logging.warning("CUDA reported available, but no GPUs found. Falling back to CPU.")
+                            device_str_local = "cpu"
+                            device_param = "cpu"
+                            torch_dtype_local = torch.float32
+                            self.gpu_index = -1
+                        elif num_gpus == 1:
+                            self.gpu_index = 0
+                            logging.info(f"Single GPU (index 0) automatically selected: {torch.cuda.get_device_name(0)}")
+                        else:
+                            logging.info(f"Found {num_gpus} GPUs. Selecting the one with most VRAM...")
+                            best_gpu_index = 0
+                            max_vram = 0
+                            for i in range(num_gpus):
+                                props = torch.cuda.get_device_properties(i)
+                                logging.info(f"  GPU {i}: {props.name} - Total VRAM: {props.total_memory / (1024**3):.2f} GB")
+                                if props.total_memory > max_vram:
+                                    max_vram = props.total_memory
+                                    best_gpu_index = i
+                            self.gpu_index = best_gpu_index
+                            logging.info(
+                                f"Automatically selected GPU {self.gpu_index}: {torch.cuda.get_device_name(self.gpu_index)} with {max_vram / (1024**3):.2f} GB VRAM."
+                            )
+                    except Exception as e:
+                        logging.error(
+                            f"Error during automatic GPU selection: {e}. Falling back to GPU 0 (if available) or CPU.",
+                            exc_info=True,
+                        )
+                        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+                            self.gpu_index = 0
+                            logging.info("Using GPU 0 as fallback from automatic selection failure.")
+                        else:
+                            device_str_local = "cpu"
+                            device_param = "cpu"
+                            torch_dtype_local = torch.float32
+                            self.gpu_index = -1
+
+                if device_str_local == "cuda":
+                    try:
+                        if self.gpu_index >= torch.cuda.device_count():
+                            logging.warning(
+                                f"Selected GPU index {self.gpu_index} is out of range (Found {torch.cuda.device_count()} GPUs). Using GPU 0."
+                            )
+                            self.gpu_index = 0
+                            if self.gpu_index >= torch.cuda.device_count():
+                                raise IndexError("GPU 0 is also out of range.")
+
+                        torch.cuda.set_device(self.gpu_index)
+                        props = torch.cuda.get_device_properties(self.gpu_index)
+                        total_gb = props.total_memory / 1024**3
+                        logging.info(f"Using GPU {self.gpu_index}: {props.name} ({total_gb:.2f} GB)")
+                        if total_gb < 4:
+                            logging.warning(
+                                f"GPU {self.gpu_index} has less than 4GB VRAM ({total_gb:.2f}GB). Falling back to CPU for model loading."
+                            )
+                            device_str_local = "cpu"
+                            device_param = "cpu"
+                            torch_dtype_local = torch.float32
+                            self.gpu_index = -1
+                    except Exception as e:
+                        logging.error(
+                            f"Failed to set or validate GPU {self.gpu_index}: {e}. Falling back to CPU.",
+                            exc_info=True,
+                        )
                         device_str_local = "cpu"
                         device_param = "cpu"
                         torch_dtype_local = torch.float32
-                except Exception as e:
-                    logging.error(f"Failed to select GPU {self.gpu_index}: {e}")
-                    device_str_local = "cpu"
-                    device_param = "cpu"
-                    torch_dtype_local = torch.float32
+                        self.gpu_index = -1
 
             if not self.batch_size_specified:
-                self.batch_size = self._suggest_batch_size()
+                if device_str_local == "cuda":
+                    self.batch_size = self._suggest_batch_size()
+                else:
+                    self.batch_size = 4
+                    logging.info(f"Using CPU, suggested batch size set to {self.batch_size}.")
 
             if device_str_local == "cuda":
                 device_param = self.gpu_index
+            else:
+                device_param = "cpu"
             loaded_pipe = pipeline(
                 "automatic-speech-recognition",
                 model="openai/whisper-large-v3",
