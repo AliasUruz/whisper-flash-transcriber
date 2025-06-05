@@ -1267,6 +1267,8 @@ class WhisperCore: # Renamed from WhisperApp
             self._set_state(STATE_ERROR_SETTINGS)
             self._log_status(status_msg, error=True)
 
+        return success
+
     def _cleanup_hotkeys(self):
         """Unhooks all keyboard listeners."""
         logging.debug("Attempting to unhook keyboard listeners...")
@@ -1378,13 +1380,15 @@ class WhisperCore: # Renamed from WhisperApp
                 try:
                     # Run the reload in a separate thread to avoid blocking the timer?
                     # No, the reload itself needs the keyboard lock, better to do it here.
-                    success = self._reload_keyboard_and_suppress() # Captura o resultado
+                    success = self._reload_keyboard_and_suppress()  # Captura o resultado
                     if success:
                         logging.info("Periodic hotkey re-registration attempt finished successfully.")
+                        with self.state_lock:
+                            if self.current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
+                                self._set_state(STATE_IDLE)
                     else:
                         logging.warning("Periodic hotkey re-registration attempt failed.")
-                        # Set error state if reload fails consistently?
-                        self._set_state(STATE_ERROR_SETTINGS) # Indicate potential issue
+                        self._set_state(STATE_ERROR_SETTINGS)  # Indicate potential issue
                 except Exception as e:
                     logging.error(f"Error during periodic hotkey re-registration: {e}", exc_info=True)
                     self._set_state(STATE_ERROR_SETTINGS) # Indicate potential issue
