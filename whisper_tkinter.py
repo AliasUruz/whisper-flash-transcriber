@@ -2437,9 +2437,9 @@ def run_settings_gui():
     reload_key_var = ctk.StringVar(value=core_instance.reload_key.upper())
     new_reload_key_temp = None
     sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled)
-    sound_frequency_var = ctk.IntVar(value=core_instance.sound_frequency)
-    sound_duration_var = ctk.DoubleVar(value=core_instance.sound_duration)
-    sound_volume_var = ctk.DoubleVar(value=core_instance.sound_volume)
+    sound_frequency_var = ctk.StringVar(value=str(core_instance.sound_frequency))
+    sound_duration_var = ctk.StringVar(value=str(core_instance.sound_duration))
+    sound_volume_var = ctk.StringVar(value=str(core_instance.sound_volume))
     text_correction_enabled_var = ctk.BooleanVar(value=core_instance.text_correction_enabled)
     text_correction_service_var = ctk.StringVar(value=core_instance.text_correction_service)
     openrouter_api_key_var = ctk.StringVar(value=core_instance.openrouter_api_key)
@@ -2447,8 +2447,8 @@ def run_settings_gui():
     gemini_api_key_var = ctk.StringVar(value=core_instance.gemini_api_key)
     gemini_model_var = ctk.StringVar(value=core_instance.gemini_model)
     gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode) # Variável para o modo Gemini
-    batch_size_var = ctk.IntVar(value=core_instance.batch_size)
-    gpu_index_var = ctk.IntVar(value=core_instance.gpu_index)
+    batch_size_var = ctk.StringVar(value=str(core_instance.batch_size))
+    gpu_index_var = ctk.StringVar(value=str(core_instance.gpu_index))
     # keyboard_library_var removida pois não é mais usada
 
     # Function to toggle visibility of Gemini prompt widgets
@@ -2756,59 +2756,69 @@ def run_settings_gui():
 
         sound_enabled_to_apply = sound_enabled_var.get()
 
-        try:
-            sound_freq_to_apply = int(sound_frequency_var.get())
-            if not (20 <= sound_freq_to_apply <= 20000):
-                messagebox.showwarning("Invalid Value", "Frequency must be between 20 and 20000 Hz", parent=settings_win) # Already English
-                return
-        except TclError:
+        freq_value = sound_frequency_var.get().strip()
+        if freq_value == "":
             sound_freq_to_apply = core_instance.sound_frequency
             logging.warning(f"Sound frequency field empty or invalid, using current value: {sound_freq_to_apply}")
-        except (ValueError, TypeError):
-            messagebox.showwarning("Invalid Value", "Frequency must be a number", parent=settings_win) # Already English
-            return
-
-        try:
-            sound_duration_to_apply = float(sound_duration_var.get())
-            if not (0.05 <= sound_duration_to_apply <= 2.0):
-                messagebox.showwarning("Invalid Value", "Duration must be between 0.05 and 2.0 seconds", parent=settings_win) # Already English
+        else:
+            try:
+                sound_freq_to_apply = int(freq_value)
+                if not (20 <= sound_freq_to_apply <= 20000):
+                    messagebox.showwarning("Invalid Value", "Frequency must be between 20 and 20000 Hz", parent=settings_win) # Already English
+                    return
+            except (ValueError, TypeError):
+                messagebox.showwarning("Invalid Value", "Frequency must be a number", parent=settings_win) # Already English
                 return
-        except TclError:
+
+        duration_value = sound_duration_var.get().strip()
+        if duration_value == "":
             sound_duration_to_apply = core_instance.sound_duration
             logging.warning(f"Sound duration field empty or invalid, using current value: {sound_duration_to_apply}")
-        except (ValueError, TypeError):
-            messagebox.showwarning("Invalid Value", "Duration must be a number", parent=settings_win) # Already English
-            return
-
-        try:
-            sound_volume_to_apply = float(sound_volume_var.get())
-            if not (0.0 <= sound_volume_to_apply <= 1.0):
-                messagebox.showwarning("Invalid Value", "Volume must be between 0.0 and 1.0", parent=settings_win) # Already English
+        else:
+            try:
+                sound_duration_to_apply = float(duration_value)
+                if not (0.05 <= sound_duration_to_apply <= 2.0):
+                    messagebox.showwarning("Invalid Value", "Duration must be between 0.05 and 2.0 seconds", parent=settings_win) # Already English
+                    return
+            except (ValueError, TypeError):
+                messagebox.showwarning("Invalid Value", "Duration must be a number", parent=settings_win) # Already English
                 return
-        except TclError:
+
+        volume_value = sound_volume_var.get().strip()
+        if volume_value == "":
             sound_volume_to_apply = core_instance.sound_volume
             logging.warning(f"Sound volume field empty or invalid, using current value: {sound_volume_to_apply}")
-        except (ValueError, TypeError):
-            messagebox.showwarning("Invalid Value", "Volume must be a number", parent=settings_win) # Already English
-            return
+        else:
+            try:
+                sound_volume_to_apply = float(volume_value)
+                if not (0.0 <= sound_volume_to_apply <= 1.0):
+                    messagebox.showwarning("Invalid Value", "Volume must be between 0.0 and 1.0", parent=settings_win) # Already English
+                    return
+            except (ValueError, TypeError):
+                messagebox.showwarning("Invalid Value", "Volume must be a number", parent=settings_win) # Already English
+                return
 
-        try:
-            batch_size_to_apply = int(batch_size_var.get())
-        except TclError:
+        batch_value = batch_size_var.get().strip()
+        if batch_value == "":
             batch_size_to_apply = core_instance.batch_size
             logging.warning(f"Batch size field empty or invalid, using current value: {batch_size_to_apply}")
-        except (ValueError, TypeError):
-            messagebox.showwarning("Invalid Value", "Batch size must be a number", parent=settings_win)
-            return
+        else:
+            try:
+                batch_size_to_apply = int(batch_value)
+            except (ValueError, TypeError):
+                messagebox.showwarning("Invalid Value", "Batch size must be a number", parent=settings_win)
+                return
 
-        try:
-            gpu_index_to_apply = int(gpu_index_var.get())
-        except TclError:
+        gpu_value = gpu_index_var.get().strip()
+        if gpu_value == "":
             gpu_index_to_apply = core_instance.gpu_index
             logging.warning(f"GPU index field empty or invalid, using current value: {gpu_index_to_apply}")
-        except (ValueError, TypeError):
-            messagebox.showwarning("Invalid Value", "GPU index must be a number", parent=settings_win)
-            return
+        else:
+            try:
+                gpu_index_to_apply = int(gpu_value)
+            except (ValueError, TypeError):
+                messagebox.showwarning("Invalid Value", "GPU index must be a number", parent=settings_win)
+                return
 
 
         try:
@@ -2957,9 +2967,13 @@ def run_settings_gui():
             messagebox.showinfo("Sound Test", "Sound is disabled. Enable it first to test.", parent=settings_win) # Already English
             return
         try:
-            freq = int(sound_frequency_var.get())
-            duration = float(sound_duration_var.get())
-            volume = float(sound_volume_var.get())
+            freq_value = sound_frequency_var.get().strip()
+            duration_value = sound_duration_var.get().strip()
+            volume_value = sound_volume_var.get().strip()
+
+            freq = int(freq_value)
+            duration = float(duration_value)
+            volume = float(volume_value)
             if not (20 <= freq <= 20000):
                 messagebox.showwarning("Invalid Value", "Frequency must be between 20 and 20000 Hz", parent=settings_win) # Already English
                 return
