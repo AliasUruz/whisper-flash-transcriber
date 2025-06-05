@@ -2434,12 +2434,26 @@ def run_settings_gui():
     settings_win.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
 
     # --- Variables ---
-    auto_paste_var = ctk.BooleanVar(value=core_instance.auto_paste)
-    mode_var = ctk.StringVar(value=core_instance.record_mode)
-    detected_key_var = ctk.StringVar(value=core_instance.record_key.upper())
+    settings_vars = []
+    auto_paste_var = ctk.BooleanVar(value=core_instance.auto_paste); settings_vars.append(auto_paste_var)
+    mode_var = ctk.StringVar(value=core_instance.record_mode); settings_vars.append(mode_var)
+    detected_key_var = ctk.StringVar(value=core_instance.record_key.upper()); settings_vars.append(detected_key_var)
     new_record_key_temp = None
-    reload_key_var = ctk.StringVar(value=core_instance.reload_key.upper())
+    reload_key_var = ctk.StringVar(value=core_instance.reload_key.upper()); settings_vars.append(reload_key_var)
     new_reload_key_temp = None
+    sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled); settings_vars.append(sound_enabled_var)
+    sound_frequency_var = ctk.IntVar(value=core_instance.sound_frequency); settings_vars.append(sound_frequency_var)
+    sound_duration_var = ctk.DoubleVar(value=core_instance.sound_duration); settings_vars.append(sound_duration_var)
+    sound_volume_var = ctk.DoubleVar(value=core_instance.sound_volume); settings_vars.append(sound_volume_var)
+    text_correction_enabled_var = ctk.BooleanVar(value=core_instance.text_correction_enabled); settings_vars.append(text_correction_enabled_var)
+    text_correction_service_var = ctk.StringVar(value=core_instance.text_correction_service); settings_vars.append(text_correction_service_var)
+    openrouter_api_key_var = ctk.StringVar(value=core_instance.openrouter_api_key); settings_vars.append(openrouter_api_key_var)
+    openrouter_model_var = ctk.StringVar(value=core_instance.openrouter_model); settings_vars.append(openrouter_model_var)
+    gemini_api_key_var = ctk.StringVar(value=core_instance.gemini_api_key); settings_vars.append(gemini_api_key_var)
+    gemini_model_var = ctk.StringVar(value=core_instance.gemini_model); settings_vars.append(gemini_model_var)
+    gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode); settings_vars.append(gemini_mode_var)  # Variável para o modo Gemini
+    batch_size_var = ctk.IntVar(value=core_instance.batch_size); settings_vars.append(batch_size_var)
+    gpu_index_var = ctk.IntVar(value=core_instance.gpu_index); settings_vars.append(gpu_index_var)
     sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled)
     sound_frequency_var = ctk.StringVar(value=str(core_instance.sound_frequency))
     sound_duration_var = ctk.StringVar(value=str(core_instance.sound_duration))
@@ -2861,6 +2875,7 @@ def run_settings_gui():
 
     def close_settings():
         """Closes the settings window and its temporary root (runs in Tkinter thread)."""
+        nonlocal settings_vars, temp_tk_root
         global settings_window_instance, settings_thread_running
         logging.info("Settings window closing sequence started (in Tkinter thread).")
 
@@ -2883,6 +2898,10 @@ def run_settings_gui():
 
         # Definir settings_window_instance como None após a destruição
         settings_window_instance = None
+
+        # Limpar variáveis de configuração
+        for i in range(len(settings_vars)):
+            settings_vars[i] = None
 
         # Destruir temp_tk_root apenas se ele existir e for válido
         if temp_tk_root and temp_tk_root.winfo_exists():
@@ -3025,7 +3044,7 @@ def run_settings_gui():
     ctk.CTkLabel(gemini_model_row, text="Model:", width=120).pack(side="left", padx=5) # Already English
     ctk.CTkEntry(gemini_model_row, textvariable=gemini_model_var).pack(side="left", fill="x", expand=True, padx=5)
  
-    gemini_prompt_correction_var = ctk.StringVar(value=core_instance.gemini_prompt) # Variable for correction prompt
+    gemini_prompt_correction_var = ctk.StringVar(value=core_instance.gemini_prompt); settings_vars.append(gemini_prompt_correction_var) # Variable for correction prompt
 
     # Correction Prompt Textbox and Label
     # Correction Prompt Label and Textbox
