@@ -7,6 +7,31 @@ import time
 # Import tkinter apenas quando necessário dentro das funções
 import tkinter.messagebox as messagebox
 from tkinter import TclError
+import tkinter as tk
+
+# --- Ajuste para evitar erros "main thread is not in main loop" ao destruir
+# variáveis Tkinter quando a aplicação encerra.
+def _safe_variable_del(self):
+    """Versão segura do destrutor de tkinter.Variable."""
+    tk_root = getattr(self, "_tk", None)
+    if not tk_root:
+        return
+    try:
+        if tk_root.getboolean(tk_root.call("info", "exists", self._name)):
+            tk_root.globalunsetvar(self._name)
+    except Exception:
+        # Ignora falhas decorrentes de loop principal inexistente
+        pass
+    cmds = getattr(self, "_tclCommands", None)
+    if cmds:
+        for name in cmds:
+            try:
+                tk_root.deletecommand(name)
+            except Exception:
+                pass
+        self._tclCommands = None
+
+tk.Variable.__del__ = _safe_variable_del
 import sounddevice as sd
 import numpy as np
 import wave
@@ -3216,7 +3241,7 @@ def on_settings_menu_click(*_):
         # thread-safe `after` method and return.
         if settings_thread_running:
             logging.info("Settings window already running. Attempting to focus.")
-            if settings_window_instance:
+            if settings_window_instance and settings_window_instance.winfo_exists():
                 try:
                     settings_window_instance.after(0, lambda: (
                         settings_window_instance.lift(),
@@ -3224,7 +3249,12 @@ def on_settings_menu_click(*_):
                     ))
                 except Exception as e:
                     logging.debug(f"Could not focus settings window: {e}")
-            return
+                return
+            else:
+                logging.debug("Settings window instance invalid. Resetting flag.")
+                settings_thread_running = False
+                settings_window_instance = None
+                # Sem retorno: criaremos uma nova janela abaixo
 
         # Otherwise, start a new settings thread. Set the running flag here to
         # minimise the chance of double threads before the thread sets it.
