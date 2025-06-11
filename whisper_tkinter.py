@@ -92,6 +92,7 @@ DEFAULT_CONFIG = {
     "sound_duration": 0.3,
     "sound_volume": 0.5,
     "agent_key": "F5",
+    "agent_record_duration": 5.0,
     "keyboard_library": "win32",  # Apenas a opção 'win32' é suportada agora
     "text_correction_enabled": False,
     "text_correction_service": "none",
@@ -534,7 +535,6 @@ class WhisperCore: # Renamed from WhisperApp
             self.agent_key = DEFAULT_CONFIG[AGENT_KEY_CONFIG_KEY]
             self.config[AGENT_KEY_CONFIG_KEY] = self.agent_key
 
-
         # Gemini agent model
         try:
             self.gemini_agent_model = str(self.config.get("gemini_agent_model", DEFAULT_CONFIG["gemini_agent_model"]))
@@ -728,6 +728,7 @@ class WhisperCore: # Renamed from WhisperApp
             SOUND_VOLUME_CONFIG_KEY: self.sound_volume,
             # Agent key
             AGENT_KEY_CONFIG_KEY: self.agent_key,
+            AGENT_RECORD_DURATION_CONFIG_KEY: self.agent_record_duration,
             # Keyboard library
             KEYBOARD_LIBRARY_CONFIG_KEY: self.keyboard_library,
             # Text correction settings
@@ -2152,7 +2153,6 @@ class WhisperCore: # Renamed from WhisperApp
                 config_needs_saving = True
                 logging.info(f"Agent key changed to: {self.agent_key.upper()}")
 
-
         if new_gemini_agent_model is not None and new_gemini_agent_model != self.gemini_agent_model:
             self.gemini_agent_model = new_gemini_agent_model
             config_needs_saving = True
@@ -3143,7 +3143,6 @@ def run_settings_gui():
     agent_key_display_label.pack(side="left", padx=5)
     detect_agent_key_button = ctk.CTkButton(agent_key_frame, text="Detect Key", command=lambda: start_detect_agent_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7")
     detect_agent_key_button.pack(side="left", padx=5)
-
 
     # --- Agent Model Selection Section ---
     agent_model_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
