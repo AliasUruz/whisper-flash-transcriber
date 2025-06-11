@@ -91,7 +91,7 @@ DEFAULT_CONFIG = {
     "sound_frequency": 400,
     "sound_duration": 0.3,
     "sound_volume": 0.5,
-    "reload_key": "F5",
+    "agent_key": "F5",
     "keyboard_library": "win32",  # Apenas a opção 'win32' é suportada agora
     "text_correction_enabled": False,
     "text_correction_service": "none",
@@ -130,6 +130,7 @@ Transcribed speech: {text}""",
 HOTKEY_DEBOUNCE_INTERVAL = 0.3
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1
+AGENT_RECORD_DURATION = 3.0
 MIN_RECORDING_DURATION_CONFIG_KEY = "min_record_duration"
 # Sound configuration keys
 SOUND_ENABLED_CONFIG_KEY = "sound_enabled"
@@ -141,8 +142,8 @@ AUTO_REREGISTER_CONFIG_KEY = "auto_reregister_hotkeys"
 # Batch size and GPU index configuration keys
 BATCH_SIZE_CONFIG_KEY = "batch_size"
 GPU_INDEX_CONFIG_KEY = "gpu_index"
-# Reload key configuration
-RELOAD_KEY_CONFIG_KEY = "reload_key"
+# Agent key configuration
+AGENT_KEY_CONFIG_KEY = "agent_key"
 # Keyboard library configuration - Usando apenas Win32 API
 KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 # Apenas uma opção de biblioteca de teclado agora
@@ -237,8 +238,8 @@ class WhisperCore: # Renamed from WhisperApp
         self.gemini_model_options = []
         self.sound_lock = RLock()  # Lock for sound playback
 
-        # Reload key configuration
-        self.reload_key = DEFAULT_CONFIG["reload_key"]
+        # Agent key configuration
+        self.agent_key = DEFAULT_CONFIG["agent_key"]
 
         # Auto re-register setting
         self.auto_reregister_hotkeys = DEFAULT_CONFIG[AUTO_REREGISTER_CONFIG_KEY]
@@ -521,13 +522,13 @@ class WhisperCore: # Renamed from WhisperApp
             self.sound_volume = DEFAULT_CONFIG[SOUND_VOLUME_CONFIG_KEY]
             self.config[SOUND_VOLUME_CONFIG_KEY] = self.sound_volume
 
-        # Reload key validation
+        # Agent key validation
         try:
-            reload_key = str(self.config.get(RELOAD_KEY_CONFIG_KEY, DEFAULT_CONFIG[RELOAD_KEY_CONFIG_KEY])).lower()
-            self.reload_key = reload_key
+            agent_key = str(self.config.get(AGENT_KEY_CONFIG_KEY, DEFAULT_CONFIG[AGENT_KEY_CONFIG_KEY])).lower()
+            self.agent_key = agent_key
         except (ValueError, TypeError):
-            self.reload_key = DEFAULT_CONFIG[RELOAD_KEY_CONFIG_KEY]
-            self.config[RELOAD_KEY_CONFIG_KEY] = self.reload_key
+            self.agent_key = DEFAULT_CONFIG[AGENT_KEY_CONFIG_KEY]
+            self.config[AGENT_KEY_CONFIG_KEY] = self.agent_key
 
         # Keyboard library - Apenas Win32 é suportado agora
         self.keyboard_library = KEYBOARD_LIB_WIN32
@@ -706,8 +707,8 @@ class WhisperCore: # Renamed from WhisperApp
             SOUND_FREQUENCY_CONFIG_KEY: self.sound_frequency,
             SOUND_DURATION_CONFIG_KEY: self.sound_duration,
             SOUND_VOLUME_CONFIG_KEY: self.sound_volume,
-            # Reload key
-            RELOAD_KEY_CONFIG_KEY: self.reload_key,
+            # Agent key
+            AGENT_KEY_CONFIG_KEY: self.agent_key,
             # Keyboard library
             KEYBOARD_LIBRARY_CONFIG_KEY: self.keyboard_library,
             # Text correction settings
@@ -928,6 +929,34 @@ class WhisperCore: # Renamed from WhisperApp
             logging.error(f"Error during transcription result handling (paste): {e}")
             self._log_status("Transcription complete. Error pasting.", error=True)
 
+    def _handle_agent_result(self, prompt_text):
+        """Processes the spoken command using Gemini and copies the response."""
+        if not prompt_text or prompt_text == "[No speech detected]":
+            self._log_status("Comando vazio.", error=True)
+            return
+
+        if GeminiAPI is None or not self.gemini_api_key:
+            self._log_status("Gemini não configurado.", error=True)
+            return
+
+        if self.gemini_client is None:
+            try:
+                self.gemini_client = GeminiAPI(api_key=self.gemini_api_key, model_id=self.gemini_model, prompt=self.gemini_prompt)
+            except Exception as e:
+                logging.error(f"Erro inicializando Gemini: {e}")
+                self._log_status("Erro ao inicializar Gemini", error=True)
+                return
+
+        try:
+            response = self.gemini_client.correct_text(prompt_text, override_prompt=self.gemini_agent_prompt)
+            if pyperclip:
+                pyperclip.copy(response)
+            logging.info("Resposta do agente copiada para o clipboard.")
+            self._log_status("Comando executado.")
+        except Exception as e:
+            logging.error(f"Erro no comando agêntico: {e}")
+            self._log_status("Erro ao executar comando", error=True)
+
 
     def _do_paste(self):
         """Performs the paste action."""
@@ -1140,7 +1169,7 @@ class WhisperCore: # Renamed from WhisperApp
                 # Atualizar a configuração do KeyboardHotkeyManager
                 self.ahk_manager.update_config(
                     record_key=self.record_key,
-                    reload_key=self.reload_key,
+                    agent_key=self.agent_key,
                     record_mode=self.record_mode
                 )
 
@@ -1149,7 +1178,7 @@ class WhisperCore: # Renamed from WhisperApp
                     toggle=self.toggle_recording,
                     start=self.start_recording,
                     stop=self.stop_recording_if_needed,
-                    reload=self.force_reregister_hotkeys
+                    agent=self.start_agent_command
                 )
 
                 # Iniciar o KeyboardHotkeyManager
@@ -1233,27 +1262,11 @@ class WhisperCore: # Renamed from WhisperApp
                     self._debounce_logic(self.start_recording)
                     return True  # Suppress the key
 
-            # Check if this is our reload key
-            if key_str.lower() == self.reload_key.lower():
-                logging.info(f"Pynput detected reload key press: {key_str}")
-                # Debounce to prevent multiple rapid calls
-                current_time = time.time()
-                if hasattr(self, 'last_reload_time') and current_time - self.last_reload_time < HOTKEY_DEBOUNCE_INTERVAL:
-                    logging.debug(f"Ignoring reload hotkey press (debounce): {current_time - self.last_reload_time:.2f}s")
-                    return False  # Don't suppress other keys
-
-                self.last_reload_time = current_time
-                logging.info(f"Reload hotkey pressed: {self.reload_key}")
-
-                # Play a sound to indicate reload is happening
-                if self.sound_enabled:
-                    threading.Thread(target=self._play_generated_tone_stream, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
-                    time.sleep(0.2)  # Small delay between sounds
-                    threading.Thread(target=self._play_generated_tone_stream, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
-
-                # Force re-register in a separate thread to avoid blocking
-                threading.Thread(target=self.force_reregister_hotkeys, daemon=True, name="ReloadHotkeyThread").start()
-                return True  # Suppress the key
+            # Check if this is our agent key
+            if key_str.lower() == self.agent_key.lower():
+                logging.info(f"Pynput detected agent key press: {key_str}")
+                self._debounce_logic(self.start_agent_command)
+                return True
         except Exception as e:
             logging.error(f"Error in pynput press handler: {e}", exc_info=True)
 
@@ -1388,34 +1401,6 @@ class WhisperCore: # Renamed from WhisperApp
             except Exception as e:
                 logging.error(f"Error during KeyboardHotkeyManager cleanup: {e}")
 
-    def _register_reload_hotkey(self):
-        """Registers the reload hotkey with KeyboardHotkeyManager."""
-        # O hotkey de reload é gerenciado pelo KeyboardHotkeyManager
-        # Não é necessário fazer nada adicional, pois o KeyboardHotkeyManager já registra
-        # o hotkey de reload quando é iniciado no método _start_autohotkey
-        logging.info(f"Reload hotkey is handled by KeyboardHotkeyManager: {self.reload_key}")
-        return True
-
-    def _reload_hotkey_handler(self):
-        """Handler for the reload hotkey press."""
-        # Debounce to prevent multiple rapid calls
-        current_time = time.time()
-        if hasattr(self, 'last_reload_time') and current_time - self.last_reload_time < HOTKEY_DEBOUNCE_INTERVAL:
-            logging.debug(f"Ignoring reload hotkey press (debounce): {current_time - self.last_reload_time:.2f}s")
-            return
-
-        # Armazenar o tempo atual para debounce
-        self.last_reload_time = current_time
-        logging.info(f"Reload hotkey pressed: {self.reload_key}")
-
-        # Play a sound to indicate reload is happening
-        if self.sound_enabled:
-            threading.Thread(target=self._play_generated_tone_stream, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
-            time.sleep(0.2)  # Small delay between sounds
-            threading.Thread(target=self._play_generated_tone_stream, kwargs={"frequency": self.sound_frequency * 1.2, "duration": 0.15, "is_start": True}, daemon=True).start()
-
-        # Force re-register in a separate thread to avoid blocking
-        threading.Thread(target=self.force_reregister_hotkeys, daemon=True, name="ReloadHotkeyThread").start()
 
     def _reload_keyboard_and_suppress(self):
         """Recarrega completamente o KeyboardHotkeyManager."""
@@ -1515,7 +1500,7 @@ class WhisperCore: # Renamed from WhisperApp
                     # Atualizar a configuração e reiniciar o KeyboardHotkeyManager
                     self.ahk_manager.update_config(
                         record_key=self.record_key,
-                        reload_key=self.reload_key,
+                        agent_key=self.agent_key,
                         record_mode=self.record_mode
                     )
 
@@ -1524,7 +1509,7 @@ class WhisperCore: # Renamed from WhisperApp
                         toggle=self.toggle_recording,
                         start=self.start_recording,
                         stop=self.stop_recording_if_needed,
-                        reload=self.force_reregister_hotkeys # Mantém a capacidade de auto-chamada se necessário no futuro
+                        agent=self.start_agent_command
                     )
 
                     success = self.ahk_manager.start()
@@ -1654,8 +1639,8 @@ class WhisperCore: # Renamed from WhisperApp
         # Start audio capture thread
         threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread").start()
 
-    def stop_recording(self):
-        """Stops recording, checks duration, and triggers saving if sufficient."""
+    def stop_recording(self, agent_mode=False):
+        """Stops recording, checks duration, and triggers saving."""
         logging.debug("Attempting to stop recording...")
         should_save = False
         recording_duration = 0.0
@@ -1723,7 +1708,7 @@ class WhisperCore: # Renamed from WhisperApp
             # State set in the task now
             # self._set_state(STATE_SAVING)
             # Start save task in thread
-            threading.Thread(target=self._save_and_transcribe_task, args=(audio_data_copy,), daemon=True, name="SaveTranscribeThread").start()
+            threading.Thread(target=self._save_and_transcribe_task, args=(audio_data_copy, agent_mode), daemon=True, name="SaveTranscribeThread").start()
         elif not should_save:
              pass # Already handled the "too short" case inside the lock
         else: # Should not happen if should_save is True but audio_data_copy is None
@@ -1769,10 +1754,45 @@ class WhisperCore: # Renamed from WhisperApp
             logging.info("Toggle: Currently stopped, calling start...")
             self.start_recording()
 
+    def start_agent_command(self):
+        """Captures a short command and processes it with the agent prompt."""
+        with self.recording_lock:
+            if self.is_recording:
+                logging.warning("Cannot start agent command while recording.")
+                return
+            with self.transcription_lock:
+                if self.transcription_in_progress:
+                    logging.warning("Cannot start agent command: transcription in progress.")
+                    return
+            with self.state_lock:
+                if self.pipe is None or self.current_state == STATE_LOADING_MODEL:
+                    self._log_status("Model not loaded.", error=True)
+                    return
+                if self.current_state.startswith("ERROR"):
+                    self._log_status(f"Cannot start command: state {self.current_state}", error=True)
+                    return
+            self.is_recording = True
+            self.start_time = time.time()
+            self.recording_data.clear()
+
+        self._set_state(STATE_RECORDING)
+        threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": True}, daemon=True).start()
+        threading.Thread(target=self._record_agent_command_task, daemon=True).start()
+
+    def _record_agent_command_task(self):
+        """Records audio for a fixed duration for agent commands."""
+        try:
+            with sd.InputStream(samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS, callback=self._audio_callback, dtype='float32'):
+                time.sleep(AGENT_RECORD_DURATION)
+        except Exception as e:
+            logging.error(f"Erro na gravação do comando: {e}")
+        finally:
+            self.stop_recording(agent_mode=True)
+
 
     # --- Audio Saving and Transcription Task ---
-    def _save_and_transcribe_task(self, audio_data):
-        """Saves audio data to WAV and immediately starts transcription."""
+    def _save_and_transcribe_task(self, audio_data, agent_mode=False):
+        """Saves audio data and starts transcription. When agent_mode is True, the result triggers the agent prompt."""
         logging.info("Save and transcribe task started.")
         self._set_state(STATE_SAVING)
 
@@ -1822,7 +1842,7 @@ class WhisperCore: # Renamed from WhisperApp
         if saved_successfully:
             self._set_state(STATE_TRANSCRIBING)
             # Run transcription in a new thread
-            threading.Thread(target=self._transcribe_audio_task, args=(final_filename,), daemon=True, name="TranscriptionThread").start()
+            threading.Thread(target=self._transcribe_audio_task, args=(final_filename, agent_mode), daemon=True, name="TranscriptionThread").start()
         else:
              logging.error("Skipping transcription because audio save failed.")
              # State should already be ERROR_AUDIO
@@ -1838,8 +1858,8 @@ class WhisperCore: # Renamed from WhisperApp
                 logging.warning(f"Could not delete audio file '{filename}': {e}")
 
     # --- Transcription Processing (Simplified) ---
-    def _transcribe_audio_task(self, audio_filename):
-        """Transcribes a single audio file using the Whisper pipeline."""
+    def _transcribe_audio_task(self, audio_filename, agent_mode=False):
+        """Transcribes a single audio file. If agent_mode, send result to agent prompt."""
         start_process_time = time.time()
         logging.info(f"Transcription task started for {audio_filename}")
         text_result = None
@@ -1994,8 +2014,11 @@ class WhisperCore: # Renamed from WhisperApp
                             logging.error(f"OpenRouter text correction failed: {e}")
                             # Continue with original text on error
 
-                    self._handle_transcription_result(text_result) # Handle copy/paste
-                    self._set_state(STATE_IDLE) # Back to idle after success
+                    if agent_mode:
+                        self._handle_agent_result(text_result)
+                    else:
+                        self._handle_transcription_result(text_result)
+                    self._set_state(STATE_IDLE)
                 else: # No text or "[No speech detected]"
                      logging.warning(f"Processed {audio_filename} with no significant text.")
                      self._log_status("Transcription finished: No speech detected.", error=False) # Log as info
@@ -2102,15 +2125,12 @@ class WhisperCore: # Renamed from WhisperApp
                 logging.warning(f"Invalid sound volume value: {new_sound_volume}")
 
         # Apply reload key setting
-        if new_reload_key is not None:
-            reload_key_str = str(new_reload_key).lower()
-            if reload_key_str != self.reload_key:
-                self.reload_key = reload_key_str
+        if new_agent_key is not None:
+            agent_key_str = str(new_agent_key).lower()
+            if agent_key_str != self.agent_key:
+                self.agent_key = agent_key_str
                 config_needs_saving = True
-                logging.info(f"Reload key changed to: {self.reload_key.upper()}")
-
-                # Re-register the reload key hotkey
-                self._register_reload_hotkey()
+                logging.info(f"Agent key changed to: {self.agent_key.upper()}")
 
         # Batch size
         if new_batch_size is not None:
@@ -2299,7 +2319,7 @@ class WhisperCore: # Renamed from WhisperApp
 
         # Save config only if something actually changed
         if config_needs_saving:
-            logging.info(f"Settings applied: Key='{self.record_key.upper()}', Mode='{self.record_mode}', AutoPaste={self.auto_paste}, Sound={self.sound_enabled}, ReloadKey='{self.reload_key.upper()}'")
+            logging.info(f"Settings applied: Key='{self.record_key.upper()}', Mode='{self.record_mode}', AutoPaste={self.auto_paste}, Sound={self.sound_enabled}, AgentKey='{self.agent_key.upper()}'")
             self._save_config() # File I/O is generally safe
 
             # Re-register hotkeys only if key or mode changed
@@ -2493,7 +2513,7 @@ def update_tray_icon(state):
         tray_icon.icon = icon_image
         tooltip = f"Whisper Recorder ({state})"
         if state == STATE_IDLE and core_instance:
-             tooltip += f" - Record: {core_instance.record_key.upper()} - Reload: {core_instance.reload_key.upper()}"
+             tooltip += f" - Record: {core_instance.record_key.upper()} - Agent: {core_instance.agent_key.upper()}"
         elif state.startswith("ERROR") and core_instance:
              tooltip += f" - Check Logs/Settings"
 
@@ -2583,8 +2603,8 @@ def run_settings_gui():
     mode_var = ctk.StringVar(value=core_instance.record_mode); settings_vars.append(mode_var)
     detected_key_var = ctk.StringVar(value=core_instance.record_key.upper()); settings_vars.append(detected_key_var)
     new_record_key_temp = None
-    reload_key_var = ctk.StringVar(value=core_instance.reload_key.upper()); settings_vars.append(reload_key_var)
-    new_reload_key_temp = None
+    agent_key_var = ctk.StringVar(value=core_instance.agent_key.upper()); settings_vars.append(agent_key_var)
+    new_agent_key_temp = None
     auto_reregister_var = ctk.BooleanVar(value=core_instance.auto_reregister_hotkeys); settings_vars.append(auto_reregister_var)
     sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled); settings_vars.append(sound_enabled_var)
     sound_frequency_var = ctk.IntVar(value=core_instance.sound_frequency); settings_vars.append(sound_frequency_var)
@@ -2683,9 +2703,7 @@ def run_settings_gui():
             if core_instance:
                 logging.info("Unhooking global hotkeys for detection (from detect thread)...")
                 with core_instance.keyboard_lock:
-                    # Garantir que todos os hooks sejam removidos antes da detecção
                     core_instance._cleanup_hotkeys()
-                    # Resetar estado das teclas
                     core_instance.pynput_last_key = None
                     core_instance.pynput_is_pressed = False
                     core_instance.hotkey_press_handler = None
@@ -2751,16 +2769,15 @@ def run_settings_gui():
                     logging.debug(f"Could not schedule detect key UI final update: {e}")
             logging.info("Detect key task finished (in detect thread).")
 
-    def update_detection_ui(key_text, is_reload_key=False):
+    def update_detection_ui(key_text, is_agent_key=False):
         """Updates the key label and button state (runs in Tkinter thread via after())."""
         if settings_window_instance and settings_window_instance.winfo_exists():
-            if is_reload_key:
-                reload_key_var.set(key_text)
+            if is_agent_key:
+                agent_key_var.set(key_text)
                 try:
-                    # Use configure for CTkButton
-                    detect_reload_key_button.configure(text="Detect Key", state="normal")
+                    detect_agent_key_button.configure(text="Detect Key", state="normal")
                 except Exception:
-                    logging.warning("detect_reload_key_button not found or not a valid widget during UI update.")
+                    logging.warning("detect_agent_key_button not found or not a valid widget during UI update.")
             else:
                 detected_key_var.set(key_text)
                 try:
@@ -2782,18 +2799,18 @@ def run_settings_gui():
         detect_key_thread = threading.Thread(target=detect_key_task_internal, daemon=True, name="DetectKeyThread")
         detect_key_thread.start()
 
-    def detect_reload_key_task_internal():
-        """Internal task to detect reload key press, runs in a thread."""
-        nonlocal new_reload_key_temp
+    def detect_agent_key_task_internal():
+        """Internal task to detect agent key press, runs in a thread."""
+        nonlocal new_agent_key_temp
         detected_key_str = "ERROR"
-        new_reload_key_temp = None
-        logging.info("Detect reload key task started (in detect thread).")
+        new_agent_key_temp = None
+        logging.info("Detect agent key task started (in detect thread).")
 
         if settings_window_instance:
             try:
                 main_tk_root.after(0, lambda: (
                     settings_window_instance.winfo_exists() and
-                    detect_reload_key_button.configure(text="PRESS KEY...", state="disabled")
+                    detect_agent_key_button.configure(text="PRESS KEY...", state="disabled")
                 ))
             except Exception as e:
                 logging.debug(f"Could not schedule reload key detect UI update: {e}")
@@ -2817,7 +2834,7 @@ def run_settings_gui():
             # Aguardar um pouco mais para garantir que todos os hooks foram removidos
             time.sleep(0.3)
 
-            logging.info("Waiting for reload key event...")
+            logging.info("Waiting for agent key event...")
             # Usar o KeyboardHotkeyManager para detectar a tecla
             detected_key = None
             try:
@@ -2847,13 +2864,13 @@ def run_settings_gui():
             # Verificar se a tecla detectada é válida
             if detected_key:
                 if len(detected_key) > 0:
-                    # Verificar se a tecla de reload é diferente da tecla de gravação
+                    # Verificar se a tecla de comando é diferente da tecla de gravação
                     if detected_key.lower() == core_instance.record_key.lower():
-                        logging.warning(f"Reload key cannot be the same as record key: {detected_key}")
+                        logging.warning(f"Agent key cannot be the same as record key: {detected_key}")
                         detected_key_str = "SAME AS RECORD KEY"
                     else:
-                        new_reload_key_temp = detected_key.lower()
-                        detected_key_str = new_reload_key_temp.upper()
+                        new_agent_key_temp = detected_key.lower()
+                        detected_key_str = new_agent_key_temp.upper()
                         logging.info(f"Tecla válida detectada: {detected_key_str}")
                 else:
                     logging.warning("Combinação de tecla vazia detectada")
@@ -2861,10 +2878,10 @@ def run_settings_gui():
             else:
                 detected_key_str = "DETECTION FAILED"
         except Exception as e:
-            logging.error(f"Error detecting reload key: {e}", exc_info=True)
-            messagebox.showerror("Erro de Detecção de Tecla", f"Ocorreu um erro inesperado durante a detecção da tecla de recarga: {e}", parent=settings_window_instance)
+            logging.error(f"Error detecting agent key: {e}", exc_info=True)
+            messagebox.showerror("Erro de Detecção de Tecla", f"Ocorreu um erro inesperado durante a detecção da tecla de comando: {e}", parent=settings_window_instance)
             detected_key_str = "ERROR"
-            new_reload_key_temp = None
+            new_agent_key_temp = None
             with core_instance.hotkey_lock:
                 if core_instance:
                     logging.error("Re-registering original hotkeys after reload key detection error...")
@@ -2877,26 +2894,26 @@ def run_settings_gui():
                 try:
                     main_tk_root.after(0, lambda: (
                         settings_window_instance.winfo_exists() and
-                        update_detection_ui(detected_key_str, is_reload_key=True)
-                    ))
+                        update_detection_ui(detected_key_str, is_agent_key=True)
+                ))
                 except Exception as e:
                     logging.debug(f"Could not schedule reload key UI final update: {e}")
-            logging.info("Detect reload key task finished (in detect thread).")
+            logging.info("Detect agent key task finished (in detect thread).")
 
-    def start_detect_reload_key():
-        """Starts the reload key detection thread."""
+    def start_detect_agent_key():
+        """Starts the agent key detection thread."""
         nonlocal detect_key_thread
         if detect_key_thread and detect_key_thread.is_alive():
             logging.warning("Key detection thread already running.")
             return
         if settings_window_instance and settings_window_instance.winfo_exists():
-            reload_key_var.set("PRESS KEY...")
-        detect_key_thread = threading.Thread(target=detect_reload_key_task_internal, daemon=True, name="DetectReloadKeyThread")
+            agent_key_var.set("PRESS KEY...")
+        detect_key_thread = threading.Thread(target=detect_agent_key_task_internal, daemon=True, name="DetectAgentKeyThread")
         detect_key_thread.start()
 
     def apply_settings():
         """Applies the selected settings by calling the core instance method."""
-        nonlocal new_record_key_temp, new_reload_key_temp
+        nonlocal new_record_key_temp, new_agent_key_temp
         logging.info("Apply settings clicked (in Tkinter thread).")
 
         if core_instance.pipe is None:
@@ -2914,7 +2931,7 @@ def run_settings_gui():
         key_to_apply = new_record_key_temp
         mode_to_apply = mode_var.get()
         auto_paste_to_apply = auto_paste_var.get()
-        reload_key_to_apply = new_reload_key_temp
+        agent_key_to_apply = new_agent_key_temp
         auto_reregister_to_apply = auto_reregister_var.get()
 
         sound_enabled_to_apply = sound_enabled_var.get()
@@ -2992,7 +3009,7 @@ def run_settings_gui():
                     new_sound_frequency=sound_freq_to_apply,
                     new_sound_duration=sound_duration_to_apply,
                     new_sound_volume=sound_volume_to_apply,
-                    new_reload_key=reload_key_to_apply,
+                    new_agent_key=agent_key_to_apply,
                     new_text_correction_enabled=text_correction_enabled_var.get(),
                     new_text_correction_service=text_correction_service_var.get(),
                     new_openrouter_api_key=openrouter_api_key_var.get(),
@@ -3014,7 +3031,7 @@ def run_settings_gui():
             return
 
         new_record_key_temp = None
-        new_reload_key_temp = None # Resetar também a variável temporária da reload key
+        new_agent_key_temp = None # Resetar também a variável temporária da agent key
         close_settings()
 
     def close_settings():
@@ -3081,14 +3098,14 @@ def run_settings_gui():
     detect_key_button = ctk.CTkButton(key_frame, text="Detect Key", command=lambda: start_detect_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7") # Already English
     detect_key_button.pack(side="left", padx=5)
 
-    # --- Reload Hotkey Section ---
-    reload_key_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
-    reload_key_frame.pack(fill="x", pady=(0, 10), padx=0)
-    ctk.CTkLabel(reload_key_frame, text="Reload Hotkey", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15)) # Already English
-    reload_key_display_label = ctk.CTkLabel(reload_key_frame, textvariable=reload_key_var, font=("Segoe UI", 12, "bold"), width=120, fg_color="#393E46", text_color="#00a0ff", corner_radius=8)
-    reload_key_display_label.pack(side="left", padx=5)
-    detect_reload_key_button = ctk.CTkButton(reload_key_frame, text="Detect Key", command=lambda: start_detect_reload_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7") # Already English
-    detect_reload_key_button.pack(side="left", padx=5)
+    # --- Agent Hotkey Section ---
+    agent_key_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
+    agent_key_frame.pack(fill="x", pady=(0, 10), padx=0)
+    ctk.CTkLabel(agent_key_frame, text="Agent Hotkey", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
+    agent_key_display_label = ctk.CTkLabel(agent_key_frame, textvariable=agent_key_var, font=("Segoe UI", 12, "bold"), width=120, fg_color="#393E46", text_color="#00a0ff", corner_radius=8)
+    agent_key_display_label.pack(side="left", padx=5)
+    detect_agent_key_button = ctk.CTkButton(agent_key_frame, text="Detect Key", command=lambda: start_detect_agent_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7")
+    detect_agent_key_button.pack(side="left", padx=5)
 
     # --- Record Mode Section ---
     mode_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
@@ -3387,27 +3404,6 @@ def on_settings_menu_click(*_):
         settings_thread_running = True
         run_settings_gui() # Chame a função diretamente.
 
-# --- NEW: Callback for Force Re-register Menu Item ---
-def on_force_reregister_menu_click(*_):
-    """Forces a reload of the keyboard library and hotkey re-registration."""
-    global core_instance
-    logging.info("Force keyboard/hotkey reload requested from tray menu.")
-    if core_instance:
-        if hasattr(core_instance, 'force_reregister_hotkeys'):
-            # Run the core logic. It logs success/failure internally.
-            # Consider running in a thread if it blocks pystray for too long,
-            # but let's try direct call first for simplicity.
-            core_instance.force_reregister_hotkeys()
-            # Optional: Show a messagebox (requires importing tkinter.messagebox here)
-            # if success:
-            #     messagebox.showinfo("Hotkey Reload", "Keyboard/Hotkey reload successful.")
-            # else:
-            #     messagebox.showerror("Hotkey Reload", "Failed to reload keyboard/hotkey. Check logs.")
-        else:
-            logging.critical("CRITICAL: force_reregister_hotkeys method not found on core_instance!")
-            update_tray_icon(STATE_ERROR_SETTINGS)
-    else:
-        logging.warning("Force reload requested, but core_instance is None.")
 
 
 # --- Callback to change Gemini model from tray ---
@@ -3477,9 +3473,6 @@ def create_dynamic_menu(_):
         default_action_text = 'Error (Check Logs/⚙️)'
     # Add other states if needed
 
-    # Determine if force reload should be enabled
-    can_force_reload = current_state not in [STATE_RECORDING, STATE_SAVING, STATE_LOADING_MODEL]
-
     # Build the menu tuple
     menu_items = [
         pystray.MenuItem(
@@ -3493,12 +3486,6 @@ def create_dynamic_menu(_):
             '⚙️ Settings',
             on_settings_menu_click,
             enabled=(not is_loading and not is_recording) # Allow settings unless loading/recording
-        ),
-        # --- NEW: Force Reload Item ---
-        pystray.MenuItem(
-            '🔄 Reload Keyboard/Hotkey',
-            on_force_reregister_menu_click,
-            enabled=can_force_reload # Enable based on state
         ),
         pystray.MenuItem(
             'Gemini Model',
