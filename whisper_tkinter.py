@@ -155,12 +155,6 @@ OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 # Gemini API configuration
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
-# Predefined Gemini models for quick selection
-GEMINI_MODEL_OPTIONS = [
-    "gemini-2.0-pro",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash"
-]
 # Window size adjusted to fit all elements comfortably
 SETTINGS_WINDOW_GEOMETRY = "550x700" # Increased width and height for scrollable content
 REREGISTER_INTERVAL_SECONDS = 60 # 1 minuto (ajustável aqui)
@@ -3095,11 +3089,7 @@ def run_settings_gui():
     gemini_model_row = ctk.CTkFrame(gemini_section_frame, fg_color="#222831")
     gemini_model_row.pack(fill="x", padx=0, pady=(5, 0))
     ctk.CTkLabel(gemini_model_row, text="Model:", width=120).pack(side="left", padx=5) # Already English
-    ctk.CTkOptionMenu(
-        gemini_model_row,
-        variable=gemini_model_var,
-        values=GEMINI_MODEL_OPTIONS
-    ).pack(side="left", fill="x", expand=True, padx=5)
+    ctk.CTkEntry(gemini_model_row, textvariable=gemini_model_var).pack(side="left", fill="x", expand=True, padx=5)
  
     gemini_prompt_correction_var = ctk.StringVar(value=core_instance.gemini_prompt); settings_vars.append(gemini_prompt_correction_var) # Variable for correction prompt
 
@@ -3310,26 +3300,6 @@ def on_force_reregister_menu_click(*_):
         logging.warning("Force reload requested, but core_instance is None.")
 
 
-# --- Callback to change Gemini model from tray ---
-def on_set_gemini_model(model_id, *_):
-    """Updates Gemini model and reinitializes the client."""
-    global core_instance
-    logging.info(f"Changing Gemini model via tray menu to: {model_id}")
-    if core_instance:
-        if hasattr(core_instance, 'apply_settings_from_external'):
-            core_instance.apply_settings_from_external(
-                core_instance.record_key,
-                core_instance.record_mode,
-                core_instance.auto_paste,
-                new_gemini_model=model_id
-            )
-        else:
-            logging.error("apply_settings_from_external method missing on core_instance")
-            update_tray_icon(STATE_ERROR_SETTINGS)
-    else:
-        logging.warning("Core instance missing; cannot change Gemini model")
-
-
 # --- Dynamic Menu Creation ---
 def create_dynamic_menu(_):
     """Creates the tray icon menu dynamically based on recording state."""
@@ -3399,18 +3369,6 @@ def create_dynamic_menu(_):
             '🔄 Reload Keyboard/Hotkey',
             on_force_reregister_menu_click,
             enabled=can_force_reload # Enable based on state
-        ),
-        pystray.MenuItem(
-            'Gemini Model',
-            pystray.Menu(
-                *[
-                    pystray.MenuItem(
-                        model,
-                        lambda _, m=model: on_set_gemini_model(m),
-                        checked=lambda item, m=model: core_instance.gemini_model == m
-                    ) for model in GEMINI_MODEL_OPTIONS
-                ]
-            )
         ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem('❌ Exit', on_exit_app)
