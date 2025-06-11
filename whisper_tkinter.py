@@ -103,7 +103,7 @@ DEFAULT_CONFIG = {
     "gemini_mode": "correction",
     "gemini_general_prompt": "Based on the following text, generate a short response: {text}",
     "gemini_agent_prompt": "You are a helpful assistant. Reply to: {text}",
-    "gemini_agent_model": "gemini-1.5-flash",
+    "gemini_agent_model": "gemini-2.0-flash-001",
     "agent_auto_paste": True,
     "gemini_prompt": """You are a speech-to-text correction specialist. Your task is to refine the following transcribed speech.
 
@@ -133,7 +133,6 @@ Transcribed speech: {text}""",
 HOTKEY_DEBOUNCE_INTERVAL = 0.3
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1
-AGENT_RECORD_DURATION_CONFIG_KEY = "agent_record_duration"
 MIN_RECORDING_DURATION_CONFIG_KEY = "min_record_duration"
 # Sound configuration keys
 SOUND_ENABLED_CONFIG_KEY = "sound_enabled"
@@ -245,7 +244,7 @@ class WhisperCore: # Renamed from WhisperApp
 
         # Agent key configuration
         self.agent_key = DEFAULT_CONFIG["agent_key"]
-        self.agent_record_duration = DEFAULT_CONFIG["agent_record_duration"]
+        self.agent_mode_active = False
 
         # Auto re-register setting
         self.auto_reregister_hotkeys = DEFAULT_CONFIG[AUTO_REREGISTER_CONFIG_KEY]
@@ -535,15 +534,6 @@ class WhisperCore: # Renamed from WhisperApp
         except (ValueError, TypeError):
             self.agent_key = DEFAULT_CONFIG[AGENT_KEY_CONFIG_KEY]
             self.config[AGENT_KEY_CONFIG_KEY] = self.agent_key
-
-        # Agent record duration
-        try:
-            self.agent_record_duration = float(self.config.get(AGENT_RECORD_DURATION_CONFIG_KEY, DEFAULT_CONFIG[AGENT_RECORD_DURATION_CONFIG_KEY]))
-            if self.agent_record_duration <= 0:
-                raise ValueError
-        except (ValueError, TypeError):
-            self.agent_record_duration = DEFAULT_CONFIG[AGENT_RECORD_DURATION_CONFIG_KEY]
-            self.config[AGENT_RECORD_DURATION_CONFIG_KEY] = self.agent_record_duration
 
         # Gemini agent model
         try:
@@ -1751,6 +1741,9 @@ class WhisperCore: # Renamed from WhisperApp
              logging.error("Logic error: should_save=True but no audio data.")
              self._set_state(STATE_IDLE)
 
+        if agent_mode:
+            self.agent_mode_active = False
+
 
     def stop_recording_if_needed(self):
         """Stops recording only if it's currently active (used for press/release)."""
@@ -1791,10 +1784,15 @@ class WhisperCore: # Renamed from WhisperApp
             self.start_recording()
 
     def start_agent_command(self):
-        """Captures a short command and processes it with the agent prompt."""
+        """Inicia ou finaliza a gravação de comando agêntico."""
         with self.recording_lock:
-            if self.is_recording:
-                logging.warning("Cannot start agent command while recording.")
+            if self.is_recording and self.agent_mode_active:
+                logging.info("Parando gravação do comando agêntico...")
+                self.stop_recording(agent_mode=True)
+                self.agent_mode_active = False
+                return
+            elif self.is_recording:
+                logging.warning("Não é possível iniciar comando agêntico durante gravação comum.")
                 return
             with self.transcription_lock:
                 if self.transcription_in_progress:
@@ -1807,24 +1805,9 @@ class WhisperCore: # Renamed from WhisperApp
                 if self.current_state.startswith("ERROR"):
                     self._log_status(f"Cannot start command: state {self.current_state}", error=True)
                     return
-            self.is_recording = True
-            self.start_time = time.time()
-            self.recording_data.clear()
 
-        self._set_state(STATE_RECORDING)
-        threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": True}, daemon=True).start()
-        threading.Thread(target=self._record_agent_command_task, daemon=True).start()
-
-    def _record_agent_command_task(self):
-        """Records audio for a fixed duration for agent commands."""
-        try:
-            with sd.InputStream(samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS, callback=self._audio_callback, dtype='float32'):
-                time.sleep(self.agent_record_duration)
-        except Exception as e:
-            logging.error(f"Erro na gravação do comando: {e}")
-        finally:
-            self.stop_recording(agent_mode=True)
-
+        self.agent_mode_active = True
+        self.start_recording()
 
     # --- Audio Saving and Transcription Task ---
     def _save_and_transcribe_task(self, audio_data, agent_mode=False):
@@ -2088,7 +2071,6 @@ class WhisperCore: # Renamed from WhisperApp
         new_gemini_prompt=None,
         new_gemini_general_prompt=None,
         new_gemini_agent_prompt=None,
-        new_agent_record_duration=None,
         new_gemini_agent_model=None,
         new_agent_auto_paste=None,
         new_batch_size=None,
@@ -2170,16 +2152,6 @@ class WhisperCore: # Renamed from WhisperApp
                 self.agent_key = agent_key_str
                 config_needs_saving = True
                 logging.info(f"Agent key changed to: {self.agent_key.upper()}")
-
-        if new_agent_record_duration is not None and new_agent_record_duration != self.agent_record_duration:
-            try:
-                dur = float(new_agent_record_duration)
-                if dur > 0:
-                    self.agent_record_duration = dur
-                    config_needs_saving = True
-                    logging.info(f"Agent record duration changed to: {self.agent_record_duration}s")
-            except (ValueError, TypeError):
-                logging.warning(f"Invalid agent record duration value: {new_agent_record_duration}")
 
         if new_gemini_agent_model is not None and new_gemini_agent_model != self.gemini_agent_model:
             self.gemini_agent_model = new_gemini_agent_model
@@ -2664,7 +2636,6 @@ def run_settings_gui():
     new_record_key_temp = None
     agent_key_var = ctk.StringVar(value=core_instance.agent_key.upper()); settings_vars.append(agent_key_var)
     new_agent_key_temp = None
-    agent_duration_var = ctk.StringVar(value=str(core_instance.agent_record_duration)); settings_vars.append(agent_duration_var)
     agent_model_var = ctk.StringVar(value=core_instance.gemini_agent_model); settings_vars.append(agent_model_var)
     agent_auto_paste_var = ctk.BooleanVar(value=core_instance.agent_auto_paste); settings_vars.append(agent_auto_paste_var)
     auto_reregister_var = ctk.BooleanVar(value=core_instance.auto_reregister_hotkeys); settings_vars.append(auto_reregister_var)
@@ -2994,15 +2965,6 @@ def run_settings_gui():
         mode_to_apply = mode_var.get()
         auto_paste_to_apply = auto_paste_var.get()
         agent_key_to_apply = new_agent_key_temp
-        try:
-            duration_to_apply = float(agent_duration_var.get())
-            if duration_to_apply <= 0:
-                messagebox.showwarning("Invalid Value", "Agent record duration must be a positive number.", parent=settings_win)
-                return
-        except (ValueError, TypeError):
-            messagebox.showwarning("Invalid Value", "Agent record duration must be a number.", parent=settings_win)
-            return
-
         model_to_apply = agent_model_var.get()
         paste_to_apply = agent_auto_paste_var.get()
         auto_reregister_to_apply = auto_reregister_var.get()
@@ -3181,12 +3143,6 @@ def run_settings_gui():
     agent_key_display_label.pack(side="left", padx=5)
     detect_agent_key_button = ctk.CTkButton(agent_key_frame, text="Detect Key", command=lambda: start_detect_agent_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7")
     detect_agent_key_button.pack(side="left", padx=5)
-
-    # --- Agent Record Duration Section ---
-    agent_duration_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
-    agent_duration_frame.pack(fill="x", pady=(0, 10), padx=0)
-    ctk.CTkLabel(agent_duration_frame, text="Agent Record Duration (s)", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
-    ctk.CTkEntry(agent_duration_frame, textvariable=agent_duration_var, width=80).pack(side="left", padx=5)
 
     # --- Agent Model Selection Section ---
     agent_model_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
