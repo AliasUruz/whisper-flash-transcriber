@@ -21,6 +21,7 @@ A lightweight desktop tool for Windows that turns speech into text using OpenAI'
 * **Auditory Feedback:** Optional sound cues play when recording starts and stops.
 * **Intelligent Text Correction (Optional):** Integrate with OpenRouter or Google Gemini for improved punctuation and capitalization.
 * **Easy Configuration GUI:** Adjust hotkeys and API settings without touching code.
+* **Gemini Model Switching:** Alterne rapidamente entre modelos do Gemini pela interface ou pelo menu da bandeja. A lista de modelos é configurável.
 
 ## Installation
 
@@ -168,7 +169,8 @@ To access and change settings:
 *   **API Key:** This is where you enter the API key for the text correction service you selected. **Keep your API keys private!** They are stored locally in `config.json`, which is ignored by Git.
     *   **How to get an OpenRouter API Key:** Visit [https://openrouter.ai/](https://openrouter.ai/) and sign up or log in. You can generate API keys from your account dashboard.
     *   **How to get a Google Gemini API Key:** Visit [https://makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey) and generate a new API key.
-*   **Model:** For text correction, you can usually select the specific AI model you want to use from the chosen service (e.g., "deepseek/deepseek-chat-v3-0324:free" for OpenRouter, "gemini-2.0-flash-001" for Gemini). Defaults are usually provided.
+*   **Model:** Defina o modelo ativo para correção de texto. Você pode manter uma lista de modelos no campo **Model List** (separados por vírgula) e escolher rapidamente no menu suspenso.
+*   **Alterar Modelo pelo Tray:** O submenu **Gemini Model** reflete os modelos da lista personalizada para troca imediata.
 *   **Sound Feedback:** Toggle sound notifications for recording start/stop.
 
 Remember to save your changes in the settings window.
