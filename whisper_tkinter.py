@@ -119,7 +119,7 @@ Return only the improved text without explanations.
 Transcribed speech: {text}""",
     "batch_size": 16,
     "gpu_index": 0,
-    "auto_reregister_hotkeys": True
+    "gemini_model_list": ["gemini-2.0-flash-001"]
 }
 HOTKEY_DEBOUNCE_INTERVAL = 0.3
 AUDIO_SAMPLE_RATE = 16000
@@ -155,12 +155,8 @@ OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 # Gemini API configuration
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
-# Predefined Gemini models for quick selection
-GEMINI_MODEL_OPTIONS = [
-    "gemini-2.0-pro",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash"
-]
+# Gemini model list configuration
+GEMINI_MODEL_LIST_CONFIG_KEY = "gemini_model_list"
 # Window size adjusted to fit all elements comfortably
 SETTINGS_WINDOW_GEOMETRY = "550x700" # Increased width and height for scrollable content
 REREGISTER_INTERVAL_SECONDS = 60 # 1 minuto (ajustável aqui)
@@ -231,6 +227,7 @@ class WhisperCore: # Renamed from WhisperApp
         self.gemini_prompt = DEFAULT_CONFIG["gemini_prompt"]
         self.gemini_mode = DEFAULT_CONFIG["gemini_mode"]
         self.gemini_general_prompt = DEFAULT_CONFIG["gemini_general_prompt"]
+        self.gemini_model_list = DEFAULT_CONFIG[GEMINI_MODEL_LIST_CONFIG_KEY].copy()
         self.sound_lock = RLock()  # Lock for sound playback
 
         # Reload key configuration
@@ -583,6 +580,19 @@ class WhisperCore: # Renamed from WhisperApp
             self.gemini_model = DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY]
             self.config[GEMINI_MODEL_CONFIG_KEY] = self.gemini_model
 
+        # Gemini model list
+        try:
+            raw_list = self.config.get(GEMINI_MODEL_LIST_CONFIG_KEY, DEFAULT_CONFIG[GEMINI_MODEL_LIST_CONFIG_KEY])
+            if isinstance(raw_list, list):
+                self.gemini_model_list = [str(m) for m in raw_list if str(m).strip()]
+            elif isinstance(raw_list, str):
+                self.gemini_model_list = [m.strip() for m in raw_list.split(',') if m.strip()]
+            else:
+                raise ValueError("Invalid type for model list")
+        except (ValueError, TypeError):
+            self.gemini_model_list = DEFAULT_CONFIG[GEMINI_MODEL_LIST_CONFIG_KEY].copy()
+            self.config[GEMINI_MODEL_LIST_CONFIG_KEY] = self.gemini_model_list
+
         # Batch size
         self.batch_size_specified = BATCH_SIZE_CONFIG_KEY in loaded_config
         try:
@@ -680,6 +690,7 @@ class WhisperCore: # Renamed from WhisperApp
             # Gemini API settings
             GEMINI_API_KEY_CONFIG_KEY: self.gemini_api_key,
             GEMINI_MODEL_CONFIG_KEY: self.gemini_model,
+            GEMINI_MODEL_LIST_CONFIG_KEY: self.gemini_model_list,
             "gemini_mode": self.gemini_mode,
             "gemini_general_prompt": self.gemini_general_prompt,
             BATCH_SIZE_CONFIG_KEY: self.batch_size,
@@ -1973,6 +1984,7 @@ class WhisperCore: # Renamed from WhisperApp
                                    new_text_correction_enabled=None, new_text_correction_service=None,
                                    new_openrouter_api_key=None, new_openrouter_model=None,
                                    new_gemini_api_key=None, new_gemini_model=None,
+                                   new_gemini_model_list=None,
                                    new_gemini_mode=None, new_gemini_prompt=None, new_gemini_general_prompt=None,
                                    new_batch_size=None, new_gpu_index=None,
                                    new_auto_reregister=None):
@@ -2168,6 +2180,23 @@ class WhisperCore: # Renamed from WhisperApp
                 config_needs_saving = True
                 logging.info(f"Gemini model changed to: {self.gemini_model}")
 
+        if new_gemini_model_list is not None:
+            if isinstance(new_gemini_model_list, str):
+                new_list = [m.strip() for m in new_gemini_model_list.split(',') if m.strip()]
+            elif isinstance(new_gemini_model_list, list):
+                new_list = [str(m).strip() for m in new_gemini_model_list if str(m).strip()]
+            else:
+                new_list = []
+            if new_list:
+                if new_list != self.gemini_model_list:
+                    self.gemini_model_list = new_list
+                    config_needs_saving = True
+                    gemini_changed = True
+                    logging.info(f"Gemini model list changed to: {self.gemini_model_list}")
+                if self.gemini_model not in self.gemini_model_list:
+                    self.gemini_model = self.gemini_model_list[0]
+                    logging.info(f"Gemini model adjusted to first item: {self.gemini_model}")
+
         # Apply Gemini mode
         if new_gemini_mode is not None:
             mode_str = str(new_gemini_mode).lower()
@@ -2210,6 +2239,9 @@ class WhisperCore: # Renamed from WhisperApp
             if new_gemini_prompt is not None and new_gemini_prompt != self.gemini_prompt:
                 gemini_changed = True
             if new_gemini_general_prompt is not None and new_gemini_general_prompt != self.gemini_general_prompt:
+                gemini_changed = True
+
+            if new_gemini_model_list is not None and new_gemini_model_list != self.gemini_model_list:
                 gemini_changed = True
 
             if gemini_changed:
@@ -2514,6 +2546,7 @@ def run_settings_gui():
     openrouter_model_var = ctk.StringVar(value=core_instance.openrouter_model); settings_vars.append(openrouter_model_var)
     gemini_api_key_var = ctk.StringVar(value=core_instance.gemini_api_key); settings_vars.append(gemini_api_key_var)
     gemini_model_var = ctk.StringVar(value=core_instance.gemini_model); settings_vars.append(gemini_model_var)
+    gemini_model_list_var = ctk.StringVar(value=", ".join(core_instance.gemini_model_list)); settings_vars.append(gemini_model_list_var)
     gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode); settings_vars.append(gemini_mode_var)  # Variável para o modo Gemini
     batch_size_var = ctk.IntVar(value=core_instance.batch_size); settings_vars.append(batch_size_var)
     gpu_index_var = ctk.IntVar(value=core_instance.gpu_index); settings_vars.append(gpu_index_var)
@@ -2911,6 +2944,7 @@ def run_settings_gui():
                     new_openrouter_model=openrouter_model_var.get(),
                     new_gemini_api_key=gemini_api_key_var.get(),
                     new_gemini_model=gemini_model_var.get(),
+                    new_gemini_model_list=gemini_model_list_var.get(),
                     new_batch_size=batch_size_to_apply,
                     new_gpu_index=gpu_index_to_apply,
                     new_auto_reregister=auto_reregister_to_apply
@@ -3095,11 +3129,18 @@ def run_settings_gui():
     gemini_model_row = ctk.CTkFrame(gemini_section_frame, fg_color="#222831")
     gemini_model_row.pack(fill="x", padx=0, pady=(5, 0))
     ctk.CTkLabel(gemini_model_row, text="Model:", width=120).pack(side="left", padx=5) # Already English
-    ctk.CTkOptionMenu(
+    gemini_model_option = ctk.CTkOptionMenu(
         gemini_model_row,
         variable=gemini_model_var,
-        values=GEMINI_MODEL_OPTIONS
-    ).pack(side="left", fill="x", expand=True, padx=5)
+        values=core_instance.gemini_model_list
+    )
+    gemini_model_option.pack(side="left", fill="x", expand=True, padx=5)
+
+    gemini_model_list_row = ctk.CTkFrame(gemini_section_frame, fg_color="#222831")
+    gemini_model_list_row.pack(fill="x", padx=0, pady=(5, 0))
+    ctk.CTkLabel(gemini_model_list_row, text="Model List:", width=120).pack(side="left", padx=5)
+    ctk.CTkEntry(gemini_model_list_row, textvariable=gemini_model_list_var).pack(side="left", fill="x", expand=True, padx=5)
+    ctk.CTkLabel(gemini_model_list_row, text="comma separated").pack(side="left", padx=5)
  
     gemini_prompt_correction_var = ctk.StringVar(value=core_instance.gemini_prompt); settings_vars.append(gemini_prompt_correction_var) # Variable for correction prompt
 
@@ -3408,7 +3449,7 @@ def create_dynamic_menu(_):
                         model,
                         lambda _, m=model: on_set_gemini_model(m),
                         checked=lambda item, m=model: core_instance.gemini_model == m
-                    ) for model in GEMINI_MODEL_OPTIONS
+                    ) for model in core_instance.gemini_model_list
                 ]
             )
         ),
