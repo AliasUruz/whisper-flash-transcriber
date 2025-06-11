@@ -119,7 +119,12 @@ Return only the improved text without explanations.
 Transcribed speech: {text}""",
     "batch_size": 16,
     "gpu_index": 0,
-    "auto_reregister_hotkeys": True
+    "auto_reregister_hotkeys": True,
+    "gemini_model_options": [
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-2.0-pro"
+    ]
 }
 HOTKEY_DEBOUNCE_INTERVAL = 0.3
 AUDIO_SAMPLE_RATE = 16000
@@ -155,12 +160,8 @@ OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 # Gemini API configuration
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
-# Predefined Gemini models for quick selection
-GEMINI_MODEL_OPTIONS = [
-    "gemini-2.0-pro",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash"
-]
+# Key for list of available Gemini models in config
+GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 # Window size adjusted to fit all elements comfortably
 SETTINGS_WINDOW_GEOMETRY = "550x700" # Increased width and height for scrollable content
 REREGISTER_INTERVAL_SECONDS = 60 # 1 minuto (ajustável aqui)
@@ -231,6 +232,7 @@ class WhisperCore: # Renamed from WhisperApp
         self.gemini_prompt = DEFAULT_CONFIG["gemini_prompt"]
         self.gemini_mode = DEFAULT_CONFIG["gemini_mode"]
         self.gemini_general_prompt = DEFAULT_CONFIG["gemini_general_prompt"]
+        self.gemini_model_options = []
         self.sound_lock = RLock()  # Lock for sound playback
 
         # Reload key configuration
@@ -639,6 +641,35 @@ class WhisperCore: # Renamed from WhisperApp
             logging.warning(f"Invalid gemini_general_prompt type in config. Falling back to default.")
             self.gemini_general_prompt = DEFAULT_CONFIG["gemini_general_prompt"]
 
+        # Load and VALIDATE Gemini model options list
+        try:
+            model_options = self.config.get(
+                GEMINI_MODEL_OPTIONS_CONFIG_KEY,
+                DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY],
+            )
+            if isinstance(model_options, list) and model_options:
+                self.gemini_model_options = model_options
+            else:
+                logging.warning(
+                    "Invalid or empty 'gemini_model_options' in config. Reverting to default."
+                )
+                self.gemini_model_options = DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY]
+                self.config[GEMINI_MODEL_OPTIONS_CONFIG_KEY] = self.gemini_model_options
+        except Exception as e:
+            logging.error(
+                f"Error loading 'gemini_model_options': {e}. Reverting to default."
+            )
+            self.gemini_model_options = DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY]
+
+        logging.info(f"Gemini Models Loaded: {self.gemini_model_options}")
+
+        # Ensure currently selected model is valid
+        if self.gemini_model not in self.gemini_model_options:
+            logging.warning(
+                f"Previously selected model '{self.gemini_model}' not in list. Using first option."
+            )
+            self.gemini_model = self.gemini_model_options[0]
+
         logging.info(f"Config source: {config_source}. Applied: Key='{self.record_key}', Mode='{self.record_mode}', AutoPaste={self.auto_paste}, MinDuration={self.min_record_duration}s")
         logging.info(f"Keyboard library: {self.keyboard_library}")
         logging.info(f"Text correction settings: Enabled={self.text_correction_enabled}, Service={self.text_correction_service}")
@@ -680,6 +711,7 @@ class WhisperCore: # Renamed from WhisperApp
             # Gemini API settings
             GEMINI_API_KEY_CONFIG_KEY: self.gemini_api_key,
             GEMINI_MODEL_CONFIG_KEY: self.gemini_model,
+            GEMINI_MODEL_OPTIONS_CONFIG_KEY: self.gemini_model_options,
             "gemini_mode": self.gemini_mode,
             "gemini_general_prompt": self.gemini_general_prompt,
             BATCH_SIZE_CONFIG_KEY: self.batch_size,
@@ -1966,16 +1998,30 @@ class WhisperCore: # Renamed from WhisperApp
 
 
     # --- Settings Application Logic (Called from Settings Thread) ---
-    def apply_settings_from_external(self, new_key, new_mode, new_auto_paste,
-                                   new_sound_enabled=None, new_sound_frequency=None,
-                                   new_sound_duration=None, new_sound_volume=None,
-                                   new_reload_key=None,
-                                   new_text_correction_enabled=None, new_text_correction_service=None,
-                                   new_openrouter_api_key=None, new_openrouter_model=None,
-                                   new_gemini_api_key=None, new_gemini_model=None,
-                                   new_gemini_mode=None, new_gemini_prompt=None, new_gemini_general_prompt=None,
-                                   new_batch_size=None, new_gpu_index=None,
-                                   new_auto_reregister=None):
+    def apply_settings_from_external(
+        self,
+        new_key,
+        new_mode,
+        new_auto_paste,
+        new_sound_enabled=None,
+        new_sound_frequency=None,
+        new_sound_duration=None,
+        new_sound_volume=None,
+        new_reload_key=None,
+        new_text_correction_enabled=None,
+        new_text_correction_service=None,
+        new_openrouter_api_key=None,
+        new_openrouter_model=None,
+        new_gemini_api_key=None,
+        new_gemini_model=None,
+        new_gemini_mode=None,
+        new_gemini_prompt=None,
+        new_gemini_general_prompt=None,
+        new_batch_size=None,
+        new_gpu_index=None,
+        new_auto_reregister=None,
+        new_gemini_model_options=None,
+    ):
         """Applies settings passed from the external settings window/thread."""
         logging.info("Applying new configuration from external source.")
         key_changed = False
@@ -2194,6 +2240,19 @@ class WhisperCore: # Renamed from WhisperApp
                 gemini_changed = True
                 config_needs_saving = True
                 logging.info("Gemini general prompt updated.")
+
+        if new_gemini_model_options is not None and new_gemini_model_options != self.gemini_model_options:
+            self.gemini_model_options = new_gemini_model_options
+            config_needs_saving = True
+            gemini_changed = True
+            logging.info(f"Gemini model list updated to: {self.gemini_model_options}")
+
+            if self.gemini_model not in self.gemini_model_options:
+                old_model = self.gemini_model
+                self.gemini_model = self.gemini_model_options[0]
+                logging.warning(
+                    f"Previously selected model '{old_model}' is no longer in the list. Switched to '{self.gemini_model}'."
+                )
 
         # Reinitialize API clients if settings changed
         if text_correction_changed or openrouter_changed:
@@ -2892,6 +2951,12 @@ def run_settings_gui():
                 messagebox.showwarning("Invalid Value", "GPU index must be a number", parent=settings_win)
                 return
 
+        models_text = gemini_models_textbox.get("1.0", "end-1c")
+        new_models_list = [line.strip() for line in models_text.split("\n") if line.strip()]
+        if not new_models_list:
+            messagebox.showwarning("Invalid Value", "The model list cannot be empty. Please add at least one model.", parent=settings_win)
+            return
+
 
         try:
             if hasattr(core_instance, 'apply_settings_from_external'):
@@ -2911,6 +2976,7 @@ def run_settings_gui():
                     new_openrouter_model=openrouter_model_var.get(),
                     new_gemini_api_key=gemini_api_key_var.get(),
                     new_gemini_model=gemini_model_var.get(),
+                    new_gemini_model_options=new_models_list,
                     new_batch_size=batch_size_to_apply,
                     new_gpu_index=gpu_index_to_apply,
                     new_auto_reregister=auto_reregister_to_apply
@@ -3098,8 +3164,19 @@ def run_settings_gui():
     ctk.CTkOptionMenu(
         gemini_model_row,
         variable=gemini_model_var,
-        values=GEMINI_MODEL_OPTIONS
+        values=core_instance.gemini_model_options
     ).pack(side="left", fill="x", expand=True, padx=5)
+
+    ctk.CTkLabel(gemini_section_frame, text="Editable Model List (one per line):", font=("Segoe UI", 12)).pack(anchor="w", padx=5, pady=(10, 0))
+    gemini_models_textbox = ctk.CTkTextbox(gemini_section_frame, width=400, height=100, wrap="none")
+    gemini_models_textbox.pack(fill="x", expand=True, padx=5, pady=(0, 5))
+    gemini_models_textbox.insert("0.0", "\n".join(core_instance.gemini_model_options))
+
+    def restore_default_models():
+        gemini_models_textbox.delete("1.0", "end")
+        gemini_models_textbox.insert("0.0", "\n".join(DEFAULT_CONFIG["gemini_model_options"]))
+
+    ctk.CTkButton(gemini_section_frame, text="Restore Default List", command=restore_default_models).pack(anchor="w", padx=5, pady=(0, 10))
  
     gemini_prompt_correction_var = ctk.StringVar(value=core_instance.gemini_prompt); settings_vars.append(gemini_prompt_correction_var) # Variable for correction prompt
 
@@ -3408,7 +3485,7 @@ def create_dynamic_menu(_):
                         model,
                         lambda _, m=model: on_set_gemini_model(m),
                         checked=lambda item, m=model: core_instance.gemini_model == m
-                    ) for model in GEMINI_MODEL_OPTIONS
+                    ) for model in core_instance.gemini_model_options
                 ]
             )
         ),
