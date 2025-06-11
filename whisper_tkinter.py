@@ -130,6 +130,8 @@ SOUND_ENABLED_CONFIG_KEY = "sound_enabled"
 SOUND_FREQUENCY_CONFIG_KEY = "sound_frequency"
 SOUND_DURATION_CONFIG_KEY = "sound_duration"
 SOUND_VOLUME_CONFIG_KEY = "sound_volume"
+# Auto re-register configuration key
+AUTO_REREGISTER_CONFIG_KEY = "auto_reregister_hotkeys"
 # Batch size and GPU index configuration keys
 BATCH_SIZE_CONFIG_KEY = "batch_size"
 GPU_INDEX_CONFIG_KEY = "gpu_index"
@@ -230,6 +232,9 @@ class WhisperCore: # Renamed from WhisperApp
 
         # Reload key configuration
         self.reload_key = DEFAULT_CONFIG["reload_key"]
+
+        # Auto re-register setting
+        self.auto_reregister_hotkeys = DEFAULT_CONFIG[AUTO_REREGISTER_CONFIG_KEY]
 
         # Keyboard library configuration - Apenas Win32 é suportado agora
         self.keyboard_library = KEYBOARD_LIB_WIN32
@@ -521,6 +526,13 @@ class WhisperCore: # Renamed from WhisperApp
         self.keyboard_library = KEYBOARD_LIB_WIN32
         self.config[KEYBOARD_LIBRARY_CONFIG_KEY] = self.keyboard_library
 
+        # Auto re-register setting
+        try:
+            self.auto_reregister_hotkeys = bool(self.config.get(AUTO_REREGISTER_CONFIG_KEY, DEFAULT_CONFIG[AUTO_REREGISTER_CONFIG_KEY]))
+        except (ValueError, TypeError):
+            self.auto_reregister_hotkeys = DEFAULT_CONFIG[AUTO_REREGISTER_CONFIG_KEY]
+            self.config[AUTO_REREGISTER_CONFIG_KEY] = self.auto_reregister_hotkeys
+
         # Text correction settings validation
         # Text correction enabled
         try:
@@ -682,7 +694,8 @@ class WhisperCore: # Renamed from WhisperApp
             "gemini_mode": self.gemini_mode,
             "gemini_general_prompt": self.gemini_general_prompt,
             BATCH_SIZE_CONFIG_KEY: self.batch_size,
-            GPU_INDEX_CONFIG_KEY: self.gpu_index
+            GPU_INDEX_CONFIG_KEY: self.gpu_index,
+            AUTO_REREGISTER_CONFIG_KEY: self.auto_reregister_hotkeys
         }
         self.config = config_to_save # Update in-memory config as well
         try:
@@ -1056,18 +1069,21 @@ class WhisperCore: # Renamed from WhisperApp
         # Iniciar o KeyboardHotkeyManager e registrar callbacks
         self._start_autohotkey()
 
-        # Iniciar thread de re-registro periódico das hotkeys
-        try:
-            self.stop_reregister_event.clear()
-            self.reregister_timer_thread = threading.Thread(
-                target=self._periodic_reregister_task,
-                daemon=True,
-                name="PeriodicHotkeyReregister",
-            )
-            self.reregister_timer_thread.start()
-            logging.info("Periodic re-register thread started.")
-        except Exception as e:
-            logging.error(f"Erro ao iniciar thread de re-registro periódico: {e}")
+        # Iniciar thread de re-registro periódico se ativado
+        if self.auto_reregister_hotkeys:
+            try:
+                self.stop_reregister_event.clear()
+                self.reregister_timer_thread = threading.Thread(
+                    target=self._periodic_reregister_task,
+                    daemon=True,
+                    name="PeriodicHotkeyReregister",
+                )
+                self.reregister_timer_thread.start()
+                logging.info("Periodic re-register thread started.")
+            except Exception as e:
+                logging.error(f"Erro ao iniciar thread de re-registro periódico: {e}")
+        else:
+            logging.info("Auto re-register de hotkeys desativado.")
 
         logging.info("Hotkeys registered using keyboard library.")
 
@@ -1295,16 +1311,19 @@ class WhisperCore: # Renamed from WhisperApp
             if self.current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
                  self._set_state(STATE_IDLE)
 
-            # Start health monitoring thread if not already running
-            if not self.health_check_thread or not self.health_check_thread.is_alive():
-                self.stop_health_check_event.clear()
-                self.health_check_thread = threading.Thread(
-                    target=self._hotkey_health_check_task,
-                    daemon=True,
-                    name="HotkeyHealthThread",
-                )
-                self.health_check_thread.start()
-                logging.info("Hotkey health monitoring thread launched.")
+            # Start health monitoring thread if enabled
+            if self.auto_reregister_hotkeys:
+                if not self.health_check_thread or not self.health_check_thread.is_alive():
+                    self.stop_health_check_event.clear()
+                    self.health_check_thread = threading.Thread(
+                        target=self._hotkey_health_check_task,
+                        daemon=True,
+                        name="HotkeyHealthThread",
+                    )
+                    self.health_check_thread.start()
+                    logging.info("Hotkey health monitoring thread launched.")
+            else:
+                self.stop_health_check_event.set()
         else:
             # All registration attempts failed
             status_msg = f"Error: Hotkey registration failed with all libraries."
@@ -1967,7 +1986,8 @@ class WhisperCore: # Renamed from WhisperApp
                                    new_gemini_api_key=None, new_gemini_model=None,
                                    new_gemini_model_list=None,
                                    new_gemini_mode=None, new_gemini_prompt=None, new_gemini_general_prompt=None,
-                                   new_batch_size=None, new_gpu_index=None):
+                                   new_batch_size=None, new_gpu_index=None,
+                                   new_auto_reregister=None):
         """Applies settings passed from the external settings window/thread."""
         logging.info("Applying new configuration from external source.")
         key_changed = False
@@ -2069,6 +2089,37 @@ class WhisperCore: # Renamed from WhisperApp
                     logging.info(f"GPU index changed to: {self.gpu_index}")
             except (ValueError, TypeError):
                 logging.warning(f"Invalid GPU index value: {new_gpu_index}")
+
+        # Auto re-register hotkeys
+        if new_auto_reregister is not None:
+            auto_bool = bool(new_auto_reregister)
+            if auto_bool != self.auto_reregister_hotkeys:
+                self.auto_reregister_hotkeys = auto_bool
+                config_needs_saving = True
+                logging.info(f"Auto hotkey re-register changed to: {self.auto_reregister_hotkeys}")
+                if auto_bool:
+                    # Start monitoring threads if necessary
+                    if not self.reregister_timer_thread or not self.reregister_timer_thread.is_alive():
+                        self.stop_reregister_event.clear()
+                        self.reregister_timer_thread = threading.Thread(
+                            target=self._periodic_reregister_task,
+                            daemon=True,
+                            name="PeriodicHotkeyReregister",
+                        )
+                        self.reregister_timer_thread.start()
+                        logging.info("Periodic re-register thread started.")
+                    if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
+                        self.stop_health_check_event.clear()
+                        self.health_check_thread = threading.Thread(
+                            target=self._hotkey_health_check_task,
+                            daemon=True,
+                            name="HotkeyHealthThread",
+                        )
+                        self.health_check_thread.start()
+                        logging.info("Hotkey health monitoring thread launched.")
+                else:
+                    self.stop_reregister_event.set()
+                    self.stop_health_check_event.set()
 
         # Keyboard library is always Win32
         self.keyboard_library = KEYBOARD_LIB_WIN32
@@ -2484,6 +2535,7 @@ def run_settings_gui():
     new_record_key_temp = None
     reload_key_var = ctk.StringVar(value=core_instance.reload_key.upper()); settings_vars.append(reload_key_var)
     new_reload_key_temp = None
+    auto_reregister_var = ctk.BooleanVar(value=core_instance.auto_reregister_hotkeys); settings_vars.append(auto_reregister_var)
     sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled); settings_vars.append(sound_enabled_var)
     sound_frequency_var = ctk.IntVar(value=core_instance.sound_frequency); settings_vars.append(sound_frequency_var)
     sound_duration_var = ctk.DoubleVar(value=core_instance.sound_duration); settings_vars.append(sound_duration_var)
@@ -2814,6 +2866,7 @@ def run_settings_gui():
         mode_to_apply = mode_var.get()
         auto_paste_to_apply = auto_paste_var.get()
         reload_key_to_apply = new_reload_key_temp
+        auto_reregister_to_apply = auto_reregister_var.get()
 
         sound_enabled_to_apply = sound_enabled_var.get()
 
@@ -2893,7 +2946,8 @@ def run_settings_gui():
                     new_gemini_model=gemini_model_var.get(),
                     new_gemini_model_list=gemini_model_list_var.get(),
                     new_batch_size=batch_size_to_apply,
-                    new_gpu_index=gpu_index_to_apply
+                    new_gpu_index=gpu_index_to_apply,
+                    new_auto_reregister=auto_reregister_to_apply
                 ) # Fechar parênteses da chamada da função
             else:
                 logging.critical("CRITICAL: apply_settings_from_external method not found on core_instance!")
@@ -2988,6 +3042,12 @@ def run_settings_gui():
     ctk.CTkRadioButton(mode_frame, text="Toggle", variable=mode_var, value="toggle").pack(side="left", padx=5) # Already English
     ctk.CTkRadioButton(mode_frame, text="Press/Hold", variable=mode_var, value="press").pack(side="left", padx=5) # Already English
 
+    # --- Auto Hotkey Reload Section ---
+    auto_reload_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
+    auto_reload_frame.pack(fill="x", pady=(0, 10), padx=0)
+    ctk.CTkLabel(auto_reload_frame, text="Auto Hotkey Reload", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
+    ctk.CTkSwitch(auto_reload_frame, text="Enabled", variable=auto_reregister_var, onvalue=True, offvalue=False).pack(side="left")
+
     # Seção de biblioteca de teclado removida, pois não é configurável pelo usuário
 
     # --- Sound Settings Section ---
@@ -3069,7 +3129,6 @@ def run_settings_gui():
     gemini_model_row = ctk.CTkFrame(gemini_section_frame, fg_color="#222831")
     gemini_model_row.pack(fill="x", padx=0, pady=(5, 0))
     ctk.CTkLabel(gemini_model_row, text="Model:", width=120).pack(side="left", padx=5) # Already English
-    gemini_model_option = ctk.CTkOptionMenu(
         gemini_model_row,
         variable=gemini_model_var,
         values=core_instance.gemini_model_list
