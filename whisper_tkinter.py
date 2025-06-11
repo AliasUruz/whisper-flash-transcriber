@@ -92,6 +92,7 @@ DEFAULT_CONFIG = {
     "sound_duration": 0.3,
     "sound_volume": 0.5,
     "agent_key": "F5",
+    "agent_record_duration": 5.0,
     "keyboard_library": "win32",  # Apenas a opção 'win32' é suportada agora
     "text_correction_enabled": False,
     "text_correction_service": "none",
@@ -102,6 +103,8 @@ DEFAULT_CONFIG = {
     "gemini_mode": "correction",
     "gemini_general_prompt": "Based on the following text, generate a short response: {text}",
     "gemini_agent_prompt": "You are a helpful assistant. Reply to: {text}",
+    "gemini_agent_model": "gemini-1.5-flash",
+    "agent_auto_paste": True,
     "gemini_prompt": """You are a speech-to-text correction specialist. Your task is to refine the following transcribed speech.
 
 Key instructions:
@@ -130,7 +133,7 @@ Transcribed speech: {text}""",
 HOTKEY_DEBOUNCE_INTERVAL = 0.3
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1
-AGENT_RECORD_DURATION = 3.0
+AGENT_RECORD_DURATION_CONFIG_KEY = "agent_record_duration"
 MIN_RECORDING_DURATION_CONFIG_KEY = "min_record_duration"
 # Sound configuration keys
 SOUND_ENABLED_CONFIG_KEY = "sound_enabled"
@@ -235,11 +238,14 @@ class WhisperCore: # Renamed from WhisperApp
         self.gemini_mode = DEFAULT_CONFIG["gemini_mode"]
         self.gemini_general_prompt = DEFAULT_CONFIG["gemini_general_prompt"]
         self.gemini_agent_prompt = DEFAULT_CONFIG["gemini_agent_prompt"]
+        self.gemini_agent_model = DEFAULT_CONFIG["gemini_agent_model"]
+        self.agent_auto_paste = DEFAULT_CONFIG["agent_auto_paste"]
         self.gemini_model_options = []
         self.sound_lock = RLock()  # Lock for sound playback
 
         # Agent key configuration
         self.agent_key = DEFAULT_CONFIG["agent_key"]
+        self.agent_record_duration = DEFAULT_CONFIG["agent_record_duration"]
 
         # Auto re-register setting
         self.auto_reregister_hotkeys = DEFAULT_CONFIG[AUTO_REREGISTER_CONFIG_KEY]
@@ -530,6 +536,29 @@ class WhisperCore: # Renamed from WhisperApp
             self.agent_key = DEFAULT_CONFIG[AGENT_KEY_CONFIG_KEY]
             self.config[AGENT_KEY_CONFIG_KEY] = self.agent_key
 
+        # Agent record duration
+        try:
+            self.agent_record_duration = float(self.config.get(AGENT_RECORD_DURATION_CONFIG_KEY, DEFAULT_CONFIG[AGENT_RECORD_DURATION_CONFIG_KEY]))
+            if self.agent_record_duration <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            self.agent_record_duration = DEFAULT_CONFIG[AGENT_RECORD_DURATION_CONFIG_KEY]
+            self.config[AGENT_RECORD_DURATION_CONFIG_KEY] = self.agent_record_duration
+
+        # Gemini agent model
+        try:
+            self.gemini_agent_model = str(self.config.get("gemini_agent_model", DEFAULT_CONFIG["gemini_agent_model"]))
+        except (ValueError, TypeError):
+            self.gemini_agent_model = DEFAULT_CONFIG["gemini_agent_model"]
+            self.config["gemini_agent_model"] = self.gemini_agent_model
+
+        # Agent auto paste
+        try:
+            self.agent_auto_paste = bool(self.config.get("agent_auto_paste", DEFAULT_CONFIG["agent_auto_paste"]))
+        except (ValueError, TypeError):
+            self.agent_auto_paste = DEFAULT_CONFIG["agent_auto_paste"]
+            self.config["agent_auto_paste"] = self.agent_auto_paste
+
         # Keyboard library - Apenas Win32 é suportado agora
         self.keyboard_library = KEYBOARD_LIB_WIN32
         self.config[KEYBOARD_LIBRARY_CONFIG_KEY] = self.keyboard_library
@@ -709,6 +738,7 @@ class WhisperCore: # Renamed from WhisperApp
             SOUND_VOLUME_CONFIG_KEY: self.sound_volume,
             # Agent key
             AGENT_KEY_CONFIG_KEY: self.agent_key,
+            AGENT_RECORD_DURATION_CONFIG_KEY: self.agent_record_duration,
             # Keyboard library
             KEYBOARD_LIBRARY_CONFIG_KEY: self.keyboard_library,
             # Text correction settings
@@ -726,6 +756,8 @@ class WhisperCore: # Renamed from WhisperApp
             "gemini_mode": self.gemini_mode,
             "gemini_general_prompt": self.gemini_general_prompt,
             "gemini_agent_prompt": self.gemini_agent_prompt,
+            "gemini_agent_model": self.gemini_agent_model,
+            "agent_auto_paste": self.agent_auto_paste,
             BATCH_SIZE_CONFIG_KEY: self.batch_size,
             GPU_INDEX_CONFIG_KEY: self.gpu_index,
             AUTO_REREGISTER_CONFIG_KEY: self.auto_reregister_hotkeys
@@ -939,20 +971,24 @@ class WhisperCore: # Renamed from WhisperApp
             self._log_status("Gemini não configurado.", error=True)
             return
 
-        if self.gemini_client is None:
-            try:
-                self.gemini_client = GeminiAPI(api_key=self.gemini_api_key, model_id=self.gemini_model, prompt=self.gemini_prompt)
-            except Exception as e:
-                logging.error(f"Erro inicializando Gemini: {e}")
-                self._log_status("Erro ao inicializar Gemini", error=True)
-                return
-
         try:
-            response = self.gemini_client.correct_text(prompt_text, override_prompt=self.gemini_agent_prompt)
+            agent_client = GeminiAPI(
+                api_key=self.gemini_api_key,
+                model_id=self.gemini_agent_model,
+                prompt=self.gemini_agent_prompt,
+            )
+            logging.info(f"Using agent model: {self.gemini_agent_model}")
+            response = agent_client.correct_text(prompt_text, override_prompt=self.gemini_agent_prompt)
             if pyperclip:
                 pyperclip.copy(response)
-            logging.info("Resposta do agente copiada para o clipboard.")
-            self._log_status("Comando executado.")
+                logging.info("Resposta do agente copiada para o clipboard.")
+
+            if self.agent_auto_paste:
+                self._do_paste()
+                self._log_status("Comando executado e colado.")
+            else:
+                self._log_status("Comando executado.")
+
         except Exception as e:
             logging.error(f"Erro no comando agêntico: {e}")
             self._log_status("Erro ao executar comando", error=True)
@@ -1783,7 +1819,7 @@ class WhisperCore: # Renamed from WhisperApp
         """Records audio for a fixed duration for agent commands."""
         try:
             with sd.InputStream(samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS, callback=self._audio_callback, dtype='float32'):
-                time.sleep(AGENT_RECORD_DURATION)
+                time.sleep(self.agent_record_duration)
         except Exception as e:
             logging.error(f"Erro na gravação do comando: {e}")
         finally:
@@ -2052,6 +2088,9 @@ class WhisperCore: # Renamed from WhisperApp
         new_gemini_prompt=None,
         new_gemini_general_prompt=None,
         new_gemini_agent_prompt=None,
+        new_agent_record_duration=None,
+        new_gemini_agent_model=None,
+        new_agent_auto_paste=None,
         new_batch_size=None,
         new_gpu_index=None,
         new_auto_reregister=None,
@@ -2131,6 +2170,26 @@ class WhisperCore: # Renamed from WhisperApp
                 self.agent_key = agent_key_str
                 config_needs_saving = True
                 logging.info(f"Agent key changed to: {self.agent_key.upper()}")
+
+        if new_agent_record_duration is not None and new_agent_record_duration != self.agent_record_duration:
+            try:
+                dur = float(new_agent_record_duration)
+                if dur > 0:
+                    self.agent_record_duration = dur
+                    config_needs_saving = True
+                    logging.info(f"Agent record duration changed to: {self.agent_record_duration}s")
+            except (ValueError, TypeError):
+                logging.warning(f"Invalid agent record duration value: {new_agent_record_duration}")
+
+        if new_gemini_agent_model is not None and new_gemini_agent_model != self.gemini_agent_model:
+            self.gemini_agent_model = new_gemini_agent_model
+            config_needs_saving = True
+            logging.info(f"Gemini agent model changed to: {self.gemini_agent_model}")
+
+        if new_agent_auto_paste is not None and new_agent_auto_paste != self.agent_auto_paste:
+            self.agent_auto_paste = new_agent_auto_paste
+            config_needs_saving = True
+            logging.info(f"Agent auto paste changed to: {self.agent_auto_paste}")
 
         # Batch size
         if new_batch_size is not None:
@@ -2605,6 +2664,9 @@ def run_settings_gui():
     new_record_key_temp = None
     agent_key_var = ctk.StringVar(value=core_instance.agent_key.upper()); settings_vars.append(agent_key_var)
     new_agent_key_temp = None
+    agent_duration_var = ctk.StringVar(value=str(core_instance.agent_record_duration)); settings_vars.append(agent_duration_var)
+    agent_model_var = ctk.StringVar(value=core_instance.gemini_agent_model); settings_vars.append(agent_model_var)
+    agent_auto_paste_var = ctk.BooleanVar(value=core_instance.agent_auto_paste); settings_vars.append(agent_auto_paste_var)
     auto_reregister_var = ctk.BooleanVar(value=core_instance.auto_reregister_hotkeys); settings_vars.append(auto_reregister_var)
     sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled); settings_vars.append(sound_enabled_var)
     sound_frequency_var = ctk.IntVar(value=core_instance.sound_frequency); settings_vars.append(sound_frequency_var)
@@ -2932,6 +2994,17 @@ def run_settings_gui():
         mode_to_apply = mode_var.get()
         auto_paste_to_apply = auto_paste_var.get()
         agent_key_to_apply = new_agent_key_temp
+        try:
+            duration_to_apply = float(agent_duration_var.get())
+            if duration_to_apply <= 0:
+                messagebox.showwarning("Invalid Value", "Agent record duration must be a positive number.", parent=settings_win)
+                return
+        except (ValueError, TypeError):
+            messagebox.showwarning("Invalid Value", "Agent record duration must be a number.", parent=settings_win)
+            return
+
+        model_to_apply = agent_model_var.get()
+        paste_to_apply = agent_auto_paste_var.get()
         auto_reregister_to_apply = auto_reregister_var.get()
 
         sound_enabled_to_apply = sound_enabled_var.get()
@@ -3016,6 +3089,8 @@ def run_settings_gui():
                     new_openrouter_model=openrouter_model_var.get(),
                     new_gemini_api_key=gemini_api_key_var.get(),
                     new_gemini_model=gemini_model_var.get(),
+                    new_gemini_agent_model=model_to_apply,
+                    new_agent_auto_paste=paste_to_apply,
                     new_gemini_model_options=new_models_list,
                     new_batch_size=batch_size_to_apply,
                     new_gpu_index=gpu_index_to_apply,
@@ -3106,6 +3181,24 @@ def run_settings_gui():
     agent_key_display_label.pack(side="left", padx=5)
     detect_agent_key_button = ctk.CTkButton(agent_key_frame, text="Detect Key", command=lambda: start_detect_agent_key(), width=100, fg_color="#00a0ff", hover_color="#0078d7")
     detect_agent_key_button.pack(side="left", padx=5)
+
+    # --- Agent Record Duration Section ---
+    agent_duration_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
+    agent_duration_frame.pack(fill="x", pady=(0, 10), padx=0)
+    ctk.CTkLabel(agent_duration_frame, text="Agent Record Duration (s)", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
+    ctk.CTkEntry(agent_duration_frame, textvariable=agent_duration_var, width=80).pack(side="left", padx=5)
+
+    # --- Agent Model Selection Section ---
+    agent_model_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
+    agent_model_frame.pack(fill="x", pady=(0, 10), padx=0)
+    ctk.CTkLabel(agent_model_frame, text="Agent Model", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
+    ctk.CTkOptionMenu(agent_model_frame, variable=agent_model_var, values=core_instance.gemini_model_options).pack(side="left", fill="x", expand=True, padx=5)
+
+    # --- Agent Auto Paste Section ---
+    agent_paste_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
+    agent_paste_frame.pack(fill="x", pady=(0, 10), padx=0)
+    ctk.CTkLabel(agent_paste_frame, text="Agent Auto Paste", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(side="left", padx=(0, 15))
+    ctk.CTkSwitch(agent_paste_frame, text="Enabled", variable=agent_auto_paste_var).pack(side="left")
 
     # --- Record Mode Section ---
     mode_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
