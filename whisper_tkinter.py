@@ -101,6 +101,7 @@ DEFAULT_CONFIG = {
     "gemini_model": "gemini-2.0-flash-001",
     "gemini_mode": "correction",
     "gemini_general_prompt": "Based on the following text, generate a short response: {text}",
+    "gemini_agent_prompt": "You are a helpful assistant. Reply to: {text}",
     "gemini_prompt": """You are a speech-to-text correction specialist. Your task is to refine the following transcribed speech.
 
 Key instructions:
@@ -232,6 +233,7 @@ class WhisperCore: # Renamed from WhisperApp
         self.gemini_prompt = DEFAULT_CONFIG["gemini_prompt"]
         self.gemini_mode = DEFAULT_CONFIG["gemini_mode"]
         self.gemini_general_prompt = DEFAULT_CONFIG["gemini_general_prompt"]
+        self.gemini_agent_prompt = DEFAULT_CONFIG["gemini_agent_prompt"]
         self.gemini_model_options = []
         self.sound_lock = RLock()  # Lock for sound playback
 
@@ -641,6 +643,13 @@ class WhisperCore: # Renamed from WhisperApp
             logging.warning(f"Invalid gemini_general_prompt type in config. Falling back to default.")
             self.gemini_general_prompt = DEFAULT_CONFIG["gemini_general_prompt"]
 
+        # Load Gemini agent prompt
+        try:
+            self.gemini_agent_prompt = str(self.config.get("gemini_agent_prompt", DEFAULT_CONFIG["gemini_agent_prompt"]))
+        except (ValueError, TypeError):
+            logging.warning("Invalid gemini_agent_prompt type in config. Falling back to default.")
+            self.gemini_agent_prompt = DEFAULT_CONFIG["gemini_agent_prompt"]
+
         # Load and VALIDATE Gemini model options list
         try:
             model_options = self.config.get(
@@ -677,6 +686,7 @@ class WhisperCore: # Renamed from WhisperApp
         logging.info(f"Gemini settings: Model={self.gemini_model}")
         logging.info(f"Gemini mode: {self.gemini_mode}") # Added logging for new settings
         logging.info(f"Gemini general prompt: {self.gemini_general_prompt}") # Added logging for new settings
+        logging.info(f"Gemini agent prompt: {self.gemini_agent_prompt}")
         logging.info(f"Batch size: {self.batch_size} (specified: {self.batch_size_specified})")
         logging.info(f"GPU index: {self.gpu_index} (specified: {self.gpu_index_specified})")
 
@@ -714,6 +724,7 @@ class WhisperCore: # Renamed from WhisperApp
             GEMINI_MODEL_OPTIONS_CONFIG_KEY: self.gemini_model_options,
             "gemini_mode": self.gemini_mode,
             "gemini_general_prompt": self.gemini_general_prompt,
+            "gemini_agent_prompt": self.gemini_agent_prompt,
             BATCH_SIZE_CONFIG_KEY: self.batch_size,
             GPU_INDEX_CONFIG_KEY: self.gpu_index,
             AUTO_REREGISTER_CONFIG_KEY: self.auto_reregister_hotkeys
@@ -2017,6 +2028,7 @@ class WhisperCore: # Renamed from WhisperApp
         new_gemini_mode=None,
         new_gemini_prompt=None,
         new_gemini_general_prompt=None,
+        new_gemini_agent_prompt=None,
         new_batch_size=None,
         new_gpu_index=None,
         new_auto_reregister=None,
@@ -2241,6 +2253,15 @@ class WhisperCore: # Renamed from WhisperApp
                 config_needs_saving = True
                 logging.info("Gemini general prompt updated.")
 
+        # Apply Gemini agent prompt
+        if new_gemini_agent_prompt is not None:
+            agent_prompt_str = str(new_gemini_agent_prompt)
+            if agent_prompt_str != self.gemini_agent_prompt:
+                self.gemini_agent_prompt = agent_prompt_str
+                gemini_changed = True
+                config_needs_saving = True
+                logging.info("Gemini agent prompt updated.")
+
         if new_gemini_model_options is not None and new_gemini_model_options != self.gemini_model_options:
             self.gemini_model_options = new_gemini_model_options
             config_needs_saving = True
@@ -2269,6 +2290,8 @@ class WhisperCore: # Renamed from WhisperApp
             if new_gemini_prompt is not None and new_gemini_prompt != self.gemini_prompt:
                 gemini_changed = True
             if new_gemini_general_prompt is not None and new_gemini_general_prompt != self.gemini_general_prompt:
+                gemini_changed = True
+            if new_gemini_agent_prompt is not None and new_gemini_agent_prompt != self.gemini_agent_prompt:
                 gemini_changed = True
 
             if gemini_changed:
