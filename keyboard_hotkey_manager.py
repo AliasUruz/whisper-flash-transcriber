@@ -24,9 +24,9 @@ class KeyboardHotkeyManager:
         self.callback_toggle = None
         self.callback_start = None
         self.callback_stop = None
-        self.callback_reload = None
+        self.callback_agent = None
         self.record_key = "f3"  # Tecla padrão
-        self.reload_key = "f4"  # Tecla padrão
+        self.agent_key = "f4"  # Tecla padrão para comando agêntico
         self.record_mode = "toggle"  # Modo padrão
         self.hotkey_handlers = {}
 
@@ -40,9 +40,9 @@ class KeyboardHotkeyManager:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                     self.record_key = config.get('record_key', self.record_key)
-                    self.reload_key = config.get('reload_key', self.reload_key)
+                    self.agent_key = config.get('agent_key', self.agent_key)
                     self.record_mode = config.get('record_mode', self.record_mode)
-                    logging.info(f"Configuração carregada: record_key={self.record_key}, reload_key={self.reload_key}, record_mode={self.record_mode}")
+                    logging.info(f"Configuração carregada: record_key={self.record_key}, agent_key={self.agent_key}, record_mode={self.record_mode}")
         except Exception as e:
             logging.error(f"Erro ao carregar configuração: {e}")
 
@@ -51,7 +51,7 @@ class KeyboardHotkeyManager:
         try:
             config = {
                 'record_key': self.record_key,
-                'reload_key': self.reload_key,
+                'agent_key': self.agent_key,
                 'record_mode': self.record_mode
             }
             with open(self.config_file, 'w', encoding='utf-8') as f:
@@ -87,13 +87,13 @@ class KeyboardHotkeyManager:
         self.is_running = False
         logging.info("KeyboardHotkeyManager encerrado.")
 
-    def update_config(self, record_key=None, reload_key=None, record_mode=None):
+    def update_config(self, record_key=None, agent_key=None, record_mode=None):
         """
         Atualiza a configuração do gerenciador de hotkeys.
 
         Args:
             record_key (str): Tecla de gravação
-            reload_key (str): Tecla de recarga
+            agent_key (str): Tecla para comando agêntico
             record_mode (str): Modo de gravação ('toggle' ou 'press')
         """
         try:
@@ -106,8 +106,8 @@ class KeyboardHotkeyManager:
             if record_key is not None:
                 self.record_key = record_key.lower()
 
-            if reload_key is not None:
-                self.reload_key = reload_key.lower()
+            if agent_key is not None:
+                self.agent_key = agent_key.lower()
 
             if record_mode is not None:
                 self.record_mode = record_mode
@@ -119,14 +119,14 @@ class KeyboardHotkeyManager:
             if was_running:
                 self._register_hotkeys()
 
-            logging.info(f"Configuração atualizada: record_key={self.record_key}, reload_key={self.reload_key}, record_mode={self.record_mode}")
+            logging.info(f"Configuração atualizada: record_key={self.record_key}, agent_key={self.agent_key}, record_mode={self.record_mode}")
             return True
 
         except Exception as e:
             logging.error(f"Erro ao atualizar configuração: {e}")
             return False
 
-    def set_callbacks(self, toggle=None, start=None, stop=None, reload=None):
+    def set_callbacks(self, toggle=None, start=None, stop=None, agent=None):
         """
         Define os callbacks para os eventos de hotkey.
 
@@ -134,7 +134,7 @@ class KeyboardHotkeyManager:
             toggle (callable): Callback para o evento de toggle
             start (callable): Callback para o evento de início de gravação
             stop (callable): Callback para o evento de fim de gravação
-            reload (callable): Callback para o evento de recarga
+            agent (callable): Callback para o comando agêntico
         """
         if toggle is not None:
             self.callback_toggle = toggle
@@ -145,8 +145,8 @@ class KeyboardHotkeyManager:
         if stop is not None:
             self.callback_stop = stop
 
-        if reload is not None:
-            self.callback_reload = reload
+        if agent is not None:
+            self.callback_agent = agent
 
     def _register_hotkeys(self):
         """Registra as hotkeys no sistema."""
@@ -180,12 +180,12 @@ class KeyboardHotkeyManager:
             logging.info(f"Hotkey de gravação registrada com sucesso (on_press_key): {self.record_key}")
 
             # Registrar a tecla de recarga
-            logging.info(f"Registrando hotkey de recarga: {self.reload_key}")
-            keyboard.on_press_key(self.reload_key, lambda _: self._on_reload_key(), suppress=True)
-            self.hotkey_handlers[self.reload_key] = self._on_reload_key
-            logging.info(f"Hotkey de recarga registrada com sucesso (on_press_key): {self.reload_key}")
+            logging.info(f"Registrando hotkey de comando: {self.agent_key}")
+            keyboard.on_press_key(self.agent_key, lambda _: self._on_agent_key(), suppress=True)
+            self.hotkey_handlers[self.agent_key] = self._on_agent_key
+            logging.info(f"Hotkey de comando registrada com sucesso (on_press_key): {self.agent_key}")
 
-            logging.info(f"Hotkeys registradas com sucesso: gravação={self.record_key}, recarga={self.reload_key}")
+            logging.info(f"Hotkeys registradas com sucesso: gravação={self.record_key}, comando={self.agent_key}")
             return True
 
         except Exception as e:
@@ -233,14 +233,14 @@ class KeyboardHotkeyManager:
         except Exception as e:
             logging.error(f"Erro ao chamar callback de start: {e}", exc_info=True)
 
-    def _on_reload_key(self):
-        """Handler para a tecla de recarga."""
+    def _on_agent_key(self):
+        """Handler para a tecla de comando agêntico."""
         try:
-            if self.callback_reload:
-                threading.Thread(target=self.callback_reload, daemon=True, name="ReloadCallback").start()
-                logging.info("Callback de reload chamado.")
+            if self.callback_agent:
+                threading.Thread(target=self.callback_agent, daemon=True, name="AgentCallback").start()
+                logging.info("Callback de comando chamado.")
         except Exception as e:
-            logging.error(f"Erro ao chamar callback de reload: {e}", exc_info=True)
+            logging.error(f"Erro ao chamar callback de comando: {e}", exc_info=True)
 
     def _on_release_key(self):
         """Handler para o evento de soltar a tecla no modo press."""
