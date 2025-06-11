@@ -4,6 +4,7 @@ import os
 import json
 import threading
 import time
+import queue # Importar a biblioteca queue
 # Import tkinter apenas quando necessário dentro das funções
 import tkinter.messagebox as messagebox
 from tkinter import TclError
@@ -2410,36 +2411,14 @@ def run_settings_gui():
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
 
-    # Create a temporary hidden root for this instance of the settings window
-    temp_tk_root = ctk.CTk()
-    temp_tk_root.withdraw()
 
-    def on_temp_root_close():
-        global settings_window_instance
-        # Sempre definir como None, independentemente de erros
-        settings_window_instance = None
-
-        # Verificação mais segura para evitar erros de threading
-        root_exists = False
-        try:
-            root_exists = temp_tk_root is not None and temp_tk_root.winfo_exists()
-        except Exception as e:
-            logging.debug(f"Error checking if temp_tk_root exists: {e}")
-
-        if root_exists:
-            try:
-                temp_tk_root.destroy()
-            except Exception as e:
-                logging.warning(f"Error destroying temp_tk_root: {e}")
-    temp_tk_root.protocol("WM_DELETE_WINDOW", on_temp_root_close)
-
-    # Create Toplevel as child of the temporary root
+    # Create Toplevel as child of the main_tk_root (implicitly)
     try:
-        settings_win = ctk.CTkToplevel(temp_tk_root)
+        settings_win = ctk.CTkToplevel()
         settings_window_instance = settings_win
     except Exception as e:
         logging.error(f"Failed to create Toplevel for settings: {e}", exc_info=True)
-        on_temp_root_close()
+        # Não há mais on_temp_root_close, apenas retornar
         return
 
     # --- Configure the Toplevel window (INDENTED under the try) ---
@@ -2548,7 +2527,7 @@ def run_settings_gui():
         # Schedule button update on the Tkinter thread using temp_tk_root.after
         if settings_window_instance:
             try:
-                temp_tk_root.after(0, lambda: (
+                main_tk_root.after(0, lambda: (
                     settings_window_instance.winfo_exists() and
                     detect_key_button.configure(text="PRESS KEY...", state="disabled")
                 ))
@@ -2623,7 +2602,7 @@ def run_settings_gui():
         finally:
             if settings_window_instance:
                 try:
-                    temp_tk_root.after(0, lambda: (
+                    main_tk_root.after(0, lambda: (
                         settings_window_instance.winfo_exists() and
                         update_detection_ui(detected_key_str)
                     ))
@@ -2671,7 +2650,7 @@ def run_settings_gui():
 
         if settings_window_instance:
             try:
-                temp_tk_root.after(0, lambda: (
+                main_tk_root.after(0, lambda: (
                     settings_window_instance.winfo_exists() and
                     detect_reload_key_button.configure(text="PRESS KEY...", state="disabled")
                 ))
@@ -2755,7 +2734,7 @@ def run_settings_gui():
         finally:
             if settings_window_instance:
                 try:
-                    temp_tk_root.after(0, lambda: (
+                    main_tk_root.after(0, lambda: (
                         settings_window_instance.winfo_exists() and
                         update_detection_ui(detected_key_str, is_reload_key=True)
                     ))
@@ -2890,7 +2869,7 @@ def run_settings_gui():
 
     def close_settings():
         """Closes the settings window and its temporary root (runs in Tkinter thread)."""
-        nonlocal settings_vars, temp_tk_root
+        nonlocal settings_vars
         global settings_window_instance, settings_thread_running
         logging.info("Settings window closing sequence started (in Tkinter thread).")
 
@@ -2918,14 +2897,7 @@ def run_settings_gui():
         for i in range(len(settings_vars)):
             settings_vars[i] = None
 
-        # Destruir temp_tk_root apenas se ele existir e for válido
-        if temp_tk_root and temp_tk_root.winfo_exists():
-            logging.debug("Quitting and destroying temporary Tk root for settings window...")
-            try:
-                temp_tk_root.quit()
-                temp_tk_root.destroy()
-            except Exception as e:
-                logging.warning(f"Error destroying temp root: {e}")
+        # temp_tk_root não existe mais, então não há necessidade de destruí-lo
 
 
         logging.info("Settings window closing sequence finished (in Tkinter thread).")
@@ -2934,7 +2906,7 @@ def run_settings_gui():
         settings_thread_running = False
 
     # --- UI Construction ---
-    settings_win.protocol("WM_DELETE_WINDOW", lambda: close_settings())
+    settings_win.protocol("WM_DELETE_WINDOW", close_settings)
 
     # Main frame with scrollable content
     main_frame = ctk.CTkFrame(settings_win, fg_color="#222831", corner_radius=16)
@@ -3158,7 +3130,6 @@ def run_settings_gui():
     settings_win.update()
  
     # --- Make Visible and Start Mainloop ---
-    settings_win.transient(temp_tk_root)
     settings_win.deiconify()
     settings_win.lift()
     settings_win.focus_force()
@@ -3166,14 +3137,8 @@ def run_settings_gui():
     # Set initial visibility of Gemini prompt based on loaded config
     toggle_gemini_prompt_visibility()
 
-    logging.info("Starting mainloop for settings window thread...")
-    try:
-        temp_tk_root.mainloop()
-    except Exception as e:
-        logging.error(f"Error during settings window mainloop: {e}", exc_info=True)
-    finally:
-        logging.info("Settings window thread mainloop finished.")
-        # Ensure cleanup happens even if mainloop crashes (close_settings handles this now)
+    # O mainloop principal já está rodando na main_tk_root, não precisamos de um mainloop aqui.
+    logging.info("Settings window opened and focused.")
 
 # --- Callbacks for pystray Menu Items ---
 def on_start_recording_menu_click(*_):
@@ -3232,7 +3197,7 @@ settings_window_lock = threading.Lock()
 settings_thread_running = False
 
 def on_settings_menu_click(*_):
-    """Starts the settings GUI in a separate thread."""
+    """Abre a GUI de configurações na thread principal."""
     global settings_window_instance, settings_thread_running
 
     # Use a lock to avoid race conditions when checking/creating the window
@@ -3240,29 +3205,16 @@ def on_settings_menu_click(*_):
         # If the settings GUI is already running, just try to focus it using the
         # thread-safe `after` method and return.
         if settings_thread_running:
-            logging.info("Settings window already running. Attempting to focus.")
+            logging.info("Janela de configurações já está sendo executada. Tentando focar.")
             if settings_window_instance and settings_window_instance.winfo_exists():
-                try:
-                    settings_window_instance.after(0, lambda: (
-                        settings_window_instance.lift(),
-                        settings_window_instance.focus_force()
-                    ))
-                except Exception as e:
-                    logging.debug(f"Could not focus settings window: {e}")
-                return
-            else:
-                logging.debug("Settings window instance invalid. Resetting flag.")
-                settings_thread_running = False
-                settings_window_instance = None
-                # Sem retorno: criaremos uma nova janela abaixo
+                settings_window_instance.lift()
+                settings_window_instance.focus_force()
+            return
 
-        # Otherwise, start a new settings thread. Set the running flag here to
-        # minimise the chance of double threads before the thread sets it.
-        logging.info("Starting settings window thread...")
+        # Como estamos na thread principal, não precisamos mais de uma nova thread.
+        logging.info("Abrindo a janela de configurações.")
         settings_thread_running = True
-        settings_thread = threading.Thread(
-            target=run_settings_gui, daemon=True, name="SettingsGUIThread")
-        settings_thread.start()
+        run_settings_gui() # Chame a função diretamente.
 
 # --- NEW: Callback for Force Re-register Menu Item ---
 def on_force_reregister_menu_click(*_):
@@ -3387,56 +3339,63 @@ def on_exit_app(*_):
     # No need to destroy settings_tk_root here
 
 # --- Main Execution ---
+# --- Main Execution ---
 if __name__ == "__main__":
-    # Register atexit handlers
-    atexit.register(lambda: logging.info("atexit handler reached. Main shutdown should have occurred via on_exit_app."))
+    # Registrar atexit para garantir que o log seja escrito no final.
+    atexit.register(lambda: logging.info("Aplicação encerrada."))
 
-    try:
-        # Initialize core logic
-        core_instance = WhisperCore()
+    # 1. CRIAR UMA JANELA TKINTER RAIZ OCULTA NA THREAD PRINCIPAL
+    # Esta será a única raiz Tkinter e seu mainloop gerenciará todos os eventos da GUI.
+    main_tk_root = tk.Tk()
+    main_tk_root.withdraw() # Mantém a janela principal invisível.
 
-        # Setup initial icon state (Loading)
-        initial_state = core_instance.current_state
-        color1, color2 = ICON_COLORS.get(initial_state, DEFAULT_ICON_COLOR)
-        initial_image = create_image(64, 64, color1, color2)
-        initial_tooltip = f"Whisper Recorder ({initial_state})"
+    # 2. MODIFICAR a função de saída para também fechar a raiz do Tkinter.
+    def on_exit_app_enhanced(*_):
+        global core_instance, tray_icon
+        logging.info("Saída solicitada pelo ícone da bandeja.")
+        if core_instance:
+            core_instance.shutdown()
+        if tray_icon:
+            tray_icon.stop()
+        # Garante que o mainloop do Tkinter termine, fechando a aplicação.
+        main_tk_root.quit()
 
-        # Create the icon object using the dynamic menu function
-        tray_icon = pystray.Icon(
-            "whisper_recorder",
-            initial_image,
-            initial_tooltip,
-            menu=pystray.Menu(lambda: create_dynamic_menu(None))
-        )
+    # Sobrescrever a função on_exit_app original
+    # (ou renomeie a do arquivo para _on_exit_app e chame a partir daqui)
+    on_exit_app = on_exit_app_enhanced
 
-        # Set the callback in the core instance AFTER the icon is created
-        core_instance.set_state_update_callback(update_tray_icon)
+    # 3. Inicializar a lógica principal (WhisperCore)
+    core_instance = WhisperCore()
 
-        # --- REMOVED: Redundant atexit registration of on_exit_app ---
-        # atexit.register(on_exit_app, None, None) # Removed, on_exit_app handles tray stop now
+    # 4. Criar o ícone da bandeja
+    initial_state = core_instance.current_state
+    color1, color2 = ICON_COLORS.get(initial_state, DEFAULT_ICON_COLOR)
+    initial_image = create_image(64, 64, color1, color2)
+    initial_tooltip = f"Whisper Recorder ({initial_state})"
 
-        logging.info("Starting pystray icon run loop.")
-        # Run the icon loop (this blocks)
-        tray_icon.run()
+    # O menu agora usa a função de saída aprimorada
+    tray_icon = pystray.Icon(
+        "whisper_recorder",
+        initial_image,
+        initial_tooltip,
+        menu=pystray.Menu(lambda: create_dynamic_menu(None))
+    )
 
-    except Exception as e:
-        logging.critical(f"Unhandled exception during application startup or main loop: {e}", exc_info=True)
-        try:
-            # Attempt to show a simple message box without relying on the core instance
-            import tkinter as tk_err # Import locally
-            import tkinter.messagebox as mb_err # Import locally
-            err_root = tk_err.Tk()
-            err_root.withdraw()
-            mb_err.showerror("Fatal Error",
-                             f"Unexpected error:\n\n{e}\n\nCheck logs for details.\nThe application will now exit.", parent=None)
-            err_root.destroy()
-        except Exception as tk_e:
-            logging.error(f"Could not display fatal error messagebox: {tk_e}")
-        # Ensure cleanup is attempted even on fatal error
-        if core_instance and not core_instance.shutting_down:
-            on_exit_app() # Attempt cleanup if not already shutting down
-        sys.exit(1)
+    # Definir o callback de atualização no core_instance
+    core_instance.set_state_update_callback(update_tray_icon)
 
-    finally:
-        logging.info("Application shutting down or finished.")
-        # atexit handlers run automatically after this point if sys.exit wasn't called.
+    # 5. CRIAR UMA FUNÇÃO PARA RODAR O ÍCONE DA BANDEJA EM SEGUNDO PLANO
+    def run_tray_icon_in_thread(icon):
+        icon.run()
+
+    # 6. INICIAR O ÍCONE DA BANDEJA EM UMA THREAD DAEMON
+    tray_thread = threading.Thread(target=run_tray_icon_in_thread, args=(tray_icon,), daemon=True, name="PystrayThread")
+    tray_thread.start()
+
+    # 7. INICIAR O MAINLOOP DO TKINTER NA THREAD PRINCIPAL
+    # Este comando bloqueia a execução aqui, mantendo a aplicação viva
+    # e processando todos os eventos da GUI (como abrir a janela de configurações) de forma segura.
+    logging.info("Iniciando o mainloop do Tkinter na thread principal.")
+    main_tk_root.mainloop()
+
+    logging.info("Mainloop do Tkinter finalizado. A aplicação será encerrada.")
