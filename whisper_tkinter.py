@@ -2642,11 +2642,11 @@ def create_dynamic_menu(_):
 
     if is_recording:
         default_action_text = '⏹️ Stop Recording'
-        default_action_callback = on_toggle_recording_menu_click
+        default_action_callback = lambda *_: core_instance.toggle_recording()
         default_enabled = True
     elif is_idle:
         default_action_text = '▶️ Start Recording'
-        default_action_callback = on_toggle_recording_menu_click
+        default_action_callback = lambda *_: core_instance.toggle_recording()
         default_enabled = True
     elif is_loading:
         default_action_text = 'Loading Model...'
