@@ -3,17 +3,27 @@ import json
 import logging
 import time
 
+
 class OpenRouterAPI:
     """
     Class to handle interactions with the OpenRouter API for text correction using Deepseek model.
     """
-    def __init__(self, api_key, model_id="deepseek/deepseek-chat-v3-0324:free"):
+
+    def __init__(
+        self,
+        api_key,
+        model_id="deepseek/deepseek-chat-v3-0324:free",
+        referer: str | None = None,
+        app_title: str | None = None,
+    ):
         """
         Initialize the OpenRouter API client.
 
         Args:
-            api_key (str): Your OpenRouter API key
-            model_id (str): The model ID to use (default: "deepseek/deepseek-chat-v3-0324:free")
+            api_key (str): Chave da API do OpenRouter.
+            model_id (str): Identificador do modelo a utilizar.
+            referer (str | None): Valor do cabeçalho *HTTP-Referer*.
+            app_title (str | None): Valor do cabeçalho *X-Title*.
         """
         self.api_key = api_key
         self.model_id = model_id
@@ -21,11 +31,15 @@ class OpenRouterAPI:
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://whisper-recorder.app",  # Replace with your actual app URL
-            "X-Title": "Whisper Recorder"  # Replace with your actual app name
         }
+        if referer:
+            self.headers["HTTP-Referer"] = referer
+        if app_title:
+            self.headers["X-Title"] = app_title
 
-    def correct_text(self, text: str, max_retries: int = 3, retry_delay: float = 1) -> str:
+    def correct_text(
+        self, text: str, max_retries: int = 3, retry_delay: float = 1
+    ) -> str:
         """
         Send text to the Deepseek model for correction of punctuation, capitalization, and names.
 
@@ -38,7 +52,9 @@ class OpenRouterAPI:
             str: The corrected text, or the original text if the API call fails
         """
         if not text or not text.strip():
-            logging.warning("Empty text provided to OpenRouter API, skipping correction")
+            logging.warning(
+                "Empty text provided to OpenRouter API, skipping correction"
+            )
             return text
 
         # Create the prompt for the model
@@ -52,36 +68,45 @@ class OpenRouterAPI:
             "model": self.model_id,
             "messages": [
                 {"role": "system", "content": system_message},
-                {"role": "user", "content": f"Please correct this transcribed text: {text}"}
+                {
+                    "role": "user",
+                    "content": f"Please correct this transcribed text: {text}",
+                },
             ],
             "temperature": 0.0,  # Low temperature for more deterministic outputs
-            "max_tokens": 10000   # Adjust based on your expected output length
+            "max_tokens": 10000,  # Adjust based on your expected output length
         }
 
         # Try to make the API call with retries
         for attempt in range(max_retries):
             try:
-                logging.info(f"Sending text to OpenRouter API (attempt {attempt+1}/{max_retries})")
+                logging.info(
+                    f"Sending text to OpenRouter API (attempt {attempt+1}/{max_retries})"
+                )
                 response = requests.post(
                     self.base_url,
                     headers=self.headers,
                     data=json.dumps(payload),
-                    timeout=30  # 30 second timeout
+                    timeout=30,  # 30 second timeout
                 )
 
                 response.raise_for_status()  # Raise exception for 4XX/5XX responses
 
                 result = response.json()
-                if 'choices' in result and len(result['choices']) > 0:
-                    corrected_text = result['choices'][0]['message']['content']
-                    logging.info("Successfully received corrected text from OpenRouter API")
+                if "choices" in result and len(result["choices"]) > 0:
+                    corrected_text = result["choices"][0]["message"]["content"]
+                    logging.info(
+                        "Successfully received corrected text from OpenRouter API"
+                    )
                     if corrected_text != text:
                         logging.info("OpenRouter API made corrections to the text")
                     else:
                         logging.info("OpenRouter API returned text unchanged")
                     return corrected_text
                 else:
-                    logging.error(f"Unexpected response format from OpenRouter API: {result}")
+                    logging.error(
+                        f"Unexpected response format from OpenRouter API: {result}"
+                    )
                     logging.debug(f"Full response: {json.dumps(result, indent=2)}")
 
             except requests.exceptions.RequestException as e:
@@ -97,5 +122,7 @@ class OpenRouterAPI:
                 break
 
         # If we get here, all attempts failed
-        logging.warning("Failed to correct text with OpenRouter API, returning original text")
+        logging.warning(
+            "Failed to correct text with OpenRouter API, returning original text"
+        )
         return text
