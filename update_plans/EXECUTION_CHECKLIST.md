@@ -11,12 +11,12 @@ atômicos e observações para acompanhamento.
 
 ## 2. Preparar dependências
 - [x] Incluir `customtkinter==5.2.2` em `requirements.txt`
-- [ ] Instalar dependência no ambiente de desenvolvimento
+ - [x] Instalar dependência no ambiente de desenvolvimento
 
 ## 3. Migração inicial
 - [ ] Mapear funções de interface em `whisper_tkinter.py`
-- [ ] Transferir criação da janela principal para `MainWindow`
-- [ ] Transferir lógica de configurações para `SettingsWindow`
+ - [x] Transferir criação da janela principal para `MainWindow`
+ - [x] Transferir lógica de configurações para `SettingsWindow`r
 
 ## 4. Componentização
 - [ ] Implementar primeiros widgets em `ui/components`
