@@ -1,5 +1,4 @@
 import logging
-import json
 import time
 import google.generativeai as genai
 from typing import Optional
