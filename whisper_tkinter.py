@@ -2573,9 +2573,11 @@ def run_settings_gui():
     settings_window_instance = SettingsWindow(master=main_tk_root)
 
     def _on_close() -> None:
-        global settings_thread_running
+        global settings_thread_running, settings_window_instance
         settings_thread_running = False
-        settings_window_instance.destroy()
+        if settings_window_instance:
+            settings_window_instance.destroy()
+            settings_window_instance = None
 
     settings_window_instance.protocol("WM_DELETE_WINDOW", _on_close)
     settings_window_instance.focus()
