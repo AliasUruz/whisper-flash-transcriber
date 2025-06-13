@@ -4,12 +4,9 @@ import os
 import json
 import threading
 import time
-import queue # Importar a biblioteca queue
 # Import tkinter apenas quando necessário dentro das funções
 import tkinter.messagebox as messagebox
-from tkinter import TclError
 import tkinter as tk
-import customtkinter as ctk
 
 # --- Ajuste para evitar erros "main thread is not in main loop" ao destruir
 # variáveis Tkinter quando a aplicação encerra.
@@ -74,7 +71,6 @@ except ImportError:
 
 # --- Logging Configuration ---
 # Configuração para garantir que os logs usem UTF-8
-import sys
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
