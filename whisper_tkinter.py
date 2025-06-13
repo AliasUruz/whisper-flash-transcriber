@@ -2731,8 +2731,8 @@ if __name__ == "__main__":
             core_instance.shutdown()
         if tray_icon:
             tray_icon.stop()
-        # Garante que o mainloop do Tkinter termine, fechando a aplicação.
-        main_tk_root.quit()
+        # Agenda o encerramento do mainloop na thread principal
+        main_tk_root.after(0, main_tk_root.quit)
 
     # Sobrescrever a função on_exit_app original
     # (ou renomeie a do arquivo para _on_exit_app e chame a partir daqui)
@@ -2774,5 +2774,6 @@ if __name__ == "__main__":
     # e processando todos os eventos da GUI (como abrir a janela de configurações) de forma segura.
     logging.info("Iniciando o mainloop do Tkinter na thread principal.")
     main_tk_root.mainloop()
+    main_tk_root.destroy()
 
     logging.info("Mainloop do Tkinter finalizado. A aplicação será encerrada.")
