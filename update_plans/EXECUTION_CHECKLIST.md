@@ -16,7 +16,7 @@ atômicos e observações para acompanhamento.
 ## 3. Migração inicial
 - [ ] Mapear funções de interface em `whisper_tkinter.py`
  - [x] Transferir criação da janela principal para `MainWindow`
- - [x] Transferir lógica de configurações para `SettingsWindow`
+ - [x] Transferir lógica de configurações para `SettingsWindow`r
 
 ## 4. Componentização
 - [ ] Implementar primeiros widgets em `ui/components`
