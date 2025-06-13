@@ -2522,6 +2522,8 @@ def create_image(width, height, color1, color2=None):
 # Need a way for callbacks to access the core instance and icon
 core_instance = None
 tray_icon = None
+main_tk_root = None  # Referência à janela principal
+settings_thread_running = False
 
 # --- Tray Icon State Mapping ---
 ICON_COLORS = {
@@ -2577,6 +2579,13 @@ def run_settings_gui():
 
     settings_window_instance.protocol("WM_DELETE_WINDOW", _on_close)
     settings_window_instance.focus()
+
+
+def on_settings_menu_click(*_):
+    """Dispara a abertura da janela de configurações na thread principal."""
+    global main_tk_root
+    if main_tk_root:
+        main_tk_root.after(0, run_settings_gui)
 
 
 
