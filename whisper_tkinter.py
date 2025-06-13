@@ -657,7 +657,7 @@ class WhisperCore: # Renamed from WhisperApp
         try:
             self.gemini_general_prompt = str(self.config.get("gemini_general_prompt", DEFAULT_CONFIG["gemini_general_prompt"]))
         except (ValueError, TypeError):
-            logging.warning(f"Invalid gemini_general_prompt type in config. Falling back to default.")
+            logging.warning("Tipo de gemini_general_prompt inválido na configuração. Revertendo ao padrão.")
             self.gemini_general_prompt = DEFAULT_CONFIG["gemini_general_prompt"]
 
         # Load Gemini agent prompt
@@ -1229,10 +1229,10 @@ class WhisperCore: # Renamed from WhisperApp
         """Prevents rapid firing of hotkey callbacks."""
         current_time = time.time()
         if current_time - self.last_key_press_time < HOTKEY_DEBOUNCE_INTERVAL:
-            logging.debug(f"Debounce: Ignoring event")
+            logging.debug("Debounce: Ignorando evento")
             return False
         self.last_key_press_time = current_time
-        logging.debug(f"Debounce: Allowing event")
+        logging.debug("Debounce: Aceitando evento")
         # Run the callback in a separate thread to avoid blocking the hotkey listener
         threading.Thread(target=callback, daemon=True, name="HotkeyCallbackThread").start()
         return True
@@ -1373,7 +1373,7 @@ class WhisperCore: # Renamed from WhisperApp
         if success:
             # If no exception, assume success
             self._log_status(f"Global hotkey registered: {self.record_key.upper()} (mode: {self.record_mode})")
-            logging.info(f"Hotkey registration successful with KeyboardHotkeyManager")
+            logging.info("Registro da hotkey bem-sucedido com KeyboardHotkeyManager")
             # Ensure state reflects idle state correctly after registration
             if self.current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
                  self._set_state(STATE_IDLE)
