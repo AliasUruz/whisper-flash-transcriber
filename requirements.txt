@@ -11,3 +11,4 @@ psutil
 google-generativeai
 
 soundfile
+customtkinter
