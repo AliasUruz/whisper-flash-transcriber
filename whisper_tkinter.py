@@ -143,8 +143,6 @@ AUTO_REREGISTER_CONFIG_KEY = "auto_reregister_hotkeys"
 # Batch size and GPU index configuration keys
 BATCH_SIZE_CONFIG_KEY = "batch_size"
 GPU_INDEX_CONFIG_KEY = "gpu_index"
-# Agent key configuration
-AGENT_KEY_CONFIG_KEY = "agent_key"
 # Keyboard library configuration - Usando apenas Win32 API
 KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 # Apenas uma opção de biblioteca de teclado agora
