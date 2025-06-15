@@ -1,8 +1,9 @@
 import customtkinter as ctk
 from typing import Dict, Any, Callable
 import logging
-import threading # Necessário para a detecção de hotkeys
-import time      # Necessário para delays na detecção de hotkeys
+import threading  # Necessário para a detecção de hotkeys
+import time       # Necessário para delays na detecção de hotkeys
+import tkinter as tk
 
 class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, master, core_instance):
@@ -10,23 +11,53 @@ class SettingsWindow(ctk.CTkToplevel):
         self.core_instance = core_instance
         self.initial_config = core_instance.config
         self.is_dirty = False
+        self.settings_applied = False
 
         self.title("Whisper Recorder Settings")
-        self.geometry("620x600")
+        self.geometry("650x550")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.attributes("-topmost", True)
         self.transient(master)
         self.grab_set()
 
-        self.tab_view = ctk.CTkTabview(self, anchor="nw")
-        self.tab_view.pack(padx=10, pady=10, fill="both", expand=True)
-        self.tab_view.add("Geral"); self.tab_view.add("Hotkeys"); self.tab_view.add("Correção com IA"); self.tab_view.add("Avançado")
+        main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        main_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-        self.general_frame = GeneralSettingsFrame(self.tab_view.tab("Geral"), self.initial_config, self.set_dirty)
-        self.hotkeys_frame = HotkeysSettingsFrame(self.tab_view.tab("Hotkeys"), self.initial_config, self.set_dirty, self.core_instance)
-        self.correction_frame = CorrectionSettingsFrame(self.tab_view.tab("AI Correction"), self.initial_config, self.set_dirty)
-        self.advanced_frame = AdvancedSettingsFrame(self.tab_view.tab("Advanced"), self.initial_config, self.set_dirty)
+        canvas = tk.Canvas(main_frame, highlightthickness=0)
+        scrollbar = ctk.CTkScrollbar(main_frame, command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        self.content_frame = ctk.CTkFrame(canvas, fg_color="transparent")
+        canvas.create_window((0, 0), window=self.content_frame, anchor="nw")
+        self.content_frame.bind(
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        self.tab_view = ctk.CTkTabview(self.content_frame, anchor="nw")
+        self.tab_view.pack(padx=5, pady=5, fill="both", expand=True)
+        self.tab_view.add("General")
+        self.tab_view.add("Hotkeys")
+        self.tab_view.add("AI Correction")
+        self.tab_view.add("Advanced")
+
+        self.general_frame = GeneralSettingsFrame(
+            self.tab_view.tab("General"), self.initial_config, self.set_dirty
+        )
+        self.hotkeys_frame = HotkeysSettingsFrame(
+            self.tab_view.tab("Hotkeys"),
+            self.initial_config,
+            self.set_dirty,
+            self.core_instance,
+        )
+        self.correction_frame = CorrectionSettingsFrame(
+            self.tab_view.tab("AI Correction"), self.initial_config, self.set_dirty
+        )
+        self.advanced_frame = AdvancedSettingsFrame(
+            self.tab_view.tab("Advanced"), self.initial_config, self.set_dirty
+        )
 
         self.action_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.action_frame.pack(padx=10, pady=(0, 10), fill="x", side="bottom")
@@ -62,7 +93,7 @@ class GeneralSettingsFrame(ctk.CTkFrame):
 
         # Auto Paste
         self.auto_paste_var = ctk.BooleanVar(value=initial_config.get("auto_paste"))
-        auto_paste_switch = ctk.CTkSwitch(self, text="Colar texto automaticamente...", variable=self.auto_paste_var)
+        auto_paste_switch = ctk.CTkSwitch(self, text="Auto-paste text...", variable=self.auto_paste_var)
         auto_paste_switch.pack(anchor="w", pady=(5, 20), padx=5)
         self.auto_paste_var.trace_add("write", set_dirty_callback)
 
@@ -173,7 +204,7 @@ class HotkeysSettingsFrame(ctk.CTkFrame):
 
         agent_key_display_label = ctk.CTkLabel(agent_hotkey_frame, textvariable=self.agent_key_var, font=("Segoe UI", 12, "bold"), width=120, fg_color="#393E46", text_color="#00a0ff", corner_radius=8)
         agent_key_display_label.pack(side="left", padx=5)
-        self.detect_agent_key_button = ctk.CTkButton(agent_hotkey_frame, text="Detectar Tecla", command=self._start_detect_agent_key, width=100)
+        self.detect_agent_key_button = ctk.CTkButton(agent_hotkey_frame, text="Detect Key", command=self._start_detect_agent_key, width=100)
         self.detect_agent_key_button.pack(side="left", padx=5)
 
         agent_model_row = ctk.CTkFrame(agent_hotkey_frame, fg_color="transparent")
@@ -246,7 +277,7 @@ class HotkeysSettingsFrame(ctk.CTkFrame):
             if button.winfo_exists(): # Verifica se o widget ainda existe
                 button.master.after(0, lambda: (
                     key_var.set(detected_key_str),
-                    button.configure(text="Detectar Tecla", state="normal"),
+                    button.configure(text="Detect Key", state="normal"),
                     self.set_dirty_callback() # Marcar como dirty após a detecção
                 ))
             
@@ -500,7 +531,7 @@ class CorrectionSettingsFrame(ctk.CTkFrame):
         # Model
         model_row = ctk.CTkFrame(frame, fg_color="transparent")
         model_row.pack(fill="x", pady=(5, 0))
-        ctk.CTkLabel(model_row, text="Modelo do OpenRouter:").pack(side="left", padx=5)
+        ctk.CTkLabel(model_row, text="OpenRouter Model:").pack(side="left", padx=5)
         ctk.CTkEntry(model_row, textvariable=self.openrouter_model_var).pack(side="left", fill="x", expand=True, padx=5)
 
         return frame
