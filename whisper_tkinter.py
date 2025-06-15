@@ -957,11 +957,11 @@ class WhisperCore: # Renamed from WhisperApp
     def _handle_agent_result(self, prompt_text):
         """Processes the spoken command using Gemini and copies the response."""
         if not prompt_text or prompt_text == "[No speech detected]":
-            self._log_status("Comando vazio.", error=True)
+            self._log_status("Empty command.", error=True)
             return
 
         if GeminiAPI is None or not self.gemini_api_key:
-            self._log_status("Gemini não configurado.", error=True)
+            self._log_status("Gemini not configured.", error=True)
             return
 
         try:
@@ -974,17 +974,17 @@ class WhisperCore: # Renamed from WhisperApp
             response = agent_client.correct_text(prompt_text, override_prompt=self.gemini_agent_prompt)
             if pyperclip:
                 pyperclip.copy(response)
-                logging.info("Resposta do agente copiada para o clipboard.")
+                logging.info("Agent response copied to clipboard.")
 
             if self.agent_auto_paste:
                 self._do_paste()
-                self._log_status("Comando executado e colado.")
+                self._log_status("Command executed and pasted.")
             else:
-                self._log_status("Comando executado.")
+                self._log_status("Command executed.")
 
         except Exception as e:
-            logging.error(f"Erro no comando agêntico: {e}")
-            self._log_status("Erro ao executar comando", error=True)
+            logging.error(f"Agent command error: {e}")
+            self._log_status("Error executing command", error=True)
 
 
     def _do_paste(self):
@@ -1156,7 +1156,7 @@ class WhisperCore: # Renamed from WhisperApp
         logging.info("Model loaded successfully.")
         self._set_state(STATE_IDLE)
 
-        # Iniciar o KeyboardHotkeyManager e registrar callbacks
+        # Start KeyboardHotkeyManager e registrar callbacks
         self._start_autohotkey()
 
         # Iniciar thread de re-registro periódico se ativado
@@ -1171,38 +1171,42 @@ class WhisperCore: # Renamed from WhisperApp
                 self.reregister_timer_thread.start()
                 logging.info("Periodic re-register thread started.")
             except Exception as e:
-                logging.error(f"Erro ao iniciar thread de re-registro periódico: {e}")
+                logging.error(f"Error starting periodic re-register thread: {e}")
         else:
-            logging.info("Auto re-register de hotkeys desativado.")
+            logging.info("Auto hotkey re-register disabled.")
 
         logging.info("Hotkeys registered using keyboard library.")
 
     def _on_model_load_failed(self, error_msg):
-         """Handles model loading failure."""
-         logging.error(f"Model load failed: {error_msg}")
-         self.pipe = None # Ensure pipe is None on failure
-         self._set_state(STATE_ERROR_MODEL) # Set state to indicate error
-         self._log_status(f"Erro: Falha ao carregar o modelo. {error_msg}", error=True)
-         if hasattr(self, 'root') and self.root.winfo_exists():
-             self.root.after(0, lambda: messagebox.showerror("Erro de Carregamento do Modelo", f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\nPor favor, verifique sua conexão com a internet, o nome do modelo nas configurações ou a memória da sua GPU.", parent=self.root))
+        """Handles model loading failure."""
+        logging.error(f"Model load failed: {error_msg}")
+        self.pipe = None  # Ensure pipe is None on failure
+        self._set_state(STATE_ERROR_MODEL)  # Set state to indicate error
+        self._log_status(f"Error: Failed to load model. {error_msg}", error=True)
+        if hasattr(self, 'root') and self.root.winfo_exists():
+            self.root.after(0, lambda: messagebox.showerror(
+                "Model Loading Error",
+                f"Failed to load Whisper model:\n{error_msg}\n\nPlease check your internet connection, the model name in the settings, or your GPU memory.",
+                parent=self.root,
+            ))
 
     def _start_autohotkey(self):
         """Inicia o gerenciador de hotkeys e configura os callbacks."""
         with self.hotkey_lock: # Proteger operações de inicialização/configuração
             try:
-                # Verificar se o KeyboardHotkeyManager já está em execução
+                # Check if the KeyboardHotkeyManager is already running
                 if self.ahk_running:
-                    logging.info("KeyboardHotkeyManager já está em execução.")
+                    logging.info("KeyboardHotkeyManager is already running.")
                     return True
 
-                # Atualizar a configuração do KeyboardHotkeyManager
+                # Update configuration do KeyboardHotkeyManager
                 self.ahk_manager.update_config(
                     record_key=self.record_key,
                     agent_key=self.agent_key,
                     record_mode=self.record_mode
                 )
 
-                # Configurar callbacks
+                # Configure callbacks
                 self.ahk_manager.set_callbacks(
                     toggle=self.toggle_recording,
                     start=self.start_recording,
@@ -1210,24 +1214,24 @@ class WhisperCore: # Renamed from WhisperApp
                     agent=self.start_agent_command
                 )
 
-                # Iniciar o KeyboardHotkeyManager
+                # Start KeyboardHotkeyManager
                 success = self.ahk_manager.start()
                 if success:
                     self.ahk_running = True
-                    logging.info("KeyboardHotkeyManager iniciado com sucesso.")
-                    self._log_status(f"Hotkey registrada: {self.record_key.upper()} (modo: {self.record_mode})")
+                    logging.info("KeyboardHotkeyManager started successfully.")
+                    self._log_status(f"Hotkey registered: {self.record_key.upper()} (mode: {self.record_mode})")
                     return True
                 else:
-                    logging.error("Falha ao iniciar KeyboardHotkeyManager.")
+                    logging.error("Failed to start KeyboardHotkeyManager.")
                     self._set_state(STATE_ERROR_SETTINGS)
-                    self._log_status("Erro: Falha ao iniciar KeyboardHotkeyManager.", error=True)
+                    self._log_status("Error: Failed to start KeyboardHotkeyManager.", error=True)
                     return False
 
             except Exception as e:
-                logging.error(f"Erro ao iniciar KeyboardHotkeyManager: {e}", exc_info=True)
-                messagebox.showerror("Erro de Hotkey", f"Falha ao iniciar o gerenciador de hotkeys: {e}", parent=self.root)
+                logging.error(f"Error starting KeyboardHotkeyManager: {e}", exc_info=True)
+                messagebox.showerror("Hotkey Error", f"Failed to start hotkey manager: {e}", parent=self.root)
                 self._set_state(STATE_ERROR_SETTINGS)
-                self._log_status(f"Erro: {e}", error=True)
+                self._log_status(f"Error: {e}", error=True)
                 return False
 
 
@@ -1369,7 +1373,7 @@ class WhisperCore: # Renamed from WhisperApp
 
         # Usar apenas o KeyboardHotkeyManager
         try:
-            # Iniciar o KeyboardHotkeyManager
+            # Start KeyboardHotkeyManager
             success = self._start_autohotkey()
             logging.info(f"KeyboardHotkeyManager registration result: {success}")
         except Exception as e:
@@ -1446,29 +1450,29 @@ class WhisperCore: # Renamed from WhisperApp
             while attempt < max_attempts:
                 attempt += 1
                 try:
-                    logging.info(f"Tentativa {attempt}/{max_attempts} de recarregamento do KeyboardHotkeyManager...")
+                    logging.info(f"Attempt {attempt}/{max_attempts} to reload KeyboardHotkeyManager...")
 
                     # Reiniciar o KeyboardHotkeyManager
                     if self.ahk_running:
                         self.ahk_manager.stop()
                         self.ahk_running = False
-                        logging.info("KeyboardHotkeyManager parado para reinicialização.")
+                        logging.info("KeyboardHotkeyManager stopped for restart.")
                         time.sleep(0.2)  # Pequeno delay para garantir que o processo foi encerrado
 
                     # Criar nova instância
                     self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
-                    logging.info("Nova instância de KeyboardHotkeyManager criada.")
+                    logging.info("New KeyboardHotkeyManager instance created.")
 
-                    # Se chegou até aqui, o recarregamento foi bem-sucedido
-                    logging.info("Recarregamento do KeyboardHotkeyManager concluído com sucesso.")
+                    # Reload succeeded
+                    logging.info("KeyboardHotkeyManager reload completed successfully.")
                     break
                 except Exception as e:
                     last_error = e
-                    logging.error(f"Erro na tentativa {attempt} de recarregamento: {e}")
+                    logging.error(f"Error on attempt {attempt} to reload: {e}")
                     time.sleep(1)  # Espera um pouco antes de tentar novamente
 
             if attempt >= max_attempts and last_error is not None:
-                logging.error(f"Falha após {max_attempts} tentativas de recarregamento. Último erro: {last_error}")
+                logging.error(f"Failed after {max_attempts} reload attempts. Last error: {last_error}")
                 return False
 
             # Agora, registra os hotkeys novamente
@@ -1526,14 +1530,14 @@ class WhisperCore: # Renamed from WhisperApp
                         self.ahk_running = False # Definir como False após o stop ser bem sucedido
                         time.sleep(0.5)  # Pequeno delay para garantir que o processo foi encerrado
 
-                    # Atualizar a configuração e reiniciar o KeyboardHotkeyManager
+                    # Update configuration e reiniciar o KeyboardHotkeyManager
                     self.ahk_manager.update_config(
                         record_key=self.record_key,
                         agent_key=self.agent_key,
                         record_mode=self.record_mode
                     )
 
-                    # Configurar callbacks
+                    # Configure callbacks
                     self.ahk_manager.set_callbacks(
                         toggle=self.toggle_recording,
                         start=self.start_recording,
@@ -1790,12 +1794,12 @@ class WhisperCore: # Renamed from WhisperApp
         """Inicia ou finaliza a gravação de comando agêntico."""
         with self.recording_lock:
             if self.is_recording and self.agent_mode_active:
-                logging.info("Parando gravação do comando agêntico...")
+                logging.info("Stopping agent command recording...")
                 self.stop_recording(agent_mode=True)
                 self.agent_mode_active = False
                 return
             elif self.is_recording:
-                logging.warning("Não é possível iniciar comando agêntico durante gravação comum.")
+                logging.warning("Cannot start agent command during normal recording.")
                 return
             with self.transcription_lock:
                 if self.transcription_in_progress:
@@ -2404,17 +2408,17 @@ class WhisperCore: # Renamed from WhisperApp
                 current_state = self.current_state
 
             if current_state in [STATE_IDLE, STATE_TRANSCRIBING]:
-                logging.debug(f"Verificando saúde das bibliotecas de hotkeys. Estado atual: {current_state}")
+                logging.debug(f"Checking hotkey library health. Current state: {current_state}")
 
                 # Verificar se o KeyboardHotkeyManager está funcionando corretamente
                 if not self.ahk_running:
-                    logging.warning("KeyboardHotkeyManager não está em execução. Tentando reiniciar.")
+                    logging.warning("KeyboardHotkeyManager not running. Attempting restart.")
                     self.force_reregister_hotkeys()
-                    self._log_status("Tentativa de reiniciar KeyboardHotkeyManager.", error=False)
+                    self._log_status("Attempting to restart KeyboardHotkeyManager.", error=False)
                 else:
-                    logging.debug("KeyboardHotkeyManager está funcionando corretamente.")
+                    logging.debug("KeyboardHotkeyManager is operating correctly.")
             else:
-                logging.debug(f"Pulando verificação de saúde das hotkeys. Estado atual: {current_state}")
+                logging.debug(f"Skipping hotkey health check. Current state: {current_state}")
 
         logging.info("Hotkey health monitoring thread stopped.")
 
@@ -2615,25 +2619,25 @@ def on_toggle_recording_menu_click(*_):
 
 
 def on_settings_menu_click(*_):
-    """Abre a GUI de configurações na thread principal."""
+    """Opens the settings GUI on the main thread."""
     global core_instance
     if core_instance and core_instance.root:
-        logging.info("Abrindo a janela de configurações.")
+        logging.info("Opening settings window.")
         settings_window = SettingsWindow(core_instance.root, core_instance)
         settings_window.grab_set() # Make it modal
         core_instance.root.wait_window(settings_window) # Wait for it to close
-        logging.info("Janela de configurações fechada.")
+        logging.info("Settings window closed.")
         # Apply settings after window closes
         if settings_window.settings_applied:
-            logging.info("Configurações aplicadas após fechamento da janela.")
+            logging.info("Settings applied after window closed.")
             # The settings are already applied by the SettingsWindow itself
             # No need to call apply_settings_from_external here for all settings
             # However, if there are specific settings that need to be re-read or re-applied
             # to the core_instance after the window closes, they should be handled here.
             # For now, assume SettingsWindow handles direct application to core_instance.
     else:
-        logging.error("Não foi possível abrir a janela de configurações: core_instance ou core_instance.root não disponível.")
-        messagebox.showerror("Erro", "Não foi possível abrir a janela de configurações. Reinicie o aplicativo.", parent=core_instance.root if core_instance else None)
+        logging.error("Could not open settings window: core_instance or root unavailable.")
+        messagebox.showerror("Error", "Could not open settings window. Please restart the application.", parent=core_instance.root if core_instance else None)
 
 
 
@@ -2763,7 +2767,7 @@ def on_exit_app(*_):
 # --- Main Execution ---
 if __name__ == "__main__":
     # Registrar atexit para garantir que o log seja escrito no final.
-    atexit.register(lambda: logging.info("Aplicação encerrada."))
+    atexit.register(lambda: logging.info("Application closed."))
 
     # 1. CRIAR UMA JANELA TKINTER RAIZ OCULTA NA THREAD PRINCIPAL
     # Esta será a única raiz Tkinter e seu mainloop gerenciará todos os eventos da GUI.
@@ -2773,7 +2777,7 @@ if __name__ == "__main__":
     # 2. MODIFICAR a função de saída para também fechar a raiz do Tkinter.
     def on_exit_app_enhanced(*_):
         global core_instance, tray_icon
-        logging.info("Saída solicitada pelo ícone da bandeja.")
+        logging.info("Exit requested from tray icon.")
         if core_instance:
             core_instance.shutdown()
         if tray_icon:
@@ -2816,7 +2820,7 @@ if __name__ == "__main__":
     # 7. INICIAR O MAINLOOP DO TKINTER NA THREAD PRINCIPAL
     # Este comando bloqueia a execução aqui, mantendo a aplicação viva
     # e processando todos os eventos da GUI (como abrir a janela de configurações) de forma segura.
-    logging.info("Iniciando o mainloop do Tkinter na thread principal.")
+    logging.info("Starting Tkinter main loop on main thread.")
     main_tk_root.mainloop()
 
-    logging.info("Mainloop do Tkinter finalizado. A aplicação será encerrada.")
+    logging.info("Tkinter main loop finished. Application will exit.")
