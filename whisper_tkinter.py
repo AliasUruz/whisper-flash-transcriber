@@ -957,11 +957,11 @@ class WhisperCore: # Renamed from WhisperApp
     def _handle_agent_result(self, prompt_text):
         """Processes the spoken command using Gemini and copies the response."""
         if not prompt_text or prompt_text == "[No speech detected]":
-            self._log_status("Comando vazio.", error=True)
+            self._log_status("Empty command.", error=True)
             return
 
         if GeminiAPI is None or not self.gemini_api_key:
-            self._log_status("Gemini não configurado.", error=True)
+            self._log_status("Gemini not configured.", error=True)
             return
 
         try:
@@ -978,13 +978,13 @@ class WhisperCore: # Renamed from WhisperApp
 
             if self.agent_auto_paste:
                 self._do_paste()
-                self._log_status("Comando executado e colado.")
+                self._log_status("Command executed and pasted.")
             else:
-                self._log_status("Comando executado.")
+                self._log_status("Command executed.")
 
         except Exception as e:
             logging.error(f"Erro no comando agêntico: {e}")
-            self._log_status("Erro ao executar comando", error=True)
+            self._log_status("Error executing command", error=True)
 
 
     def _do_paste(self):
@@ -1173,26 +1173,30 @@ class WhisperCore: # Renamed from WhisperApp
             except Exception as e:
                 logging.error(f"Erro ao iniciar thread de re-registro periódico: {e}")
         else:
-            logging.info("Auto re-register de hotkeys desativado.")
+            logging.info("Auto hotkey re-register disabled.")
 
         logging.info("Hotkeys registered using keyboard library.")
 
     def _on_model_load_failed(self, error_msg):
-         """Handles model loading failure."""
-         logging.error(f"Model load failed: {error_msg}")
-         self.pipe = None # Ensure pipe is None on failure
-         self._set_state(STATE_ERROR_MODEL) # Set state to indicate error
-         self._log_status(f"Erro: Falha ao carregar o modelo. {error_msg}", error=True)
-         if hasattr(self, 'root') and self.root.winfo_exists():
-             self.root.after(0, lambda: messagebox.showerror("Erro de Carregamento do Modelo", f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\nPor favor, verifique sua conexão com a internet, o nome do modelo nas configurações ou a memória da sua GPU.", parent=self.root))
+        """Handles model loading failure."""
+        logging.error(f"Model load failed: {error_msg}")
+        self.pipe = None  # Ensure pipe is None on failure
+        self._set_state(STATE_ERROR_MODEL)  # Set state to indicate error
+        self._log_status(f"Error: Failed to load model. {error_msg}", error=True)
+        if hasattr(self, 'root') and self.root.winfo_exists():
+            self.root.after(0, lambda: messagebox.showerror(
+                "Model Loading Error",
+                f"Failed to load Whisper model:\n{error_msg}\n\nPlease check your internet connection, the model name in the settings, or your GPU memory.",
+                parent=self.root,
+            ))
 
     def _start_autohotkey(self):
         """Inicia o gerenciador de hotkeys e configura os callbacks."""
         with self.hotkey_lock: # Proteger operações de inicialização/configuração
             try:
-                # Verificar se o KeyboardHotkeyManager já está em execução
+                # Check if the KeyboardHotkeyManager is already running
                 if self.ahk_running:
-                    logging.info("KeyboardHotkeyManager já está em execução.")
+                    logging.info("KeyboardHotkeyManager is already running.")
                     return True
 
                 # Atualizar a configuração do KeyboardHotkeyManager
@@ -2615,25 +2619,25 @@ def on_toggle_recording_menu_click(*_):
 
 
 def on_settings_menu_click(*_):
-    """Abre a GUI de configurações na thread principal."""
+    """Opens the settings GUI on the main thread."""
     global core_instance
     if core_instance and core_instance.root:
-        logging.info("Abrindo a janela de configurações.")
+        logging.info("Opening settings window.")
         settings_window = SettingsWindow(core_instance.root, core_instance)
         settings_window.grab_set() # Make it modal
         core_instance.root.wait_window(settings_window) # Wait for it to close
-        logging.info("Janela de configurações fechada.")
+        logging.info("Settings window closed.")
         # Apply settings after window closes
         if settings_window.settings_applied:
-            logging.info("Configurações aplicadas após fechamento da janela.")
+            logging.info("Settings applied after window closed.")
             # The settings are already applied by the SettingsWindow itself
             # No need to call apply_settings_from_external here for all settings
             # However, if there are specific settings that need to be re-read or re-applied
             # to the core_instance after the window closes, they should be handled here.
             # For now, assume SettingsWindow handles direct application to core_instance.
     else:
-        logging.error("Não foi possível abrir a janela de configurações: core_instance ou core_instance.root não disponível.")
-        messagebox.showerror("Erro", "Não foi possível abrir a janela de configurações. Reinicie o aplicativo.", parent=core_instance.root if core_instance else None)
+        logging.error("Could not open settings window: core_instance or root unavailable.")
+        messagebox.showerror("Error", "Could not open settings window. Please restart the application.", parent=core_instance.root if core_instance else None)
 
 
 
@@ -2763,7 +2767,7 @@ def on_exit_app(*_):
 # --- Main Execution ---
 if __name__ == "__main__":
     # Registrar atexit para garantir que o log seja escrito no final.
-    atexit.register(lambda: logging.info("Aplicação encerrada."))
+    atexit.register(lambda: logging.info("Application closed."))
 
     # 1. CRIAR UMA JANELA TKINTER RAIZ OCULTA NA THREAD PRINCIPAL
     # Esta será a única raiz Tkinter e seu mainloop gerenciará todos os eventos da GUI.
@@ -2773,7 +2777,7 @@ if __name__ == "__main__":
     # 2. MODIFICAR a função de saída para também fechar a raiz do Tkinter.
     def on_exit_app_enhanced(*_):
         global core_instance, tray_icon
-        logging.info("Saída solicitada pelo ícone da bandeja.")
+        logging.info("Exit requested from tray icon.")
         if core_instance:
             core_instance.shutdown()
         if tray_icon:
@@ -2816,7 +2820,7 @@ if __name__ == "__main__":
     # 7. INICIAR O MAINLOOP DO TKINTER NA THREAD PRINCIPAL
     # Este comando bloqueia a execução aqui, mantendo a aplicação viva
     # e processando todos os eventos da GUI (como abrir a janela de configurações) de forma segura.
-    logging.info("Iniciando o mainloop do Tkinter na thread principal.")
+    logging.info("Starting Tkinter main loop on main thread.")
     main_tk_root.mainloop()
 
-    logging.info("Mainloop do Tkinter finalizado. A aplicação será encerrada.")
+    logging.info("Tkinter main loop finished. Application will exit.")
