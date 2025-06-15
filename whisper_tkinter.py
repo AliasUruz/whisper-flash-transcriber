@@ -1724,6 +1724,15 @@ class WhisperCore: # Renamed from WhisperApp
                 valid_data = [arr for arr in self.recording_data if isinstance(arr, np.ndarray) and arr.size > 0]
                 if valid_data:
                     audio_data_copy = np.concatenate(valid_data, axis=0)
+                    # Convert multi-channel audio to mono if necessary
+                    if audio_data_copy.ndim == 2:
+                        if audio_data_copy.shape[1] == 1:
+                            audio_data_copy = audio_data_copy[:, 0]
+                        elif audio_data_copy.shape[1] > 1:
+                            logging.info(
+                                f"Converting audio from {audio_data_copy.shape[1]} channels to mono."
+                            )
+                            audio_data_copy = np.mean(audio_data_copy, axis=1)
                 else:
                     logging.warning("No valid audio data recorded to save.")
                     self._set_state(STATE_IDLE)
