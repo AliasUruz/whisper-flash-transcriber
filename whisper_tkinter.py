@@ -1727,12 +1727,12 @@ class WhisperCore: # Renamed from WhisperApp
                     # Convert multi-channel audio to mono if necessary
                     if audio_data_copy.ndim == 2:
                         if audio_data_copy.shape[1] == 1:
-                            audio_data_copy = audio_data_copy[:, 0]
+                            audio_data_copy = audio_data_copy[:, 0].astype(np.float32, copy=False)
                         elif audio_data_copy.shape[1] > 1:
                             logging.info(
                                 f"Converting audio from {audio_data_copy.shape[1]} channels to mono."
                             )
-                            audio_data_copy = np.mean(audio_data_copy, axis=1)
+                            audio_data_copy = np.mean(audio_data_copy, axis=1).astype(np.float32)
                 else:
                     logging.warning("No valid audio data recorded to save.")
                     self._set_state(STATE_IDLE)
@@ -2620,8 +2620,8 @@ def run_settings_gui():
     agent_auto_paste_var = ctk.BooleanVar(value=core_instance.agent_auto_paste); settings_vars.append(agent_auto_paste_var)
     auto_reregister_var = ctk.BooleanVar(value=core_instance.auto_reregister_hotkeys); settings_vars.append(auto_reregister_var)
     sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled); settings_vars.append(sound_enabled_var)
-    sound_frequency_var = ctk.IntVar(value=core_instance.sound_frequency); settings_vars.append(sound_frequency_var)
-    sound_duration_var = ctk.DoubleVar(value=core_instance.sound_duration); settings_vars.append(sound_duration_var)
+    sound_frequency_var = ctk.StringVar(value=str(core_instance.sound_frequency)); settings_vars.append(sound_frequency_var)
+    sound_duration_var = ctk.StringVar(value=str(core_instance.sound_duration)); settings_vars.append(sound_duration_var)
     sound_volume_var = ctk.DoubleVar(value=core_instance.sound_volume); settings_vars.append(sound_volume_var)
     text_correction_enabled_var = ctk.BooleanVar(value=core_instance.text_correction_enabled); settings_vars.append(text_correction_enabled_var)
     text_correction_service_var = ctk.StringVar(value=core_instance.text_correction_service); settings_vars.append(text_correction_service_var)
@@ -2630,22 +2630,9 @@ def run_settings_gui():
     gemini_api_key_var = ctk.StringVar(value=core_instance.gemini_api_key); settings_vars.append(gemini_api_key_var)
     gemini_model_var = ctk.StringVar(value=core_instance.gemini_model); settings_vars.append(gemini_model_var)
     gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode); settings_vars.append(gemini_mode_var)  # Variável para o modo Gemini
-    batch_size_var = ctk.IntVar(value=core_instance.batch_size); settings_vars.append(batch_size_var)
-    gpu_index_var = ctk.IntVar(value=core_instance.gpu_index); settings_vars.append(gpu_index_var)
+    batch_size_var = ctk.StringVar(value=str(core_instance.batch_size)); settings_vars.append(batch_size_var)
+    gpu_index_var = ctk.StringVar(value=str(core_instance.gpu_index)); settings_vars.append(gpu_index_var)
     save_audio_var = ctk.BooleanVar(value=core_instance.save_audio_for_debug); settings_vars.append(save_audio_var)
-    sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled)
-    sound_frequency_var = ctk.StringVar(value=str(core_instance.sound_frequency))
-    sound_duration_var = ctk.StringVar(value=str(core_instance.sound_duration))
-    text_correction_enabled_var = ctk.BooleanVar(value=core_instance.text_correction_enabled)
-    text_correction_service_var = ctk.StringVar(value=core_instance.text_correction_service)
-    openrouter_api_key_var = ctk.StringVar(value=core_instance.openrouter_api_key)
-    openrouter_model_var = ctk.StringVar(value=core_instance.openrouter_model)
-    gemini_api_key_var = ctk.StringVar(value=core_instance.gemini_api_key)
-    gemini_model_var = ctk.StringVar(value=core_instance.gemini_model)
-    gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode) # Variável para o modo Gemini
-    batch_size_var = ctk.StringVar(value=str(core_instance.batch_size))
-    gpu_index_var = ctk.StringVar(value=str(core_instance.gpu_index))
-    save_audio_var = ctk.BooleanVar(value=core_instance.save_audio_for_debug)
     # keyboard_library_var removida pois não é mais usada
 
     # Function to toggle visibility of Gemini prompt widgets
