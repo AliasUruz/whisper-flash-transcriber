@@ -128,7 +128,8 @@ Transcribed speech: {text}""",
         "gemini-1.5-flash",
         "gemini-1.5-pro",
         "gemini-2.0-pro"
-    ]
+    ],
+    "save_audio_for_debug": False
 }
 HOTKEY_DEBOUNCE_INTERVAL = 0.3
 AUDIO_SAMPLE_RATE = 16000
@@ -146,6 +147,8 @@ AUTO_REREGISTER_CONFIG_KEY = "auto_reregister_hotkeys"
 # Batch size and GPU index configuration keys
 BATCH_SIZE_CONFIG_KEY = "batch_size"
 GPU_INDEX_CONFIG_KEY = "gpu_index"
+# Save audio for debug configuration key
+SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY = "save_audio_for_debug"
 # Agent key configuration
 AGENT_KEY_CONFIG_KEY = "agent_key"
 # Keyboard library configuration - Usando apenas Win32 API
@@ -243,6 +246,7 @@ class WhisperCore: # Renamed from WhisperApp
         self.agent_auto_paste = DEFAULT_CONFIG["agent_auto_paste"]
         self.gemini_model_options = []
         self.sound_lock = RLock()  # Lock for sound playback
+        self.save_audio_for_debug = DEFAULT_CONFIG[SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY]
 
         # Agent key configuration
         self.agent_key = DEFAULT_CONFIG["agent_key"]
@@ -645,6 +649,14 @@ class WhisperCore: # Renamed from WhisperApp
             self.gpu_index = -1
             self.gpu_index_specified = False
 
+        # Load and validate save_audio_for_debug
+        try:
+            self.save_audio_for_debug = bool(self.config.get(SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY, DEFAULT_CONFIG[SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY]))
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid '{SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY}' value in config. Falling back to default.")
+            self.save_audio_for_debug = DEFAULT_CONFIG[SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY]
+            self.config[SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY] = self.save_audio_for_debug
+
         # Load and validate Gemini mode
         try:
             gemini_mode_val = str(self.config.get("gemini_mode", DEFAULT_CONFIG["gemini_mode"])).lower()
@@ -751,7 +763,8 @@ class WhisperCore: # Renamed from WhisperApp
             "agent_auto_paste": self.agent_auto_paste,
             BATCH_SIZE_CONFIG_KEY: self.batch_size,
             GPU_INDEX_CONFIG_KEY: self.gpu_index,
-            AUTO_REREGISTER_CONFIG_KEY: self.auto_reregister_hotkeys
+            AUTO_REREGISTER_CONFIG_KEY: self.auto_reregister_hotkeys,
+            SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY: self.save_audio_for_debug
         }
         self.config = config_to_save # Update in-memory config as well
         try:
@@ -1735,7 +1748,7 @@ class WhisperCore: # Renamed from WhisperApp
             # State set in the task now
             # self._set_state(STATE_SAVING)
             # Start save task in thread
-            threading.Thread(target=self._save_and_transcribe_task, args=(audio_data_copy, agent_mode), daemon=True, name="SaveTranscribeThread").start()
+            threading.Thread(target=self._process_audio_task, args=(audio_data_copy, agent_mode), daemon=True, name="ProcessAudioThread").start()
         elif not should_save:
              pass # Already handled the "too short" case inside the lock
         else: # Should not happen if should_save is True but audio_data_copy is None
@@ -1810,62 +1823,44 @@ class WhisperCore: # Renamed from WhisperApp
         self.agent_mode_active = True
         self.start_recording()
 
-    # --- Audio Saving and Transcription Task ---
-    def _save_and_transcribe_task(self, audio_data, agent_mode=False):
-        """Saves audio data and starts transcription. When agent_mode is True, the result triggers the agent prompt."""
-        logging.info("Save and transcribe task started.")
-        self._set_state(STATE_SAVING)
+    # --- Audio Processing Task ---
+    def _process_audio_task(self, audio_data, agent_mode=False):
+        """Processes audio data, salva opcionalmente para depuração e inicia a transcrição."""
+        logging.info("Process audio task started.")
+        self._set_state(STATE_TRANSCRIBING)
 
-        timestamp = int(time.time())
-        temp_filename = f"temp_recording_{timestamp}.wav"
-        final_filename = f"recording_{timestamp}.wav"
-        saved_successfully = False
+        final_filename = None
+        if self.save_audio_for_debug:
+            try:
+                timestamp = int(time.time())
+                temp_filename = f"temp_recording_{timestamp}.wav"
+                final_filename = f"recording_{timestamp}.wav"
 
-        try:
-            # --- Save Audio ---
-            logging.info(f"Saving audio to {temp_filename}")
+                if audio_data.dtype != np.int16:
+                    max_val = np.max(np.abs(audio_data))
+                    if max_val > 1.0:
+                        logging.warning(f"Audio data exceeds expected range [-1.0, 1.0] (max abs: {max_val}). Clipping may occur.")
+                        audio_data = np.clip(audio_data, -1.0, 1.0)
+                    audio_data_int16 = (audio_data * (2**15 - 1)).astype(np.int16)
+                else:
+                    audio_data_int16 = audio_data
 
-            # Converter para formato compatível com int16 antes de salvar
-            if audio_data.dtype != np.int16:
-                # Check max/min values before scaling to prevent clipping/overflow
-                max_val = np.max(np.abs(audio_data))
-                if max_val > 1.0:
-                    logging.warning(f"Audio data exceeds expected range [-1.0, 1.0] (max abs: {max_val}). Clipping may occur.")
-                    audio_data = np.clip(audio_data, -1.0, 1.0)
-                audio_data_int16 = (audio_data * (2**15 - 1)).astype(np.int16)
-            else:
-                audio_data_int16 = audio_data # Already int16
+                with wave.open(temp_filename, 'wb') as wf:
+                    wf.setnchannels(AUDIO_CHANNELS)
+                    wf.setsampwidth(2)
+                    wf.setframerate(AUDIO_SAMPLE_RATE)
+                    wf.writeframes(audio_data_int16.tobytes())
 
-            # Salvar usando wave para garantir compatibilidade
-            with wave.open(temp_filename, 'wb') as wf:
-                wf.setnchannels(AUDIO_CHANNELS)
-                wf.setsampwidth(2)  # 16-bit
-                wf.setframerate(AUDIO_SAMPLE_RATE)
-                wf.writeframes(audio_data_int16.tobytes())
+                if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
+                    raise ValueError("Arquivo WAV vazio ou não criado após gravação")
 
-            # Verificar se o arquivo foi salvo corretamente
-            if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
-                raise ValueError("Arquivo WAV vazio ou não criado após gravação")
+                os.rename(temp_filename, final_filename)
+                logging.info(f"Audio saved for debugging as {final_filename} (size: {os.path.getsize(final_filename)} bytes)")
+            except Exception as e:
+                logging.error(f"Error saving audio for debug: {e}", exc_info=True)
+                final_filename = None
 
-            os.rename(temp_filename, final_filename)
-            logging.info(f"Audio saved as {final_filename} (size: {os.path.getsize(final_filename)} bytes)")
-            saved_successfully = True
-
-        except Exception as e:
-            logging.error(f"Error saving audio: {e}", exc_info=True)
-            self._set_state(STATE_ERROR_AUDIO) # Or a new ERROR_SAVE state?
-            self._log_status(f"Error saving audio: {e}", error=True)
-            if os.path.exists(temp_filename): self._delete_audio_file(temp_filename) # Cleanup temp
-            # Stay in error state - DO NOT proceed to transcription
-
-        # --- Trigger Transcription Task ONLY if save was successful ---
-        if saved_successfully:
-            self._set_state(STATE_TRANSCRIBING)
-            # Run transcription in a new thread
-            threading.Thread(target=self._transcribe_audio_task, args=(final_filename, agent_mode), daemon=True, name="TranscriptionThread").start()
-        else:
-             logging.error("Skipping transcription because audio save failed.")
-             # State should already be ERROR_AUDIO
+        threading.Thread(target=self._transcribe_audio_task, args=(audio_data, agent_mode, final_filename), daemon=True, name="TranscriptionThread").start()
 
 
     def _delete_audio_file(self, filename):
@@ -1878,50 +1873,14 @@ class WhisperCore: # Renamed from WhisperApp
                 logging.warning(f"Could not delete audio file '{filename}': {e}")
 
     # --- Transcription Processing (Simplified) ---
-    def _transcribe_audio_task(self, audio_filename, agent_mode=False):
-        """Transcribes a single audio file. If agent_mode, send result to agent prompt."""
+    def _transcribe_audio_task(self, audio_input, agent_mode=False, audio_filename_to_delete=None):
+        """Transcreve o áudio em memória. Se agent_mode, envia o resultado para o agente."""
         start_process_time = time.time()
-        logging.info(f"Transcription task started for {audio_filename}")
+        logging.info("Transcription task started for in-memory audio data.")
         text_result = None
         transcription_error = None
 
-        # Verificar integridade do arquivo antes de transcrever
-        try:
-            with wave.open(audio_filename, 'rb') as wf:
-                n_channels = wf.getnchannels()
-                framerate = wf.getframerate()
-                sampwidth = wf.getsampwidth()
-                n_frames = wf.getnframes()
-                logging.debug(f"WAV check: Channels={n_channels}, Rate={framerate}, Width={sampwidth}, Frames={n_frames}")
-                if n_channels != AUDIO_CHANNELS:
-                    raise ValueError(f"Invalid channels: {n_channels} (expected {AUDIO_CHANNELS})")
-                if framerate != AUDIO_SAMPLE_RATE:
-                    raise ValueError(f"Invalid sample rate: {framerate} (expected {AUDIO_SAMPLE_RATE})")
-                if sampwidth != 2:  # 16-bit
-                    raise ValueError(f"Invalid sample width: {sampwidth} (expected 2)")
-                if n_frames == 0:
-                    raise ValueError("WAV file has zero frames.")
-        except wave.Error as e:
-            logging.error(f"Invalid WAV file format for {audio_filename}: {e}")
-            transcription_error = e
-            text_result = f"[Transcription Error: Invalid WAV format]"
-        except ValueError as e:
-            logging.error(f"Invalid WAV file properties for {audio_filename}: {e}")
-            transcription_error = e
-            text_result = f"[Transcription Error: Invalid WAV properties]"
-        except Exception as e:
-            logging.error(f"Error opening/checking WAV file {audio_filename}: {e}", exc_info=True)
-            transcription_error = e
-            text_result = f"[Transcription Error: Cannot read WAV]"
-
-        # If WAV check failed, set error state and return early
-        if transcription_error:
-            with self.transcription_lock:
-                self.transcription_in_progress = False # Ensure flag is cleared
-            self._set_state(STATE_ERROR_TRANSCRIPTION)
-            self._log_status(f"Error: Invalid audio file - {transcription_error}", error=True)
-            self._delete_audio_file(audio_filename)
-            return
+        # Áudio já validado durante a gravação; prossegue diretamente
 
         # Ensure transcription_in_progress is set
         with self.transcription_lock:
@@ -1931,7 +1890,7 @@ class WhisperCore: # Renamed from WhisperApp
             if self.pipe is None:
                 raise RuntimeError("Transcription pipeline unavailable.")
 
-            logging.debug(f"Calling pipeline for: {audio_filename}")
+            logging.debug("Calling pipeline for in-memory audio")
 
             # --- Transformers Warnings Handling ---
             # Warning 1: 'inputs' is deprecated -> 'input_features'.
@@ -1950,17 +1909,17 @@ class WhisperCore: # Renamed from WhisperApp
             # devido a TypeError na versão atual do transformers.
             # A correção para 'input_features' e 'attention_mask' será reintroduzida
             # após a atualização da biblioteca transformers para uma versão compatível.
-            result = self.pipe(audio_filename, chunk_length_s=30, batch_size=self.batch_size, return_timestamps=False)
+            result = self.pipe(audio_input, chunk_length_s=30, batch_size=self.batch_size, return_timestamps=False)
 
             logging.debug(f"Pipeline raw result: {result}")
 
             if result and "text" in result:
                 text_result = result["text"].strip()
                 if not text_result:
-                    logging.warning(f"Empty transcription for {audio_filename}")
+                    logging.warning("Empty transcription result")
                     text_result = "[No speech detected]"
                 else:
-                    logging.info(f"Transcription successful for {audio_filename}.")
+                    logging.info("Transcription successful.")
             else:
                 logging.error(f"Unexpected pipeline result format: {result}")
                 text_result = "[Transcription failed: Bad format]"
@@ -1968,7 +1927,7 @@ class WhisperCore: # Renamed from WhisperApp
 
         except RuntimeError as e:
             # Catch specific runtime errors like OOM
-            logging.error(f"Runtime error during transcription for {audio_filename}: {e}", exc_info=True)
+            logging.error(f"Runtime error during transcription: {e}", exc_info=True)
             transcription_error = e
             text_result = f"[Transcription Error: {e}]"
             if "out of memory" in str(e).lower():
@@ -1976,7 +1935,7 @@ class WhisperCore: # Renamed from WhisperApp
             else:
                  self._set_state(STATE_ERROR_TRANSCRIPTION)
         except Exception as e:
-            logging.error(f"Error during transcription for {audio_filename}: {e}", exc_info=True)
+            logging.error(f"Error during transcription: {e}", exc_info=True)
             transcription_error = e
             text_result = f"[Transcription Error: {e}]"
             self._set_state(STATE_ERROR_TRANSCRIPTION)
@@ -1984,7 +1943,7 @@ class WhisperCore: # Renamed from WhisperApp
 
         finally:
             end_process_time = time.time()
-            logging.info(f"Transcription task for {audio_filename} finished in {end_process_time - start_process_time:.2f}s.")
+            logging.info(f"Transcription task finished in {end_process_time - start_process_time:.2f}s.")
 
             # --- Handle Result ---
             with self.transcription_lock:
@@ -1994,7 +1953,7 @@ class WhisperCore: # Renamed from WhisperApp
                     # State might have been set already in except blocks
                     if not self.current_state.startswith("ERROR"):
                          self._set_state(STATE_ERROR_TRANSCRIPTION)
-                    self._log_status(f"Error transcribing {os.path.basename(audio_filename)}: {transcription_error}", error=True)
+                    self._log_status(f"Error transcribing audio: {transcription_error}", error=True)
                     # Stay in error state
                 elif text_result and text_result != "[No speech detected]":
                     # Apply text correction if enabled
@@ -2040,12 +1999,13 @@ class WhisperCore: # Renamed from WhisperApp
                         self._handle_transcription_result(text_result)
                     self._set_state(STATE_IDLE)
                 else: # No text or "[No speech detected]"
-                     logging.warning(f"Processed {audio_filename} with no significant text.")
+                     logging.warning("Processed audio with no significant text.")
                      self._log_status("Transcription finished: No speech detected.", error=False) # Log as info
                      self._set_state(STATE_IDLE) # Back to idle
 
             # --- Cleanup ---
-            self._delete_audio_file(audio_filename) # Delete file after processing
+            if audio_filename_to_delete:
+                self._delete_audio_file(audio_filename_to_delete)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 logging.debug("Cleared GPU cache after transcription task.")
@@ -2079,6 +2039,7 @@ class WhisperCore: # Renamed from WhisperApp
         new_auto_reregister=None,
         new_agent_key=None,
         new_gemini_model_options=None,
+        new_save_audio_for_debug=None,
     ):
         """Applies settings passed from the external settings window/thread."""
         logging.info("Applying new configuration from external source.")
@@ -2219,6 +2180,14 @@ class WhisperCore: # Renamed from WhisperApp
                 else:
                     self.stop_reregister_event.set()
                     self.stop_health_check_event.set()
+
+        # Apply save_audio_for_debug setting
+        if new_save_audio_for_debug is not None:
+            save_audio_bool = bool(new_save_audio_for_debug)
+            if save_audio_bool != self.save_audio_for_debug:
+                self.save_audio_for_debug = save_audio_bool
+                config_needs_saving = True
+                logging.info(f"Save audio for debug changed to: {self.save_audio_for_debug}")
 
         # Keyboard library is always Win32
         self.keyboard_library = KEYBOARD_LIB_WIN32
@@ -2654,6 +2623,7 @@ def run_settings_gui():
     gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode); settings_vars.append(gemini_mode_var)  # Variável para o modo Gemini
     batch_size_var = ctk.IntVar(value=core_instance.batch_size); settings_vars.append(batch_size_var)
     gpu_index_var = ctk.IntVar(value=core_instance.gpu_index); settings_vars.append(gpu_index_var)
+    save_audio_var = ctk.BooleanVar(value=core_instance.save_audio_for_debug); settings_vars.append(save_audio_var)
     sound_enabled_var = ctk.BooleanVar(value=core_instance.sound_enabled)
     sound_frequency_var = ctk.StringVar(value=str(core_instance.sound_frequency))
     sound_duration_var = ctk.StringVar(value=str(core_instance.sound_duration))
@@ -2666,6 +2636,7 @@ def run_settings_gui():
     gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode) # Variável para o modo Gemini
     batch_size_var = ctk.StringVar(value=str(core_instance.batch_size))
     gpu_index_var = ctk.StringVar(value=str(core_instance.gpu_index))
+    save_audio_var = ctk.BooleanVar(value=core_instance.save_audio_for_debug)
     # keyboard_library_var removida pois não é mais usada
 
     # Function to toggle visibility of Gemini prompt widgets
@@ -3034,6 +3005,8 @@ def run_settings_gui():
             messagebox.showwarning("Invalid Value", "The model list cannot be empty. Please add at least one model.", parent=settings_win)
             return
 
+        save_audio_for_debug_to_apply = save_audio_var.get()
+
 
         try:
             if hasattr(core_instance, 'apply_settings_from_external'):
@@ -3058,7 +3031,8 @@ def run_settings_gui():
                     new_gemini_model_options=new_models_list,
                     new_batch_size=batch_size_to_apply,
                     new_gpu_index=gpu_index_to_apply,
-                    new_auto_reregister=auto_reregister_to_apply
+                    new_auto_reregister=auto_reregister_to_apply,
+                    new_save_audio_for_debug=save_audio_for_debug_to_apply
                 ) # Fechar parênteses da chamada da função
             else:
                 logging.critical("CRITICAL: apply_settings_from_external method not found on core_instance!")
@@ -3356,6 +3330,12 @@ def run_settings_gui():
     openrouter_model_row.pack(fill="x", padx=0, pady=(5, 0))
     ctk.CTkLabel(openrouter_model_row, text="Model:", width=120).pack(side="left", padx=5) # Already English
     ctk.CTkEntry(openrouter_model_row, textvariable=openrouter_model_var).pack(side="left", fill="x", expand=True, padx=5)
+
+    # --- Debug Settings Section ---
+    debug_section_frame = ctk.CTkFrame(scrollable, fg_color="#222831", corner_radius=12)
+    debug_section_frame.pack(fill="x", pady=(0, 10), padx=0)
+    ctk.CTkLabel(debug_section_frame, text="Debug Settings", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(anchor="w", padx=5)
+    ctk.CTkSwitch(debug_section_frame, text="Save Audio for Debug", variable=save_audio_var, onvalue=True, offvalue=False).pack(anchor="w", padx=5, pady=(5, 0))
  
     # --- Action Buttons ---
     # Note: The button_frame was defined earlier in the original code but is placed outside the scrollable frame in CTk
