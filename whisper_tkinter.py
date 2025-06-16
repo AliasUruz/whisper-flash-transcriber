@@ -53,6 +53,8 @@ try:
 except ImportError:
     pyperclip = None
 
+from ui_manager import UIManager
+
 # Import KeyboardHotkeyManager para gerenciamento de hotkeys usando a biblioteca keyboard
 from keyboard_hotkey_manager import KeyboardHotkeyManager
 # DirectHotkeyManager foi removido devido a problemas de compatibilidade com o Windows
@@ -207,6 +209,9 @@ class WhisperCore: # Renamed from WhisperApp
 
         # --- State Update Callback ---
         self.state_update_callback = None # Function to call when state changes (for tray icon)
+        self.on_segment_transcribed = None  # Callback para segmentos transcritos
+
+        self.ui_manager = None
 
         # --- Configuration ---
         self.config = {}
@@ -907,6 +912,10 @@ class WhisperCore: # Renamed from WhisperApp
         if callback:
              callback(self.current_state)
 
+    def set_segment_callback(self, callback):
+        """Define a função chamada a cada segmento transcrito."""
+        self.on_segment_transcribed = callback
+
     def _set_state(self, new_state):
         """Sets the internal state and calls the update callback if state changes."""
         with self.state_lock:
@@ -940,7 +949,13 @@ class WhisperCore: # Renamed from WhisperApp
     def _handle_transcription_result(self, text_to_display):
         """Handles the final transcription text: logs, copies, pastes."""
         logging.info("Handling final transcription result.")
-        self.full_transcription = text_to_display # Store last result
+        self.full_transcription = text_to_display  # Store last result
+
+        if self.on_segment_transcribed:
+            try:
+                self.on_segment_transcribed(text_to_display)
+            except Exception as e:
+                logging.error(f"Erro no callback on_segment_transcribed: {e}")
 
         # Attempt clipboard copy using pyperclip, but make it optional
         if pyperclip:
@@ -964,6 +979,9 @@ class WhisperCore: # Renamed from WhisperApp
         except Exception as e:
             logging.error(f"Error during transcription result handling (paste): {e}")
             self._log_status("Transcription complete. Error pasting.", error=True)
+
+        if self.ui_manager:
+            self.ui_manager.close_live_transcription_window()
 
     def _handle_agent_result(self, prompt_text):
         """Processes the spoken command using Gemini and copies the response."""
@@ -1673,6 +1691,9 @@ class WhisperCore: # Renamed from WhisperApp
 
         self._set_state(STATE_RECORDING)
 
+        if self.ui_manager:
+            self.ui_manager.show_live_transcription_window()
+
         # Play start sound in a separate thread to avoid blocking
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": True}, daemon=True, name="StartSoundThread").start()
 
@@ -1710,6 +1731,8 @@ class WhisperCore: # Renamed from WhisperApp
                 self.start_time = None
                 self._set_state(STATE_IDLE)
                 self._log_status(f"Recording too short (<{self.min_record_duration}s). Discarded.", error=True)
+                if self.ui_manager:
+                    self.ui_manager.close_live_transcription_window()
                 return # --- Stop execution here ---
 
             # --- Duration OK - Proceed to Save ---
@@ -1737,6 +1760,8 @@ class WhisperCore: # Renamed from WhisperApp
                     logging.warning("No valid audio data recorded to save.")
                     self._set_state(STATE_IDLE)
                     self._log_status("No audio recorded.", error=True)
+                    if self.ui_manager:
+                        self.ui_manager.close_live_transcription_window()
                     self.recording_data.clear() # Clear invalid data
                     self.start_time = None # Reset start time
                     return
@@ -2499,6 +2524,7 @@ def create_image(width, height, color1, color2=None):
 # Need a way for callbacks to access the core instance and icon
 core_instance = None
 tray_icon = None
+ui_manager = None
 
 # --- Tray Icon State Mapping ---
 ICON_COLORS = {
@@ -3568,7 +3594,7 @@ if __name__ == "__main__":
 
     # 2. MODIFICAR a função de saída para também fechar a raiz do Tkinter.
     def on_exit_app_enhanced(*_):
-        global core_instance, tray_icon
+        global core_instance, tray_icon, ui_manager
         logging.info("Saída solicitada pelo ícone da bandeja.")
         if core_instance:
             core_instance.shutdown()
@@ -3583,6 +3609,11 @@ if __name__ == "__main__":
 
     # 3. Inicializar a lógica principal (WhisperCore)
     core_instance = WhisperCore()
+
+    global ui_manager
+    ui_manager = UIManager(main_tk_root)
+    core_instance.ui_manager = ui_manager
+    core_instance.set_segment_callback(ui_manager.update_live_transcription_threadsafe)
 
     # 4. Criar o ícone da bandeja
     initial_state = core_instance.current_state
