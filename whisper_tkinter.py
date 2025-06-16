@@ -1,3 +1,5 @@
+global ui_manager
+ui_manager = None
 # -*- coding: utf-8 -*-
 import sys
 import os
@@ -2655,7 +2657,6 @@ def create_image(width, height, color1, color2=None):
 # Need a way for callbacks to access the core instance and icon
 core_instance = None
 tray_icon = None
-ui_manager = None
 
 # --- Tray Icon State Mapping ---
 ICON_COLORS = {
@@ -3754,7 +3755,7 @@ if __name__ == "__main__":
 
     # 2. MODIFICAR a função de saída para também fechar a raiz do Tkinter.
     def on_exit_app_enhanced(*_):
-        global core_instance, tray_icon, ui_manager
+        global core_instance, tray_icon
         logging.info("Saída solicitada pelo ícone da bandeja.")
         if core_instance:
             core_instance.shutdown()
@@ -3770,7 +3771,6 @@ if __name__ == "__main__":
     # 3. Inicializar a lógica principal (WhisperCore)
     core_instance = WhisperCore()
 
-    global ui_manager
     ui_manager = UIManager(main_tk_root)
     core_instance.ui_manager = ui_manager
     core_instance.set_segment_callback(ui_manager.update_live_transcription_threadsafe)
