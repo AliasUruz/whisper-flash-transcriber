@@ -2532,6 +2532,23 @@ def update_tray_icon(state):
         tray_icon.update_menu() # Update the menu based on the new state
         logging.debug(f"Tray icon updated for state: {state}")
 
+# --- GPU Detection Helper ---
+def get_available_devices_for_ui():
+    """Retorna uma lista de dispositivos para a interface de configurações."""
+    devices = ["Auto-selecionar (Recomendado)"]
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        for i in range(num_gpus):
+            try:
+                name = torch.cuda.get_device_name(i)
+                total_mem_gb = torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
+                devices.append(f"GPU {i}: {name} ({total_mem_gb:.1f}GB)")
+            except Exception as e:
+                devices.append(f"GPU {i}: Erro ao obter nome")
+                logging.error(f"Não foi possível obter nome da GPU {i}: {e}")
+    devices.append("Forçar CPU")
+    return devices
+
 # --- Settings Window (Run in Separate Thread) ---
 settings_window_instance = None # Track if window is already open
 
@@ -2631,7 +2648,19 @@ def run_settings_gui():
     gemini_model_var = ctk.StringVar(value=core_instance.gemini_model); settings_vars.append(gemini_model_var)
     gemini_mode_var = ctk.StringVar(value=core_instance.gemini_mode); settings_vars.append(gemini_mode_var)  # Variável para o modo Gemini
     batch_size_var = ctk.StringVar(value=str(core_instance.batch_size)); settings_vars.append(batch_size_var)
-    gpu_index_var = ctk.StringVar(value=str(core_instance.gpu_index)); settings_vars.append(gpu_index_var)
+
+    available_devices = get_available_devices_for_ui()
+    current_device_selection = "Auto-selecionar (Recomendado)"
+    if core_instance.gpu_index_specified:
+        if core_instance.gpu_index >= 0:
+            for dev in available_devices:
+                if dev.startswith(f"GPU {core_instance.gpu_index}"):
+                    current_device_selection = dev
+                    break
+        elif core_instance.gpu_index == -1:
+            current_device_selection = "Forçar CPU"
+
+    gpu_selection_var = ctk.StringVar(value=current_device_selection); settings_vars.append(gpu_selection_var)
     save_audio_var = ctk.BooleanVar(value=core_instance.save_audio_for_debug); settings_vars.append(save_audio_var)
     # keyboard_library_var removida pois não é mais usada
 
@@ -2984,16 +3013,16 @@ def run_settings_gui():
                 messagebox.showwarning("Invalid Value", "Batch size must be a number", parent=settings_win)
                 return
 
-        gpu_value = gpu_index_var.get().strip()
-        if gpu_value == "":
-            gpu_index_to_apply = core_instance.gpu_index
-            logging.warning(f"GPU index field empty or invalid, using current value: {gpu_index_to_apply}")
-        else:
+        selected_device_str = gpu_selection_var.get()
+        gpu_index_to_apply = -1
+        if "Forçar CPU" in selected_device_str:
+            gpu_index_to_apply = -1
+        elif selected_device_str.startswith("GPU"):
             try:
-                gpu_index_to_apply = int(gpu_value)
-            except (ValueError, TypeError):
-                messagebox.showwarning("Invalid Value", "GPU index must be a number", parent=settings_win)
-                return
+                gpu_index_to_apply = int(selected_device_str.split(":")[0].replace("GPU", "").strip())
+            except (ValueError, IndexError):
+                logging.error(f"Não foi possível parsear o índice da GPU da string: '{selected_device_str}'. Usando auto-seleção.")
+                gpu_index_to_apply = -1
 
         models_text = gemini_models_textbox.get("1.0", "end-1c")
         new_models_list = [line.strip() for line in models_text.split("\n") if line.strip()]
@@ -3307,8 +3336,8 @@ def run_settings_gui():
     ctk.CTkLabel(gpu_section_frame, text="GPU Settings", font=("Segoe UI", 13, "bold"), text_color="#00a0ff").pack(anchor="w", padx=5)
     gpu_index_row = ctk.CTkFrame(gpu_section_frame, fg_color="#222831")
     gpu_index_row.pack(fill="x", padx=0, pady=(5, 0))
-    ctk.CTkLabel(gpu_index_row, text="GPU Index:", width=120).pack(side="left", padx=5)
-    ctk.CTkEntry(gpu_index_row, textvariable=gpu_index_var, width=80).pack(side="left", padx=5)
+    ctk.CTkLabel(gpu_index_row, text="Dispositivo:", width=120).pack(side="left", padx=5)
+    ctk.CTkOptionMenu(gpu_index_row, variable=gpu_selection_var, values=available_devices).pack(side="left", fill="x", expand=True, padx=5)
     batch_row = ctk.CTkFrame(gpu_section_frame, fg_color="#222831")
     batch_row.pack(fill="x", padx=0, pady=(5, 0))
     ctk.CTkLabel(batch_row, text="Batch Size:", width=120).pack(side="left", padx=5)
