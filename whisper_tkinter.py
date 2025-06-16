@@ -42,6 +42,8 @@ import torch
 from transformers import pipeline
 import pyautogui
 import soundfile as sf # Importar soundfile para carregar áudio
+# Importação do gerenciador de VAD
+from vad_manager import VADManager
 # Bibliotecas keyboard e pynput removidas completamente
 # Usando apenas Win32HotkeyManager para gerenciamento de hotkeys
 import logging
@@ -276,6 +278,12 @@ class WhisperCore: # Renamed from WhisperApp
         self.start_time = None
         self.recording_data = []
         self.audio_stream = None
+        # Fila para processamento em tempo real
+        self.audio_queue = queue.Queue(maxsize=100)
+        # Thread de consumo da fila
+        self.audio_processor_thread = None
+        # Gerenciador de VAD
+        self.vad_manager = VADManager()
 
         # --- Transcription State ---
         self.pipe = None
@@ -1643,7 +1651,15 @@ class WhisperCore: # Renamed from WhisperApp
             logging.warning(f"Audio callback status: {status}")
         with self.recording_lock:
             if self.is_recording:
-                self.recording_data.append(indata.copy())
+                chunk = indata.copy()
+                self.recording_data.append(chunk)
+                try:
+                    # Garante que o chunk esteja em mono
+                    if chunk.ndim > 1:
+                        chunk = chunk[:, 0]
+                    self.audio_queue.put_nowait(chunk)
+                except queue.Full:
+                    logging.warning("Fila de áudio cheia, descartando chunk.")
 
     def _record_audio_task(self):
         """Manages the audio input stream in a separate thread."""
@@ -1695,6 +1711,53 @@ class WhisperCore: # Renamed from WhisperApp
             self.audio_stream = None
             logging.info("Audio recording thread finished.")
 
+    def _process_audio_queue_task(self):
+        """Consome chunks da fila e detecta segmentos de fala."""
+        speech_buffer = []
+        silence_duration = 0.0
+        SILENCE_THRESHOLD_S = 1.0
+
+        logging.info("Thread de processamento de áudio iniciada.")
+        while True:
+            try:
+                chunk = self.audio_queue.get(timeout=0.5)
+            except queue.Empty:
+                if not self.is_recording:
+                    break
+                continue
+
+            if chunk is None:
+                break
+
+            is_speech = self.vad_manager.is_speech(chunk)
+            chunk_time = len(chunk) / AUDIO_SAMPLE_RATE
+
+            if is_speech:
+                speech_buffer.append(chunk)
+                silence_duration = 0.0
+            else:
+                silence_duration += chunk_time
+                if silence_duration >= SILENCE_THRESHOLD_S and speech_buffer:
+                    segment = np.concatenate(speech_buffer)
+                    threading.Thread(
+                        target=self._transcribe_audio_task,
+                        args=(segment,),
+                        daemon=True,
+                        name="StreamingTranscriptionThread",
+                    ).start()
+                    speech_buffer.clear()
+                    silence_duration = 0.0
+
+        if speech_buffer:
+            segment = np.concatenate(speech_buffer)
+            threading.Thread(
+                target=self._transcribe_audio_task,
+                args=(segment,),
+                daemon=True,
+                name="FinalTranscriptionThread",
+            ).start()
+        logging.info("Thread de processamento de áudio finalizada.")
+
 
     # --- Recording Control ---
     def start_recording(self):
@@ -1734,6 +1797,18 @@ class WhisperCore: # Renamed from WhisperApp
 
         # Play start sound in a separate thread to avoid blocking
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": True}, daemon=True, name="StartSoundThread").start()
+
+        # Limpa fila e reinicia estados do VAD
+        with self.audio_queue.mutex:
+            self.audio_queue.queue.clear()
+        self.vad_manager.reset_states()
+        # Inicia a thread de processamento de áudio
+        self.audio_processor_thread = threading.Thread(
+            target=self._process_audio_queue_task,
+            daemon=True,
+            name="AudioProcessorThread",
+        )
+        self.audio_processor_thread.start()
 
         # Start audio capture thread
         threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread").start()
@@ -1815,6 +1890,12 @@ class WhisperCore: # Renamed from WhisperApp
             self.start_time = None # Reset start time
             should_save = True
 
+        # Sinaliza para a thread consumidora finalizar
+        try:
+            self.audio_queue.put_nowait(None)
+        except queue.Full:
+            pass
+
         # --- Outside lock ---
         if should_save and audio_data_copy is not None:
             # State set in the task now
@@ -1829,6 +1910,10 @@ class WhisperCore: # Renamed from WhisperApp
 
         if agent_mode:
             self.agent_mode_active = False
+
+        # Aguarda a thread de processamento de áudio finalizar
+        if self.audio_processor_thread and self.audio_processor_thread.is_alive():
+            self.audio_processor_thread.join(timeout=2.0)
 
 
     def stop_recording_if_needed(self):
