@@ -416,6 +416,44 @@ class WhisperCore: # Renamed from WhisperApp
             logging.warning(f"Could not determine GPU memory for batch size suggestion: {e}")
             return DEFAULT_CONFIG[BATCH_SIZE_CONFIG_KEY]
 
+    def _get_dynamic_batch_size(self) -> int:
+        """Calcula dinamicamente o batch_size baseado na VRAM livre."""
+        if not torch.cuda.is_available() or self.gpu_index < 0:
+            logging.info("GPU não disponível ou não selecionada, usando batch size de CPU (4).")
+            return 4
+
+        try:
+            device = torch.device(f"cuda:{self.gpu_index}")
+            free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+            free_gb = free_bytes / (1024 ** 3)
+            total_gb = total_bytes / (1024 ** 3)
+            logging.info(
+                f"Verificando VRAM para GPU {self.gpu_index}: {free_gb:.2f}GB livres de {total_gb:.2f}GB."
+            )
+
+            if free_gb >= 10.0:
+                bs = 32
+            elif free_gb >= 6.0:
+                bs = 16
+            elif free_gb >= 4.0:
+                bs = 8
+            elif free_gb >= 2.0:
+                bs = 4
+            else:
+                bs = 2
+
+            logging.info(
+                f"VRAM livre ({free_gb:.2f}GB) -> Batch size dinâmico selecionado: {bs}"
+            )
+            return bs
+
+        except Exception as e:
+            logging.error(
+                f"Erro ao calcular batch size dinâmico: {e}. Usando valor da configuração: {self.batch_size}",
+                exc_info=True,
+            )
+            return self.batch_size
+
     def _correct_text_with_openrouter(self, text):
         """Correct the transcribed text using OpenRouter API."""
         if not self.openrouter_client or not text:
@@ -1901,6 +1939,9 @@ class WhisperCore: # Renamed from WhisperApp
 
             logging.debug("Calling pipeline for in-memory audio")
 
+            dynamic_batch_size = self._get_dynamic_batch_size()
+            logging.info(f"Iniciando transcrição com batch_size={dynamic_batch_size}.")
+
             # --- Transformers Warnings Handling ---
             # Warning 1: 'inputs' is deprecated -> 'input_features'.
             #   The pipeline handles this internally when given a filename. No action needed here.
@@ -1918,7 +1959,12 @@ class WhisperCore: # Renamed from WhisperApp
             # devido a TypeError na versão atual do transformers.
             # A correção para 'input_features' e 'attention_mask' será reintroduzida
             # após a atualização da biblioteca transformers para uma versão compatível.
-            result = self.pipe(audio_input, chunk_length_s=30, batch_size=self.batch_size, return_timestamps=False)
+            result = self.pipe(
+                audio_input,
+                chunk_length_s=30,
+                batch_size=dynamic_batch_size,
+                return_timestamps=False,
+            )
 
             logging.debug(f"Pipeline raw result: {result}")
 
