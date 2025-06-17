@@ -1,50 +1,97 @@
 # Whisper Transcription App
 
-A lightweight desktop tool for Windows that turns speech into text using OpenAI's Whisper model. Optional integration with OpenRouter or Google Gemini can automatically polish the output with better punctuation and grammar.
+A lightweight, high-performance desktop tool for Windows that turns your speech into text using OpenAI's Whisper model. It offers optional integration with Google Gemini or OpenRouter to automatically polish the output, providing superior punctuation and grammar.
+
+![Application Screenshot](image_1.png)
 
 ## Table of Contents
 
-1. [Features](#features)
-2. [Installation](#installation)
-3. [Configuration](#configuration)
-4. [Usage](#how-to-use-the-app)
-5. [Troubleshooting](#troubleshooting-common-issues)
-6. [Contributing](#contributing)
-7. [License](#license)
+1.  [Features](#features)
+2.  [System Architecture](#system-architecture)
+3.  [Installation](#installation)
+4.  [Configuration](#configuration)
+5.  [Usage](#how-to-use-the-app)
+6.  [Troubleshooting](#troubleshooting)
+7.  [Contributing](#contributing)
+8.  [License](#license)
 
 ## Features
 
-* **Real-time Audio Transcription:** Captures audio from your microphone and instantly converts it into text using the highly accurate Whisper Large v3 model.
-* **Customizable Hotkey Activation:** Start and stop recording with a single press of a keyboard shortcut (default **F3**).
-* **Toggle Recording:** Use the same hotkey to start and stop.
-* **Automatic Text Pasting:** The transcribed text is copied to the clipboard and pasted into the last active window.
-* **Auditory Feedback:** Optional sound cues play when recording starts and stops.
-* **Intelligent Text Correction (Optional):** Integrate with OpenRouter or Google Gemini for improved punctuation and capitalization.
-* **Easy Configuration GUI:** Adjust hotkeys and API settings without touching code.
-* **Gemini Model Switching:** Alterne entre modelos do Gemini pela interface ou pelo menu do ícone na bandeja.
+*   **High-Quality Transcription:** Powered by the `openai/whisper-large-v3` model for state-of-the-art speech recognition.
+*   **GPU Acceleration:** Automatically utilizes your NVIDIA GPU (if available) for significantly faster transcriptions, with fallback to CPU.
+*   **Dynamic Performance:** Intelligently adjusts batch sizes based on available VRAM for optimal performance.
+*   **Customizable Hotkeys:**
+    *   Activate recording with a global hotkey that works anywhere in Windows.
+    *   Supports both **Toggle Mode** (press once to start, press again to stop) and **Hold Mode** (record only while the key is held down).
+    *   Dedicated "Agent Mode" hotkey for special commands.
+*   **AI-Powered Text Correction (Optional):**
+    *   Integrates with **Google Gemini** or **OpenRouter** to automatically correct punctuation, grammar, and remove speech disfluencies.
+    *   Prompts are fully customizable through the settings GUI.
+*   **Agent Mode:** Use a separate hotkey to process your speech with a different, customizable prompt (e.g., "translate this to English", "summarize this text").
+*   **User-Friendly Interface:**
+    *   Runs discreetly in the system tray, showing the current status via icon colors.
+    *   An intuitive GUI for managing all settings without editing files.
+    *   Quickly switch between Gemini models directly from the tray menu.
+*   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
+*   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
+
+## System Architecture
+
+The application is built with a modular architecture to separate concerns, making it easier to maintain and extend.
+
+```mermaid
+graph TD
+    A[main.py] --> B(AppCore);
+    B --> C{ConfigManager};
+    B --> D{UIManager};
+    B --> E{AudioHandler};
+    B --> F{TranscriptionHandler};
+    B --> G{KeyboardHotkeyManager};
+    F --> H{GeminiAPI};
+    F --> I{OpenRouterAPI};
+
+    subgraph "Entry Point"
+        A
+    end
+
+    subgraph "Core Logic"
+        B
+    end
+
+    subgraph "Managers"
+        C["config.json / secrets.json"];
+        D["System Tray & Settings GUI"];
+        E["Microphone Input"];
+        F["Whisper Model"];
+        G["Global Hotkeys"];
+    end
+
+    subgraph "AI Services"
+        H
+        I
+    end
+
+    style C fill:#f9f,stroke:#333,stroke-width:2px
+    style D fill:#ccf,stroke:#333,stroke-width:2px
+    style E fill:#cfc,stroke:#333,stroke-width:2px
+    style F fill:#cfc,stroke:#333,stroke-width:2px
+    style G fill:#ccf,stroke:#333,stroke-width:2px
+    style H fill:#fcf,stroke:#333,stroke-width:2px
+    style I fill:#fcf,stroke:#333,stroke-width:2px
+```
+
+*   **`main.py`**: The entry point that initializes and runs the application.
+*   **`AppCore`**: The central brain, coordinating all other modules and managing the application's state.
+*   **`ConfigManager`**: Loads and saves all user settings from `config.json` and `secrets.json`.
+*   **`UIManager`**: Manages all GUI elements, including the system tray icon and the settings window.
+*   **`AudioHandler`**: Manages microphone input, recording, and sound feedback.
+*   **`TranscriptionHandler`**: Manages the Whisper model, runs the transcription pipeline, and coordinates with AI correction services.
+*   **`KeyboardHotkeyManager`**: Listens for and handles global hotkeys.
+*   ****`GeminiAPI` / `OpenRouterAPI`**: Clients for interacting with external AI services for text correction.
 
 ## Installation
 
-1. **Install Python 3.8+ and Git.** Ensure Python is added to your `PATH`.
-2. **Clone this repository.**
-   ```bash
-   git clone https://github.com/AliasUruz/Whisper-local-app.git
-   cd Whisper-local-app
-   ```
-3. **Create a virtual environment** (recommended):
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   ```
-4. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-
-## Detailed Installation Guide
-
-Follow these steps carefully to get the Whisper Transcription App up and running on your Windows computer.
+Follow these steps carefully to get the app running on your Windows computer.
 
 ### Step 1: Install Prerequisites
 
@@ -144,34 +191,42 @@ You are now ready to run the Whisper Transcription App!
 
 1.  **Start the main script:** In your **activated virtual environment** within the `Whisper-local-app` directory, run:
     ```bash
-    python whisper_tkinter.py
+    python src/main.py
     ```
     This command executes the main application file.
 2.  **Application Window:** A graphical window should appear. This is the application's main interface.
 3.  **System Tray Icon:** The application will likely minimize to your Windows system tray (near the clock). You can usually interact with it by right-clicking the icon.
 
-## Configuration Guide (Using the GUI)
+## Configuration
 
-The application's settings are managed through its graphical interface and stored in a file named `config.json` in the project directory. This file is automatically created the first time you run `whisper_tkinter.py`.
+The application's settings are managed through its graphical interface and stored in two files: `config.json` (for general settings) and `secrets.json` (for sensitive API keys). These files are automatically created the first time you run `src/main.py`.
 
 To access and change settings:
 
-1.  Run the application (`python whisper_tkinter.py`).
+1.  Run the application (`python src/main.py`).
 2.  Look for a "Settings" or "Configuration" option within the application window or by right-clicking the system tray icon. Click it to open the settings window.
 
 ### Key Configuration Options:
 
-![Application Screenshot](image_1.png)
-
 *   **Hotkey:** Change the keyboard shortcut used to start and stop recording. The default is F3. Choose a key combination that doesn't conflict with other applications you use frequently.
+*   **Agent Hotkey:** A separate hotkey (default F4) to activate "Agent Mode".
+*   **Recording Mode:** Choose between "Toggle" (press to start, press to stop) or "Hold" (record while key is pressed).
+*   **Auto-Paste:** If enabled, transcribed text is automatically pasted into the last active window.
+*   **Min Transcription Duration (s):** Sets the minimum duration for an audio recording to be processed for transcription. Recordings shorter than this will be discarded.
+*   **Enable Hotkey Stability Service:** Activates a background service to improve hotkey responsiveness on Windows 11.
+*   **Sound Settings:** Configure sound feedback for recording start/stop (enable/disable, frequency, duration, volume).
 *   **Enable Text Correction:** Check this box if you want to use an external AI model (OpenRouter or Gemini) to improve the transcribed text.
 *   **Text Correction Service:** If text correction is enabled, select whether you want to use "OpenRouter" or "Google Gemini".
-*   **API Key:** This is where you enter the API key for the text correction service you selected. **Keep your API keys private!** They are stored locally in `config.json`, which is ignored by Git.
+*   **API Key:** This is where you enter the API key for the text correction service you selected. **Keep your API keys private!** They are stored locally in `secrets.json`, which is ignored by Git.
     *   **How to get an OpenRouter API Key:** Visit [https://openrouter.ai/](https://openrouter.ai/) and sign up or log in. You can generate API keys from your account dashboard.
     *   **How to get a Google Gemini API Key:** Visit [https://makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey) and generate a new API key.
-*   **Model:** For text correction, escolha um dos modelos disponíveis para o serviço selecionado (ex.: "deepseek/deepseek-chat-v3-0324:free" no OpenRouter ou "gemini-2.0-flash-001" no Gemini). Na área de configurações agora há um menu suspenso com os modelos do Gemini.
-*   **Alterar Modelo pelo Tray:** Também é possível trocar rapidamente o modelo do Gemini clicando com o botão direito no ícone da aplicação e acessando o submenu **Gemini Model**.
-*   **Sound Feedback:** Toggle sound notifications for recording start/stop.
+*   **Model:** For text correction, choose one of the available models for the selected service (e.g., "deepseek/deepseek-chat-v3-0324:free" on OpenRouter or "gemini-2.5-flash-preview-05-20" on Gemini).
+*   **Gemini Correction Prompt:** Customize the prompt sent to Gemini for text correction.
+*   **Prompt do Modo Agêntico:** Customize the prompt sent to Gemini when using "Agent Mode".
+*   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
+*   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
+*   **Batch Size:** Configure the batch size for transcription.
+*   **Save Audio for Debug:** If enabled, temporary audio recordings will be saved for debugging purposes.
 
 Remember to save your changes in the settings window.
 
@@ -186,14 +241,14 @@ Once the application is running and configured:
 5.  **Wait for Transcription:** The application will process the audio. This might take a few moments depending on the length of the recording and whether you are using CPU or GPU for transcription. If text correction is enabled, it will also communicate with the API.
 6.  **Text Appears:** The transcribed (and corrected) text will automatically appear in the application window that was active when you stopped recording.
 
-## Troubleshooting Common Issues
+## Troubleshooting
 
 ### Hotkeys Stop Working on Windows 11
 
 This is a known issue related to the underlying libraries. If your main hotkey (default F3) stops working after the first use, try these solutions:
 
-*   **Press the Reload Hotkey (Default: F4):** The application includes a secondary hotkey specifically to try and fix this. Press F4.
-*   **Use the System Tray Menu:** Right-click the application's icon in the system tray and look for an option like "Reload Hotkey Listener" or "Restart Keyboard Hook".
+*   **Press the Agent Hotkey (Default: F4):** The application includes a secondary hotkey specifically to try and fix this. Press F4.
+*   **Use the System Tray Menu:** Right-click the application's icon in the system tray and look for an option like "Force Hotkey Re-registration".
 *   **Automatic Reload:** The app attempts to automatically handle this in the background, but manual intervention might sometimes be needed.
 
 ### PyTorch Installation Problems
@@ -205,10 +260,6 @@ If `pip install -r requirements.txt` fails or the application doesn't run due to
 *   **CUDA Compatibility:** If you are trying to install the CUDA version, double-check that your NVIDIA driver and CUDA toolkit versions are compatible with the PyTorch version you are trying to install, according to the PyTorch website.
 *   **Internet Connection:** Ensure you have a stable internet connection, as PyTorch and other libraries are large downloads.
 
-## License
-
-This project is open-source and licensed under the MIT License. You can find the full legal text in the `LICENSE` file included in this repository. This means you are free to use, copy, modify, and distribute the software.
-
 ## Contributing
 
 Contributions are welcome! If you have ideas for improvements, bug fixes, or new features, please:
@@ -219,7 +270,11 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
 4.  Push your changes to your fork.
 5.  Open a Pull Request from your fork to the original repository's `master` branch.
 6.  Describe your changes and why they should be included.
-7.  Execute `flake8 gemini_api.py openrouter_api.py` para verificar o lint.
+7.  Execute `flake8 src/gemini_api.py src/openrouter_api.py` to check the lint.
+
+## License
+
+This project is open-source and licensed under the MIT License. You can find the full legal text in the `LICENSE` file included in this repository. This means you are free to use, copy, modify, and distribute the software.
 
 ## Support
 
