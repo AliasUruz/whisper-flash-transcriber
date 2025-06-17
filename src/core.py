@@ -494,6 +494,7 @@ class AppCore:
                 "new_text_correction_service": "text_correction_service",
                 "new_openrouter_api_key": "openrouter_api_key", "new_openrouter_model": "openrouter_model",
                 "new_gemini_api_key": "gemini_api_key", "new_gemini_model": "gemini_model",
+                "new_agent_model": "gemini_agent_model",
                 "new_gemini_mode": "gemini_mode", "new_gemini_prompt": "gemini_prompt",
                 "new_prompt_agentico": "prompt_agentico",
                 "new_batch_size": "batch_size", "new_gpu_index": "gpu_index",
@@ -598,7 +599,7 @@ class AppCore:
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
 
         # Re-inicializar clientes API se a chave ou modelo mudou
-        if key in ["gemini_api_key", "gemini_model", "openrouter_api_key", "openrouter_model"]:
+        if key in ["gemini_api_key", "gemini_model", "gemini_agent_model", "openrouter_api_key", "openrouter_model"]:
             self.gemini_api.reinitialize_client()
             if self.transcription_handler.gemini_client:
                 self.transcription_handler.gemini_client.reinitialize_client()
