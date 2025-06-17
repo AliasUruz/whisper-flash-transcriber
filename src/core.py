@@ -173,11 +173,11 @@ class AppCore:
             self.on_segment_transcribed(text)
         self.full_transcription += text + " " # Acumula a transcrição completa
 
-    def _handle_transcription_result(self, text_to_display):
+    def _handle_transcription_result(self, corrected_text, raw_text):
         """Lida com o resultado final da transcrição (copiar/colar)."""
         logging.info("AppCore: Lidando com o resultado final da transcrição.")
         # O texto já foi acumulado em _on_segment_transcribed_for_ui
-        final_text = self.full_transcription.strip()
+        final_text = corrected_text
 
         if self.display_transcripts_in_terminal:
             print("\n=== COMPLETE TRANSCRIPTION ===\n" + final_text + "\n==============================\n")
