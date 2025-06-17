@@ -33,7 +33,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   An intuitive GUI for managing all settings without editing files.
     *   Quickly switch between Gemini models directly from the tray menu.
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
-*   **Voice Activity Detection (VAD):** Remove silent segments automatically by enabling this feature.
+*   **Remove trechos silenciosos de forma automática** por meio do Silero VAD.
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
 
 ## System Architecture
@@ -88,7 +88,7 @@ graph TD
 *   **`AudioHandler`**: Manages microphone input, recording, and sound feedback.
 *   **`TranscriptionHandler`**: Manages the Whisper model, runs the transcription pipeline, and coordinates with AI correction services.
 *   **`KeyboardHotkeyManager`**: Listens for and handles global hotkeys.
-*   ****`GeminiAPI` / `OpenRouterAPI`**: Clients for interacting with external AI services for text correction.
+*   ****`GeminiAPI` / `OpenRouterAPI`**: Clientes para interação com serviços externos de IA e correção de texto. Ambos expõem o método `reinitialize_client()` para recarregar chave e modelo em tempo de execução.
 
 ## Installation
 
@@ -228,7 +228,11 @@ To access and change settings:
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Audio for Debug:** If enabled, temporary audio recordings will be saved for debugging purposes.
-*   **Use VAD:** Check this option in *Transcription Settings* to remove silence using Silero voice activity detection. Adjust **VAD Threshold** and **VAD Silence Duration (s)** for best results.
+*   **Use VAD:** ativa a remoção de silêncio, sem encerrar a gravação automaticamente.
+*   **VAD Threshold:** sensibilidade da detecção de voz.
+*   **VAD Silence Duration (s):** tempo máximo de pausa que será mantido; silêncios mais longos são cortados.
+
+O usuário encerra a gravação manualmente.
 
 Remember to save your changes in the settings window.
 
