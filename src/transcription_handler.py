@@ -96,6 +96,11 @@ class TranscriptionHandler:
             model, processor = self._load_model_task()
             if model and processor:
                 device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
+                # Forçar a detecção de idioma na inicialização da pipeline
+                generate_kwargs_init = {
+                    "task": "transcribe",
+                    "language": None
+                }
                 self.pipe = pipeline(
                     "automatic-speech-recognition",
                     model=model,
@@ -104,6 +109,7 @@ class TranscriptionHandler:
                     chunk_length_s=30,
                     batch_size=self.batch_size, # Usar o batch_size configurado
                     torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
+                    generate_kwargs=generate_kwargs_init
                 )
                 logging.info("Pipeline de transcrição inicializada com sucesso.")
                 self.on_model_ready_callback()
@@ -256,10 +262,10 @@ class TranscriptionHandler:
             dynamic_batch_size = self._get_dynamic_batch_size()
             logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
 
+            # Forçar a detecção de idioma a cada chamada é mais robusto.
             generate_kwargs = {
                 "task": "transcribe",
-                "language": None,
-                "forced_decoder_ids": None
+                "language": None  # Força a detecção automática do idioma
             }
             result = self.pipe(
                 audio_input,
