@@ -48,6 +48,7 @@ Transcribed speech: {text}""",
     "vad_threshold": 0.5,
     # Duração máxima da pausa preservada antes que o silêncio seja descartado
     "vad_silence_duration": 1.0,
+    "display_transcripts_in_terminal": False,
     "gemini_model_options": [
         "gemini-2.0-flash-001",
         "gemini-2.5-flash",
@@ -76,6 +77,7 @@ DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
 VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
+DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY = "display_transcripts_in_terminal"
 KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
 TEXT_CORRECTION_ENABLED_CONFIG_KEY = "text_correction_enabled"
@@ -212,6 +214,12 @@ class ConfigManager:
 
         # Lógica para uso do VAD
         self.config[USE_VAD_CONFIG_KEY] = bool(self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY]))
+        self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = bool(
+            self.config.get(
+                DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
+                self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY]
+            )
+        )
         try:
             raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
             self.config[VAD_THRESHOLD_CONFIG_KEY] = float(raw_threshold)
@@ -324,3 +332,12 @@ class ConfigManager:
             self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = float(value)
         except (ValueError, TypeError):
             self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
+
+    def get_display_transcripts_in_terminal(self):
+        return self.config.get(
+            DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
+            self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY]
+        )
+
+    def set_display_transcripts_in_terminal(self, value: bool):
+        self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = bool(value)

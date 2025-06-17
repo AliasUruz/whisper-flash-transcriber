@@ -186,6 +186,7 @@ class UIManager:
                 vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
                 save_audio_var = ctk.BooleanVar(value=self.config_manager.get("save_audio_for_debug"))
+                display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get("display_transcripts_in_terminal"))
                 gemini_prompt_correction_var = ctk.StringVar(value=self.config_manager.get("gemini_prompt"))
 
                 # GPU selection variable
@@ -237,6 +238,7 @@ class UIManager:
                     vad_threshold_to_apply = float(vad_threshold_var.get())
                     vad_silence_duration_to_apply = float(vad_silence_duration_var.get())
                     save_audio_for_debug_to_apply = save_audio_var.get()
+                    display_transcripts_to_apply = display_transcripts_var.get()
 
                     # Logic for converting UI to GPU index
                     selected_device_str = gpu_selection_var.get()
@@ -284,7 +286,8 @@ class UIManager:
                         new_save_audio_for_debug=save_audio_for_debug_to_apply,
                         new_use_vad=use_vad_to_apply,
                         new_vad_threshold=vad_threshold_to_apply,
-                        new_vad_silence_duration=vad_silence_duration_to_apply
+                        new_vad_silence_duration=vad_silence_duration_to_apply,
+                        new_display_transcripts_in_terminal=display_transcripts_to_apply
                     )
                     self._close_settings_window() # Call class method
 
@@ -443,6 +446,10 @@ class UIManager:
                 save_audio_frame = ctk.CTkFrame(transcription_frame)
                 save_audio_frame.pack(fill="x", pady=5)
                 ctk.CTkSwitch(save_audio_frame, text="Save Audio for Debug", variable=save_audio_var).pack(side="left", padx=5)
+
+                display_transcripts_frame = ctk.CTkFrame(transcription_frame)
+                display_transcripts_frame.pack(fill="x", pady=5)
+                ctk.CTkSwitch(display_transcripts_frame, text="Display Transcript in Terminal", variable=display_transcripts_var).pack(side="left", padx=5)
 
                 # --- Action Buttons ---
                 button_frame = ctk.CTkFrame(settings_win) # Move outside scrollable_frame to keep fixed

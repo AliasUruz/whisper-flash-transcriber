@@ -94,6 +94,7 @@ class AppCore:
         self.hotkey_stability_service_enabled = self.config_manager.get("hotkey_stability_service_enabled") # Nova configuração unificada
         self.keyboard_library = self.config_manager.get("keyboard_library")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+        self.display_transcripts_in_terminal = self.config_manager.get("display_transcripts_in_terminal")
         # ... e outras configurações que AppCore precisa diretamente
 
     # --- Callbacks de Módulos ---
@@ -178,7 +179,8 @@ class AppCore:
         # O texto já foi acumulado em _on_segment_transcribed_for_ui
         final_text = self.full_transcription.strip()
 
-
+        if self.display_transcripts_in_terminal:
+            print("\n=== TRANSCRIÇÃO COMPLETA ===\n" + final_text + "\n============================\n")
 
         if pyperclip:
             try:
@@ -505,7 +507,8 @@ class AppCore:
                 "new_gemini_model_options": "gemini_model_options",
                 "new_use_vad": "use_vad",
                 "new_vad_threshold": "vad_threshold",
-                "new_vad_silence_duration": "vad_silence_duration"
+                "new_vad_silence_duration": "vad_silence_duration",
+                "new_display_transcripts_in_terminal": "display_transcripts_in_terminal"
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
