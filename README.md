@@ -228,11 +228,16 @@ To access and change settings:
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Audio for Debug:** If enabled, temporary audio recordings will be saved for debugging purposes.
+*   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
 *   **Use VAD:** ativa a remoção de silêncio, sem encerrar a gravação automaticamente.
 *   **VAD Threshold:** sensibilidade da detecção de voz.
 *   **VAD Silence Duration (s):** tempo máximo de pausa que será mantido; silêncios mais longos são cortados.
 
 O usuário encerra a gravação manualmente.
+
+### Displaying Transcripts in the Terminal
+
+Set `display_transcripts_in_terminal` to `true` in `config.json` or toggle the option in the settings window to print the full transcript in the terminal after each recording.
 
 Remember to save your changes in the settings window.
 
