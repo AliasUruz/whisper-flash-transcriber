@@ -51,13 +51,8 @@ Transcribed speech: {text}""",
         "gemini-2.5-flash-preview-05-20",
         "gemini-2.5-pro-preview-06-05"
     ],
-    "use_vad": False,
-    "vad_threshold": 0.5,
-    "vad_silence_duration": 0.5,
     "save_audio_for_debug": False,
-    "min_transcription_duration": 1.0, # Nova configuração
-    "vad_enabled": False,
-    "vad_silence_duration": 1.0
+    "min_transcription_duration": 1.0  # Nova configuração
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -117,6 +112,9 @@ class ConfigManager:
                 if "new_prompt_agentico" in loaded_config_from_file:
                     logging.info("Removing obsolete 'new_prompt_agentico' key from config file.")
                     loaded_config_from_file.pop("new_prompt_agentico", None)
+                if "vad_enabled" in loaded_config_from_file:
+                    logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
+                    loaded_config_from_file["use_vad"] = loaded_config_from_file.pop("vad_enabled")
                 cfg.update(loaded_config_from_file)
                 logging.info(f"Configuration loaded from {self.config_file}.")
 
