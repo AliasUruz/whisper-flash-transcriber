@@ -540,7 +540,10 @@ class AppCore:
             if self.transcription_handler.gemini_client:
                 self.transcription_handler.gemini_client.reinitialize_client() # Re-inicializar cliente Gemini do TranscriptionHandler
             if self.transcription_handler.openrouter_client:
-                self.transcription_handler.openrouter_client.reinitialize_client() # Re-inicializar cliente OpenRouter do TranscriptionHandler
+                self.transcription_handler.openrouter_client.reinitialize_client(
+                    api_key=self.config_manager.get("openrouter_api_key"),
+                    model_id=self.config_manager.get("openrouter_model")
+                ) # Re-inicializar cliente OpenRouter do TranscriptionHandler
             
             # Re-registrar hotkeys se as chaves ou modo mudaram
             if kwargs.get("new_key") is not None or kwargs.get("new_mode") is not None or kwargs.get("new_agent_key") is not None:
@@ -606,7 +609,10 @@ class AppCore:
             if self.transcription_handler.gemini_client:
                 self.transcription_handler.gemini_client.reinitialize_client()
             if self.transcription_handler.openrouter_client:
-                self.transcription_handler.openrouter_client.reinitialize_client()
+                self.transcription_handler.openrouter_client.reinitialize_client(
+                    api_key=self.config_manager.get("openrouter_api_key"),
+                    model_id=self.config_manager.get("openrouter_model")
+                )
             logging.info(f"Clientes API re-inicializados via update_setting para '{key}'.")
 
         # Re-registrar hotkeys se as chaves ou modo mudaram
