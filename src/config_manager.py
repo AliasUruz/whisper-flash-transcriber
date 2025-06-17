@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-preview-05-20",
     "gemini_agent_model": "gemini-2.5-flash-preview-05-20",
+    "display_transcripts_in_terminal": True,
     "prompt_agentico": "Você é um assistente de IA que executa comandos de texto. O usuário fornecerá uma instrução seguida do texto a ser processado. Sua tarefa é executar a instrução sobre o texto e retornar APENAS o resultado final. Não adicione explicações, saudações ou qualquer texto extra. A instrução do usuário é a prioridade máxima. O idioma de saída deve corresponder ao idioma principal do texto fornecido.",
     "gemini_prompt": """You are a speech-to-text correction specialist. Your task is to refine the following transcribed speech.
 Key instructions:
@@ -70,6 +71,7 @@ BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY = "save_audio_for_debug"
+DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
 VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
@@ -169,6 +171,9 @@ class ConfigManager:
         # Unificar auto_paste e agent_auto_paste
         self.config["auto_paste"] = bool(self.config.get("auto_paste", self.default_config["auto_paste"]))
         self.config["agent_auto_paste"] = self.config["auto_paste"] # Garante que agent_auto_paste seja sempre igual a auto_paste
+        self.config[DISPLAY_TRANSCRIPTS_KEY] = bool(
+            self.config.get(DISPLAY_TRANSCRIPTS_KEY, self.default_config[DISPLAY_TRANSCRIPTS_KEY])
+        )
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
