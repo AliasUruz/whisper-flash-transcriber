@@ -31,12 +31,9 @@ class AudioHandler:
         self.min_record_duration = self.config_manager.get("min_record_duration")
 
         self.use_vad = self.config_manager.get("use_vad")
+        self.vad_threshold = self.config_manager.get("vad_threshold")
         self.vad_silence_duration = self.config_manager.get("vad_silence_duration")
-        self.vad_manager = (
-            VADManager(threshold=self.config_manager.get("vad_threshold"))
-            if self.use_vad
-            else None
-        )
+        self.vad_manager = VADManager(threshold=self.vad_threshold) if self.use_vad else None
         self._vad_silence_counter = 0.0
 
     def update_config(self):
@@ -245,3 +242,25 @@ class AudioHandler:
                     logging.debug("OutputStream stopped and closed.")
                 except Exception as e:
                     logging.error(f"Error stopping/closing OutputStream: {e}")
+
+    def update_config(self):
+        """Recarrega configurações e atualiza componentes internos."""
+        self.sound_enabled = self.config_manager.get("sound_enabled")
+        self.sound_frequency = self.config_manager.get("sound_frequency")
+        self.sound_duration = self.config_manager.get("sound_duration")
+        self.sound_volume = self.config_manager.get("sound_volume")
+        self.min_record_duration = self.config_manager.get("min_record_duration")
+
+        self.use_vad = self.config_manager.get("use_vad")
+        self.vad_threshold = self.config_manager.get("vad_threshold")
+        self.vad_silence_duration = self.config_manager.get("vad_silence_duration")
+
+        if self.use_vad:
+            if self.vad_manager is None:
+                self.vad_manager = VADManager(threshold=self.vad_threshold)
+            else:
+                self.vad_manager.threshold = self.vad_threshold
+        else:
+            self.vad_manager = None
+
+        logging.info("AudioHandler: Configurações atualizadas.")

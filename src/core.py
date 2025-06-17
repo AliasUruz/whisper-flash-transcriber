@@ -532,6 +532,8 @@ class AppCore:
             self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
             self.audio_handler.config_manager = self.config_manager # Atualizar referência
             self.transcription_handler.config_manager = self.config_manager # Atualizar referência
+            if any(key in kwargs for key in ["new_use_vad", "new_vad_threshold", "new_vad_silence_duration"]):
+                self.audio_handler.update_config()
             self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
             # Re-inicializar clientes API existentes em vez de recriá-los
             self.gemini_api.reinitialize_client() # Re-inicializar cliente principal
