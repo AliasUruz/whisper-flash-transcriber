@@ -221,7 +221,7 @@ To access and change settings:
 *   **API Key:** This is where you enter the API key for the text correction service you selected. **Keep your API keys private!** They are stored locally in `secrets.json`, which is ignored by Git.
     *   **How to get an OpenRouter API Key:** Visit [https://openrouter.ai/](https://openrouter.ai/) and sign up or log in. You can generate API keys from your account dashboard.
     *   **How to get a Google Gemini API Key:** Visit [https://makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey) and generate a new API key.
-*   **Model:** For text correction, choose one of the available models for the selected service (e.g., "deepseek/deepseek-chat-v3-0324:free" on OpenRouter or "gemini-2.5-flash-preview-05-20" on Gemini).
+*   **Model:** For text correction, choose one of the available models for the selected service (e.g., "deepseek/deepseek-chat-v3-0324:free" on OpenRouter or "gemini-2.5-flash" on Gemini).
 *   **Gemini Correction Prompt:** Customize the prompt sent to Gemini for text correction.
 *   **Prompt do Modo Agêntico:** Customize the prompt sent to Gemini when using "Agent Mode".
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
