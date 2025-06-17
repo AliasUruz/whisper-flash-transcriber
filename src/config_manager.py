@@ -42,6 +42,9 @@ Transcribed speech: {text}""",
     "manual_batch_size": 8, # Novo: Valor para o modo manual
     "gpu_index": 0,
     "hotkey_stability_service_enabled": True, # Nova configuração unificada
+    "use_vad": False,
+    "vad_threshold": 0.5,
+    "vad_silence_duration": 1.0,
     "gemini_model_options": [
         "gemini-2.0-flash-001",
         "gemini-2.5-flash-preview-05-20",
@@ -69,6 +72,9 @@ KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
 TEXT_CORRECTION_ENABLED_CONFIG_KEY = "text_correction_enabled"
 TEXT_CORRECTION_SERVICE_CONFIG_KEY = "text_correction_service"
+USE_VAD_CONFIG_KEY = "use_vad"
+VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
+VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
 SERVICE_NONE = "none"
 SERVICE_OPENROUTER = "openrouter"
 SERVICE_GEMINI = "gemini"
@@ -186,6 +192,26 @@ class ConfigManager:
             logging.warning(f"Invalid min_transcription_duration value '{self.config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]}).")
             self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
 
+        # Lógica para uso do VAD
+        self.config[USE_VAD_CONFIG_KEY] = bool(self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY]))
+        try:
+            raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
+            self.config[VAD_THRESHOLD_CONFIG_KEY] = float(raw_threshold)
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid vad_threshold value '{self.config.get(VAD_THRESHOLD_CONFIG_KEY)}' in config. Using default ({self.default_config[VAD_THRESHOLD_CONFIG_KEY]})."
+            )
+            self.config[VAD_THRESHOLD_CONFIG_KEY] = self.default_config[VAD_THRESHOLD_CONFIG_KEY]
+
+        try:
+            raw_silence = self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY, self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY])
+            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = float(raw_silence)
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid vad_silence_duration value '{self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY)}' in config. Using default ({self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]})."
+            )
+            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
+
         logging.info(f"Configurações aplicadas: {self.config}")
 
 
@@ -250,3 +276,27 @@ class ConfigManager:
 
     def set(self, key, value):
         self.config[key] = value
+
+    def get_use_vad(self):
+        return self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])
+
+    def set_use_vad(self, value: bool):
+        self.config[USE_VAD_CONFIG_KEY] = bool(value)
+
+    def get_vad_threshold(self):
+        return self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
+
+    def set_vad_threshold(self, value: float):
+        try:
+            self.config[VAD_THRESHOLD_CONFIG_KEY] = float(value)
+        except (ValueError, TypeError):
+            self.config[VAD_THRESHOLD_CONFIG_KEY] = self.default_config[VAD_THRESHOLD_CONFIG_KEY]
+
+    def get_vad_silence_duration(self):
+        return self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY, self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY])
+
+    def set_vad_silence_duration(self, value: float):
+        try:
+            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = float(value)
+        except (ValueError, TypeError):
+            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
