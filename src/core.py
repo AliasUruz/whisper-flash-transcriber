@@ -180,7 +180,7 @@ class AppCore:
         final_text = self.full_transcription.strip()
 
         if self.display_transcripts_in_terminal:
-            print("\n=== TRANSCRIÇÃO COMPLETA ===\n" + final_text + "\n============================\n")
+            print("\n=== COMPLETE TRANSCRIPTION ===\n" + final_text + "\n==============================\n")
 
         if pyperclip:
             try:
@@ -192,7 +192,7 @@ class AppCore:
         if self.auto_paste:
             self._do_paste()
         else:
-            self._log_status("Transcrição completa. Auto-colar desativado.")
+            self._log_status("Transcription complete. Auto-paste disabled.")
         
         self._set_state(STATE_IDLE)
         if self.ui_manager:
