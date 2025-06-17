@@ -200,17 +200,24 @@ class ConfigManager:
             logging.warning(f"Invalid min_transcription_duration value '{self.config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]}).")
             self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
 
-        # Validação das configurações de VAD
+        # Lógica para uso do VAD
         self.config[USE_VAD_CONFIG_KEY] = bool(self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY]))
         try:
-            self.config[VAD_THRESHOLD_CONFIG_KEY] = float(self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY]))
+            raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
+            self.config[VAD_THRESHOLD_CONFIG_KEY] = float(raw_threshold)
         except (ValueError, TypeError):
-            logging.warning(f"Invalid vad_threshold value '{self.config.get(VAD_THRESHOLD_CONFIG_KEY)}'. Using default ({self.default_config[VAD_THRESHOLD_CONFIG_KEY]}).")
+            logging.warning(
+                f"Invalid vad_threshold value '{self.config.get(VAD_THRESHOLD_CONFIG_KEY)}' in config. Using default ({self.default_config[VAD_THRESHOLD_CONFIG_KEY]})."
+            )
             self.config[VAD_THRESHOLD_CONFIG_KEY] = self.default_config[VAD_THRESHOLD_CONFIG_KEY]
+
         try:
-            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = float(self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY, self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]))
+            raw_silence = self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY, self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY])
+            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = float(raw_silence)
         except (ValueError, TypeError):
-            logging.warning(f"Invalid vad_silence_duration value '{self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY)}'. Using default ({self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]}).")
+            logging.warning(
+                f"Invalid vad_silence_duration value '{self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY)}' in config. Using default ({self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]})."
+            )
             self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
 
         logging.info(f"Configurações aplicadas: {self.config}")
