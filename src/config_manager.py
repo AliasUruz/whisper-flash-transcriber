@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
     "openrouter_model": "deepseek/deepseek-chat-v3-0324:free",
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-preview-05-20",
+    "gemini_agent_model": "gemini-2.5-flash-preview-05-20",
     "prompt_agentico": "Você é um assistente de IA que executa comandos de texto. O usuário fornecerá uma instrução seguida do texto a ser processado. Sua tarefa é executar a instrução sobre o texto e retornar APENAS o resultado final. Não adicione explicações, saudações ou qualquer texto extra. A instrução do usuário é a prioridade máxima. O idioma de saída deve corresponder ao idioma principal do texto fornecido.",
     "gemini_prompt": """You are a speech-to-text correction specialist. Your task is to refine the following transcribed speech.
 Key instructions:
@@ -90,6 +91,7 @@ OPENROUTER_API_KEY_CONFIG_KEY = "openrouter_api_key"
 OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
+GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60

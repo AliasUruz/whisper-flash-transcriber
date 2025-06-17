@@ -134,6 +134,11 @@ class GeminiAPI:
         if not text: return ""
         agent_prompt_template = self.config_manager.get('prompt_agentico')
         full_prompt = f"{agent_prompt_template}\n\n{text}"
+        original_model = self.current_model_id
+        self.current_model_id = self.config_manager.get('gemini_agent_model')
+        self.last_model_id = None
         agent_response = self._execute_request(full_prompt)
+        self.current_model_id = original_model
+        self.last_model_id = None
         return agent_response if agent_response else text
 
