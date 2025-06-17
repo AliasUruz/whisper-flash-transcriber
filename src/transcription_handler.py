@@ -261,7 +261,7 @@ class TranscriptionHandler:
                 chunk_length_s=30,
                 batch_size=dynamic_batch_size,
                 return_timestamps=False,
-                generate_kwargs={"language": "portuguese", "task": "transcribe"}
+                generate_kwargs={"task": "transcribe"}
             )
             
             if result and "text" in result:
