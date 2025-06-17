@@ -56,6 +56,8 @@ class AudioHandler:
         else:
             self.vad_manager = None
 
+        self._vad_silence_counter = 0.0
+
         logging.info("AudioHandler: Configurações atualizadas.")
 
     def _audio_callback(self, indata, frames, time_data, status):
@@ -66,12 +68,13 @@ class AudioHandler:
                 is_speech = self.vad_manager.is_speech(indata[:, 0])
                 if is_speech:
                     self._vad_silence_counter = 0.0
+                    self.recording_data.append(indata.copy())
                 else:
                     self._vad_silence_counter += len(indata) / AUDIO_SAMPLE_RATE
-                    if self._vad_silence_counter >= self.vad_silence_duration:
-                        threading.Thread(target=self.stop_recording, daemon=True).start()
-                        self._vad_silence_counter = 0.0
-            self.recording_data.append(indata.copy())
+                    if self._vad_silence_counter <= self.vad_silence_duration:
+                        self.recording_data.append(indata.copy())
+            else:
+                self.recording_data.append(indata.copy())
 
     def _record_audio_task(self):
         stream = None
@@ -262,5 +265,7 @@ class AudioHandler:
                 self.vad_manager.threshold = self.vad_threshold
         else:
             self.vad_manager = None
+
+        self._vad_silence_counter = 0.0
 
         logging.info("AudioHandler: Configurações atualizadas.")
