@@ -438,8 +438,13 @@ class UIManager:
                 vad_params_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(vad_params_frame, text="VAD Threshold:").pack(side="left", padx=(5, 10))
                 ctk.CTkEntry(vad_params_frame, textvariable=vad_threshold_var, width=60).pack(side="left", padx=5)
-                ctk.CTkLabel(vad_params_frame, text="Silence (s):").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(vad_params_frame, text="Duração do silêncio (s):").pack(side="left", padx=(5, 10))
                 ctk.CTkEntry(vad_params_frame, textvariable=vad_silence_duration_var, width=60).pack(side="left", padx=5)
+                ctk.CTkLabel(
+                    vad_params_frame,
+                    text="Valores maiores preservam pausas curtas e descartam trechos silenciosos longos.",
+                    font=ctk.CTkFont(size=10, slant="italic")
+                ).pack(anchor="w", padx=5)
     
                 save_audio_frame = ctk.CTkFrame(transcription_frame)
                 save_audio_frame.pack(fill="x", pady=5)
