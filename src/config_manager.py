@@ -52,7 +52,7 @@ Transcribed speech: {text}""",
         "gemini-2.5-pro-preview-06-05"
     ],
     "save_audio_for_debug": False,
-    "min_transcription_duration": 1.0  # Nova configuração
+    "min_transcription_duration": 1.0 # Nova configuração
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -76,9 +76,6 @@ KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
 TEXT_CORRECTION_ENABLED_CONFIG_KEY = "text_correction_enabled"
 TEXT_CORRECTION_SERVICE_CONFIG_KEY = "text_correction_service"
-USE_VAD_CONFIG_KEY = "use_vad"
-VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
-VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
 SERVICE_NONE = "none"
 SERVICE_OPENROUTER = "openrouter"
 SERVICE_GEMINI = "gemini"
