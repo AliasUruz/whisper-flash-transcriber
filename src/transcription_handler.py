@@ -256,12 +256,17 @@ class TranscriptionHandler:
             dynamic_batch_size = self._get_dynamic_batch_size()
             logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
 
+            generate_kwargs = {
+                "task": "transcribe",
+                "language": None,
+                "forced_decoder_ids": None
+            }
             result = self.pipe(
                 audio_input,
                 chunk_length_s=30,
                 batch_size=dynamic_batch_size,
                 return_timestamps=False,
-                generate_kwargs={"task": "transcribe"}
+                generate_kwargs=generate_kwargs
             )
             
             if result and "text" in result:
