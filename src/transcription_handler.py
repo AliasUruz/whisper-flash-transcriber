@@ -15,7 +15,7 @@ from .config_manager import (
     SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
     OPENROUTER_API_KEY_CONFIG_KEY, OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY, GEMINI_MODEL_CONFIG_KEY,
-    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY # Nova constante
+    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY # Nova constante
 )
 from .audio_handler import AUDIO_SAMPLE_RATE # Importar SAMPLE_RATE
 
@@ -290,6 +290,9 @@ class TranscriptionHandler:
         finally:
             with self.transcription_lock:
                 self.transcription_in_progress = False
+
+            if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
+                logging.info(f"Transcrição bruta: {text_result}")
             
             # Verificação inicial para texto inválido ou erro de transcrição
             if not text_result or text_result == "[No speech detected]" or text_result.strip().startswith("[Transcription Error:"):

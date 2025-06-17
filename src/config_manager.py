@@ -53,7 +53,8 @@ Transcribed speech: {text}""",
         "gemini-2.5-pro-preview-06-05"
     ],
     "save_audio_for_debug": False,
-    "min_transcription_duration": 1.0 # Nova configuração
+    "min_transcription_duration": 1.0, # Nova configuração
+    "display_transcripts": False
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -90,6 +91,7 @@ SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
+DISPLAY_TRANSCRIPTS_KEY = "display_transcripts"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -169,6 +171,11 @@ class ConfigManager:
         # Unificar auto_paste e agent_auto_paste
         self.config["auto_paste"] = bool(self.config.get("auto_paste", self.default_config["auto_paste"]))
         self.config["agent_auto_paste"] = self.config["auto_paste"] # Garante que agent_auto_paste seja sempre igual a auto_paste
+
+        # Flag para exibir transcrições brutas no log
+        self.config[DISPLAY_TRANSCRIPTS_KEY] = bool(
+            self.config.get(DISPLAY_TRANSCRIPTS_KEY, self.default_config[DISPLAY_TRANSCRIPTS_KEY])
+        )
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
