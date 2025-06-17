@@ -50,8 +50,8 @@ Transcribed speech: {text}""",
     "vad_silence_duration": 1.0,
     "gemini_model_options": [
         "gemini-2.0-flash-001",
-        "gemini-2.5-flash-preview-05-20",
-        "gemini-2.5-pro-preview-06-05"
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
     ],
     "save_audio_for_debug": False,
     "min_transcription_duration": 1.0 # Nova configuração
