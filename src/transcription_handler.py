@@ -262,12 +262,17 @@ class TranscriptionHandler:
             dynamic_batch_size = self._get_dynamic_batch_size()
             logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
 
-            # Os generate_kwargs agora estão na inicialização da pipeline, não são mais necessários aqui.
+            # Forçar a detecção de idioma a cada chamada é mais robusto.
+            generate_kwargs = {
+                "task": "transcribe",
+                "language": None  # Força a detecção automática do idioma
+            }
             result = self.pipe(
                 audio_input,
                 chunk_length_s=30,
                 batch_size=dynamic_batch_size,
-                return_timestamps=False
+                return_timestamps=False,
+                generate_kwargs=generate_kwargs
             )
             
             if result and "text" in result:
