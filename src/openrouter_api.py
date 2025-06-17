@@ -5,7 +5,12 @@ import time
 
 
 class OpenRouterAPI:
-    """Cliente para a API OpenRouter usado na correção de texto."""
+    """Cliente para a API OpenRouter usado na correção de texto.
+
+    Possui o método :py:meth:`reinitialize_client` para atualizar chave
+    e modelo dinamicamente, permitindo aplicar novas configurações sem
+    recriar a instância.
+    """
     def __init__(
         self,
         api_key: str,
@@ -21,6 +26,25 @@ class OpenRouterAPI:
             "HTTP-Referer": "https://whisper-recorder.app",
             "X-Title": "Whisper Recorder",
         }
+
+    def reinitialize_client(self, api_key: str | None = None,
+                            model_id: str | None = None) -> None:
+        """Atualiza chave, modelo e cabeçalhos do cliente.
+
+        Args:
+            api_key: Nova chave de API. Se ``None``, mantém a atual.
+            model_id: Novo identificador de modelo.
+                Se ``None``, mantém o atual.
+        """
+        if api_key:
+            self.api_key = api_key
+        if model_id:
+            self.model_id = model_id
+        self.headers["Authorization"] = f"Bearer {self.api_key}"
+        logging.info(
+            "OpenRouter API client re/initialized with model '%s'",
+            self.model_id,
+        )
 
     def correct_text(
         self,

@@ -88,7 +88,7 @@ graph TD
 *   **`AudioHandler`**: Manages microphone input, recording, and sound feedback.
 *   **`TranscriptionHandler`**: Manages the Whisper model, runs the transcription pipeline, and coordinates with AI correction services.
 *   **`KeyboardHotkeyManager`**: Listens for and handles global hotkeys.
-*   ****`GeminiAPI` / `OpenRouterAPI`**: Clients for interacting with external AI services for text correction.
+*   ****`GeminiAPI` / `OpenRouterAPI`**: Clientes para interação com serviços externos de IA e correção de texto. Ambos expõem o método `reinitialize_client()` para recarregar chave e modelo em tempo de execução.
 
 ## Installation
 
