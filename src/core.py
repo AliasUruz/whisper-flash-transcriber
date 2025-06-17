@@ -177,7 +177,6 @@ class AppCore:
         logging.info("AppCore: Lidando com o resultado final da transcrição.")
         # O texto já foi acumulado em _on_segment_transcribed_for_ui
         final_text = self.full_transcription.strip()
-        self.full_transcription = "" # Reset para a próxima gravação
 
 
 
@@ -196,6 +195,8 @@ class AppCore:
         self._set_state(STATE_IDLE)
         if self.ui_manager:
             self.ui_manager.close_live_transcription_window()
+        logging.info(f"Texto final da transcrição: {final_text}")
+        self.full_transcription = ""  # Reset para a próxima gravação
 
     def _handle_agent_result_final(self, agent_response_text: str):
         """
