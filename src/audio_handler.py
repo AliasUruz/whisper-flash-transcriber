@@ -32,8 +32,34 @@ class AudioHandler:
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_silence_duration = self.config_manager.get("vad_silence_duration")
-        self.vad_manager = VADManager() if self.use_vad else None
+        self.vad_manager = (
+            VADManager(threshold=self.config_manager.get("vad_threshold"))
+            if self.use_vad
+            else None
+        )
         self._vad_silence_counter = 0.0
+
+    def update_config(self):
+        """Recarrega as configurações do gerenciador a partir do ConfigManager."""
+        self.sound_enabled = self.config_manager.get("sound_enabled")
+        self.sound_frequency = self.config_manager.get("sound_frequency")
+        self.sound_duration = self.config_manager.get("sound_duration")
+        self.sound_volume = self.config_manager.get("sound_volume")
+        self.min_record_duration = self.config_manager.get("min_record_duration")
+
+        self.use_vad = self.config_manager.get("use_vad")
+        self.vad_silence_duration = self.config_manager.get("vad_silence_duration")
+        vad_threshold = self.config_manager.get("vad_threshold")
+
+        if self.use_vad:
+            if self.vad_manager is None:
+                self.vad_manager = VADManager(threshold=vad_threshold)
+            else:
+                self.vad_manager.threshold = vad_threshold
+        else:
+            self.vad_manager = None
+
+        logging.info("AudioHandler: Configurações atualizadas.")
 
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
