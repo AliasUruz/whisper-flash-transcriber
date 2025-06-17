@@ -22,6 +22,7 @@ class AudioHandler:
         self.recording_data = []
         self.audio_stream = None
         self.sound_lock = threading.RLock()
+        self.stream_started = False
 
         # Carregar configurações de som
         self.sound_enabled = self.config_manager.get("sound_enabled")
@@ -68,6 +69,7 @@ class AudioHandler:
             )
             self.audio_stream = stream
             stream.start()
+            self.stream_started = True
             logging.info(f"Audio stream started.")
 
             while True:
@@ -92,6 +94,7 @@ class AudioHandler:
                 except Exception as e:
                     logging.error(f"Error stopping/closing audio stream: {e}")
             self.audio_stream = None
+            self.stream_started = False
             logging.info("Audio recording thread finished.")
 
 
@@ -117,8 +120,14 @@ class AudioHandler:
             return False
         
         self.is_recording = False
-        
+
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
+
+        if not self.stream_started:
+            logging.warning("Stop recording called but audio stream never started. Ignoring data.")
+            self.recording_data.clear()
+            self.on_recording_state_change_callback("IDLE")
+            return False
 
         recording_duration = time.time() - self.start_time
         if recording_duration < self.min_record_duration:
