@@ -183,6 +183,9 @@ class UIManager:
                 gemini_mode_var = ctk.StringVar(value=self.config_manager.get("gemini_mode"))
                 batch_size_var = ctk.StringVar(value=str(self.config_manager.get("batch_size")))
                 min_transcription_duration_var = ctk.DoubleVar(value=self.config_manager.get("min_transcription_duration")) # Nova variável
+                use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
+                vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
+                vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
                 save_audio_var = ctk.BooleanVar(value=self.config_manager.get("save_audio_for_debug"))
                 gemini_prompt_correction_var = ctk.StringVar(value=self.config_manager.get("gemini_prompt"))
 
@@ -231,6 +234,9 @@ class UIManager:
                     agentico_prompt_to_apply = agentico_prompt_textbox.get("1.0", "end-1c")
                     batch_size_to_apply = int(batch_size_var.get())
                     min_transcription_duration_to_apply = float(min_transcription_duration_var.get()) # Coleta o valor
+                    use_vad_to_apply = use_vad_var.get()
+                    vad_threshold_to_apply = float(vad_threshold_var.get())
+                    vad_silence_duration_to_apply = float(vad_silence_duration_var.get())
                     save_audio_for_debug_to_apply = save_audio_var.get()
 
                     # Logic for converting UI to GPU index
@@ -276,7 +282,10 @@ class UIManager:
                         new_gpu_index=gpu_index_to_apply,
                         new_hotkey_stability_service_enabled=hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
                         new_min_transcription_duration=min_transcription_duration_to_apply,
-                        new_save_audio_for_debug=save_audio_for_debug_to_apply
+                        new_save_audio_for_debug=save_audio_for_debug_to_apply,
+                        new_use_vad=use_vad_to_apply,
+                        new_vad_threshold=vad_threshold_to_apply,
+                        new_vad_silence_duration=vad_silence_duration_to_apply
                     )
                     self._close_settings_window() # Call class method
 
@@ -428,6 +437,17 @@ class UIManager:
                 ctk.CTkLabel(min_transcription_duration_frame, text="Ignore Transcriptions Shorter Than (sec):").pack(side="left", padx=(5, 10))
                 min_transcription_duration_entry = ctk.CTkEntry(min_transcription_duration_frame, textvariable=min_transcription_duration_var, width=80)
                 min_transcription_duration_entry.pack(side="left", padx=5)
+
+                vad_enable_frame = ctk.CTkFrame(transcription_frame)
+                vad_enable_frame.pack(fill="x", pady=5)
+                ctk.CTkCheckBox(vad_enable_frame, text="Use VAD", variable=use_vad_var).pack(side="left", padx=5)
+
+                vad_params_frame = ctk.CTkFrame(transcription_frame)
+                vad_params_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(vad_params_frame, text="VAD Threshold:").pack(side="left", padx=(5, 10))
+                ctk.CTkEntry(vad_params_frame, textvariable=vad_threshold_var, width=60).pack(side="left", padx=5)
+                ctk.CTkLabel(vad_params_frame, text="Silence (s):").pack(side="left", padx=(5, 10))
+                ctk.CTkEntry(vad_params_frame, textvariable=vad_silence_duration_var, width=60).pack(side="left", padx=5)
     
                 save_audio_frame = ctk.CTkFrame(transcription_frame)
                 save_audio_frame.pack(fill="x", pady=5)

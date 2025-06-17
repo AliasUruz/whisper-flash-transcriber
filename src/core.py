@@ -499,7 +499,10 @@ class AppCore:
                 "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
                 "new_min_transcription_duration": "min_transcription_duration",
                 "new_save_audio_for_debug": "save_audio_for_debug",
-                "new_gemini_model_options": "gemini_model_options"
+                "new_gemini_model_options": "gemini_model_options",
+                "new_use_vad": "use_vad",
+                "new_vad_threshold": "vad_threshold",
+                "new_vad_silence_duration": "vad_silence_duration"
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
