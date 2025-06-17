@@ -35,8 +35,7 @@ class AudioHandler:
         self.vad_manager = VADManager() if self.vad_enabled else None
         self._vad_silence_counter = 0.0
 
-    def _audio_callback(self, indata, *_, **__):
-        status = __.get('status')
+    def _audio_callback(self, indata, frames, time_data, status):
         if status:
             logging.warning(f"Audio callback status: {status}")
         if self.is_recording:
