@@ -321,7 +321,10 @@ class TranscriptionHandler:
                     final_text = self._correct_text_with_gemini(text_result)
                 elif correction_service == SERVICE_OPENROUTER:
                     final_text = self._correct_text_with_openrouter(text_result)
-                
+
+                if self.config_manager.get("save_audio_for_debug"):
+                    logging.info(f"Transcrição corrigida: {final_text}")
+
                 self.on_transcription_result_callback(final_text)
 
             # Limpeza de cache da GPU sempre ao final
