@@ -1,0 +1,139 @@
+import logging
+import time
+from typing import Optional
+
+import google.generativeai as genai
+
+
+from .config_manager import ConfigManager # Importar ConfigManager
+
+class GeminiAPI:
+    """
+    A client for the Google Gemini API to correct transcribed text.
+    """
+
+    def __init__(self, config_manager: ConfigManager, api_key: Optional[str] = None) -> None:
+        """
+        Initialize the Gemini API client.
+
+        Args:
+            config_manager: Instância do ConfigManager para acessar as configurações.
+            api_key: Opcional. A chave da API a ser usada. Se não for fornecida,
+                     será obtida do ConfigManager.
+        """
+        self.config_manager = config_manager
+        self.client = None # Inicializa o cliente Gemini
+        self.model = None
+        self.current_api_key = None
+        self.current_model_id = None
+        self.current_prompt = None
+        self.last_api_key = api_key # Armazena a chave passada na inicialização
+        self.last_model_id = None
+        self.last_prompt = None
+        self.is_valid: bool = False # Novo atributo para indicar se a API está configurada e válida
+
+        # Inicializa o cliente Gemini
+        self.reinitialize_client()
+
+    def reinitialize_client(self):
+        """
+        Recarrega o cliente Gemini com as configurações mais recentes.
+        Útil quando as configurações mudam em tempo de execução.
+        """
+        logging.info("Gemini API client re/initializing due to external request.")
+        self._load_model_from_config()
+
+    def _load_model_from_config(self):
+        """
+        Carrega ou recarrega o modelo Gemini com base nas configurações atuais.
+        A chave da API é obtida da instância ou do ConfigManager.
+        """
+        # Prioriza a chave da API passada no construtor, depois a do config
+        self.current_api_key = self.last_api_key or self.config_manager.get('gemini_api_key')
+        self.current_model_id = self.config_manager.get('gemini_model')
+        self.current_prompt = self.config_manager.get('gemini_prompt')
+
+        # Verifica se as configurações relevantes mudaram
+        if (self.model is None or
+            self.current_api_key != self.last_api_key or
+            self.current_model_id != self.last_model_id or
+            self.current_prompt != self.last_prompt):
+
+            if not self.current_api_key or "SUA_CHAVE" in self.current_api_key:
+                logging.warning("Gemini API Key não configurada ou inválida. Correção de texto desativada.")
+                self.model = None
+                self.is_valid = False # Chave inválida, marca como inválido
+                self.last_api_key = self.current_api_key
+                return
+
+            try:
+                genai.configure(api_key=self.current_api_key)
+                self.model = genai.GenerativeModel(self.current_model_id)
+                self.last_api_key = self.current_api_key
+                self.last_model_id = self.current_model_id
+                self.last_prompt = self.current_prompt
+                self.is_valid = True # Sucesso na configuração, marca como válido
+                logging.info(
+                    "Gemini API client re/initialized with model: %s",
+                    self.last_model_id,
+                )
+            except Exception as e:
+                logging.error(f"Falha ao inicializar o cliente Gemini API: {e}")
+                self.model = None
+                self.is_valid = False # Falha na configuração, marca como inválido
+                # Não limpa a chave aqui para que o erro de chave inválida persista até ser corrigido
+                self.last_api_key = self.current_api_key
+                self.last_model_id = None
+                self.last_prompt = None
+
+    def _execute_request(self, prompt: str, max_retries: int = 3, retry_delay: int = 1) -> str:
+        """
+        Executa uma requisição para a API Gemini com lógica de retry.
+        Este é o método central para todas as chamadas da API.
+        """
+        self._load_model_from_config()
+        if not prompt or not self.is_valid or not self.model:
+            logging.warning("Não é possível executar a requisição: prompt vazio, cliente inválido ou modelo não carregado.")
+            return ""
+
+        for attempt in range(max_retries):
+            try:
+                logging.info(f"Enviando prompt para a API Gemini usando o modelo {self.last_model_id} (tentativa {attempt + 1}/{max_retries})")
+                response = self.model.generate_content(prompt)
+
+                if hasattr(response, 'text') and response.text:
+                    generated_text = response.text.strip()
+                    logging.info("Resposta recebida com sucesso da API Gemini.")
+                    return generated_text
+                else:
+                    logging.warning(f"API Gemini retornou resposta vazia (tentativa {attempt + 1}/{max_retries})")
+
+            except Exception as e:
+                logging.error(f"Erro durante a geração de conteúdo da API Gemini (tentativa {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    logging.info(f"Tentando novamente em {retry_delay} segundos...")
+                    time.sleep(retry_delay)
+
+        logging.error("Todas as tentativas de geração de conteúdo da API Gemini falharam.")
+        return ""
+
+    def get_correction(self, text: str) -> str:
+        """
+        Formata e executa uma requisição de correção de texto.
+        """
+        if not text: return ""
+        correction_prompt_template = self.config_manager.get('gemini_prompt')
+        full_prompt = correction_prompt_template.format(text=text)
+        corrected_text = self._execute_request(full_prompt)
+        return corrected_text if corrected_text else text
+
+    def get_agent_response(self, text: str) -> str:
+        """
+        Formata e executa uma requisição do modo agente.
+        """
+        if not text: return ""
+        agent_prompt_template = self.config_manager.get('prompt_agentico')
+        full_prompt = f"{agent_prompt_template}\n\n{text}"
+        agent_response = self._execute_request(full_prompt)
+        return agent_response if agent_response else text
+
