@@ -300,7 +300,7 @@ class TranscriptionHandler:
                 if text_result and self.on_segment_transcribed_callback:
                     self.on_segment_transcribed_callback(text_result or "")
                 if not agent_mode and text_result:
-                     self.on_transcription_result_callback(text_result)
+                     self.on_transcription_result_callback(text_result, text_result)
                 return
 
             # A partir daqui, text_result é válido. Mostra a transcrição crua na UI.
@@ -328,7 +328,7 @@ class TranscriptionHandler:
                 if self.config_manager.get("save_audio_for_debug"):
                     logging.info(f"Transcrição corrigida: {final_text}")
 
-                self.on_transcription_result_callback(final_text)
+                self.on_transcription_result_callback(final_text, text_result)
 
             # Limpeza de cache da GPU sempre ao final
             if torch.cuda.is_available():
