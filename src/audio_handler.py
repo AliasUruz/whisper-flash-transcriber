@@ -121,6 +121,10 @@ class AudioHandler:
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
 
         recording_duration = time.time() - self.start_time
+        if not self.recording_data:
+            logging.warning("Nenhum áudio capturado. Gravacao interrompida antes do início.")
+            self.on_recording_state_change_callback("IDLE")
+            return False
         if recording_duration < self.min_record_duration:
             logging.warning(f"Gravação muito curta (< {self.min_record_duration}s). Descartando.")
             self.recording_data.clear()
