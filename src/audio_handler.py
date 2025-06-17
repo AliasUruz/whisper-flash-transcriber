@@ -30,16 +30,16 @@ class AudioHandler:
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
 
-        self.vad_enabled = self.config_manager.get("vad_enabled")
+        self.use_vad = self.config_manager.get("use_vad")
         self.vad_silence_duration = self.config_manager.get("vad_silence_duration")
-        self.vad_manager = VADManager() if self.vad_enabled else None
+        self.vad_manager = VADManager() if self.use_vad else None
         self._vad_silence_counter = 0.0
 
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
             logging.warning(f"Audio callback status: {status}")
         if self.is_recording:
-            if self.vad_enabled:
+            if self.use_vad:
                 is_speech = self.vad_manager.is_speech(indata[:, 0])
                 if is_speech:
                     self._vad_silence_counter = 0.0
