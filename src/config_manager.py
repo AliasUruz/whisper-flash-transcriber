@@ -112,6 +112,9 @@ class ConfigManager:
             if os.path.exists(self.config_file):
                 with open(self.config_file, "r", encoding='utf-8') as f:
                     loaded_config_from_file = json.load(f)
+                if "new_prompt_agentico" in loaded_config_from_file:
+                    logging.info("Removing obsolete 'new_prompt_agentico' key from config file.")
+                    loaded_config_from_file.pop("new_prompt_agentico", None)
                 cfg.update(loaded_config_from_file)
                 logging.info(f"Configuration loaded from {self.config_file}.")
 
