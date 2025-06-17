@@ -244,12 +244,6 @@ class TranscriptionHandler:
         # Calcular a duração da gravação
         audio_duration = len(audio_input) / AUDIO_SAMPLE_RATE
         
-        # Filtrar gravações muito curtas
-        if audio_duration < self.min_transcription_duration:
-            logging.info(f"Gravação muito curta ({audio_duration:.2f}s), ignorando. Mínimo: {self.min_transcription_duration:.2f}s")
-            with self.transcription_lock:
-                self.transcription_in_progress = False # Liberar o lock
-            return # Ignorar a transcrição
 
         text_result = None
         try:

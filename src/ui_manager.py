@@ -182,7 +182,6 @@ class UIManager:
                 gemini_model_var = ctk.StringVar(value=self.config_manager.get("gemini_model"))
                 gemini_mode_var = ctk.StringVar(value=self.config_manager.get("gemini_mode"))
                 batch_size_var = ctk.StringVar(value=str(self.config_manager.get("batch_size")))
-                min_transcription_duration_var = ctk.DoubleVar(value=self.config_manager.get("min_transcription_duration")) # Nova variável
                 use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
                 vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
@@ -338,13 +337,6 @@ class UIManager:
                 paste_frame.pack(fill="x", pady=5)
                 ctk.CTkSwitch(paste_frame, text="Auto-Paste", variable=auto_paste_var).pack(side="left", padx=5)
 
-                # Minimum Transcription Duration
-                min_transcription_duration_frame = ctk.CTkFrame(general_frame)
-                min_transcription_duration_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(min_transcription_duration_frame, text="Min Transcription Duration (s):").pack(side="left", padx=(5, 10))
-                min_transcription_duration_entry = ctk.CTkEntry(min_transcription_duration_frame, textvariable=min_transcription_duration_var, width=60)
-                min_transcription_duration_entry.pack(side="left", padx=5)
-                
                 # Hotkey Stability Service
                 stability_service_frame = ctk.CTkFrame(general_frame)
                 stability_service_frame.pack(fill="x", pady=5)
