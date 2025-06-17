@@ -281,4 +281,4 @@ This project is open-source and licensed under the MIT License. You can find the
 If you need help, encounter bugs, or have questions:
 
 1.  **Check the Troubleshooting section:** Review the common issues listed above.
-2.  **Open a GitHub Issue:** The best way to get support is to open a new issue on the repository's GitHub page: [https://github.com/AliasUruz/Whisper-local-app/issues](https://github.com/AliasUruz/Whisper-local-app/issues). Please provide as much detail as possible about your problem, including your operating system, Python version, steps to reproduce the issue, and any error messages.
+2.  **Open a GitHub Issue:** The best way to get support is to open a new issue on the repository's GitHub page: [https://github.com/AliasUruz/Whisper-local-app/issues](https://github.com/AliasUruz/whisper-flash-transcriber/issues). Please provide as much detail as possible about your problem, including your operating system, Python version, steps to reproduce the issue, and any error messages.
