@@ -50,8 +50,13 @@ Transcribed speech: {text}""",
         "gemini-2.5-flash-preview-05-20",
         "gemini-2.5-pro-preview-06-05"
     ],
+    "use_vad": False,
+    "vad_threshold": 0.5,
+    "vad_silence_duration": 0.5,
     "save_audio_for_debug": False,
-    "min_transcription_duration": 1.0 # Nova configuração
+    "min_transcription_duration": 1.0, # Nova configuração
+    "vad_enabled": False,
+    "vad_silence_duration": 1.0
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -68,6 +73,9 @@ BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY = "save_audio_for_debug"
+USE_VAD_CONFIG_KEY = "use_vad"
+VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
+VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
 KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
 TEXT_CORRECTION_ENABLED_CONFIG_KEY = "text_correction_enabled"

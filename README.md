@@ -33,6 +33,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   An intuitive GUI for managing all settings without editing files.
     *   Quickly switch between Gemini models directly from the tray menu.
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
+*   **Voice Activity Detection (VAD):** Remove silent segments automatically by enabling this feature.
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
 
 ## System Architecture
@@ -227,6 +228,7 @@ To access and change settings:
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Audio for Debug:** If enabled, temporary audio recordings will be saved for debugging purposes.
+*   **Use VAD:** Check this option in *Transcription Settings* to remove silence using Silero voice activity detection. Adjust **VAD Threshold** and **VAD Silence Duration (s)** for best results.
 
 Remember to save your changes in the settings window.
 
