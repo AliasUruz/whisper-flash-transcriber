@@ -45,6 +45,7 @@ Transcribed speech: {text}""",
     "hotkey_stability_service_enabled": True, # Nova configuração unificada
     "use_vad": False,
     "vad_threshold": 0.5,
+    # Duração máxima da pausa preservada antes que o silêncio seja descartado
     "vad_silence_duration": 1.0,
     "gemini_model_options": [
         "gemini-2.0-flash-001",
@@ -213,7 +214,13 @@ class ConfigManager:
 
         try:
             raw_silence = self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY, self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY])
-            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = float(raw_silence)
+            silence_val = float(raw_silence)
+            if silence_val < 0.1:
+                logging.warning(
+                    f"Invalid vad_silence_duration '{silence_val}'. Must be >= 0.1. Using default ({self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]})."
+                )
+                silence_val = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
+            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = silence_val
         except (ValueError, TypeError):
             logging.warning(
                 f"Invalid vad_silence_duration value '{self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY)}' in config. Using default ({self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]})."
