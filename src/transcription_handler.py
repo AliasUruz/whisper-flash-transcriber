@@ -8,6 +8,7 @@ from .gemini_api import GeminiAPI # Assumindo que está na raiz ou em path acess
 import numpy as np # Necessário para o audio_input
 
 # Importar constantes de configuração
+from utils import select_batch_size
 from .config_manager import (
     DEFAULT_CONFIG, BATCH_SIZE_CONFIG_KEY, GPU_INDEX_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY, MANUAL_BATCH_SIZE_CONFIG_KEY, # Novos
@@ -147,28 +148,15 @@ class TranscriptionHandler:
         if not torch.cuda.is_available() or self.gpu_index < 0:
             logging.info("GPU não disponível ou não selecionada, usando batch size de CPU (4).")
             return 4
-        
+
         if self.batch_size_mode == "manual":
-            logging.info(f"Modo de batch size manual selecionado. Usando valor configurado: {self.manual_batch_size}")
+            logging.info(
+                f"Modo de batch size manual selecionado. Usando valor configurado: {self.manual_batch_size}"
+            )
             return self.manual_batch_size
-        
+
         # Lógica para modo "auto" (dinâmico)
-        try:
-            device = torch.device(f"cuda:{self.gpu_index}")
-            free_memory_bytes, total_memory_bytes = torch.cuda.mem_get_info(device)
-            free_memory_gb = free_memory_bytes / (1024**3)
-            total_memory_gb = total_memory_bytes / (1024**3)
-            logging.info(f"Verificando VRAM para GPU {self.gpu_index}: {free_memory_gb:.2f}GB livres de {total_memory_gb:.2f}GB.")
-            if free_memory_gb >= 10.0: bs = 32
-            elif free_memory_gb >= 6.0: bs = 16
-            elif free_memory_gb >= 4.0: bs = 8
-            elif free_memory_gb >= 2.0: bs = 4
-            else: bs = 2
-            logging.info(f"VRAM livre ({free_memory_gb:.2f}GB) -> Batch size dinâmico selecionado: {bs}")
-            return bs
-        except Exception as e:
-            logging.error(f"Erro ao calcular batch size dinâmico: {e}. Usando valor padrão da configuração: {self.batch_size}", exc_info=True)
-            return self.batch_size
+        return select_batch_size(self.gpu_index, fallback=self.batch_size)
 
     def start_model_loading(self):
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
