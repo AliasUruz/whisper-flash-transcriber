@@ -10,7 +10,8 @@ from PIL import Image, ImageDraw
 from .config_manager import (
     SETTINGS_WINDOW_GEOMETRY,
     SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
-    GEMINI_MODEL_OPTIONS_CONFIG_KEY
+    GEMINI_MODEL_OPTIONS_CONFIG_KEY,
+    DISPLAY_TRANSCRIPTS_KEY,
 )
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
