@@ -1,23 +1,16 @@
-import tkinter as tk
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
 from tkinter import simpledialog # Adicionado para askstring
 import logging
 import threading
-import time
 import pystray
 from PIL import Image, ImageDraw
-from tkinter import simpledialog # Adicionado para askstring
 
 # Importar constantes de configuração
 from .config_manager import (
-    DEFAULT_CONFIG,
     SETTINGS_WINDOW_GEOMETRY,
-    SERVICE_NONE,
-    SERVICE_OPENROUTER,
-    SERVICE_GEMINI,
-    GEMINI_MODEL_OPTIONS_CONFIG_KEY,
-    DISPLAY_TRANSCRIPTS_KEY,
+    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
+    GEMINI_MODEL_OPTIONS_CONFIG_KEY
 )
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
