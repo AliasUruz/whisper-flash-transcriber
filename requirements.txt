@@ -7,7 +7,6 @@ pystray
 pillow
 pyperclip
 requests
-psutil
 google-generativeai
 customtkinter
 keyboard
