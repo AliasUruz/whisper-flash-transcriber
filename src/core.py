@@ -67,7 +67,7 @@ class AppCore:
             on_transcription_result_callback=self._handle_transcription_result,
             on_agent_result_callback=self._handle_agent_result_final, # Usa o novo callback
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
-            state_check_callback=self.is_state_transcribing,
+            is_state_transcribing_fn=self.is_state_transcribing
         )
         self.ui_manager = None # Será setado externamente pelo main.py
 
@@ -302,8 +302,8 @@ class AppCore:
             except Exception as e:
                 logging.error(f"Error calling state update callback for state {current_state_for_callback}: {e}")
 
-    def is_state_transcribing(self):
-        """Retorna True se o estado atual for TRANSCRIBING."""
+    def is_state_transcribing(self) -> bool:
+        """Indica se o estado atual é TRANSCRIBING."""
         with self.state_lock:
             return self.current_state == STATE_TRANSCRIBING
 

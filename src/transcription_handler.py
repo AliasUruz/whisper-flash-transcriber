@@ -1,5 +1,6 @@
 import logging
 import threading
+import concurrent.futures
 import torch
 from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
@@ -18,17 +19,7 @@ from .config_manager import (
 )
 
 class TranscriptionHandler:
-    def __init__(
-        self,
-        config_manager,
-        gemini_api_client,
-        on_model_ready_callback,
-        on_model_error_callback,
-        on_transcription_result_callback,
-        on_agent_result_callback,
-        on_segment_transcribed_callback,
-        state_check_callback,
-    ):
+    def __init__(self, config_manager, gemini_api_client, on_model_ready_callback, on_model_error_callback, on_transcription_result_callback, on_agent_result_callback, on_segment_transcribed_callback, is_state_transcribing_fn):
         self.config_manager = config_manager
         self.gemini_client = gemini_api_client # Instância da API Gemini injetada
         self.on_model_ready_callback = on_model_ready_callback
@@ -36,7 +27,8 @@ class TranscriptionHandler:
         self.on_transcription_result_callback = on_transcription_result_callback # Para resultado final
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
-        self.state_check_callback = state_check_callback
+        self.is_state_transcribing_fn = is_state_transcribing_fn
+        self.correction_cancel_event = threading.Event()
 
         self.pipe = None
         self.transcription_in_progress = False
@@ -152,6 +144,32 @@ class TranscriptionHandler:
             logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
             return text
 
+    def _async_text_correction(self, text: str, service: str, cancel_event: threading.Event) -> None:
+        """Corrige o texto de forma assíncrona com timeout e verificação de cancelamento."""
+        corrected = text
+        def _call():
+            if service == SERVICE_GEMINI:
+                return self._correct_text_with_gemini(text)
+            if service == SERVICE_OPENROUTER:
+                return self._correct_text_with_openrouter(text)
+            return text
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_call)
+                try:
+                    corrected = future.result(timeout=30)
+                except concurrent.futures.TimeoutError:
+                    logging.error("Tempo esgotado na correção de texto.")
+                    future.cancel()
+                except Exception as exc:
+                    logging.error(f"Erro ao corrigir texto: {exc}")
+        finally:
+            if not cancel_event.is_set() and self.is_state_transcribing_fn and self.is_state_transcribing_fn():
+                if self.config_manager.get("save_audio_for_debug"):
+                    logging.info(f"Transcrição corrigida: {corrected}")
+                self.on_transcription_result_callback(corrected, text)
+
     def _get_dynamic_batch_size(self) -> int:
         if not torch.cuda.is_available() or self.gpu_index < 0:
             logging.info("GPU não disponível ou não selecionada, usando batch size de CPU (4).")
@@ -168,6 +186,10 @@ class TranscriptionHandler:
 
     def start_model_loading(self):
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
+
+    def cancel_text_correction(self):
+        """Cancela a correção de texto em andamento."""
+        self.correction_cancel_event.set()
 
     def _load_model_task(self):
         # Removido: model_loaded_successfully = False
@@ -331,23 +353,15 @@ class TranscriptionHandler:
                             "Estado mudou antes do resultado do agente. UI não será atualizada."
                         )
             else:
-                # Lógica de Correção de Texto (Modo Normal)
-                final_text = text_result
-                correction_service = self._get_text_correction_service()
-                if correction_service == SERVICE_GEMINI:
-                    final_text = self._correct_text_with_gemini(text_result)
-                elif correction_service == SERVICE_OPENROUTER:
-                    final_text = self._correct_text_with_openrouter(text_result)
-
-                if self.config_manager.get("save_audio_for_debug"):
-                    logging.info(f"Transcrição corrigida: {final_text}")
-
-                if not self.state_check_callback or self.state_check_callback():
-                    self.on_transcription_result_callback(final_text, text_result)
-                else:
-                    logging.warning(
-                        "Estado mudou antes do resultado de transcrição. UI não será atualizada."
-                    )
+                # Lança a correção de texto em thread separada
+                service = self._get_text_correction_service()
+                self.correction_cancel_event.clear()
+                threading.Thread(
+                    target=self._async_text_correction,
+                    args=(text_result, service, self.correction_cancel_event),
+                    daemon=True,
+                    name="TextCorrectionThread",
+                ).start()
 
             # Limpeza de cache da GPU sempre ao final
             if torch.cuda.is_available():
