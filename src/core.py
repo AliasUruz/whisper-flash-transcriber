@@ -30,7 +30,6 @@ from .gemini_api import GeminiAPI # Adicionado para correção de texto
 STATE_IDLE = "IDLE"
 STATE_LOADING_MODEL = "LOADING_MODEL"
 STATE_RECORDING = "RECORDING"
-STATE_SAVING = "SAVING"
 STATE_TRANSCRIBING = "TRANSCRIBING"
 STATE_ERROR_MODEL = "ERROR_MODEL"
 STATE_ERROR_AUDIO = "ERROR_AUDIO"
@@ -396,7 +395,7 @@ class AppCore:
 
     def force_reregister_hotkeys(self):
         with self.state_lock: current_state = self.current_state
-        if current_state not in [STATE_RECORDING, STATE_SAVING, STATE_LOADING_MODEL]:
+        if current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
             logging.info(f"Manual trigger: State is {current_state}. Attempting hotkey re-registration.")
             with self.hotkey_lock:
                 try:
