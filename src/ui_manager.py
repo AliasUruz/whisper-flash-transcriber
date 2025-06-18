@@ -189,6 +189,18 @@ class UIManager:
                 display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
                 gemini_prompt_correction_var = ctk.StringVar(value=self.config_manager.get("gemini_prompt"))
 
+                def update_text_correction_fields():
+                    enabled = text_correction_enabled_var.get()
+                    state = "normal" if enabled else "disabled"
+                    service_menu.configure(state=state)
+                    openrouter_key_entry.configure(state=state)
+                    openrouter_model_entry.configure(state=state)
+                    gemini_key_entry.configure(state=state)
+                    gemini_model_menu.configure(state=state)
+                    gemini_prompt_correction_textbox.configure(state=state)
+                    agentico_prompt_textbox.configure(state=state)
+                    gemini_models_textbox.configure(state=state)
+
                 # GPU selection variable
                 available_devices = get_available_devices_for_ui()
                 current_device_selection = "Auto-select (Recommended)"
@@ -441,7 +453,7 @@ class UIManager:
 
                 text_correction_frame = ctk.CTkFrame(ai_frame)
                 text_correction_frame.pack(fill="x", pady=5)
-                correction_switch = ctk.CTkSwitch(text_correction_frame, text="Enable Text Correction", variable=text_correction_enabled_var)
+                correction_switch = ctk.CTkSwitch(text_correction_frame, text="Enable Text Correction", variable=text_correction_enabled_var, command=update_text_correction_fields)
                 correction_switch.pack(side="left", padx=5)
                 Tooltip(correction_switch, "Use an AI service to polish the text.")
 
@@ -569,6 +581,8 @@ class UIManager:
                 force_reregister_button = ctk.CTkButton(button_frame, text="Force Hotkey Re-registration", command=self.core_instance_ref.force_reregister_hotkeys)
                 force_reregister_button.pack(side="left", padx=5)
                 Tooltip(force_reregister_button, "Re-register all global hotkeys.")
+
+                update_text_correction_fields()
 
                 settings_win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
 
