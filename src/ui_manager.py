@@ -324,6 +324,13 @@ class UIManager:
                     sound_volume_var.set(DEFAULT_CONFIG["sound_volume"])
                     text_correction_enabled_var.set(DEFAULT_CONFIG["text_correction_enabled"])
                     text_correction_service_var.set(DEFAULT_CONFIG["text_correction_service"])
+                    # Sincroniza os campos de correção de texto caso os widgets existam
+                    try:
+                        service_menu  # Verifica se os widgets foram criados
+                    except NameError:
+                        pass
+                    else:
+                        update_text_correction_fields()
                     openrouter_api_key_var.set(DEFAULT_CONFIG["openrouter_api_key"])
                     openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
                     gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
