@@ -1,7 +1,5 @@
 import sounddevice as sd
 import numpy as np
-import wave
-import queue
 import threading
 import logging
 import time
@@ -69,16 +67,17 @@ class AudioHandler:
                 channels=AUDIO_CHANNELS,
                 callback=self._audio_callback,
                 dtype='float32'
-            ) as stream:
-                self.audio_stream = stream
-                self.stream_started = True
-                logging.info("Audio stream started.")
+            )
+            self.audio_stream = stream
+            stream.start()
+            self.stream_started = True
+            logging.info("Audio stream started.")
 
-                while True:
-                    if not self.is_recording:
-                        break
-                    sd.sleep(100)
-                logging.info("Recording flag is off. Stopping audio stream.")
+            while True:
+                if not self.is_recording:
+                    break
+                sd.sleep(100)
+            logging.info("Recording flag is off. Stopping audio stream.")
         except sd.PortAudioError as e:
             logging.error(f"PortAudio error during recording: {e}", exc_info=True)
             self.is_recording = False

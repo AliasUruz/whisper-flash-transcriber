@@ -38,7 +38,6 @@ app_core_instance = None
 ui_manager_instance = None
 
 def on_exit_app_enhanced(*_):
-    global app_core_instance, ui_manager_instance
     logging.info("Saída solicitada pelo ícone da bandeja.")
     if app_core_instance:
         app_core_instance.shutdown()
