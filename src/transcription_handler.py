@@ -18,7 +18,17 @@ from .config_manager import (
 )
 
 class TranscriptionHandler:
-    def __init__(self, config_manager, gemini_api_client, on_model_ready_callback, on_model_error_callback, on_transcription_result_callback, on_agent_result_callback, on_segment_transcribed_callback):
+    def __init__(
+        self,
+        config_manager,
+        gemini_api_client,
+        on_model_ready_callback,
+        on_model_error_callback,
+        on_transcription_result_callback,
+        on_agent_result_callback,
+        on_segment_transcribed_callback,
+        state_check_callback,
+    ):
         self.config_manager = config_manager
         self.gemini_client = gemini_api_client # Instância da API Gemini injetada
         self.on_model_ready_callback = on_model_ready_callback
@@ -26,6 +36,7 @@ class TranscriptionHandler:
         self.on_transcription_result_callback = on_transcription_result_callback # Para resultado final
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
+        self.state_check_callback = state_check_callback
 
         self.pipe = None
         self.transcription_in_progress = False
@@ -279,8 +290,19 @@ class TranscriptionHandler:
                 logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
                 if text_result and self.on_segment_transcribed_callback:
                     self.on_segment_transcribed_callback(text_result or "")
-                if not agent_mode and text_result:
-                     self.on_transcription_result_callback(text_result, text_result)
+                if (
+                    not agent_mode
+                    and text_result
+                    and (
+                        not self.state_check_callback
+                        or self.state_check_callback()
+                    )
+                ):
+                    self.on_transcription_result_callback(text_result, text_result)
+                elif not agent_mode and text_result:
+                    logging.warning(
+                        "Estado mudou antes do resultado de transcrição. UI não será atualizada."
+                    )
                 return
 
             # A partir daqui, text_result é válido. Mostra a transcrição crua na UI.
@@ -291,11 +313,23 @@ class TranscriptionHandler:
                 try:
                     logging.info(f"Enviando texto para o modo agente: '{text_result}'")
                     agent_response = self.gemini_client.get_agent_response(text_result)
-                    logging.info(f"Resposta recebida do modo agente: '{agent_response}'")
-                    self.on_agent_result_callback(agent_response)
+                    logging.info(
+                        f"Resposta recebida do modo agente: '{agent_response}'"
+                    )
+                    if not self.state_check_callback or self.state_check_callback():
+                        self.on_agent_result_callback(agent_response)
+                    else:
+                        logging.warning(
+                            "Estado mudou antes do resultado do agente. UI não será atualizada."
+                        )
                 except Exception as e:
                     logging.error(f"Erro ao processar o comando do agente: {e}", exc_info=True)
-                    self.on_agent_result_callback(text_result) # Falha, retorna o texto original
+                    if not self.state_check_callback or self.state_check_callback():
+                        self.on_agent_result_callback(text_result)  # Falha, retorna o texto original
+                    else:
+                        logging.warning(
+                            "Estado mudou antes do resultado do agente. UI não será atualizada."
+                        )
             else:
                 # Lógica de Correção de Texto (Modo Normal)
                 final_text = text_result
@@ -308,7 +342,12 @@ class TranscriptionHandler:
                 if self.config_manager.get("save_audio_for_debug"):
                     logging.info(f"Transcrição corrigida: {final_text}")
 
-                self.on_transcription_result_callback(final_text, text_result)
+                if not self.state_check_callback or self.state_check_callback():
+                    self.on_transcription_result_callback(final_text, text_result)
+                else:
+                    logging.warning(
+                        "Estado mudou antes do resultado de transcrição. UI não será atualizada."
+                    )
 
             # Limpeza de cache da GPU sempre ao final
             if torch.cuda.is_available():
