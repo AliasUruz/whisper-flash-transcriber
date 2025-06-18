@@ -107,6 +107,11 @@ class AudioHandler:
         self.start_time = time.time()
         self.recording_data.clear()
 
+        if self.use_vad and self.vad_manager:
+            self.vad_manager.reset_states()
+        self._vad_silence_counter = 0.0
+        logging.debug("VAD reiniciado e contador de silêncio zerado para nova gravação.")
+
         self.on_recording_state_change_callback("RECORDING")
 
         threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread").start()
@@ -120,6 +125,11 @@ class AudioHandler:
             return False
         
         self.is_recording = False
+
+        if self.use_vad and self.vad_manager:
+            self.vad_manager.reset_states()
+        self._vad_silence_counter = 0.0
+        logging.debug("VAD reiniciado e contador de silêncio zerado ao parar a gravação.")
 
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
 
