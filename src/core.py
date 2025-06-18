@@ -174,10 +174,11 @@ class AppCore:
         self.full_transcription += text + " " # Acumula a transcrição completa
 
     def _handle_transcription_result(self, corrected_text, raw_text):
-        """Lida com o resultado final da transcrição (copiar/colar)."""
+        """Lida com o texto final de transcrição, priorizando a versão corrigida."""
         logging.info("AppCore: Lidando com o resultado final da transcrição.")
-        # O texto já foi acumulado em _on_segment_transcribed_for_ui
-        final_text = corrected_text
+        # O texto corrigido tem prioridade; se vazio, usa o acumulado durante a gravação
+        text_to_display = corrected_text
+        final_text = text_to_display.strip() if text_to_display else self.full_transcription.strip()
 
         if self.display_transcripts_in_terminal:
             print("\n=== COMPLETE TRANSCRIPTION ===\n" + final_text + "\n==============================\n")
@@ -197,7 +198,7 @@ class AppCore:
         self._set_state(STATE_IDLE)
         if self.ui_manager:
             self.ui_manager.close_live_transcription_window()
-        logging.info(f"Texto final da transcrição: {final_text}")
+        logging.info(f"Texto final corrigido para copiar/colar: {final_text}")
         self.full_transcription = ""  # Reset para a próxima gravação
 
     def _handle_agent_result_final(self, agent_response_text: str):
