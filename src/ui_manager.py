@@ -186,6 +186,18 @@ class UIManager:
                 display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
                 gemini_prompt_correction_var = ctk.StringVar(value=self.config_manager.get("gemini_prompt"))
 
+                # Function to enable/disable text correction widgets
+                def update_text_correction_fields():
+                    state = "normal" if text_correction_enabled_var.get() else "disabled"
+                    text_correction_service_optionmenu.configure(state=state)
+                    openrouter_api_key_entry.configure(state=state)
+                    openrouter_model_entry.configure(state=state)
+                    gemini_api_key_entry.configure(state=state)
+                    gemini_model_optionmenu.configure(state=state)
+                    gemini_prompt_correction_textbox.configure(state=state)
+                    agentico_prompt_textbox.configure(state=state)
+                    gemini_models_textbox.configure(state=state)
+
                 # GPU selection variable
                 available_devices = get_available_devices_for_ui()
                 current_device_selection = "Auto-select (Recommended)"
@@ -365,46 +377,82 @@ class UIManager:
 
                 text_correction_frame = ctk.CTkFrame(ai_frame)
                 text_correction_frame.pack(fill="x", pady=5)
-                ctk.CTkSwitch(text_correction_frame, text="Enable Text Correction", variable=text_correction_enabled_var).pack(side="left", padx=5)
+                ctk.CTkSwitch(
+                    text_correction_frame,
+                    text="Enable Text Correction",
+                    variable=text_correction_enabled_var,
+                    command=update_text_correction_fields,
+                ).pack(side="left", padx=5)
 
                 service_frame = ctk.CTkFrame(ai_frame)
                 service_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(service_frame, text="Service:").pack(side="left", padx=(5, 10))
-                ctk.CTkOptionMenu(service_frame, variable=text_correction_service_var, values=[SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI]).pack(side="left", padx=5)
+                text_correction_service_optionmenu = ctk.CTkOptionMenu(
+                    service_frame,
+                    variable=text_correction_service_var,
+                    values=[SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI],
+                )
+                text_correction_service_optionmenu.pack(side="left", padx=5)
 
                 # --- OpenRouter Settings ---
                 openrouter_frame = ctk.CTkFrame(ai_frame)
                 openrouter_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(openrouter_frame, text="OpenRouter API Key:").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(openrouter_frame, textvariable=openrouter_api_key_var, show="*", width=250).pack(side="left", padx=5)
+                openrouter_api_key_entry = ctk.CTkEntry(
+                    openrouter_frame, textvariable=openrouter_api_key_var, show="*", width=250
+                )
+                openrouter_api_key_entry.pack(side="left", padx=5)
                 ctk.CTkLabel(openrouter_frame, text="OpenRouter Model:").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(openrouter_frame, textvariable=openrouter_model_var, width=200).pack(side="left", padx=5)
+                openrouter_model_entry = ctk.CTkEntry(
+                    openrouter_frame, textvariable=openrouter_model_var, width=200
+                )
+                openrouter_model_entry.pack(side="left", padx=5)
 
                 # --- Gemini Settings ---
                 gemini_frame = ctk.CTkFrame(ai_frame)
                 gemini_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(gemini_frame, text="Gemini API Key:").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(gemini_frame, textvariable=gemini_api_key_var, show="*", width=250).pack(side="left", padx=5)
+                gemini_api_key_entry = ctk.CTkEntry(
+                    gemini_frame, textvariable=gemini_api_key_var, show="*", width=250
+                )
+                gemini_api_key_entry.pack(side="left", padx=5)
                 ctk.CTkLabel(gemini_frame, text="Gemini Model:").pack(side="left", padx=(5, 10))
-                ctk.CTkOptionMenu(gemini_frame, variable=gemini_model_var, values=self.config_manager.get("gemini_model_options", [])).pack(side="left", padx=5)
+                gemini_model_optionmenu = ctk.CTkOptionMenu(
+                    gemini_frame,
+                    variable=gemini_model_var,
+                    values=self.config_manager.get("gemini_model_options", []),
+                )
+                gemini_model_optionmenu.pack(side="left", padx=5)
                 
                 # --- Gemini Prompt ---
                 gemini_prompt_frame = ctk.CTkFrame(ai_frame)
                 gemini_prompt_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(gemini_prompt_frame, text="Gemini Correction Prompt:").pack(anchor="w", pady=(5,0))
-                gemini_prompt_correction_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=100, wrap="word")
+                gemini_prompt_correction_textbox = ctk.CTkTextbox(
+                    gemini_prompt_frame, height=100, wrap="word"
+                )
                 gemini_prompt_correction_textbox.pack(fill="x", expand=True, pady=5)
-                gemini_prompt_correction_textbox.insert("1.0", self.config_manager.get("gemini_prompt"))
+                gemini_prompt_correction_textbox.insert(
+                    "1.0", self.config_manager.get("gemini_prompt")
+                )
 
                 ctk.CTkLabel(gemini_prompt_frame, text="Prompt do Modo Agêntico:").pack(anchor="w", pady=(5,0))
-                agentico_prompt_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
+                agentico_prompt_textbox = ctk.CTkTextbox(
+                    gemini_prompt_frame, height=60, wrap="word"
+                )
                 agentico_prompt_textbox.pack(fill="x", expand=True, pady=5)
-                agentico_prompt_textbox.insert("1.0", self.config_manager.get("prompt_agentico"))
+                agentico_prompt_textbox.insert(
+                    "1.0", self.config_manager.get("prompt_agentico")
+                )
 
                 ctk.CTkLabel(gemini_prompt_frame, text="Gemini Models (one per line):").pack(anchor="w", pady=(5,0))
-                gemini_models_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
+                gemini_models_textbox = ctk.CTkTextbox(
+                    gemini_prompt_frame, height=60, wrap="word"
+                )
                 gemini_models_textbox.pack(fill="x", expand=True, pady=5)
-                gemini_models_textbox.insert("1.0", "\n".join(self.config_manager.get("gemini_model_options", [])))
+                gemini_models_textbox.insert(
+                    "1.0", "\n".join(self.config_manager.get("gemini_model_options", []))
+                )
 
                 # --- Transcription Settings (Advanced) Section ---
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
@@ -458,6 +506,9 @@ class UIManager:
 
                 force_reregister_button = ctk.CTkButton(button_frame, text="Force Hotkey Re-registration", command=self.core_instance_ref.force_reregister_hotkeys)
                 force_reregister_button.pack(side="left", padx=5)
+
+                # Apply initial state to text correction widgets
+                update_text_correction_fields()
 
                 settings_win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
 
