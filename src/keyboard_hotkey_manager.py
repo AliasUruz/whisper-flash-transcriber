@@ -324,3 +324,8 @@ class KeyboardHotkeyManager:
         except Exception as e:
             logging.error(f"Erro ao detectar tecla: {e}", exc_info=True)
             return None
+
+    def detect_single_key(self, timeout=5.0):
+        """Mantida para compatibilidade: delega para ``detect_key``."""
+        logging.info("detect_single_key foi chamado; delegando para detect_key.")
+        return self.detect_key(timeout=timeout)
