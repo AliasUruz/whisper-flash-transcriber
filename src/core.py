@@ -12,13 +12,11 @@ except ImportError as exc:
     ) from exc
 import pyperclip # Ainda necessário para _handle_transcription_result
 import numpy as np # Adicionado para np.ndarray no callback
-import queue # Adicionado para queue.Full no shutdown
 from tkinter import messagebox # Adicionado para messagebox no _on_model_load_failed
 
 # Importar os novos módulos
 from .config_manager import (
     ConfigManager,
-    DEFAULT_CONFIG,
     REREGISTER_INTERVAL_SECONDS,
     HOTKEY_HEALTH_CHECK_INTERVAL,
     DISPLAY_TRANSCRIPTS_KEY,
@@ -32,11 +30,10 @@ from .gemini_api import GeminiAPI # Adicionado para correção de texto
 STATE_IDLE = "IDLE"
 STATE_LOADING_MODEL = "LOADING_MODEL"
 STATE_RECORDING = "RECORDING"
-STATE_SAVING = "SAVING"
 STATE_TRANSCRIBING = "TRANSCRIBING"
 STATE_ERROR_MODEL = "ERROR_MODEL"
 STATE_ERROR_AUDIO = "ERROR_AUDIO"
-STATE_ERROR_TRANSCRIPTION = "ERROR_TRANSCRIÇÃO"
+STATE_ERROR_TRANSCRIPTION = "ERROR_TRANSCRIPTION"
 STATE_ERROR_SETTINGS = "ERROR_SETTINGS"
 
 class AppCore:
@@ -342,7 +339,7 @@ class AppCore:
                 self._set_state(STATE_IDLE)
         else:
             self._set_state(STATE_ERROR_SETTINGS)
-            self._log_status(f"Error: Hotkey registration failed.", error=True)
+            self._log_status("Error: Hotkey registration failed.", error=True)
         return success
 
     def _cleanup_hotkeys(self):
@@ -398,7 +395,7 @@ class AppCore:
 
     def force_reregister_hotkeys(self):
         with self.state_lock: current_state = self.current_state
-        if current_state not in [STATE_RECORDING, STATE_SAVING, STATE_LOADING_MODEL]:
+        if current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
             logging.info(f"Manual trigger: State is {current_state}. Attempting hotkey re-registration.")
             with self.hotkey_lock:
                 try:

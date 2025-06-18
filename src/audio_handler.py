@@ -1,7 +1,5 @@
 import sounddevice as sd
 import numpy as np
-import wave
-import queue
 import threading
 import logging
 import time
@@ -35,6 +33,10 @@ class AudioHandler:
         self.vad_threshold = self.config_manager.get("vad_threshold")
         self.vad_silence_duration = self.config_manager.get("vad_silence_duration")
         self.vad_manager = VADManager(threshold=self.vad_threshold) if self.use_vad else None
+        if self.use_vad and self.vad_manager and not self.vad_manager.enabled:
+            logging.error("VAD desativado: modelo n\u00e3o encontrado.")
+            self.use_vad = False
+            self.vad_manager = None
         self._vad_silence_counter = 0.0
 
     def _audio_callback(self, indata, frames, time_data, status):
@@ -54,23 +56,22 @@ class AudioHandler:
                 self.recording_data.append(indata.copy())
 
     def _record_audio_task(self):
-        stream = None
+        self.audio_stream = None
         try:
             logging.info("Audio recording thread started.")
             if not self.is_recording:
                 logging.warning("Recording flag turned off before stream start.")
                 return
 
-            stream = sd.InputStream(
+            self.audio_stream = sd.InputStream(
                 samplerate=AUDIO_SAMPLE_RATE,
                 channels=AUDIO_CHANNELS,
                 callback=self._audio_callback,
                 dtype='float32'
             )
-            self.audio_stream = stream
-            stream.start()
+            self.audio_stream.start()
             self.stream_started = True
-            logging.info(f"Audio stream started.")
+            logging.info("Audio stream started.")
 
             while True:
                 if not self.is_recording:
@@ -86,14 +87,16 @@ class AudioHandler:
             self.is_recording = False
             self.on_recording_state_change_callback("ERROR_AUDIO")
         finally:
-            if stream is not None:
+            if self.audio_stream is not None:
                 try:
-                    if stream.active: stream.stop()
-                    stream.close()
+                    if self.audio_stream.active:
+                        self.audio_stream.stop()
+                    self.audio_stream.close()
                     logging.info("Audio stream stopped and closed.")
                 except Exception as e:
                     logging.error(f"Error stopping/closing audio stream: {e}")
-            self.audio_stream = None
+                finally:
+                    self.audio_stream = None
             self.stream_started = False
             logging.info("Audio recording thread finished.")
 
@@ -266,6 +269,10 @@ class AudioHandler:
                 self.vad_manager = VADManager(threshold=self.vad_threshold)
             else:
                 self.vad_manager.threshold = self.vad_threshold
+            if not self.vad_manager.enabled:
+                logging.error("VAD desativado: modelo n\u00e3o encontrado.")
+                self.use_vad = False
+                self.vad_manager = None
         else:
             self.vad_manager = None
 
