@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import copy
+import hashlib
 
 # --- Constantes de Configuração (movidas de whisper_tkinter.py) ---
 CONFIG_FILE = "config.json"
@@ -99,7 +100,13 @@ class ConfigManager:
         self.config_file = config_file
         self.default_config = default_config
         self.config = {}
+        self._config_hash = None
+        self._secrets_hash = None
         self.load_config()
+
+    def _compute_hash(self, data) -> str:
+        """Gera um hash SHA256 determinístico para o dicionário informado."""
+        return hashlib.sha256(json.dumps(data, sort_keys=True).encode("utf-8")).hexdigest()
 
     def load_config(self):
         cfg = copy.deepcopy(self.default_config) # Usar deepcopy para evitar modificações no default
@@ -110,6 +117,8 @@ class ConfigManager:
             if os.path.exists(self.config_file):
                 with open(self.config_file, "r", encoding='utf-8') as f:
                     loaded_config_from_file = json.load(f)
+                self._config_hash = self._compute_hash(loaded_config_from_file)
+
                 if "new_prompt_agentico" in loaded_config_from_file:
                     logging.info("Removing obsolete 'new_prompt_agentico' key from config file.")
                     loaded_config_from_file.pop("new_prompt_agentico", None)
@@ -128,6 +137,7 @@ class ConfigManager:
                 # --- Fim da Migração ---
             else:
                 logging.info(f"{self.config_file} not found. Using defaults.")
+                self._config_hash = None
         except (json.JSONDecodeError, FileNotFoundError) as e:
             logging.warning(f"Error reading or decoding {self.config_file}: {e}. Using default configuration.")
             # Em caso de erro, garantir que o config.json seja recriado com defaults
@@ -144,16 +154,20 @@ class ConfigManager:
             if os.path.exists(SECRETS_FILE):
                 with open(SECRETS_FILE, "r", encoding='utf-8') as f:
                     secrets_loaded = json.load(f)
-                cfg.update(secrets_loaded) # Secrets sobrescrevem configs se houver conflito
+                cfg.update(secrets_loaded)  # Secrets sobrescrevem configs se houver conflito
+                self._secrets_hash = self._compute_hash(secrets_loaded)
                 logging.info(f"Secrets loaded from {SECRETS_FILE}.")
             else:
                 logging.info(f"{SECRETS_FILE} not found. API keys might be missing.")
+                self._secrets_hash = None
         except (json.JSONDecodeError, FileNotFoundError) as e:
             logging.warning(f"Error reading or decoding {SECRETS_FILE}: {e}. API keys might be missing or invalid.")
-            secrets_loaded = {} # Resetar segredos em caso de erro
+            secrets_loaded = {}  # Resetar segredos em caso de erro
+            self._secrets_hash = None
         except Exception as e:
             logging.error(f"An unexpected error occurred while loading {SECRETS_FILE}: {e}. API keys might be missing or invalid.", exc_info=True)
             secrets_loaded = {}
+            self._secrets_hash = None
 
         self.config = cfg
         # Aplicar validação e conversão de tipo
@@ -262,43 +276,56 @@ class ConfigManager:
             if key in config_to_save:
                 del config_to_save[key]
 
-        # Salvar config.json
-        temp_file_config = self.config_file + ".tmp"
-        try:
-            with open(temp_file_config, "w", encoding='utf-8') as f:
-                json.dump(config_to_save, f, indent=4)
-            os.replace(temp_file_config, self.config_file)
-            logging.info(f"Configuration saved to {self.config_file}")
-        except Exception as e:
-            logging.error(f"Error saving configuration to {self.config_file}: {e}")
-            if os.path.exists(temp_file_config):
-                os.remove(temp_file_config)
-
-        # Salvar secrets.json se houver segredos
-        if secrets_to_save:
-            temp_file_secrets = SECRETS_FILE + ".tmp"
-            # Ler segredos existentes para não sobrescrevê-los
-            existing_secrets = {}
-            if os.path.exists(SECRETS_FILE):
-                try:
-                    with open(SECRETS_FILE, "r", encoding='utf-8') as f:
-                        existing_secrets = json.load(f)
-                except json.JSONDecodeError:
-                    logging.warning(f"Could not decode {SECRETS_FILE}, will overwrite.")
-                except FileNotFoundError:
-                    pass # Não faz nada se o arquivo não existe, será criado
-
-            existing_secrets.update(secrets_to_save)
-
+        # Salvar config.json apenas se mudar
+        new_config_hash = self._compute_hash(config_to_save)
+        if new_config_hash != self._config_hash:
+            temp_file_config = self.config_file + ".tmp"
             try:
-                with open(temp_file_secrets, "w", encoding='utf-8') as f:
-                    json.dump(existing_secrets, f, indent=4)
-                os.replace(temp_file_secrets, SECRETS_FILE)
-                logging.info(f"Secrets saved to {SECRETS_FILE}")
+                with open(temp_file_config, "w", encoding='utf-8') as f:
+                    json.dump(config_to_save, f, indent=4)
+                os.replace(temp_file_config, self.config_file)
+                self._config_hash = new_config_hash
+                logging.info(f"Configuration saved to {self.config_file}")
             except Exception as e:
-                logging.error(f"Error saving secrets to {SECRETS_FILE}: {e}")
-                if os.path.exists(temp_file_secrets):
-                    os.remove(temp_file_secrets)
+                logging.error(f"Error saving configuration to {self.config_file}: {e}")
+                if os.path.exists(temp_file_config):
+                    os.remove(temp_file_config)
+        else:
+            logging.info(f"Nenhuma alteração detectada em {self.config_file}.")
+
+        # Salvar secrets.json somente se houver mudanças
+        temp_file_secrets = SECRETS_FILE + ".tmp"
+        existing_secrets = {}
+        if os.path.exists(SECRETS_FILE):
+            try:
+                with open(SECRETS_FILE, "r", encoding='utf-8') as f:
+                    existing_secrets = json.load(f)
+            except json.JSONDecodeError:
+                logging.warning(f"Could not decode {SECRETS_FILE}, will overwrite.")
+            except FileNotFoundError:
+                pass
+
+        existing_secrets.update(secrets_to_save)
+        new_secrets_hash = self._compute_hash(existing_secrets)
+
+        if new_secrets_hash != self._secrets_hash:
+            if existing_secrets or os.path.exists(SECRETS_FILE):
+                try:
+                    with open(temp_file_secrets, "w", encoding='utf-8') as f:
+                        json.dump(existing_secrets, f, indent=4)
+                    os.replace(temp_file_secrets, SECRETS_FILE)
+                    logging.info(f"Secrets saved to {SECRETS_FILE}")
+                except Exception as e:
+                    logging.error(f"Error saving secrets to {SECRETS_FILE}: {e}")
+                    if os.path.exists(temp_file_secrets):
+                        os.remove(temp_file_secrets)
+                else:
+                    self._secrets_hash = new_secrets_hash
+            else:
+                # Não há arquivo nem segredos a salvar
+                self._secrets_hash = new_secrets_hash
+        else:
+            logging.info(f"Nenhuma alteração detectada em {SECRETS_FILE}.")
 
     def get(self, key, default=None):
         return self.config.get(key, default)
