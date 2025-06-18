@@ -38,6 +38,8 @@ class AudioHandler:
             self.use_vad = False
             self.vad_manager = None
         self._vad_silence_counter = 0.0
+        self._stop_event = threading.Event()
+        self._record_thread = None
 
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
@@ -73,9 +75,7 @@ class AudioHandler:
             self.stream_started = True
             logging.info("Audio stream started.")
 
-            while True:
-                if not self.is_recording:
-                    break
+            while not self._stop_event.is_set() and self.is_recording:
                 sd.sleep(100)
             logging.info("Recording flag is off. Stopping audio stream.")
         except sd.PortAudioError as e:
@@ -88,24 +88,47 @@ class AudioHandler:
             self.on_recording_state_change_callback("ERROR_AUDIO")
         finally:
             if self.audio_stream is not None:
-                try:
-                    if self.audio_stream.active:
-                        self.audio_stream.stop()
-                    self.audio_stream.close()
-                    logging.info("Audio stream stopped and closed.")
-                except Exception as e:
-                    logging.error(f"Error stopping/closing audio stream: {e}")
-                finally:
-                    self.audio_stream = None
+                self._close_input_stream()
+                self.audio_stream = None
             self.stream_started = False
+            self._stop_event.clear()
+            self._record_thread = None
             logging.info("Audio recording thread finished.")
+
+    def _close_input_stream(self, timeout: float = 2.0):
+        finished_event = threading.Event()
+
+        def _closer():
+            try:
+                if self.audio_stream.active:
+                    self.audio_stream.stop()
+                self.audio_stream.close()
+                logging.info("Audio stream stopped and closed.")
+            except Exception as e:
+                logging.error(f"Error stopping/closing audio stream: {e}")
+            finally:
+                finished_event.set()
+
+        t = threading.Thread(target=_closer)
+        t.start()
+        finished_event.wait(timeout)
+        if t.is_alive():
+            logging.error("Timeout ao fechar InputStream.")
+        t.join(timeout=0)
 
 
     def start_recording(self):
         if self.is_recording:
             logging.warning("Gravação já está ativa.")
             return False
-        
+
+        if self._record_thread and self._record_thread.is_alive():
+            logging.debug("Aguardando término da thread de gravação anterior.")
+            self._stop_event.set()
+            self._record_thread.join(timeout=2)
+
+        self._stop_event.clear()
+
         self.is_recording = True
         self.start_time = time.time()
         self.recording_data.clear()
@@ -121,7 +144,8 @@ class AudioHandler:
             self.vad_manager.reset_states()
             logging.debug("Estados do VAD reiniciados.")
 
-        threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread").start()
+        self._record_thread = threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread")
+        self._record_thread.start()
         
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": True}, daemon=True, name="StartSoundThread").start()
         return True
@@ -132,6 +156,7 @@ class AudioHandler:
             return False
         
         self.is_recording = False
+        self._stop_event.set()
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
@@ -139,6 +164,9 @@ class AudioHandler:
         logging.debug("VAD reiniciado e contador de silêncio zerado ao parar a gravação.")
 
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
+
+        if self._record_thread:
+            self._record_thread.join(timeout=2)
 
         if not self.stream_started:
             logging.warning("Stop recording called but audio stream never started. Ignoring data.")
