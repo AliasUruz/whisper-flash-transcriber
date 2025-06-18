@@ -14,6 +14,8 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
 )
 
+from .utils.tooltip import Tooltip
+
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
 # Para este plano, vamos movê-lo para cá.
@@ -303,6 +305,7 @@ class UIManager:
                 ctk.CTkLabel(key_frame, text="Record Hotkey:").pack(side="left", padx=(5, 10))
                 key_display = ctk.CTkLabel(key_frame, textvariable=detected_key_var, fg_color="gray20", corner_radius=5, width=120)
                 key_display.pack(side="left", padx=5)
+                Tooltip(key_display, "Current hotkey for recording.")
                 
                 def detect_key_task_internal(key_var):
                     key_var.set("PRESS KEY...")
@@ -313,6 +316,7 @@ class UIManager:
 
                 detect_key_button = ctk.CTkButton(key_frame, text="Detect Key", command=lambda: detect_key_task_internal(detected_key_var))
                 detect_key_button.pack(side="left", padx=5)
+                Tooltip(detect_key_button, "Capture a new recording hotkey.")
 
                 # Agent Hotkey (Moved here)
                 agent_key_frame = ctk.CTkFrame(general_frame)
@@ -320,25 +324,35 @@ class UIManager:
                 ctk.CTkLabel(agent_key_frame, text="Agent Hotkey:").pack(side="left", padx=(5, 10))
                 agent_key_display = ctk.CTkLabel(agent_key_frame, textvariable=agent_key_var, fg_color="gray20", corner_radius=5, width=120)
                 agent_key_display.pack(side="left", padx=5)
+                Tooltip(agent_key_display, "Current hotkey for agent mode.")
                 detect_agent_key_button = ctk.CTkButton(agent_key_frame, text="Detect Key", command=lambda: detect_key_task_internal(agent_key_var))
                 detect_agent_key_button.pack(side="left", padx=5)
+                Tooltip(detect_agent_key_button, "Capture a new agent hotkey.")
 
                 # Recording Mode
                 mode_frame = ctk.CTkFrame(general_frame)
                 mode_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(mode_frame, text="Recording Mode:").pack(side="left", padx=(5, 10))
-                ctk.CTkRadioButton(mode_frame, text="Toggle", variable=mode_var, value="toggle").pack(side="left", padx=5)
-                ctk.CTkRadioButton(mode_frame, text="Hold", variable=mode_var, value="hold").pack(side="left", padx=5)
+                toggle_rb = ctk.CTkRadioButton(mode_frame, text="Toggle", variable=mode_var, value="toggle")
+                toggle_rb.pack(side="left", padx=5)
+                Tooltip(toggle_rb, "Press once to start or stop recording.")
+                hold_rb = ctk.CTkRadioButton(mode_frame, text="Hold", variable=mode_var, value="hold")
+                hold_rb.pack(side="left", padx=5)
+                Tooltip(hold_rb, "Record only while the key is held down.")
 
                 # Auto-Paste
                 paste_frame = ctk.CTkFrame(general_frame)
                 paste_frame.pack(fill="x", pady=5)
-                ctk.CTkSwitch(paste_frame, text="Auto-Paste", variable=auto_paste_var).pack(side="left", padx=5)
+                paste_switch = ctk.CTkSwitch(paste_frame, text="Auto-Paste", variable=auto_paste_var)
+                paste_switch.pack(side="left", padx=5)
+                Tooltip(paste_switch, "Automatically paste the transcription.")
 
                 # Hotkey Stability Service
                 stability_service_frame = ctk.CTkFrame(general_frame)
                 stability_service_frame.pack(fill="x", pady=5)
-                ctk.CTkSwitch(stability_service_frame, text="Enable Hotkey Stability Service", variable=hotkey_stability_service_enabled_var).pack(side="left", padx=5)
+                stability_switch = ctk.CTkSwitch(stability_service_frame, text="Enable Hotkey Stability Service", variable=hotkey_stability_service_enabled_var)
+                stability_switch.pack(side="left", padx=5)
+                Tooltip(stability_switch, "Keep hotkeys active when focus changes.")
 
                 # --- Sound Settings Section ---
                 sound_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
@@ -347,16 +361,24 @@ class UIManager:
                 
                 sound_enabled_frame = ctk.CTkFrame(sound_frame)
                 sound_enabled_frame.pack(fill="x", pady=5)
-                ctk.CTkSwitch(sound_enabled_frame, text="Enable Sounds", variable=sound_enabled_var).pack(side="left", padx=5)
+                sound_switch = ctk.CTkSwitch(sound_enabled_frame, text="Enable Sounds", variable=sound_enabled_var)
+                sound_switch.pack(side="left", padx=5)
+                Tooltip(sound_switch, "Play a beep when recording starts or stops.")
 
                 sound_details_frame = ctk.CTkFrame(sound_frame)
                 sound_details_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(sound_details_frame, text="Frequency (Hz):").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(sound_details_frame, textvariable=sound_frequency_var, width=60).pack(side="left", padx=5)
+                freq_entry = ctk.CTkEntry(sound_details_frame, textvariable=sound_frequency_var, width=60)
+                freq_entry.pack(side="left", padx=5)
+                Tooltip(freq_entry, "Beep frequency in hertz.")
                 ctk.CTkLabel(sound_details_frame, text="Duration (s):").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(sound_details_frame, textvariable=sound_duration_var, width=60).pack(side="left", padx=5)
+                duration_entry = ctk.CTkEntry(sound_details_frame, textvariable=sound_duration_var, width=60)
+                duration_entry.pack(side="left", padx=5)
+                Tooltip(duration_entry, "Beep duration in seconds.")
                 ctk.CTkLabel(sound_details_frame, text="Volume:").pack(side="left", padx=(5, 10))
-                ctk.CTkSlider(sound_details_frame, from_=0.0, to=1.0, variable=sound_volume_var).pack(side="left", padx=5, fill="x", expand=True)
+                volume_slider = ctk.CTkSlider(sound_details_frame, from_=0.0, to=1.0, variable=sound_volume_var)
+                volume_slider.pack(side="left", padx=5, fill="x", expand=True)
+                Tooltip(volume_slider, "Beep volume.")
 
                 # --- Text Correction (AI Services) Section ---
                 ai_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
@@ -365,28 +387,40 @@ class UIManager:
 
                 text_correction_frame = ctk.CTkFrame(ai_frame)
                 text_correction_frame.pack(fill="x", pady=5)
-                ctk.CTkSwitch(text_correction_frame, text="Enable Text Correction", variable=text_correction_enabled_var).pack(side="left", padx=5)
+                correction_switch = ctk.CTkSwitch(text_correction_frame, text="Enable Text Correction", variable=text_correction_enabled_var)
+                correction_switch.pack(side="left", padx=5)
+                Tooltip(correction_switch, "Use an AI service to polish the text.")
 
                 service_frame = ctk.CTkFrame(ai_frame)
                 service_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(service_frame, text="Service:").pack(side="left", padx=(5, 10))
-                ctk.CTkOptionMenu(service_frame, variable=text_correction_service_var, values=[SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI]).pack(side="left", padx=5)
+                service_menu = ctk.CTkOptionMenu(service_frame, variable=text_correction_service_var, values=[SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI])
+                service_menu.pack(side="left", padx=5)
+                Tooltip(service_menu, "Select the service for text correction.")
 
                 # --- OpenRouter Settings ---
                 openrouter_frame = ctk.CTkFrame(ai_frame)
                 openrouter_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(openrouter_frame, text="OpenRouter API Key:").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(openrouter_frame, textvariable=openrouter_api_key_var, show="*", width=250).pack(side="left", padx=5)
+                openrouter_key_entry = ctk.CTkEntry(openrouter_frame, textvariable=openrouter_api_key_var, show="*", width=250)
+                openrouter_key_entry.pack(side="left", padx=5)
+                Tooltip(openrouter_key_entry, "API key for the OpenRouter service.")
                 ctk.CTkLabel(openrouter_frame, text="OpenRouter Model:").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(openrouter_frame, textvariable=openrouter_model_var, width=200).pack(side="left", padx=5)
+                openrouter_model_entry = ctk.CTkEntry(openrouter_frame, textvariable=openrouter_model_var, width=200)
+                openrouter_model_entry.pack(side="left", padx=5)
+                Tooltip(openrouter_model_entry, "Model name for OpenRouter.")
 
                 # --- Gemini Settings ---
                 gemini_frame = ctk.CTkFrame(ai_frame)
                 gemini_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(gemini_frame, text="Gemini API Key:").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(gemini_frame, textvariable=gemini_api_key_var, show="*", width=250).pack(side="left", padx=5)
+                gemini_key_entry = ctk.CTkEntry(gemini_frame, textvariable=gemini_api_key_var, show="*", width=250)
+                gemini_key_entry.pack(side="left", padx=5)
+                Tooltip(gemini_key_entry, "API key for the Gemini service.")
                 ctk.CTkLabel(gemini_frame, text="Gemini Model:").pack(side="left", padx=(5, 10))
-                ctk.CTkOptionMenu(gemini_frame, variable=gemini_model_var, values=self.config_manager.get("gemini_model_options", [])).pack(side="left", padx=5)
+                gemini_model_menu = ctk.CTkOptionMenu(gemini_frame, variable=gemini_model_var, values=self.config_manager.get("gemini_model_options", []))
+                gemini_model_menu.pack(side="left", padx=5)
+                Tooltip(gemini_model_menu, "Model used for Gemini requests.")
                 
                 # --- Gemini Prompt ---
                 gemini_prompt_frame = ctk.CTkFrame(ai_frame)
@@ -395,16 +429,19 @@ class UIManager:
                 gemini_prompt_correction_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=100, wrap="word")
                 gemini_prompt_correction_textbox.pack(fill="x", expand=True, pady=5)
                 gemini_prompt_correction_textbox.insert("1.0", self.config_manager.get("gemini_prompt"))
+                Tooltip(gemini_prompt_correction_textbox, "Prompt used to refine text.")
 
                 ctk.CTkLabel(gemini_prompt_frame, text="Prompt do Modo Agêntico:").pack(anchor="w", pady=(5,0))
                 agentico_prompt_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
                 agentico_prompt_textbox.pack(fill="x", expand=True, pady=5)
                 agentico_prompt_textbox.insert("1.0", self.config_manager.get("prompt_agentico"))
+                Tooltip(agentico_prompt_textbox, "Prompt executed in agent mode.")
 
                 ctk.CTkLabel(gemini_prompt_frame, text="Gemini Models (one per line):").pack(anchor="w", pady=(5,0))
                 gemini_models_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
                 gemini_models_textbox.pack(fill="x", expand=True, pady=5)
                 gemini_models_textbox.insert("1.0", "\n".join(self.config_manager.get("gemini_model_options", [])))
+                Tooltip(gemini_models_textbox, "List of models to try, one per line.")
 
                 # --- Transcription Settings (Advanced) Section ---
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
@@ -414,12 +451,16 @@ class UIManager:
                 device_frame = ctk.CTkFrame(transcription_frame)
                 device_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(device_frame, text="Processing Device:").pack(side="left", padx=(5, 10))
-                ctk.CTkOptionMenu(device_frame, variable=gpu_selection_var, values=available_devices).pack(side="left", padx=5)
+                device_menu = ctk.CTkOptionMenu(device_frame, variable=gpu_selection_var, values=available_devices)
+                device_menu.pack(side="left", padx=5)
+                Tooltip(device_menu, "Select CPU or GPU for processing.")
 
                 batch_size_frame = ctk.CTkFrame(transcription_frame)
                 batch_size_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(batch_size_frame, text="Batch Size:").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(batch_size_frame, textvariable=batch_size_var, width=60).pack(side="left", padx=5)
+                batch_entry = ctk.CTkEntry(batch_size_frame, textvariable=batch_size_var, width=60)
+                batch_entry.pack(side="left", padx=5)
+                Tooltip(batch_entry, "Number of segments processed together.")
     
                 # New: Ignore Transcriptions Shorter Than
                 min_transcription_duration_frame = ctk.CTkFrame(transcription_frame)
@@ -427,24 +468,35 @@ class UIManager:
                 ctk.CTkLabel(min_transcription_duration_frame, text="Ignore Transcriptions Shorter Than (sec):").pack(side="left", padx=(5, 10))
                 min_transcription_duration_entry = ctk.CTkEntry(min_transcription_duration_frame, textvariable=min_transcription_duration_var, width=80)
                 min_transcription_duration_entry.pack(side="left", padx=5)
+                Tooltip(min_transcription_duration_entry, "Discard segments shorter than this.")
 
                 vad_enable_frame = ctk.CTkFrame(transcription_frame)
                 vad_enable_frame.pack(fill="x", pady=5)
-                ctk.CTkCheckBox(vad_enable_frame, text="Use VAD", variable=use_vad_var).pack(side="left", padx=5)
+                vad_checkbox = ctk.CTkCheckBox(vad_enable_frame, text="Use VAD", variable=use_vad_var)
+                vad_checkbox.pack(side="left", padx=5)
+                Tooltip(vad_checkbox, "Enable voice activity detection.")
 
                 vad_params_frame = ctk.CTkFrame(transcription_frame)
                 vad_params_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(vad_params_frame, text="VAD Threshold:").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(vad_params_frame, textvariable=vad_threshold_var, width=60).pack(side="left", padx=5)
+                vad_threshold_entry = ctk.CTkEntry(vad_params_frame, textvariable=vad_threshold_var, width=60)
+                vad_threshold_entry.pack(side="left", padx=5)
+                Tooltip(vad_threshold_entry, "Voice probability to trigger splitting.")
                 ctk.CTkLabel(vad_params_frame, text="Duração do silêncio (s):").pack(side="left", padx=(5, 10))
-                ctk.CTkEntry(vad_params_frame, textvariable=vad_silence_duration_var, width=60).pack(side="left", padx=5)
+                vad_silence_entry = ctk.CTkEntry(vad_params_frame, textvariable=vad_silence_duration_var, width=60)
+                vad_silence_entry.pack(side="left", padx=5)
+                Tooltip(vad_silence_entry, "Length of silence before a cut.")
                 save_audio_frame = ctk.CTkFrame(transcription_frame)
                 save_audio_frame.pack(fill="x", pady=5)
-                ctk.CTkSwitch(save_audio_frame, text="Save Audio for Debug", variable=save_audio_var).pack(side="left", padx=5)
+                save_audio_switch = ctk.CTkSwitch(save_audio_frame, text="Save Audio for Debug", variable=save_audio_var)
+                save_audio_switch.pack(side="left", padx=5)
+                Tooltip(save_audio_switch, "Store captured audio files for troubleshooting.")
 
                 display_transcripts_frame = ctk.CTkFrame(transcription_frame)
                 display_transcripts_frame.pack(fill="x", pady=5)
-                ctk.CTkSwitch(display_transcripts_frame, text="Display Transcript in Terminal", variable=display_transcripts_var).pack(side="left", padx=5)
+                display_switch = ctk.CTkSwitch(display_transcripts_frame, text="Display Transcript in Terminal", variable=display_transcripts_var)
+                display_switch.pack(side="left", padx=5)
+                Tooltip(display_switch, "Print transcripts to the terminal window.")
 
                 # --- Action Buttons ---
                 button_frame = ctk.CTkFrame(settings_win) # Move outside scrollable_frame to keep fixed
@@ -452,12 +504,15 @@ class UIManager:
                 
                 apply_button = ctk.CTkButton(button_frame, text="Apply and Close", command=apply_settings)
                 apply_button.pack(side="right", padx=5)
+                Tooltip(apply_button, "Save all settings and exit.")
                 
                 close_button = ctk.CTkButton(button_frame, text="Cancel", command=self._close_settings_window, fg_color="gray50")
                 close_button.pack(side="right", padx=5)
+                Tooltip(close_button, "Discard changes and exit.")
 
                 force_reregister_button = ctk.CTkButton(button_frame, text="Force Hotkey Re-registration", command=self.core_instance_ref.force_reregister_hotkeys)
                 force_reregister_button.pack(side="left", padx=5)
+                Tooltip(force_reregister_button, "Re-register all global hotkeys.")
 
                 settings_win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
 
