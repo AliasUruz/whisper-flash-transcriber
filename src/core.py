@@ -10,7 +10,13 @@ import queue # Adicionado para queue.Full no shutdown
 from tkinter import messagebox # Adicionado para messagebox no _on_model_load_failed
 
 # Importar os novos módulos
-from .config_manager import ConfigManager, DEFAULT_CONFIG, REREGISTER_INTERVAL_SECONDS, HOTKEY_HEALTH_CHECK_INTERVAL
+from .config_manager import (
+    ConfigManager,
+    DEFAULT_CONFIG,
+    REREGISTER_INTERVAL_SECONDS,
+    HOTKEY_HEALTH_CHECK_INTERVAL,
+    DISPLAY_TRANSCRIPTS_KEY,
+)
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
@@ -94,7 +100,7 @@ class AppCore:
         self.hotkey_stability_service_enabled = self.config_manager.get("hotkey_stability_service_enabled") # Nova configuração unificada
         self.keyboard_library = self.config_manager.get("keyboard_library")
         self.min_record_duration = self.config_manager.get("min_record_duration")
-        self.display_transcripts_in_terminal = self.config_manager.get("display_transcripts_in_terminal")
+        self.display_transcripts_in_terminal = self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY)
         # ... e outras configurações que AppCore precisa diretamente
 
     # --- Callbacks de Módulos ---
@@ -174,10 +180,11 @@ class AppCore:
         self.full_transcription += text + " " # Acumula a transcrição completa
 
     def _handle_transcription_result(self, corrected_text, raw_text):
-        """Lida com o resultado final da transcrição (copiar/colar)."""
+        """Lida com o texto final de transcrição, priorizando a versão corrigida."""
         logging.info("AppCore: Lidando com o resultado final da transcrição.")
-        # O texto já foi acumulado em _on_segment_transcribed_for_ui
-        final_text = corrected_text
+        # O texto corrigido tem prioridade; se vazio, usa o acumulado durante a gravação
+        text_to_display = corrected_text
+        final_text = text_to_display.strip() if text_to_display else self.full_transcription.strip()
 
         if self.display_transcripts_in_terminal:
             print("\n=== COMPLETE TRANSCRIPTION ===\n" + final_text + "\n==============================\n")
@@ -197,7 +204,7 @@ class AppCore:
         self._set_state(STATE_IDLE)
         if self.ui_manager:
             self.ui_manager.close_live_transcription_window()
-        logging.info(f"Texto final da transcrição: {final_text}")
+        logging.info(f"Texto final corrigido para copiar/colar: {final_text}")
         self.full_transcription = ""  # Reset para a próxima gravação
 
     def _handle_agent_result_final(self, agent_response_text: str):
@@ -498,7 +505,7 @@ class AppCore:
                 "new_openrouter_api_key": "openrouter_api_key", "new_openrouter_model": "openrouter_model",
                 "new_gemini_api_key": "gemini_api_key", "new_gemini_model": "gemini_model",
                 "new_agent_model": "gemini_agent_model",
-                "new_gemini_mode": "gemini_mode", "new_gemini_prompt": "gemini_prompt",
+                "new_gemini_prompt": "gemini_prompt",
                 "new_prompt_agentico": "prompt_agentico",
                 "new_batch_size": "batch_size", "new_gpu_index": "gpu_index",
                 "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada

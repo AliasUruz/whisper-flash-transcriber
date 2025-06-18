@@ -177,13 +177,12 @@ class UIManager:
                 openrouter_model_var = ctk.StringVar(value=self.config_manager.get("openrouter_model"))
                 gemini_api_key_var = ctk.StringVar(value=self.config_manager.get("gemini_api_key"))
                 gemini_model_var = ctk.StringVar(value=self.config_manager.get("gemini_model"))
-                gemini_mode_var = ctk.StringVar(value=self.config_manager.get("gemini_mode"))
                 batch_size_var = ctk.StringVar(value=str(self.config_manager.get("batch_size")))
                 use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
                 vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
                 save_audio_var = ctk.BooleanVar(value=self.config_manager.get("save_audio_for_debug"))
-                display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get("display_transcripts_in_terminal"))
+                display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
                 gemini_prompt_correction_var = ctk.StringVar(value=self.config_manager.get("gemini_prompt"))
 
                 # GPU selection variable
@@ -226,7 +225,6 @@ class UIManager:
                     openrouter_model_to_apply = openrouter_model_var.get()
                     gemini_api_key_to_apply = gemini_api_key_var.get()
                     gemini_model_to_apply = gemini_model_var.get()
-                    gemini_mode_to_apply = gemini_mode_var.get()
                     gemini_prompt_correction_to_apply = gemini_prompt_correction_textbox.get("1.0", "end-1c")
                     agentico_prompt_to_apply = agentico_prompt_textbox.get("1.0", "end-1c")
                     batch_size_to_apply = int(batch_size_var.get())
@@ -271,7 +269,6 @@ class UIManager:
                         new_openrouter_model=openrouter_model_to_apply,
                         new_gemini_api_key=gemini_api_key_to_apply,
                         new_gemini_model=gemini_model_to_apply,
-                        new_gemini_mode=gemini_mode_to_apply,
                         new_gemini_prompt=gemini_prompt_correction_to_apply,
                         new_prompt_agentico=agentico_prompt_to_apply,
                         new_agent_model=model_to_apply,

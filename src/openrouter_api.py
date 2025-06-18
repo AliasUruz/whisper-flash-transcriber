@@ -2,6 +2,7 @@ import requests
 import json
 import logging
 import time
+from typing import Optional
 
 
 class OpenRouterAPI:
@@ -27,8 +28,11 @@ class OpenRouterAPI:
             "X-Title": "Whisper Recorder",
         }
 
-    def reinitialize_client(self, api_key: str | None = None,
-                            model_id: str | None = None) -> None:
+    def reinitialize_client(
+        self,
+        api_key: Optional[str] = None,
+        model_id: Optional[str] = None,
+    ) -> None:
         """Atualiza chave, modelo e cabeçalhos do cliente.
 
         Args:

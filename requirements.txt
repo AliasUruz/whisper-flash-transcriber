@@ -9,6 +9,8 @@ pyperclip
 requests
 psutil
 google-generativeai
+customtkinter
+keyboard
 
 soundfile
 onnxruntime
