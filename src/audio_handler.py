@@ -114,6 +114,10 @@ class AudioHandler:
 
         self.on_recording_state_change_callback("RECORDING")
 
+        if self.use_vad and self.vad_manager:
+            self.vad_manager.reset_states()
+            logging.debug("Estados do VAD reiniciados.")
+
         threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread").start()
         
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": True}, daemon=True, name="StartSoundThread").start()
