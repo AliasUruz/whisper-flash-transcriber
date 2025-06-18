@@ -58,29 +58,27 @@ class AudioHandler:
                 self.recording_data.append(indata.copy())
 
     def _record_audio_task(self):
-        stream = None
         try:
             logging.info("Audio recording thread started.")
             if not self.is_recording:
                 logging.warning("Recording flag turned off before stream start.")
                 return
 
-            stream = sd.InputStream(
+            with sd.InputStream(
                 samplerate=AUDIO_SAMPLE_RATE,
                 channels=AUDIO_CHANNELS,
                 callback=self._audio_callback,
                 dtype='float32'
-            )
-            self.audio_stream = stream
-            stream.start()
-            self.stream_started = True
-            logging.info(f"Audio stream started.")
+            ) as stream:
+                self.audio_stream = stream
+                self.stream_started = True
+                logging.info("Audio stream started.")
 
-            while True:
-                if not self.is_recording:
-                    break
-                sd.sleep(100)
-            logging.info("Recording flag is off. Stopping audio stream.")
+                while True:
+                    if not self.is_recording:
+                        break
+                    sd.sleep(100)
+                logging.info("Recording flag is off. Stopping audio stream.")
         except sd.PortAudioError as e:
             logging.error(f"PortAudio error during recording: {e}", exc_info=True)
             self.is_recording = False
@@ -90,13 +88,6 @@ class AudioHandler:
             self.is_recording = False
             self.on_recording_state_change_callback("ERROR_AUDIO")
         finally:
-            if stream is not None:
-                try:
-                    if stream.active: stream.stop()
-                    stream.close()
-                    logging.info("Audio stream stopped and closed.")
-                except Exception as e:
-                    logging.error(f"Error stopping/closing audio stream: {e}")
             self.audio_stream = None
             self.stream_started = False
             logging.info("Audio recording thread finished.")
