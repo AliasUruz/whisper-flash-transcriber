@@ -12,13 +12,11 @@ except ImportError as exc:
     ) from exc
 import pyperclip # Ainda necessário para _handle_transcription_result
 import numpy as np # Adicionado para np.ndarray no callback
-import queue # Adicionado para queue.Full no shutdown
 from tkinter import messagebox # Adicionado para messagebox no _on_model_load_failed
 
 # Importar os novos módulos
 from .config_manager import (
     ConfigManager,
-    DEFAULT_CONFIG,
     REREGISTER_INTERVAL_SECONDS,
     HOTKEY_HEALTH_CHECK_INTERVAL,
     DISPLAY_TRANSCRIPTS_KEY,
@@ -342,7 +340,7 @@ class AppCore:
                 self._set_state(STATE_IDLE)
         else:
             self._set_state(STATE_ERROR_SETTINGS)
-            self._log_status(f"Error: Hotkey registration failed.", error=True)
+            self._log_status("Error: Hotkey registration failed.", error=True)
         return success
 
     def _cleanup_hotkeys(self):

@@ -1,7 +1,5 @@
 import sounddevice as sd
 import numpy as np
-import wave
-import queue
 import threading
 import logging
 import time
@@ -70,7 +68,7 @@ class AudioHandler:
             self.audio_stream = stream
             stream.start()
             self.stream_started = True
-            logging.info(f"Audio stream started.")
+            logging.info("Audio stream started.")
 
             while True:
                 if not self.is_recording:
