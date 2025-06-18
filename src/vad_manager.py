@@ -28,8 +28,21 @@ class VADManager:
 
         try:
             model_path_str = str(MODEL_PATH)
-            self.session = onnxruntime.InferenceSession(model_path_str)
-            self.enabled = True
+            # Seleciona automaticamente o provider, priorizando CUDA se disponível
+            available_providers = onnxruntime.get_available_providers()
+            if "CUDAExecutionProvider" in available_providers:
+                providers = ["CUDAExecutionProvider"]
+                logging.info("CUDAExecutionProvider detectado para o VAD.")
+            else:
+                providers = ["CPUExecutionProvider"]
+                logging.info("CUDAExecutionProvider indisponível; usando CPUExecutionProvider.")
+
+            self.session = onnxruntime.InferenceSession(
+                model_path_str,
+                providers=providers,
+            )
+            self.threshold = threshold
+            self.sr = sampling_rate
             self.reset_states()
             logging.info(
                 "Modelo VAD carregado com sucesso de '%s'.", model_path_str

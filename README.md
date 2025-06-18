@@ -33,7 +33,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   An intuitive GUI for managing all settings without editing files.
     *   Quickly switch between Gemini models directly from the tray menu.
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
-*   **Remove trechos silenciosos de forma automática** por meio do Silero VAD.
+*   **Remove trechos silenciosos de forma automática** por meio do Silero VAD. A inicialização do VAD usa `onnxruntime` com seleção automática de `CUDAExecutionProvider` quando disponível, garantindo funcionamento estável também em CPU (`CPUExecutionProvider`).
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
 *   **Gerenciamento Simplificado de Estados:** o antigo estado "SAVING" foi removido por não haver funcionalidade associada.
 
@@ -187,14 +187,8 @@ The `pip` command is Python's package installer. The `-r requirements.txt` part 
     *   This command will download and install the GPU-accelerated version of PyTorch. It's a large download. If you already installed the CPU version via `requirements.txt`, this command will upgrade it.
     *   If you do *not* have a compatible GPU or prefer not to use it, you can skip this step. The application will still work using your CPU, just slower.
 
-### Opcional: Baixar o modelo Silero VAD
-
-Para remover trechos silenciosos automaticamente é necessário o arquivo `silero_vad.onnx` na pasta `src/models/`.
-Caso ele não esteja presente, o aplicativo irá registrar um erro e prosseguir sem o VAD.
-
-1. Acesse <https://github.com/snakers4/silero-vad>.
-2. Baixe o arquivo `silero_vad.onnx` disponível no repositório.
-3. Copie o arquivo para a pasta `src/models/` deste projeto.
+3.  **Optional: Install onnxruntime-gpu (for VAD acceleration):**
+    O VAD usa a biblioteca **ONNX Runtime**. O `requirements.txt` instala a versão para CPU (`onnxruntime`), mas quem possui GPU compatível pode optar por instalar `onnxruntime-gpu` para acelerar a detecção de voz. A aplicação seleciona automaticamente `CUDAExecutionProvider` caso disponível; do contrário, usa `CPUExecutionProvider`.
 
 ### Step 5: Run the Application
 
