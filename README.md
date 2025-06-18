@@ -283,7 +283,11 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
 4.  Push your changes to your fork.
 5.  Open a Pull Request from your fork to the original repository's `master` branch.
 6.  Describe your changes and why they should be included.
-7.  Execute `flake8 src/gemini_api.py src/openrouter_api.py` to check the lint.
+7.  Instale as dependências de desenvolvimento com:
+    ```bash
+    pip install -r requirements-dev.txt
+    ```
+8.  Execute `flake8 src/gemini_api.py src/openrouter_api.py` para verificar o lint.
 
 ## License
 
