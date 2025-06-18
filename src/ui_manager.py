@@ -64,7 +64,6 @@ class UIManager:
             "IDLE": ('green', 'white'),
             "LOADING_MODEL": ('gray', 'yellow'),
             "RECORDING": ('red', 'white'),
-            "SAVING": ('orange', 'white'),
             "TRANSCRIBING": ('blue', 'white'),
             "ERROR_MODEL": ('black', 'red'),
             "ERROR_AUDIO": ('black', 'red'),

@@ -35,6 +35,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
 *   **Remove trechos silenciosos de forma automática** por meio do Silero VAD.
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
+*   **Gerenciamento Simplificado de Estados:** o antigo estado "SAVING" foi removido por não haver funcionalidade associada.
 
 ## System Architecture
 
