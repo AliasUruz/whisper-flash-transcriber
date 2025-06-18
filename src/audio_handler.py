@@ -1,7 +1,5 @@
 import sounddevice as sd
 import numpy as np
-import wave
-import queue
 import threading
 import logging
 import time
@@ -35,6 +33,10 @@ class AudioHandler:
         self.vad_threshold = self.config_manager.get("vad_threshold")
         self.vad_silence_duration = self.config_manager.get("vad_silence_duration")
         self.vad_manager = VADManager(threshold=self.vad_threshold) if self.use_vad else None
+        if self.use_vad and self.vad_manager and not self.vad_manager.enabled:
+            logging.error("VAD desativado: modelo n\u00e3o encontrado.")
+            self.use_vad = False
+            self.vad_manager = None
         self._vad_silence_counter = 0.0
 
     def _audio_callback(self, indata, frames, time_data, status):
@@ -267,6 +269,10 @@ class AudioHandler:
                 self.vad_manager = VADManager(threshold=self.vad_threshold)
             else:
                 self.vad_manager.threshold = self.vad_threshold
+            if not self.vad_manager.enabled:
+                logging.error("VAD desativado: modelo n\u00e3o encontrado.")
+                self.use_vad = False
+                self.vad_manager = None
         else:
             self.vad_manager = None
 

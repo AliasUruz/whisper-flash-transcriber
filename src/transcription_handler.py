@@ -1,23 +1,20 @@
 import logging
-import time
 import threading
 import torch
 from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
-from .gemini_api import GeminiAPI # Assumindo que está na raiz ou em path acessível
 import numpy as np # Necessário para o audio_input
 
 # Importar constantes de configuração
 from .config_manager import (
-    DEFAULT_CONFIG, BATCH_SIZE_CONFIG_KEY, GPU_INDEX_CONFIG_KEY,
+    BATCH_SIZE_CONFIG_KEY, GPU_INDEX_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY, MANUAL_BATCH_SIZE_CONFIG_KEY, # Novos
     TEXT_CORRECTION_ENABLED_CONFIG_KEY, TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
     OPENROUTER_API_KEY_CONFIG_KEY, OPENROUTER_MODEL_CONFIG_KEY,
-    GEMINI_API_KEY_CONFIG_KEY, GEMINI_MODEL_CONFIG_KEY,
+    GEMINI_API_KEY_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY # Nova constante
 )
-from .audio_handler import AUDIO_SAMPLE_RATE # Importar SAMPLE_RATE
 
 class TranscriptionHandler:
     def __init__(self, config_manager, gemini_api_client, on_model_ready_callback, on_model_error_callback, on_transcription_result_callback, on_agent_result_callback, on_segment_transcribed_callback):
@@ -174,7 +171,6 @@ class TranscriptionHandler:
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
 
     def _load_model_task(self):
-        load_start_time = time.time()
         # Removido: model_loaded_successfully = False
         # Removido: error_message = "Unknown error during model load."
         try:
@@ -241,7 +237,6 @@ class TranscriptionHandler:
             self.transcription_in_progress = True
 
         # Calcular a duração da gravação
-        audio_duration = len(audio_input) / AUDIO_SAMPLE_RATE
         
 
         text_result = None

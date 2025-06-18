@@ -38,14 +38,13 @@ app_core_instance = None
 ui_manager_instance = None
 
 def on_exit_app_enhanced(*_):
-    global app_core_instance, ui_manager_instance
     logging.info("Saída solicitada pelo ícone da bandeja.")
     if app_core_instance:
         app_core_instance.shutdown()
     if ui_manager_instance and ui_manager_instance.tray_icon:
         ui_manager_instance.tray_icon.stop()
     main_tk_root.quit()
-    os._exit(0) # Força o encerramento do processo Python
+    sys.exit(0)  # Permite execução de handlers registrados em atexit
 
 if __name__ == "__main__":
     atexit.register(lambda: logging.info("Aplicação encerrada."))
