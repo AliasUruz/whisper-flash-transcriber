@@ -44,7 +44,7 @@ def on_exit_app_enhanced(*_):
     if ui_manager_instance and ui_manager_instance.tray_icon:
         ui_manager_instance.tray_icon.stop()
     main_tk_root.quit()
-    os._exit(0) # Força o encerramento do processo Python
+    sys.exit(0)  # Permite execução de handlers registrados em atexit
 
 if __name__ == "__main__":
     atexit.register(lambda: logging.info("Aplicação encerrada."))
