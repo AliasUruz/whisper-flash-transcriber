@@ -1,7 +1,6 @@
 import logging
 import numpy as np
 import onnxruntime
-import torch
 from pathlib import Path
 
 # Construir um caminho absoluto para o modelo ONNX, relativo a este arquivo.
@@ -47,7 +46,7 @@ class VADManager:
             audio_chunk = audio_chunk.mean(axis=1)
 
         ort_inputs = {
-            "input": torch.from_numpy(audio_chunk).unsqueeze(0).numpy(),
+            "input": np.expand_dims(audio_chunk, 0),
             "state": self._state,
             "sr": np.array([self.sr], dtype=np.int64),
         }
