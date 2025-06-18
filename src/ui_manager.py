@@ -12,6 +12,7 @@ from .config_manager import (
     SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
     GEMINI_MODEL_OPTIONS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
+    DEFAULT_CONFIG,
 )
 
 from .utils.tooltip import Tooltip
@@ -288,6 +289,59 @@ class UIManager:
                     )
                     self._close_settings_window() # Call class method
 
+                def restore_defaults():
+                    if not messagebox.askyesno(
+                        "Restore Defaults",
+                        "Are you sure you want to restore all settings to their default values?",
+                        parent=settings_win,
+                    ):
+                        return
+
+                    self.core_instance_ref.apply_settings_from_external(**DEFAULT_CONFIG)
+
+                    auto_paste_var.set(DEFAULT_CONFIG["auto_paste"])
+                    mode_var.set(DEFAULT_CONFIG["record_mode"])
+                    detected_key_var.set(DEFAULT_CONFIG["record_key"].upper())
+                    agent_key_var.set(DEFAULT_CONFIG["agent_key"].upper())
+                    agent_model_var.set(DEFAULT_CONFIG["gemini_agent_model"])
+                    hotkey_stability_service_enabled_var.set(DEFAULT_CONFIG["hotkey_stability_service_enabled"])
+                    min_transcription_duration_var.set(DEFAULT_CONFIG["min_transcription_duration"])
+                    sound_enabled_var.set(DEFAULT_CONFIG["sound_enabled"])
+                    sound_frequency_var.set(str(DEFAULT_CONFIG["sound_frequency"]))
+                    sound_duration_var.set(str(DEFAULT_CONFIG["sound_duration"]))
+                    sound_volume_var.set(DEFAULT_CONFIG["sound_volume"])
+                    text_correction_enabled_var.set(DEFAULT_CONFIG["text_correction_enabled"])
+                    text_correction_service_var.set(DEFAULT_CONFIG["text_correction_service"])
+                    openrouter_api_key_var.set(DEFAULT_CONFIG["openrouter_api_key"])
+                    openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
+                    gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
+                    gemini_model_var.set(DEFAULT_CONFIG["gemini_model"])
+                    gemini_prompt_correction_textbox.delete("1.0", "end")
+                    gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG["gemini_prompt"])
+                    agentico_prompt_textbox.delete("1.0", "end")
+                    agentico_prompt_textbox.insert("1.0", DEFAULT_CONFIG["prompt_agentico"])
+                    gemini_models_textbox.delete("1.0", "end")
+                    gemini_models_textbox.insert("1.0", "\n".join(DEFAULT_CONFIG["gemini_model_options"]))
+                    batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
+
+                    if DEFAULT_CONFIG["gpu_index"] == -1:
+                        gpu_selection_var.set("Force CPU")
+                    else:
+                        found = "Auto-select (Recommended)"
+                        for dev in available_devices:
+                            if dev.startswith(f"GPU {DEFAULT_CONFIG['gpu_index']}"):
+                                found = dev
+                                break
+                        gpu_selection_var.set(found)
+
+                    use_vad_var.set(DEFAULT_CONFIG["use_vad"])
+                    vad_threshold_var.set(DEFAULT_CONFIG["vad_threshold"])
+                    vad_silence_duration_var.set(DEFAULT_CONFIG["vad_silence_duration"])
+                    save_audio_var.set(DEFAULT_CONFIG["save_audio_for_debug"])
+                    display_transcripts_var.set(DEFAULT_CONFIG["display_transcripts_in_terminal"])
+
+                    self.config_manager.save_config()
+
                 scrollable_frame = ctk.CTkScrollableFrame(settings_win, fg_color="transparent")
                 scrollable_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -505,10 +559,12 @@ class UIManager:
                 apply_button = ctk.CTkButton(button_frame, text="Apply and Close", command=apply_settings)
                 apply_button.pack(side="right", padx=5)
                 Tooltip(apply_button, "Save all settings and exit.")
-                
                 close_button = ctk.CTkButton(button_frame, text="Cancel", command=self._close_settings_window, fg_color="gray50")
                 close_button.pack(side="right", padx=5)
                 Tooltip(close_button, "Discard changes and exit.")
+
+                restore_button = ctk.CTkButton(button_frame, text="Restore Defaults", command=restore_defaults)
+                restore_button.pack(side="left", padx=5)
 
                 force_reregister_button = ctk.CTkButton(button_frame, text="Force Hotkey Re-registration", command=self.core_instance_ref.force_reregister_hotkeys)
                 force_reregister_button.pack(side="left", padx=5)
