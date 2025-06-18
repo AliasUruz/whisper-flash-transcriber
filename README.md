@@ -171,7 +171,7 @@ With your virtual environment activated, you can now install the libraries the a
     ```bash
     pip install -r requirements.txt
     ```
-    The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
+The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
 
 2.  **Optional: Install PyTorch with CUDA (For GPU Acceleration):**
     The `requirements.txt` includes a basic installation of PyTorch. However, if you have a compatible NVIDIA graphics card, you can significantly speed up the transcription process by installing a version of PyTorch that uses your GPU (CUDA).
@@ -185,6 +185,15 @@ With your virtual environment activated, you can now install the libraries the a
         ```
     *   This command will download and install the GPU-accelerated version of PyTorch. It's a large download. If you already installed the CPU version via `requirements.txt`, this command will upgrade it.
     *   If you do *not* have a compatible GPU or prefer not to use it, you can skip this step. The application will still work using your CPU, just slower.
+
+### Opcional: Baixar o modelo Silero VAD
+
+Para remover trechos silenciosos automaticamente é necessário o arquivo `silero_vad.onnx` na pasta `src/models/`.
+Caso ele não esteja presente, o aplicativo irá registrar um erro e prosseguir sem o VAD.
+
+1. Acesse <https://github.com/snakers4/silero-vad>.
+2. Baixe o arquivo `silero_vad.onnx` disponível no repositório.
+3. Copie o arquivo para a pasta `src/models/` deste projeto.
 
 ### Step 5: Run the Application
 
