@@ -10,7 +10,13 @@ import queue # Adicionado para queue.Full no shutdown
 from tkinter import messagebox # Adicionado para messagebox no _on_model_load_failed
 
 # Importar os novos módulos
-from .config_manager import ConfigManager, DEFAULT_CONFIG, REREGISTER_INTERVAL_SECONDS, HOTKEY_HEALTH_CHECK_INTERVAL
+from .config_manager import (
+    ConfigManager,
+    DEFAULT_CONFIG,
+    REREGISTER_INTERVAL_SECONDS,
+    HOTKEY_HEALTH_CHECK_INTERVAL,
+    DISPLAY_TRANSCRIPTS_KEY,
+)
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
@@ -94,7 +100,7 @@ class AppCore:
         self.hotkey_stability_service_enabled = self.config_manager.get("hotkey_stability_service_enabled") # Nova configuração unificada
         self.keyboard_library = self.config_manager.get("keyboard_library")
         self.min_record_duration = self.config_manager.get("min_record_duration")
-        self.display_transcripts_in_terminal = self.config_manager.get("display_transcripts_in_terminal")
+        self.display_transcripts_in_terminal = self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY)
         # ... e outras configurações que AppCore precisa diretamente
 
     # --- Callbacks de Módulos ---

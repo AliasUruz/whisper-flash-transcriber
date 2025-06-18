@@ -11,9 +11,13 @@ from tkinter import simpledialog # Adicionado para askstring
 
 # Importar constantes de configuração
 from .config_manager import (
-    DEFAULT_CONFIG, SETTINGS_WINDOW_GEOMETRY,
-    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
-    GEMINI_MODEL_OPTIONS_CONFIG_KEY
+    DEFAULT_CONFIG,
+    SETTINGS_WINDOW_GEOMETRY,
+    SERVICE_NONE,
+    SERVICE_OPENROUTER,
+    SERVICE_GEMINI,
+    GEMINI_MODEL_OPTIONS_CONFIG_KEY,
+    DISPLAY_TRANSCRIPTS_KEY,
 )
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
@@ -186,7 +190,7 @@ class UIManager:
                 vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
                 save_audio_var = ctk.BooleanVar(value=self.config_manager.get("save_audio_for_debug"))
-                display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get("display_transcripts_in_terminal"))
+                display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
                 gemini_prompt_correction_var = ctk.StringVar(value=self.config_manager.get("gemini_prompt"))
 
                 # GPU selection variable
