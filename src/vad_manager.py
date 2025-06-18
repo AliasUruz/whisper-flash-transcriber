@@ -12,25 +12,46 @@ class VADManager:
     """Gerencia a detecção de voz usando o modelo Silero."""
 
     def __init__(self, threshold: float = 0.5, sampling_rate: int = 16000):
-        """
-        Inicializa o VAD Manager. O caminho do modelo é determinado internamente
-        para garantir robustez.
-        """
+        """Inicializa o VAD Manager."""
+
+        self.threshold = threshold
+        self.sr = sampling_rate
+        self.enabled = False
+
+        if not MODEL_PATH.exists():
+            logging.error(
+                "Arquivo do modelo VAD ausente em '%s'. Recurso VAD desabilitado.",
+                MODEL_PATH,
+            )
+            self.session = None
+            return
+
         try:
-            # Garante que o caminho seja uma string para a sessão ONNX
             model_path_str = str(MODEL_PATH)
-            self.session = onnxruntime.InferenceSession(model_path_str)
+            # Seleciona automaticamente o provider, priorizando CUDA se disponível
+            available_providers = onnxruntime.get_available_providers()
+            if "CUDAExecutionProvider" in available_providers:
+                providers = ["CUDAExecutionProvider"]
+                logging.info("CUDAExecutionProvider detectado para o VAD.")
+            else:
+                providers = ["CPUExecutionProvider"]
+                logging.info("CUDAExecutionProvider indisponível; usando CPUExecutionProvider.")
+
+            self.session = onnxruntime.InferenceSession(
+                model_path_str,
+                providers=providers,
+            )
             self.threshold = threshold
             self.sr = sampling_rate
             self.reset_states()
-            logging.info(f"Modelo VAD carregado com sucesso de '{model_path_str}'.")
-        except FileNotFoundError:
-            logging.error(f"Arquivo do modelo VAD não encontrado no caminho esperado: {MODEL_PATH}")
-            logging.error("Certifique-se de que o arquivo 'silero_vad.onnx' existe em 'src/models/'.")
-            raise
+            logging.info(
+                "Modelo VAD carregado com sucesso de '%s'.", model_path_str
+            )
         except Exception as exc:
-            logging.error(f"Erro ao carregar o modelo VAD de '{MODEL_PATH}': {exc}", exc_info=True)
-            raise
+            logging.error(
+                "Erro ao carregar o modelo VAD de '%s': %s", MODEL_PATH, exc, exc_info=True
+            )
+            self.session = None
 
     def reset_states(self) -> None:
         """Reseta os estados internos do modelo."""
@@ -38,7 +59,12 @@ class VADManager:
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
 
     def is_speech(self, audio_chunk: np.ndarray) -> bool:
-        """Retorna True se o chunk contém fala."""
+        """Retorna ``True`` se o chunk contém fala."""
+
+        if self.session is None:
+            # VAD desabilitado – assume sempre haver fala para não cortar áudio
+            return True
+
         if not isinstance(audio_chunk, np.ndarray):
             raise TypeError("audio_chunk deve ser um np.ndarray")
         if audio_chunk.dtype != np.float32:

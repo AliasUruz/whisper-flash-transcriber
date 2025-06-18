@@ -33,8 +33,9 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   An intuitive GUI for managing all settings without editing files.
     *   Quickly switch between Gemini models directly from the tray menu.
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
-*   **Remove trechos silenciosos de forma automática** por meio do Silero VAD.
+*   **Remove trechos silenciosos de forma automática** por meio do Silero VAD. A inicialização do VAD usa `onnxruntime` com seleção automática de `CUDAExecutionProvider` quando disponível, garantindo funcionamento estável também em CPU (`CPUExecutionProvider`).
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
+*   **Gerenciamento Simplificado de Estados:** o antigo estado "SAVING" foi removido por não haver funcionalidade associada.
 
 ## System Architecture
 
@@ -171,7 +172,7 @@ With your virtual environment activated, you can now install the libraries the a
     ```bash
     pip install -r requirements.txt
     ```
-    The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
+The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
 
 2.  **Optional: Install PyTorch with CUDA (For GPU Acceleration):**
     The `requirements.txt` includes a basic installation of PyTorch. However, if you have a compatible NVIDIA graphics card, you can significantly speed up the transcription process by installing a version of PyTorch that uses your GPU (CUDA).
@@ -185,6 +186,9 @@ With your virtual environment activated, you can now install the libraries the a
         ```
     *   This command will download and install the GPU-accelerated version of PyTorch. It's a large download. If you already installed the CPU version via `requirements.txt`, this command will upgrade it.
     *   If you do *not* have a compatible GPU or prefer not to use it, you can skip this step. The application will still work using your CPU, just slower.
+
+3.  **Optional: Install onnxruntime-gpu (for VAD acceleration):**
+    O VAD usa a biblioteca **ONNX Runtime**. O `requirements.txt` instala a versão para CPU (`onnxruntime`), mas quem possui GPU compatível pode optar por instalar `onnxruntime-gpu` para acelerar a detecção de voz. A aplicação seleciona automaticamente `CUDAExecutionProvider` caso disponível; do contrário, usa `CPUExecutionProvider`.
 
 ### Step 5: Run the Application
 
@@ -283,7 +287,11 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
 4.  Push your changes to your fork.
 5.  Open a Pull Request from your fork to the original repository's `master` branch.
 6.  Describe your changes and why they should be included.
-7.  Execute `flake8 src/gemini_api.py src/openrouter_api.py` to check the lint.
+7.  Instale as dependências de desenvolvimento com:
+    ```bash
+    pip install -r requirements-dev.txt
+    ```
+8.  Execute `flake8 src/gemini_api.py src/openrouter_api.py` para verificar o lint.
 
 ## License
 

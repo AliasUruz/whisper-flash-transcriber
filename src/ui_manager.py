@@ -64,7 +64,6 @@ class UIManager:
             "IDLE": ('green', 'white'),
             "LOADING_MODEL": ('gray', 'yellow'),
             "RECORDING": ('red', 'white'),
-            "SAVING": ('orange', 'white'),
             "TRANSCRIBING": ('blue', 'white'),
             "ERROR_MODEL": ('black', 'red'),
             "ERROR_AUDIO": ('black', 'red'),
@@ -128,7 +127,7 @@ class UIManager:
             if state == "IDLE" and self.core_instance_ref:
                 tooltip += f" - Record: {self.core_instance_ref.record_key.upper()} - Agent: {self.core_instance_ref.agent_key.upper()}"
             elif state.startswith("ERROR") and self.core_instance_ref:
-                tooltip += f" - Check Logs/Settings"
+                tooltip += " - Check Logs/Settings"
             self.tray_icon.title = tooltip
             self.tray_icon.update_menu()
             logging.debug(f"Tray icon updated for state: {state}")
@@ -187,7 +186,6 @@ class UIManager:
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
                 save_audio_var = ctk.BooleanVar(value=self.config_manager.get("save_audio_for_debug"))
                 display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
-                gemini_prompt_correction_var = ctk.StringVar(value=self.config_manager.get("gemini_prompt"))
 
                 def update_text_correction_fields():
                     enabled = text_correction_enabled_var.get()
