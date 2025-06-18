@@ -128,22 +128,22 @@ You need to install two essential tools before setting up the application:
 Now that you have Python and Git installed, you can download the application code from GitHub.
 
 1.  **Open your terminal:** Open Command Prompt or PowerShell.
-2.  **Clone the repository:** Run the following command. This will download all the project files into a new folder named `Whisper-local-app` in your current location.
+2.  **Clone the repository:** Run the following command. This will download all the project files into a new folder named `whisper-flash-transcriber` in your current location.
     ```bash
-    git clone https://github.com/AliasUruz/Whisper-local-app.git
+    git clone https://github.com/AliasUruz/whisper-flash-transcriber.git
     ```
 
 3.  **Navigate to the project directory:** Change your current working directory in the terminal to the folder you just cloned:
     ```bash
-    cd Whisper-local-app
+    cd whisper-flash-transcriber
     ```
-    Your terminal prompt should now show that you are inside the `Whisper-local-app` folder.
+    Your terminal prompt should now show that you are inside the `whisper-flash-transcriber` folder.
 
 ### Step 3: Set up a Virtual Environment (Best Practice!)
 
 Setting up a virtual environment is highly recommended. It creates an isolated space for this project's Python libraries, preventing them from interfering with libraries used by other Python projects on your computer.
 
-1.  **Create the virtual environment:** While inside the `Whisper-local-app` directory in your terminal, run:
+1.  **Create the virtual environment:** While inside the `whisper-flash-transcriber` directory in your terminal, run:
     ```bash
     python -m venv venv
     ```
@@ -162,7 +162,7 @@ Setting up a virtual environment is highly recommended. It creates an isolated s
         ```bash
         source venv/bin/activate
         ```
-    After activation, your terminal prompt should change to include `(venv)` at the beginning, like `(venv) C:\path\to\Whisper-local-app>`. This indicates that the virtual environment is active.
+    After activation, your terminal prompt should change to include `(venv)` at the beginning, like `(venv) C:\path\to\whisper-flash-transcriber>`. This indicates that the virtual environment is active.
 
 ### Step 4: Install Application Dependencies
 
@@ -196,7 +196,7 @@ You are now ready to run the Whisper Transcription App!
 
 **Importante:** certifique-se de ter executado `pip install -r requirements.txt` antes de rodar o comando abaixo.
 
-1.  **Start the main script:** In your **activated virtual environment** within the `Whisper-local-app` directory, run:
+1.  **Start the main script:** In your **activated virtual environment** within the `whisper-flash-transcriber` directory, run:
     ```bash
     python src/main.py
     ```
@@ -302,4 +302,4 @@ This project is open-source and licensed under the MIT License. You can find the
 If you need help, encounter bugs, or have questions:
 
 1.  **Check the Troubleshooting section:** Review the common issues listed above.
-2.  **Open a GitHub Issue:** The best way to get support is to open a new issue on the repository's GitHub page: [https://github.com/AliasUruz/Whisper-local-app/issues](https://github.com/AliasUruz/whisper-flash-transcriber/issues). Please provide as much detail as possible about your problem, including your operating system, Python version, steps to reproduce the issue, and any error messages.
+2.  **Open a GitHub Issue:** The best way to get support is to open a new issue on the repository's GitHub page: [https://github.com/AliasUruz/whisper-flash-transcriber/issues](https://github.com/AliasUruz/whisper-flash-transcriber/issues). Please provide as much detail as possible about your problem, including your operating system, Python version, steps to reproduce the issue, and any error messages.
