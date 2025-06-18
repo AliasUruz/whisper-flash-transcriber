@@ -3,7 +3,13 @@ import threading
 import time
 from threading import RLock
 import atexit
-import pyautogui # Ainda necessário para _do_paste
+try:
+    import pyautogui  # Ainda necessário para _do_paste
+except ImportError as exc:
+    raise SystemExit(
+        "Erro: a biblioteca 'pyautogui' não está instalada. "
+        "Execute 'pip install -r requirements.txt' antes de executar o aplicativo."
+    ) from exc
 import pyperclip # Ainda necessário para _handle_transcription_result
 import numpy as np # Adicionado para np.ndarray no callback
 import queue # Adicionado para queue.Full no shutdown

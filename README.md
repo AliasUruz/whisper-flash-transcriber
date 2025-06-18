@@ -190,6 +190,8 @@ With your virtual environment activated, you can now install the libraries the a
 
 You are now ready to run the Whisper Transcription App!
 
+**Importante:** certifique-se de ter executado `pip install -r requirements.txt` antes de rodar o comando abaixo.
+
 1.  **Start the main script:** In your **activated virtual environment** within the `Whisper-local-app` directory, run:
     ```bash
     python src/main.py
