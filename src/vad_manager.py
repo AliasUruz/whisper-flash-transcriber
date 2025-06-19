@@ -16,6 +16,7 @@ class VADManager:
 
         self.threshold = threshold
         self.sr = sampling_rate
+        # Flag que indica se o VAD está pronto para uso
         self.enabled = False
 
         if not MODEL_PATH.exists():
@@ -41,6 +42,8 @@ class VADManager:
                 model_path_str,
                 providers=providers,
             )
+            # Se a inicialização foi bem-sucedida, habilita o VAD
+            self.enabled = True
             self.threshold = threshold
             self.sr = sampling_rate
             self.reset_states()
