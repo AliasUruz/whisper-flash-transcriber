@@ -316,8 +316,8 @@ class TranscriptionHandler:
                     not agent_mode
                     and text_result
                     and (
-                        not self.state_check_callback
-                        or self.state_check_callback()
+                        not self.is_state_transcribing_fn
+                        or self.is_state_transcribing_fn()
                     )
                 ):
                     self.on_transcription_result_callback(text_result, text_result)
@@ -338,7 +338,7 @@ class TranscriptionHandler:
                     logging.info(
                         f"Resposta recebida do modo agente: '{agent_response}'"
                     )
-                    if not self.state_check_callback or self.state_check_callback():
+                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
                         self.on_agent_result_callback(agent_response)
                     else:
                         logging.warning(
@@ -346,7 +346,7 @@ class TranscriptionHandler:
                         )
                 except Exception as e:
                     logging.error(f"Erro ao processar o comando do agente: {e}", exc_info=True)
-                    if not self.state_check_callback or self.state_check_callback():
+                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
                         self.on_agent_result_callback(text_result)  # Falha, retorna o texto original
                     else:
                         logging.warning(
