@@ -1,6 +1,9 @@
 import importlib.machinery
 import types
 from types import SimpleNamespace
+import os, sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 # Stub simples de torch para evitar importacoes pesadas
 fake_torch = types.ModuleType("torch")
