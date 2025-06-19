@@ -28,6 +28,8 @@ class TranscriptionHandler:
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
+        # Alias para manter compatibilidade com referências existentes
+        self.state_check_callback = is_state_transcribing_fn
         self.correction_cancel_event = threading.Event()
         self.transcription_cancel_event = threading.Event()
         self.transcription_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)

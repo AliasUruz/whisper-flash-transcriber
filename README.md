@@ -277,6 +277,11 @@ If `pip install -r requirements.txt` fails or the application doesn't run due to
 *   **CUDA Compatibility:** If you are trying to install the CUDA version, double-check that your NVIDIA driver and CUDA toolkit versions are compatible with the PyTorch version you are trying to install, according to the PyTorch website.
 *   **Internet Connection:** Ensure you have a stable internet connection, as PyTorch and other libraries are large downloads.
 
+### Erro "state_check_callback"
+
+Caso ocorra a mensagem `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
+atualize para a versão mais recente. O atributo agora é inicializado corretamente em `TranscriptionHandler.__init__`.
+
 ## Contributing
 
 Contributions are welcome! If you have ideas for improvements, bug fixes, or new features, please:
