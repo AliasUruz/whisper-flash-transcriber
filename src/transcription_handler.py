@@ -29,6 +29,8 @@ class TranscriptionHandler:
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
         self.correction_cancel_event = threading.Event()
+        self.transcription_cancel_event = threading.Event()
+        self.correction_in_progress = False
 
         self.pipe = None
         self.transcription_in_progress = False
@@ -147,6 +149,7 @@ class TranscriptionHandler:
     def _async_text_correction(self, text: str, service: str, cancel_event: threading.Event) -> None:
         """Corrige o texto de forma assíncrona com timeout e verificação de cancelamento."""
         corrected = text
+        self.correction_in_progress = True
         def _call():
             if service == SERVICE_GEMINI:
                 return self._correct_text_with_gemini(text)
@@ -165,6 +168,7 @@ class TranscriptionHandler:
                 except Exception as exc:
                     logging.error(f"Erro ao corrigir texto: {exc}")
         finally:
+            self.correction_in_progress = False
             if not cancel_event.is_set() and self.is_state_transcribing_fn and self.is_state_transcribing_fn():
                 if self.config_manager.get("save_audio_for_debug"):
                     logging.info(f"Transcrição corrigida: {corrected}")
@@ -187,9 +191,21 @@ class TranscriptionHandler:
     def start_model_loading(self):
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
 
+    def cancel_transcription(self):
+        """Cancela a transcrição em andamento."""
+        self.transcription_cancel_event.set()
+
+    def is_transcription_running(self) -> bool:
+        """Indica se há transcrição em andamento."""
+        return self.transcription_in_progress
+
     def cancel_text_correction(self):
         """Cancela a correção de texto em andamento."""
         self.correction_cancel_event.set()
+
+    def is_text_correction_running(self) -> bool:
+        """Indica se há correção de texto em andamento."""
+        return self.correction_in_progress
 
     def _load_model_task(self):
         # Removido: model_loaded_successfully = False
@@ -256,6 +272,7 @@ class TranscriptionHandler:
                 logging.warning("Transcrição já em andamento, ignorando nova solicitação.")
                 return
             self.transcription_in_progress = True
+        self.transcription_cancel_event.clear()
 
         # Calcular a duração da gravação
         
@@ -303,6 +320,11 @@ class TranscriptionHandler:
         finally:
             with self.transcription_lock:
                 self.transcription_in_progress = False
+
+            if self.transcription_cancel_event.is_set():
+                logging.info("Transcrição cancelada. Resultado descartado.")
+                self.transcription_cancel_event.clear()
+                return
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
                 logging.info(f"Transcrição bruta: {text_result}")
