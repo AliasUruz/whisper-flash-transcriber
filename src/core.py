@@ -517,6 +517,13 @@ class AppCore:
     def is_correction_running(self) -> bool:
         return self.transcription_handler.is_text_correction_running()
 
+    def cancel_recording_and_corrections(self):
+        """Interrompe a gravação e cancela transcrições e correções em andamento."""
+        self.stop_recording_if_needed()
+        self.cancel_transcription()
+        self.cancel_text_correction()
+        self._set_state(STATE_IDLE)
+
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
     def apply_settings_from_external(self, **kwargs):
         logging.info("AppCore: Applying new configuration from external source.")

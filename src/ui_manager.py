@@ -642,6 +642,17 @@ class UIManager:
                 default=True,
                 enabled=(is_recording or is_idle)
             ),
+        ]
+
+        if is_recording:
+            menu_items.append(
+                pystray.MenuItem(
+                    '🛑 Cancelar Transcrição e Correções',
+                    lambda: self.core_instance_ref.cancel_recording_and_corrections(),
+                )
+            )
+
+        menu_items.extend([
             pystray.MenuItem(
                 '⚙️ Settings',
                 lambda: self.main_tk_root.after(0, self.run_settings_gui), # Call on main thread
@@ -683,19 +694,9 @@ class UIManager:
                     )
                 )
             ),
-            pystray.MenuItem(
-                '🚫 Cancel Transcription',
-                lambda: self.core_instance_ref.cancel_transcription(),
-                enabled=self.core_instance_ref.is_transcription_running()
-            ),
-            pystray.MenuItem(
-                '⛔ Cancel Correction',
-                lambda: self.core_instance_ref.cancel_text_correction(),
-                enabled=self.core_instance_ref.is_correction_running()
-            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('❌ Exit', self.on_exit_app)
-        ]
+        ])
         return tuple(menu_items)
 
     def on_exit_app(self, *_):
