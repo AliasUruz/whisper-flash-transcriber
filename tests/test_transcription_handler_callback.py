@@ -1,30 +1,15 @@
 import importlib.machinery
 import types
-from types import SimpleNamespace
-import os, sys
-from unittest.mock import MagicMock
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+import concurrent.futures
 
-# Stub simples de torch para evitar importacoes pesadas
+# Stub simples de torch
 fake_torch = types.ModuleType("torch")
 fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
 fake_torch.__version__ = "0.0"
-fake_torch.cuda = SimpleNamespace(is_available=lambda: False)
+fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
 
-import sys  # noqa: E402
+import sys
 sys.modules["torch"] = fake_torch
-
-fake_transformers = types.ModuleType("transformers")
-fake_transformers.pipeline = MagicMock()
-fake_transformers.AutoProcessor = MagicMock()
-fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
-sys.modules["transformers"] = fake_transformers
-
-fake_requests = types.ModuleType("requests")
-sys.modules["requests"] = fake_requests
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.transcription_handler import TranscriptionHandler
 from src.config_manager import (
@@ -67,23 +52,37 @@ class DummyConfig:
         return self.data.get(key)
 
 
-# Funções de callback dummy
-
-def noop(*_a, **_k):
-    return None
+noop = lambda *a, **k: None
 
 
-def test_state_check_callback_attribute():
+class DummyPipe:
+    def __call__(self, *a, **k):
+        return {"text": "dummy"}
+
+
+def test_transcription_task_handles_missing_callback(monkeypatch):
     cfg = DummyConfig()
+    results = []
+
+    def result_callback(text, original):
+        results.append(text)
+
     handler = TranscriptionHandler(
         cfg,
         gemini_api_client=None,
         on_model_ready_callback=noop,
         on_model_error_callback=noop,
-        on_transcription_result_callback=noop,
+        on_transcription_result_callback=result_callback,
         on_agent_result_callback=noop,
-        on_segment_transcribed_callback=noop,
-        is_state_transcribing_fn=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: True,
     )
-    assert hasattr(handler, "state_check_callback")
-    assert handler.state_check_callback is handler.is_state_transcribing_fn
+    handler.pipe = DummyPipe()
+    handler.transcription_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+    monkeypatch.setattr(handler, "_get_dynamic_batch_size", lambda: 1)
+    monkeypatch.setattr(handler, "_async_text_correction", lambda text, service, ev: result_callback(text, text))
+
+    handler._transcription_task(None, agent_mode=False)
+
+    assert results == ["dummy"]
