@@ -738,6 +738,11 @@ class AppCore:
             if self.transcription_handler.transcription_in_progress:
                 logging.warning("Shutting down while transcription is in progress. Transcription may not complete.")
 
+        try:
+            self.transcription_handler.shutdown()
+        except Exception as e:
+            logging.error(f"Error shutting down TranscriptionHandler executor: {e}")
+
         if self.reregister_timer_thread and self.reregister_timer_thread.is_alive():
             self.reregister_timer_thread.join(timeout=1.5)
         if self.health_check_thread and self.health_check_thread.is_alive():
