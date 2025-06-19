@@ -683,6 +683,16 @@ class UIManager:
                     )
                 )
             ),
+            pystray.MenuItem(
+                '🚫 Cancel Transcription',
+                lambda: self.core_instance_ref.cancel_transcription(),
+                enabled=self.core_instance_ref.is_transcription_running()
+            ),
+            pystray.MenuItem(
+                '⛔ Cancel Correction',
+                lambda: self.core_instance_ref.cancel_text_correction(),
+                enabled=self.core_instance_ref.is_correction_running()
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('❌ Exit', self.on_exit_app)
         ]
