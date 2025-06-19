@@ -112,9 +112,9 @@ class AudioHandler:
         t = threading.Thread(target=_closer)
         t.start()
         finished_event.wait(timeout)
+        t.join(timeout)
         if t.is_alive():
-            logging.error("Timeout ao fechar InputStream.")
-        t.join(timeout=0)
+            logging.error("Thread de fechamento n\u00e3o terminou em %ss", timeout)
 
 
     def start_recording(self):
