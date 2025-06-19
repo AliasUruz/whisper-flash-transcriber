@@ -28,7 +28,11 @@ class TranscriptionHandler:
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
+        # Alias para manter compatibilidade com referências existentes
+        self.state_check_callback = is_state_transcribing_fn
         self.correction_cancel_event = threading.Event()
+        self.transcription_cancel_event = threading.Event()
+        self.correction_in_progress = False
 
         self.pipe = None
         self.transcription_in_progress = False
@@ -147,6 +151,7 @@ class TranscriptionHandler:
     def _async_text_correction(self, text: str, service: str, cancel_event: threading.Event) -> None:
         """Corrige o texto de forma assíncrona com timeout e verificação de cancelamento."""
         corrected = text
+        self.correction_in_progress = True
         def _call():
             if service == SERVICE_GEMINI:
                 return self._correct_text_with_gemini(text)
@@ -165,6 +170,7 @@ class TranscriptionHandler:
                 except Exception as exc:
                     logging.error(f"Erro ao corrigir texto: {exc}")
         finally:
+            self.correction_in_progress = False
             if not cancel_event.is_set() and self.is_state_transcribing_fn and self.is_state_transcribing_fn():
                 if self.config_manager.get("save_audio_for_debug"):
                     logging.info(f"Transcrição corrigida: {corrected}")
@@ -187,9 +193,21 @@ class TranscriptionHandler:
     def start_model_loading(self):
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
 
+    def cancel_transcription(self):
+        """Cancela a transcrição em andamento."""
+        self.transcription_cancel_event.set()
+
+    def is_transcription_running(self) -> bool:
+        """Indica se há transcrição em andamento."""
+        return self.transcription_in_progress
+
     def cancel_text_correction(self):
         """Cancela a correção de texto em andamento."""
         self.correction_cancel_event.set()
+
+    def is_text_correction_running(self) -> bool:
+        """Indica se há correção de texto em andamento."""
+        return self.correction_in_progress
 
     def _load_model_task(self):
         # Removido: model_loaded_successfully = False
@@ -256,9 +274,16 @@ class TranscriptionHandler:
                 logging.warning("Transcrição já em andamento, ignorando nova solicitação.")
                 return
             self.transcription_in_progress = True
+        self.transcription_cancel_event.clear()
 
-        # Calcular a duração da gravação
-        
+        self.transcription_future = self.transcription_executor.submit(self._transcription_task, audio_input, agent_mode)
+
+    def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+        if self.transcription_cancel_event.is_set():
+            with self.transcription_lock:
+                self.transcription_in_progress = False
+            logging.info("Transcrição cancelada antes do início do processamento.")
+            return
 
         text_result = None
         try:
@@ -266,15 +291,14 @@ class TranscriptionHandler:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
                 self.on_model_error_callback(error_message)
-                return # Retorna sem tentar transcrever
-            
+                return
+
             dynamic_batch_size = self._get_dynamic_batch_size()
             logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
 
-            # Forçar a detecção de idioma a cada chamada é mais robusto.
             generate_kwargs = {
                 "task": "transcribe",
-                "language": None  # Força a detecção automática do idioma
+                "language": None
             }
             result = self.pipe(
                 audio_input,
@@ -283,7 +307,7 @@ class TranscriptionHandler:
                 return_timestamps=False,
                 generate_kwargs=generate_kwargs
             )
-            
+
             if result and "text" in result:
                 text_result = result["text"].strip()
                 if not text_result:
@@ -297,17 +321,19 @@ class TranscriptionHandler:
         except Exception as e:
             logging.error(f"Erro durante a transcrição de segmento: {e}", exc_info=True)
             text_result = f"[Transcription Error: {e}]"
-            # Removido: self.on_model_error_callback(f"Erro de transcrição: {e}")
-            # O AppCore já lida com o resultado final, incluindo erros.
 
         finally:
             with self.transcription_lock:
                 self.transcription_in_progress = False
 
+            if self.transcription_cancel_event.is_set():
+                logging.info("Transcrição cancelada. Resultado descartado.")
+                self.transcription_cancel_event.clear()
+                return
+
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
                 logging.info(f"Transcrição bruta: {text_result}")
-            
-            # Verificação inicial para texto inválido ou erro de transcrição
+
             if not text_result or text_result == "[No speech detected]" or text_result.strip().startswith("[Transcription Error:"):
                 logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
                 if text_result and self.on_segment_transcribed_callback:
@@ -327,11 +353,9 @@ class TranscriptionHandler:
                     )
                 return
 
-            # A partir daqui, text_result é válido. Mostra a transcrição crua na UI.
             self.on_segment_transcribed_callback(text_result)
 
             if agent_mode:
-                # Lógica do Modo Agente
                 try:
                     logging.info(f"Enviando texto para o modo agente: '{text_result}'")
                     agent_response = self.gemini_client.get_agent_response(text_result)
@@ -353,17 +377,16 @@ class TranscriptionHandler:
                             "Estado mudou antes do resultado do agente. UI não será atualizada."
                         )
             else:
-                # Lança a correção de texto em thread separada
                 service = self._get_text_correction_service()
                 self.correction_cancel_event.clear()
-                threading.Thread(
+                self.correction_thread = threading.Thread(
                     target=self._async_text_correction,
                     args=(text_result, service, self.correction_cancel_event),
                     daemon=True,
                     name="TextCorrectionThread",
-                ).start()
+                )
+                self.correction_thread.start()
 
-            # Limpeza de cache da GPU sempre ao final
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 logging.debug("Cache da GPU limpo após tarefa de transcrição.")

@@ -465,9 +465,13 @@ class AppCore:
     def stop_recording(self, agent_mode=False):
         with self.recording_lock:
             if not self.audio_handler.is_recording: return
-        
+
         self.audio_handler.stop_recording()
-        
+
+        # Cancela qualquer transcrição ou correção pendente
+        self.cancel_transcription()
+        self.cancel_text_correction()
+
         # A janela de UI ao vivo será fechada pelo _handle_transcription_result
 
     def stop_recording_if_needed(self):
@@ -496,6 +500,19 @@ class AppCore:
                     self._log_status(f"Cannot start command: state {self.current_state}", error=True); return
         self.agent_mode_active = True
         self.start_recording()
+
+    # --- Cancelamentos e consultas ---
+    def cancel_transcription(self):
+        self.transcription_handler.cancel_transcription()
+
+    def cancel_text_correction(self):
+        self.transcription_handler.cancel_text_correction()
+
+    def is_transcription_running(self) -> bool:
+        return self.transcription_handler.is_transcription_running()
+
+    def is_correction_running(self) -> bool:
+        return self.transcription_handler.is_text_correction_running()
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
     def apply_settings_from_external(self, **kwargs):
