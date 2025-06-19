@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 # Garantir que o diretório src esteja no path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
-
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 def _run_with_vram(free_gb):
     free_bytes = int(free_gb * (1024 ** 3))
