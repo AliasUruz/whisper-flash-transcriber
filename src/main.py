@@ -43,8 +43,8 @@ def on_exit_app_enhanced(*_):
         app_core_instance.shutdown()
     if ui_manager_instance and ui_manager_instance.tray_icon:
         ui_manager_instance.tray_icon.stop()
-    main_tk_root.quit()
-    sys.exit(0)  # Permite execução de handlers registrados em atexit
+    # Agenda o encerramento do mainloop na thread principal sem gerar exceção
+    main_tk_root.after(0, main_tk_root.quit)
 
 if __name__ == "__main__":
     atexit.register(lambda: logging.info("Aplicação encerrada."))
