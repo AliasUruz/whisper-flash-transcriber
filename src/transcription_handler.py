@@ -353,7 +353,8 @@ class TranscriptionHandler:
                     )
                 return
 
-            self.on_segment_transcribed_callback(text_result)
+            if self.on_segment_transcribed_callback:
+                self.on_segment_transcribed_callback(text_result)
 
             if agent_mode:
                 try:
