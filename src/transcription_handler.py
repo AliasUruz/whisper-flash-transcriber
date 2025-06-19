@@ -37,6 +37,10 @@ class TranscriptionHandler:
         self.pipe = None
         self.transcription_in_progress = False
         self.transcription_lock = threading.RLock()
+        # Executor dedicado para a tarefa de transcrição em background
+        self.transcription_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1
+        )
 
         # Configurações de modelo e API (carregadas do config_manager)
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
@@ -391,3 +395,10 @@ class TranscriptionHandler:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 logging.debug("Cache da GPU limpo após tarefa de transcrição.")
+
+    def shutdown(self) -> None:
+        """Encerra o executor de transcrição."""
+        try:
+            self.transcription_executor.shutdown(wait=False)
+        except Exception as e:
+            logging.error(f"Erro ao encerrar o executor de transcrição: {e}")
