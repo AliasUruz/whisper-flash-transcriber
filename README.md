@@ -4,6 +4,20 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 
 ![Application Screenshot](image_1.png)
 
+## Overview
+
+This application was created to provide **fast and reliable transcriptions** in any Windows workflow. Unlike heavy or web-based solutions, it offers a straightforward experience optimized for CPU or GPU. The **Whisper** model was chosen for its **high recognition quality** and the efficiency it achieves when GPU accelerated, ensuring great accuracy even in long or moderately noisy recordings.
+
+### Optional Generative AI Integration
+
+Beyond transcription, you can enhance the text using **Google Gemini** or **OpenRouter**. Gemini excels at producing concise, contextual responses—perfect for quick corrections or summaries. OpenRouter offers a wide variety of models for tasks like **translation** or **rewriting**. Both services can be enabled or disabled as needed.
+
+### Design Decisions
+
+* **Background service:** implemented to work around hotkey issues on Windows, ensuring shortcut keys respond consistently.
+* **Silero VAD via `onnxruntime`:** removes silent segments before transcription and automatically selects `CUDAExecutionProvider` when available while remaining fully CPU compatible.
+* **Ease of use with high performance:** all settings are configured through a graphical interface with defaults tuned for quick results without complex adjustments.
+
 ## Table of Contents
 
 1.  [Features](#features)
@@ -33,9 +47,9 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   An intuitive GUI for managing all settings without editing files.
     *   Quickly switch between Gemini models directly from the tray menu.
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
-*   **Remove trechos silenciosos de forma automática** por meio do Silero VAD. A inicialização do VAD usa `onnxruntime` com seleção automática de `CUDAExecutionProvider` quando disponível, garantindo funcionamento estável também em CPU (`CPUExecutionProvider`).
+*   **Automatically remove silent sections** via Silero VAD. Initialization uses `onnxruntime` and automatically selects `CUDAExecutionProvider` when available, ensuring stable operation on CPU (`CPUExecutionProvider`).
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
-*   **Gerenciamento Simplificado de Estados:** o antigo estado "SAVING" foi removido por não haver funcionalidade associada.
+*   **Simplified State Management:** the old "SAVING" state was removed because no functionality relied on it.
 
 ## System Architecture
 
@@ -89,7 +103,7 @@ graph TD
 *   **`AudioHandler`**: Manages microphone input, recording, and sound feedback.
 *   **`TranscriptionHandler`**: Manages the Whisper model, runs the transcription pipeline, and coordinates with AI correction services.
 *   **`KeyboardHotkeyManager`**: Listens for and handles global hotkeys.
-*   ****`GeminiAPI` / `OpenRouterAPI`**: Clientes para interação com serviços externos de IA e correção de texto. Ambos expõem o método `reinitialize_client()` para recarregar chave e modelo em tempo de execução.
+*   **`GeminiAPI` / `OpenRouterAPI`:** Clients for interacting with external AI services. Both expose a `reinitialize_client()` method to reload key and model at runtime.
 
 ## Installation
 
@@ -188,13 +202,13 @@ The `pip` command is Python's package installer. The `-r requirements.txt` part 
     *   If you do *not* have a compatible GPU or prefer not to use it, you can skip this step. The application will still work using your CPU, just slower.
 
 3.  **Optional: Install onnxruntime-gpu (for VAD acceleration):**
-    O VAD usa a biblioteca **ONNX Runtime**. O `requirements.txt` instala a versão para CPU (`onnxruntime`), mas quem possui GPU compatível pode optar por instalar `onnxruntime-gpu` para acelerar a detecção de voz. A aplicação seleciona automaticamente `CUDAExecutionProvider` caso disponível; do contrário, usa `CPUExecutionProvider`.
+    The VAD uses the **ONNX Runtime** library. The `requirements.txt` file installs the CPU version (`onnxruntime`), but if you have a compatible GPU you can install `onnxruntime-gpu` to speed up voice detection. The application automatically selects `CUDAExecutionProvider` when available, otherwise it falls back to `CPUExecutionProvider`.
 
 ### Step 5: Run the Application
 
 You are now ready to run the Whisper Transcription App!
 
-**Importante:** certifique-se de ter executado `pip install -r requirements.txt` antes de rodar o comando abaixo.
+**Important:** make sure you have run `pip install -r requirements.txt` before executing the command below.
 
 1.  **Start the main script:** In your **activated virtual environment** within the `whisper-flash-transcriber` directory, run:
     ```bash
@@ -229,17 +243,17 @@ To access and change settings:
     *   **How to get a Google Gemini API Key:** Visit [https://makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey) and generate a new API key.
 *   **Model:** For text correction, choose one of the available models for the selected service (e.g., "deepseek/deepseek-chat-v3-0324:free" on OpenRouter or "gemini-2.5-flash" on Gemini).
 *   **Gemini Correction Prompt:** Customize the prompt sent to Gemini for text correction.
-*   **Prompt do Modo Agêntico:** Customize the prompt sent to Gemini when using "Agent Mode".
+*   **Agent Mode Prompt:** Customize the prompt sent to Gemini when using "Agent Mode".
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Audio for Debug:** If enabled, temporary audio recordings will be saved for debugging purposes.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
-*   **Use VAD:** ativa a remoção de silêncio, sem encerrar a gravação automaticamente.
-*   **VAD Threshold:** sensibilidade da detecção de voz.
-*   **VAD Silence Duration (s):** tempo máximo de pausa que será mantido; silêncios mais longos são cortados.
+*   **Use VAD:** enables silence removal without automatically stopping the recording.
+*   **VAD Threshold:** voice detection sensitivity.
+*   **VAD Silence Duration (s):** maximum pause length to keep; longer silences are trimmed.
 
-O usuário encerra a gravação manualmente.
+The user stops the recording manually.
 
 ### Displaying Transcripts in the Terminal
 
@@ -277,10 +291,7 @@ If `pip install -r requirements.txt` fails or the application doesn't run due to
 *   **CUDA Compatibility:** If you are trying to install the CUDA version, double-check that your NVIDIA driver and CUDA toolkit versions are compatible with the PyTorch version you are trying to install, according to the PyTorch website.
 *   **Internet Connection:** Ensure you have a stable internet connection, as PyTorch and other libraries are large downloads.
 
-### Erro "state_check_callback"
-
-Caso ocorra a mensagem `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
-atualize para a versão mais recente. O atributo agora é inicializado corretamente em `TranscriptionHandler.__init__`.
+If you see the message `AttributeError: 'TranscriptionHandler' object has no attribute state_check_callback`, update to the latest version. The attribute is now initialized correctly in `TranscriptionHandler.__init__`.
 
 ## Contributing
 
@@ -292,11 +303,11 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
 4.  Push your changes to your fork.
 5.  Open a Pull Request from your fork to the original repository's `master` branch.
 6.  Describe your changes and why they should be included.
-7.  Instale as dependências de desenvolvimento com:
+7.  Install the development dependencies with:
     ```bash
     pip install -r requirements-dev.txt
     ```
-8.  Execute `flake8 src/gemini_api.py src/openrouter_api.py` para verificar o lint.
+8.  Run `flake8 src/gemini_api.py src/openrouter_api.py` to check linting.
 
 ## License
 
