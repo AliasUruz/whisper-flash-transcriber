@@ -10,7 +10,7 @@ fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
 fake_torch.__version__ = "0.0"
 fake_torch.cuda = SimpleNamespace(is_available=lambda: False)
 
-import sys
+import sys  # noqa: E402
 sys.modules["torch"] = fake_torch
 
 fake_transformers = types.ModuleType("transformers")
@@ -66,7 +66,9 @@ class DummyConfig:
 
 
 # Funções de callback dummy
-noop = lambda *a, **k: None
+
+def noop(*_a, **_k):
+    return None
 
 
 def test_state_check_callback_attribute():

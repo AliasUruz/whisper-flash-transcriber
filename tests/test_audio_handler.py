@@ -20,7 +20,8 @@ sys.modules['sounddevice'] = fake_sd
 sys.modules['onnxruntime'] = fake_onnx
 sys.modules['torch'] = fake_torch
 
-from src.audio_handler import AudioHandler
+from src.audio_handler import AudioHandler  # noqa: E402
+
 
 class DummyConfig:
     def __init__(self):
@@ -34,13 +35,19 @@ class DummyConfig:
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
         }
+
     def get(self, key):
         return self.data.get(key)
+
 
 class AudioHandlerTest(unittest.TestCase):
     def setUp(self):
         self.config = DummyConfig()
-        self.handler = AudioHandler(self.config, lambda x: None, lambda x: None)
+
+        def noop(_):
+            return None
+
+        self.handler = AudioHandler(self.config, noop, noop)
 
     def test_stream_cleanup_on_portaudio_error(self):
         fake_sd.InputStream.side_effect = fake_sd.PortAudioError()
@@ -49,6 +56,7 @@ class AudioHandlerTest(unittest.TestCase):
             self.handler._record_audio_task()
             self.assertIsNone(self.handler.audio_stream)
             self.assertFalse(self.handler.stream_started)
+
 
 if __name__ == '__main__':
     unittest.main()
