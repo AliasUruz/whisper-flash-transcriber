@@ -154,8 +154,9 @@ class AudioHandler:
         if not self.is_recording:
             logging.warning("Gravação não está ativa para ser parada.")
             return False
-        
+
         self.is_recording = False
+        stream_was_started = self.stream_started
         self._stop_event.set()
 
         if self.use_vad and self.vad_manager:
@@ -168,7 +169,7 @@ class AudioHandler:
         if self._record_thread:
             self._record_thread.join(timeout=2)
 
-        if not self.stream_started:
+        if not stream_was_started:
             logging.warning("Stop recording called but audio stream never started. Ignoring data.")
             self.recording_data.clear()
             self.on_recording_state_change_callback("IDLE")

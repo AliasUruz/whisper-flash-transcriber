@@ -1,6 +1,7 @@
 import importlib.machinery
 import types
 import concurrent.futures
+from unittest.mock import MagicMock
 
 # Stub simples de torch
 fake_torch = types.ModuleType("torch")
@@ -10,6 +11,12 @@ fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
 
 import sys
 sys.modules["torch"] = fake_torch
+
+fake_transformers = types.ModuleType("transformers")
+fake_transformers.pipeline = MagicMock()
+fake_transformers.AutoProcessor = MagicMock()
+fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
+sys.modules["transformers"] = fake_transformers
 
 from src.transcription_handler import TranscriptionHandler
 from src.config_manager import (
