@@ -1,4 +1,5 @@
 import sys
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 import types
@@ -6,6 +7,8 @@ import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Módulos falsos para dependências nativas ausentes
 fake_sd = types.SimpleNamespace(
