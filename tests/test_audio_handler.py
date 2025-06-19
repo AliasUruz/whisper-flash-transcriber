@@ -3,6 +3,8 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 import types
+import time
+import numpy as np
 import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
@@ -60,6 +62,35 @@ class AudioHandlerTest(unittest.TestCase):
             self.handler._record_audio_task()
             self.assertIsNone(self.handler.audio_stream)
             self.assertFalse(self.handler.stream_started)
+
+    def test_start_and_stop_recording_success(self):
+        results = []
+
+        def on_ready(audio):
+            results.append(audio)
+
+        handler = AudioHandler(self.config, on_ready, lambda *_: None)
+
+        def fake_record_audio_task(self):
+            self.stream_started = True
+            while not self._stop_event.is_set() and self.is_recording:
+                self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
+                time.sleep(0.01)
+            self.stream_started = False
+            self._stop_event.clear()
+            self._record_thread = None
+
+        with patch.object(AudioHandler, '_record_audio_task', fake_record_audio_task):
+            with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
+                with patch('logging.warning') as mock_warn:
+                    started = handler.start_recording()
+                    time.sleep(0.05)
+                    stopped = handler.stop_recording()
+
+        self.assertTrue(started)
+        self.assertTrue(stopped)
+        self.assertTrue(len(results) == 1)
+        mock_warn.assert_not_called()
 
 
 if __name__ == '__main__':
