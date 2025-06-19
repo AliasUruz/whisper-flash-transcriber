@@ -8,11 +8,11 @@ fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
 fake_torch.__version__ = "0.0"
 fake_torch.cuda = SimpleNamespace(is_available=lambda: False)
 
-import sys
+import sys  # noqa: E402
 sys.modules["torch"] = fake_torch
 
-from src.transcription_handler import TranscriptionHandler
-from src.config_manager import (
+from src.transcription_handler import TranscriptionHandler  # noqa: E402
+from src.config_manager import (  # noqa: E402
     BATCH_SIZE_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY,
     MANUAL_BATCH_SIZE_CONFIG_KEY,
@@ -53,7 +53,9 @@ class DummyConfig:
 
 
 # Funções de callback dummy
-noop = lambda *a, **k: None
+
+def noop(*_a, **_k):
+    return None
 
 
 def test_state_check_callback_attribute():

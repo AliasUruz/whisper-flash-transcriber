@@ -1,17 +1,22 @@
 import logging
-from typing import Optional
 
 
 def select_batch_size(gpu_index: int, fallback: int = 4) -> int:
     """Calcula batch size dinâmico baseado na VRAM disponível."""
     try:
         import torch
-    except Exception as e:  # pragma: no cover - proteção caso torch não esteja instalado
-        logging.error(f"Torch indisponível: {e}. Usando valor de fallback: {fallback}")
+    except Exception as e:  # pragma: no cover - torch pode não estar instalado
+        logging.error(
+            "Torch indisponível: %s. Usando valor de fallback: %s",
+            e,
+            fallback,
+        )
         return fallback
 
     if not torch.cuda.is_available() or gpu_index < 0:
-        logging.info("GPU não disponível ou não selecionada, usando batch size de CPU (4).")
+        logging.info(
+            "GPU não disponível ou não selecionada, usando batch size de CPU"
+        )
         return fallback
 
     try:
@@ -20,7 +25,10 @@ def select_batch_size(gpu_index: int, fallback: int = 4) -> int:
         free_memory_gb = free_memory_bytes / (1024 ** 3)
         total_memory_gb = total_memory_bytes / (1024 ** 3)
         logging.info(
-            f"Verificando VRAM para GPU {gpu_index}: {free_memory_gb:.2f}GB livres de {total_memory_gb:.2f}GB."
+            "Verificando VRAM para GPU %s: %.2fGB livres de %.2fGB.",
+            gpu_index,
+            free_memory_gb,
+            total_memory_gb,
         )
         if free_memory_gb >= 10.0:
             bs = 32
@@ -32,11 +40,20 @@ def select_batch_size(gpu_index: int, fallback: int = 4) -> int:
             bs = 4
         else:
             bs = 2
-        logging.info(f"VRAM livre ({free_memory_gb:.2f}GB) -> Batch size dinâmico selecionado: {bs}")
+        logging.info(
+            "VRAM livre (%.2fGB) -> Batch size dinâmico selecionado: %s",
+            free_memory_gb,
+            bs,
+        )
         return bs
-    except Exception as e:  # pragma: no cover - captura erros ao consultar VRAM
+    except Exception as e:  # pragma: no cover - erro ao consultar VRAM
         logging.error(
-            f"Erro ao calcular batch size dinâmico: {e}. Usando valor padrão de fallback: {fallback}",
+            (
+                "Erro ao calcular batch size dinâmico: %s. "
+                "Usando valor padrão de fallback: %s"
+            ),
+            e,
+            fallback,
             exc_info=True,
         )
         return fallback
