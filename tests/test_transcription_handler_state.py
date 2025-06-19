@@ -1,6 +1,8 @@
 import importlib.machinery
 import types
 from types import SimpleNamespace
+import os
+from unittest.mock import MagicMock
 
 # Stub simples de torch para evitar importacoes pesadas
 fake_torch = types.ModuleType("torch")
@@ -10,6 +12,17 @@ fake_torch.cuda = SimpleNamespace(is_available=lambda: False)
 
 import sys
 sys.modules["torch"] = fake_torch
+
+fake_transformers = types.ModuleType("transformers")
+fake_transformers.pipeline = MagicMock()
+fake_transformers.AutoProcessor = MagicMock()
+fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
+sys.modules["transformers"] = fake_transformers
+
+fake_requests = types.ModuleType("requests")
+sys.modules["requests"] = fake_requests
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.transcription_handler import TranscriptionHandler
 from src.config_manager import (
