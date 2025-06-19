@@ -71,3 +71,4 @@ if __name__ == "__main__":
     logging.info("Iniciando o mainloop do Tkinter na thread principal.")
     main_tk_root.mainloop()
     logging.info("Mainloop do Tkinter finalizado. A aplicação será encerrada.")
+    sys.exit(0)
