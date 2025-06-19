@@ -466,11 +466,14 @@ class AppCore:
         with self.recording_lock:
             if not self.audio_handler.is_recording: return
 
-        self.audio_handler.stop_recording()
-
-        # Cancela qualquer transcrição ou correção pendente
+        # Cancela qualquer transcrição ou correção pendente ANTES de finalizar a
+        # gravação atual. Isso evita que o áudio recém-capturado seja afetado
+        # por eventos de cancelamento disparados após o envio do segmento para o
+        # TranscriptionHandler.
         self.cancel_transcription()
         self.cancel_text_correction()
+
+        self.audio_handler.stop_recording()
 
         # A janela de UI ao vivo será fechada pelo _handle_transcription_result
 
