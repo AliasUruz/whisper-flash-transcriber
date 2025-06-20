@@ -19,7 +19,18 @@ from .config_manager import (
 )
 
 class TranscriptionHandler:
-    def __init__(self, config_manager, gemini_api_client, on_model_ready_callback, on_model_error_callback, on_transcription_result_callback, on_agent_result_callback, on_segment_transcribed_callback, is_state_transcribing_fn):
+    def __init__(
+        self,
+        config_manager,
+        gemini_api_client,
+        on_model_ready_callback,
+        on_model_error_callback,
+        on_transcription_result_callback,
+        on_agent_result_callback,
+        on_segment_transcribed_callback,
+        is_state_transcribing_fn,
+        on_transcription_cancelled_callback=None,
+    ):
         self.config_manager = config_manager
         self.gemini_client = gemini_api_client # Instância da API Gemini injetada
         self.on_model_ready_callback = on_model_ready_callback
@@ -28,6 +39,7 @@ class TranscriptionHandler:
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
+        self.on_transcription_cancelled_callback = on_transcription_cancelled_callback
         # Alias para manter compatibilidade com referências existentes
         self.state_check_callback = is_state_transcribing_fn
         self.correction_cancel_event = threading.Event()
@@ -333,6 +345,12 @@ class TranscriptionHandler:
             if self.transcription_cancel_event.is_set():
                 logging.info("Transcrição cancelada. Resultado descartado.")
                 self.transcription_cancel_event.clear()
+                if self.on_transcription_cancelled_callback:
+                    try:
+                        self.on_transcription_cancelled_callback()
+                    except Exception as e:
+                        logging.error(
+                            f"Erro no callback de cancelamento: {e}")
                 return
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
