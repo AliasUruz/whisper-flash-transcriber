@@ -42,6 +42,7 @@ class TranscriptionHandler:
         self.on_transcription_cancelled_callback = on_transcription_cancelled_callback
         # Alias para manter compatibilidade com referências existentes
         self.state_check_callback = is_state_transcribing_fn
+        self.on_transcription_cancelled_callback = None # Novo callback para notificar cancelamento
         self.correction_cancel_event = threading.Event()
         self.transcription_cancel_event = threading.Event()
         self.correction_in_progress = False
@@ -212,6 +213,9 @@ class TranscriptionHandler:
     def cancel_transcription(self):
         """Cancela a transcrição em andamento."""
         self.transcription_cancel_event.set()
+        # Notifica o callback se ele existir
+        if self.on_transcription_cancelled_callback:
+            self.on_transcription_cancelled_callback()
 
     def is_transcription_running(self) -> bool:
         """Indica se há transcrição em andamento."""

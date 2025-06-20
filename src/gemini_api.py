@@ -110,8 +110,8 @@ class GeminiAPI:
                 # Não limpa a chave aqui para que o erro de chave inválida
                 # persista até ser corrigido
                 self.last_api_key = self.current_api_key
-                self.last_model_id = None
-                self.last_prompt = None
+                self.last_model_id = self.current_model_id
+                self.last_prompt = self.current_prompt
 
     def _execute_request(
         self,
