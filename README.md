@@ -4,6 +4,10 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 
 ![Application Screenshot](image_1.png)
 
+## Project Overview
+
+Whisper Transcription App captures audio from your microphone, transcribes it with OpenAI's Whisper model, and then pastes the resulting text into the active application. Optional AI services can refine the transcript for better grammar and punctuation. Everything runs locally on Windows with a small system-tray interface.
+
 ## Table of Contents
 
 1.  [Features](#features)
@@ -204,6 +208,10 @@ You are now ready to run the Whisper Transcription App!
 2.  **Application Window:** A graphical window should appear. This is the application's main interface.
 3.  **System Tray Icon:** The application will likely minimize to your Windows system tray (near the clock). You can usually interact with it by right-clicking the icon.
 
+### Step 6: Verify Your Installation
+
+With the application running, open a text editor such as Notepad, press your configured hotkey (default `F3`), speak a short phrase, and press the hotkey again. The transcribed text should appear in the editor. If you see the text and the tray icon changes color during recording, everything is working correctly.
+
 ## Configuration
 
 The application's settings are managed through its graphical interface and stored in two files: `config.json` (for general settings) and `secrets.json` (for sensitive API keys). These files are automatically created the first time you run `src/main.py`.
@@ -257,6 +265,14 @@ Once the application is running and configured:
 4.  **Press the Hotkey Again:** Press the *same* hotkey to stop recording.
 5.  **Wait for Transcription:** The application will process the audio. This might take a few moments depending on the length of the recording and whether you are using CPU or GPU for transcription. If text correction is enabled, it will also communicate with the API.
 6.  **Text Appears:** The transcribed (and corrected) text will automatically appear in the application window that was active when you stopped recording.
+
+### Usage Example
+
+1. Open Notepad.
+2. Press `F3` to start recording.
+3. Say "Hello world" into your microphone.
+4. Press `F3` again to stop recording.
+5. The words "Hello world" should be pasted into Notepad automatically.
 
 ## Troubleshooting
 
