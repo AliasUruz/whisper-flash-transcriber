@@ -67,7 +67,8 @@ class AppCore:
             on_transcription_result_callback=self._handle_transcription_result,
             on_agent_result_callback=self._handle_agent_result_final, # Usa o novo callback
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
-            is_state_transcribing_fn=self.is_state_transcribing
+            is_state_transcribing_fn=self.is_state_transcribing,
+            on_transcription_cancelled_callback=self._on_transcription_cancelled,
         )
         self.ui_manager = None # Será setado externamente pelo main.py
 
@@ -239,6 +240,14 @@ class AppCore:
             self._set_state(STATE_IDLE)
             if self.ui_manager:
                 self.ui_manager.close_live_transcription_window()
+
+    def _on_transcription_cancelled(self):
+        """Callback quando uma transcrição é cancelada pelo usuário."""
+        logging.info("AppCore: transcrição cancelada.")
+        self._set_state(STATE_IDLE)
+        if self.ui_manager:
+            self.ui_manager.close_live_transcription_window()
+        self.full_transcription = ""
 
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste

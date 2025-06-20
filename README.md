@@ -282,6 +282,11 @@ If `pip install -r requirements.txt` fails or the application doesn't run due to
 Caso ocorra a mensagem `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
 atualize para a versão mais recente. O atributo agora é inicializado corretamente em `TranscriptionHandler.__init__`.
 
+### Novo callback `on_transcription_cancelled_callback`
+
+Para desenvolvedores que instanciam manualmente o `TranscriptionHandler`, foi adicionado o parâmetro opcional `on_transcription_cancelled_callback`. Ele 
+é executado quando `cancel_transcription()` é chamado e o segmento ainda está em processamento, permitindo redefinir estados ou fechar janelas personalizadas.
+
 ## Contributing
 
 Contributions are welcome! If you have ideas for improvements, bug fixes, or new features, please:
