@@ -54,9 +54,11 @@ class GeminiAPI:
         self._load_model_from_config()
 
     def _load_model_from_config(self):
-        """
-        Carrega ou recarrega o modelo Gemini com base nas configurações atuais.
-        A chave da API é obtida da instância ou do ConfigManager.
+        """Recarrega o modelo Gemini quando chave ou modelo mudam.
+
+        A chave da API é obtida da instância ou do ``ConfigManager``. O prompt
+        é lido diretamente nos métodos públicos, portanto não participa do
+        critério de reinicialização.
         """
         # Prioriza a chave da API passada no construtor, depois a do config
         self.current_api_key = (
@@ -66,13 +68,14 @@ class GeminiAPI:
         self.current_model_id = self.config_manager.get('gemini_model')
         self.current_prompt = self.config_manager.get('gemini_prompt')
 
-        # Verifica se as configurações relevantes mudaram
-        if (
-            self.model is None
-            or self.current_api_key != self.last_api_key
+        # A reinicialização considera apenas chave e modelo. O prompt é lido a
+        # cada chamada pública, portanto não dispara reload.
+        config_changed = (
+            self.current_api_key != self.last_api_key
             or self.current_model_id != self.last_model_id
-            or self.current_prompt != self.last_prompt
-        ):
+        )
+
+        if self.model is None or config_changed:
 
             if not self.current_api_key or "SUA_CHAVE" in self.current_api_key:
                 logging.warning(
