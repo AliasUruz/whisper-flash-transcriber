@@ -42,7 +42,6 @@ class TranscriptionHandler:
         self.on_transcription_cancelled_callback = on_transcription_cancelled_callback
         # Alias para manter compatibilidade com referências existentes
         self.state_check_callback = is_state_transcribing_fn
-        self.on_transcription_cancelled_callback = None # Novo callback para notificar cancelamento
         self.correction_cancel_event = threading.Event()
         self.transcription_cancel_event = threading.Event()
         self.correction_in_progress = False
@@ -349,12 +348,6 @@ class TranscriptionHandler:
             if self.transcription_cancel_event.is_set():
                 logging.info("Transcrição cancelada. Resultado descartado.")
                 self.transcription_cancel_event.clear()
-                if self.on_transcription_cancelled_callback:
-                    try:
-                        self.on_transcription_cancelled_callback()
-                    except Exception as e:
-                        logging.error(
-                            f"Erro no callback de cancelamento: {e}")
                 return
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
