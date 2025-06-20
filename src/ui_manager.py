@@ -284,7 +284,7 @@ class UIManager:
                         new_gemini_api_key=gemini_api_key_to_apply,
                         new_gemini_model=gemini_model_to_apply,
                         new_gemini_prompt=gemini_prompt_correction_to_apply,
-                        new_prompt_agentico=agentico_prompt_to_apply,
+                        prompt_agentico=agentico_prompt_to_apply,
                         new_agent_model=model_to_apply,
                         new_gemini_model_options=new_models_list,
                         new_batch_size=batch_size_to_apply,

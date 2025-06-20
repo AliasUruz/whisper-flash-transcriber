@@ -535,7 +535,6 @@ class AppCore:
                 "new_gemini_api_key": "gemini_api_key", "new_gemini_model": "gemini_model",
                 "new_agent_model": "gemini_agent_model",
                 "new_gemini_prompt": "gemini_prompt",
-                "new_prompt_agentico": "prompt_agentico",
                 "new_batch_size": "batch_size", "new_gpu_index": "gpu_index",
                 "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
                 "new_min_transcription_duration": "min_transcription_duration",
