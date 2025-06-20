@@ -25,7 +25,7 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
-    "prompt_agentico": "Você é um assistente de IA que executa comandos de texto. O usuário fornecerá uma instrução seguida do texto a ser processado. Sua tarefa é executar a instrução sobre o texto e retornar APENAS o resultado final. Não adicione explicações, saudações ou qualquer texto extra. A instrução do usuário é a prioridade máxima. O idioma de saída deve corresponder ao idioma principal do texto fornecido.",
+    "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
     "gemini_prompt": """You are a speech-to-text correction specialist. Your task is to refine the following transcribed speech.
 Key instructions:
 - Remove self-corrections (when I say something wrong and then correct myself)
@@ -119,9 +119,6 @@ class ConfigManager:
                     loaded_config_from_file = json.load(f)
                 self._config_hash = self._compute_hash(loaded_config_from_file)
 
-                if "new_prompt_agentico" in loaded_config_from_file:
-                    logging.info("Removing obsolete 'new_prompt_agentico' key from config file.")
-                    loaded_config_from_file.pop("new_prompt_agentico", None)
                 if "vad_enabled" in loaded_config_from_file:
                     logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
                     loaded_config_from_file["use_vad"] = loaded_config_from_file.pop("vad_enabled")
