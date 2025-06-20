@@ -26,18 +26,15 @@ DEFAULT_CONFIG = {
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
     "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
-    "gemini_prompt": """You are a speech-to-text correction specialist. Your task is to refine the following transcribed speech.
+    "gemini_prompt": """You are a meticulous speech-to-text correction AI. Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below while preserving the original content and structure as closely as possible.
 Key instructions:
-- Remove self-corrections (when I say something wrong and then correct myself)
-- Focus on removing speech-specific redundancies (repeated words, filler phrases, false starts)
-- Make the text MUCH MORE FLUID AND COHERENT
-- Remove possible errors in speech
-- Maintain the speaker's emotional tone
-- Keep the text as fluid as possible (IMPORTANT!)
-- Preserve all language transitions (Portuguese/Spanish/English) exactly as they occur
-- Connect related thoughts that may be fragmented in the transcription
-- Maintain the core message and meaning, but fix speech errors and disfluencies
-Return only the improved text without explanations.
+- Correct punctuation, such as adding commas, periods, and question marks where appropriate.
+- Fix capitalization at the beginning of sentences.
+- Remove only obvious speech disfluencies like stutters (e.g., \"I-I mean\") and false starts, but preserve the natural flow of speech.
+- DO NOT summarize, paraphrase, or change the original meaning of the sentences.
+- DO NOT remove any content, even if it seems redundant.
+- Preserve all language transitions (e.g., Portuguese/English) exactly as they occur.
+- Return only the corrected text, with no additional comments or explanations.
 Transcribed speech: {text}""",
     "batch_size": 16, # Valor padrão para o modo automático
     "batch_size_mode": "auto", # Novo: 'auto' ou 'manual'
