@@ -15,7 +15,8 @@ from .config_manager import (
     SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
     OPENROUTER_API_KEY_CONFIG_KEY, OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
-    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY # Nova constante
+    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY, # Nova constante
+    SAVE_TEMP_RECORDINGS_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -188,7 +189,7 @@ class TranscriptionHandler:
         finally:
             self.correction_in_progress = False
             if not cancel_event.is_set() and self.is_state_transcribing_fn and self.is_state_transcribing_fn():
-                if self.config_manager.get("save_temp_recordings"):
+                if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
                     logging.info(f"Transcrição corrigida: {corrected}")
                 self.on_transcription_result_callback(corrected, text)
 
