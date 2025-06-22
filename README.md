@@ -219,7 +219,6 @@ To access and change settings:
 *   **Agent Hotkey:** A separate hotkey (default F4) to activate "Agent Mode".
 *   **Recording Mode:** Choose between "Toggle" (press to start, press to stop) or "Hold" (record while key is pressed).
 *   **Auto-Paste:** If enabled, transcribed text is automatically pasted into the last active window.
-*   **Min Transcription Duration (s):** Sets the minimum duration for an audio recording to be processed for transcription. Recordings shorter than this will be discarded.
 *   **Enable Hotkey Stability Service:** Activates a background service to improve hotkey responsiveness on Windows 11.
 *   **Sound Settings:** Configure sound feedback for recording start/stop (enable/disable, frequency, duration, volume).
 *   **Enable Text Correction:** Check this box if you want to use an external AI model (OpenRouter or Gemini) to improve the transcribed text.
@@ -233,14 +232,12 @@ To access and change settings:
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
-*   **Save Audio for Debug:** If enabled, temporary audio recordings will be saved for debugging purposes.
-*   **Save Temporary Recordings:** Keep the temporary `.wav` files after transcription for further review.
+*   **Save Temporary Recordings:** When enabled, a copy of your audio is saved as `temp_recording_<timestamp>.wav` until transcription finishes. The file is deleted automatically afterward.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
 *   **Use VAD:** enables silence removal without automatically stopping the recording.
 *   **VAD Threshold:** sensitivity of voice detection.
 *   **VAD Silence Duration (s):** maximum pause length to keep; longer silences are trimmed.
 
-The user stops recording manually.
 
 ### Displaying Transcripts in the Terminal
 
