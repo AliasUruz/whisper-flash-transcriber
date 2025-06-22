@@ -24,7 +24,6 @@ class AudioHandler:
         self.audio_stream = None
         self.sound_lock = threading.RLock()
         self.stream_started = False
-        self.save_temp_recordings = self.config_manager.get("save_temp_recordings")
         self.temp_file_path = None
 
         # Carregar configurações de som
@@ -304,7 +303,6 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
-        self.save_temp_recordings = self.config_manager.get("save_temp_recordings")
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_threshold = self.config_manager.get("vad_threshold")
