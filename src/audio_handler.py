@@ -313,6 +313,7 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+        self.save_temp_recordings = self.config_manager.get("save_audio_for_debug")
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_threshold = self.config_manager.get("vad_threshold")
