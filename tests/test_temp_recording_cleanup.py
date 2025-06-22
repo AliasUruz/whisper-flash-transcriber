@@ -51,7 +51,6 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
             self.on_recording_state_change_callback = on_recording_state_change_callback
             self.is_recording = False
             self.temp_file_path = None
-            self.save_temp_recordings = True
 
         def start_recording(self):
             self.is_recording = True
