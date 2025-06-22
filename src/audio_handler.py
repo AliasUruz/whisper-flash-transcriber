@@ -212,7 +212,6 @@ class AudioHandler:
                 sf.write(filename, full_audio, AUDIO_SAMPLE_RATE)
                 self.temp_file_path = filename
                 logging.info(f"Temporary recording saved to {filename}")
-                self.temp_file_path = filename
             except Exception as e:
                 logging.error(f"Failed to save temporary recording: {e}")
                 self.temp_file_path = None
