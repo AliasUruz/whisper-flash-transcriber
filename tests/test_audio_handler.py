@@ -117,11 +117,35 @@ class AudioHandlerTest(unittest.TestCase):
 
         filename = 'temp_recording_1111111111.wav'
         self.assertTrue(os.path.exists(filename))
+        self.assertEqual(handler.temp_file_path, filename)
 
         for f in glob.glob('temp_recording_*.wav'):
             os.remove(f)
 
         self.assertFalse(os.path.exists(filename))
+
+    def test_temp_recording_save_error(self):
+        self.config.data['save_temp_recordings'] = True
+        handler = AudioHandler(self.config, lambda *_: None, lambda *_: None)
+
+        def fake_record_audio_task(self):
+            self.stream_started = True
+            while not self._stop_event.is_set() and self.is_recording:
+                self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
+                time.sleep(0.01)
+            self.stream_started = False
+            self._stop_event.clear()
+            self._record_thread = None
+
+        with patch.object(AudioHandler, '_record_audio_task', fake_record_audio_task):
+            with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
+                with patch('time.time', return_value=2222222222):
+                    with patch('src.audio_handler.sf.write', side_effect=Exception('fail')):
+                        handler.start_recording()
+                        time.sleep(0.05)
+                        handler.stop_recording()
+
+        self.assertIsNone(handler.temp_file_path)
 
 
 if __name__ == '__main__':
