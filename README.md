@@ -232,7 +232,7 @@ To access and change settings:
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
-*   **Save Temporary Recordings:** When enabled, a copy of your audio is saved as `temp_recording_<timestamp>.wav` until transcription finishes. The file is deleted automatically afterward.
+*   **Save Temporary Recordings:** When enabled, the captured audio is stored as `temp_recording_<timestamp>.wav` in the application folder. This temporary file is automatically deleted once transcription completes.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
 *   **Use VAD:** enables silence removal without automatically stopping the recording.
 *   **VAD Threshold:** sensitivity of voice detection.
