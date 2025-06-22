@@ -209,6 +209,7 @@ class AudioHandler:
                 ts = int(time.time())
                 filename = f"temp_recording_{ts}.wav"
                 sf.write(filename, full_audio, AUDIO_SAMPLE_RATE)
+                self.temp_file_path = filename
                 logging.info(f"Temporary recording saved to {filename}")
                 self.temp_file_path = filename
             except Exception as e:
