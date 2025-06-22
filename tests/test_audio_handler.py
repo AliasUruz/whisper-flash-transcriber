@@ -28,6 +28,7 @@ sys.modules['onnxruntime'] = fake_onnx
 sys.modules['torch'] = fake_torch
 
 from src.audio_handler import AudioHandler  # noqa: E402
+from src.config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
 
 
 class DummyConfig:
@@ -41,7 +42,7 @@ class DummyConfig:
             'use_vad': False,
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
-            'save_temp_recordings': False,
+            SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 
     def get(self, key):
@@ -137,7 +138,7 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertIsNone(handler.temp_file_path)
 
     def test_temp_recording_save_error(self):
-        self.config.data['save_temp_recordings'] = True
+        self.config.data[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = True
         handler = AudioHandler(self.config, lambda *_: None, lambda *_: None)
 
         def fake_record_audio_task(self):

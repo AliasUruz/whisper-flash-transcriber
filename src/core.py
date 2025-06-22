@@ -21,6 +21,7 @@ from .config_manager import (
     REREGISTER_INTERVAL_SECONDS,
     HOTKEY_HEALTH_CHECK_INTERVAL,
     DISPLAY_TRANSCRIPTS_KEY,
+    SAVE_TEMP_RECORDINGS_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
@@ -551,7 +552,7 @@ class AppCore:
                 "new_batch_size": "batch_size", "new_gpu_index": "gpu_index",
                 "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
                 "new_min_transcription_duration": "min_transcription_duration",
-                "new_save_temp_recordings": "save_temp_recordings",
+                "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 "new_gemini_model_options": "gemini_model_options",
                 "new_use_vad": "use_vad",
                 "new_vad_threshold": "vad_threshold",
