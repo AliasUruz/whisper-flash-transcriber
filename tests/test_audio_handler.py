@@ -114,14 +114,17 @@ class AudioHandlerTest(unittest.TestCase):
                     handler.start_recording()
                     time.sleep(0.05)
                     handler.stop_recording()
+                    self.assertEqual(handler.temp_file_path, 'temp_recording_1111111111.wav')
 
         filename = 'temp_recording_1111111111.wav'
         self.assertTrue(os.path.exists(filename))
 
         for f in glob.glob('temp_recording_*.wav'):
             os.remove(f)
+        handler.temp_file_path = None
 
         self.assertFalse(os.path.exists(filename))
+        self.assertIsNone(handler.temp_file_path)
 
 
 if __name__ == '__main__':
