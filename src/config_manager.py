@@ -52,6 +52,7 @@ Transcribed speech: {text}""",
         "gemini-2.5-pro"
     ],
     "save_audio_for_debug": False,
+    "save_temp_recordings": False,
     "min_transcription_duration": 1.0 # Nova configuração
 }
 
@@ -69,6 +70,7 @@ BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY = "save_audio_for_debug"
+SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
@@ -184,6 +186,14 @@ class ConfigManager:
         # Flag para exibir transcrições brutas no log
         self.config[DISPLAY_TRANSCRIPTS_KEY] = bool(
             self.config.get(DISPLAY_TRANSCRIPTS_KEY, self.default_config[DISPLAY_TRANSCRIPTS_KEY])
+        )
+
+        # Persistência opcional de gravações temporárias
+        self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(
+            self.config.get(
+                SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+                self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
+            )
         )
     
         # Para gpu_index_specified e batch_size_specified
@@ -359,3 +369,12 @@ class ConfigManager:
 
     def set_display_transcripts_in_terminal(self, value: bool):
         self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = bool(value)
+
+    def get_save_temp_recordings(self):
+        return self.config.get(
+            SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+            self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
+        )
+
+    def set_save_temp_recordings(self, value: bool):
+        self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(value)

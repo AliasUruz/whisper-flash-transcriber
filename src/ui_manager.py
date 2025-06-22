@@ -185,6 +185,7 @@ class UIManager:
                 vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
                 save_audio_var = ctk.BooleanVar(value=self.config_manager.get("save_audio_for_debug"))
+                save_temp_recordings_var = ctk.BooleanVar(value=self.config_manager.get("save_temp_recordings"))
                 display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
 
                 def update_text_correction_fields():
@@ -247,6 +248,7 @@ class UIManager:
                     vad_threshold_to_apply = float(vad_threshold_var.get())
                     vad_silence_duration_to_apply = float(vad_silence_duration_var.get())
                     save_audio_for_debug_to_apply = save_audio_var.get()
+                    save_temp_recordings_to_apply = save_temp_recordings_var.get()
                     display_transcripts_to_apply = display_transcripts_var.get()
 
                     # Logic for converting UI to GPU index
@@ -292,6 +294,7 @@ class UIManager:
                         new_hotkey_stability_service_enabled=hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
                         new_min_transcription_duration=min_transcription_duration_to_apply,
                         new_save_audio_for_debug=save_audio_for_debug_to_apply,
+                        new_save_temp_recordings=save_temp_recordings_to_apply,
                         new_use_vad=use_vad_to_apply,
                         new_vad_threshold=vad_threshold_to_apply,
                         new_vad_silence_duration=vad_silence_duration_to_apply,
@@ -355,6 +358,7 @@ class UIManager:
                     vad_threshold_var.set(DEFAULT_CONFIG["vad_threshold"])
                     vad_silence_duration_var.set(DEFAULT_CONFIG["vad_silence_duration"])
                     save_audio_var.set(DEFAULT_CONFIG["save_audio_for_debug"])
+                    save_temp_recordings_var.set(DEFAULT_CONFIG["save_temp_recordings"])
                     display_transcripts_var.set(DEFAULT_CONFIG["display_transcripts_in_terminal"])
 
                     self.config_manager.save_config()
@@ -562,6 +566,12 @@ class UIManager:
                 save_audio_switch = ctk.CTkSwitch(save_audio_frame, text="Save Audio for Debug", variable=save_audio_var)
                 save_audio_switch.pack(side="left", padx=5)
                 Tooltip(save_audio_switch, "Store captured audio files for troubleshooting.")
+
+                temp_recordings_frame = ctk.CTkFrame(transcription_frame)
+                temp_recordings_frame.pack(fill="x", pady=5)
+                temp_recordings_switch = ctk.CTkSwitch(temp_recordings_frame, text="Save Temporary Recordings", variable=save_temp_recordings_var)
+                temp_recordings_switch.pack(side="left", padx=5)
+                Tooltip(temp_recordings_switch, "Keep temporary audio files after processing.")
 
                 display_transcripts_frame = ctk.CTkFrame(transcription_frame)
                 display_transcripts_frame.pack(fill="x", pady=5)
