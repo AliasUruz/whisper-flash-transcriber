@@ -212,8 +212,10 @@ class AudioHandler:
                 filename = f"temp_recording_{ts}.wav"
                 sf.write(filename, full_audio, AUDIO_SAMPLE_RATE)
                 logging.info(f"Temporary recording saved to {filename}")
+                self.temp_file_path = filename
             except Exception as e:
                 logging.error(f"Failed to save temporary recording: {e}")
+                self.temp_file_path = None
 
         self.start_time = None
         # Mudar o estado para TRANSCRIBING ANTES de enviar o áudio para processamento
