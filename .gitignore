@@ -11,7 +11,7 @@ __pycache__/
 
 # Arquivos temporários de áudio
 recording_*.wav
-temp_recording_*.wav
+temp_recording_*.wav # gravações temporárias
 
 # Arquivos de sistema
 .DS_Store
