@@ -3,6 +3,7 @@ import numpy as np
 import threading
 import logging
 import time
+import soundfile as sf
 from .vad_manager import VADManager # Assumindo que vad_manager.py está na raiz ou em um path acessível
 
 # Constantes de áudio (movidas de whisper_tkinter.py)
@@ -21,6 +22,8 @@ class AudioHandler:
         self.audio_stream = None
         self.sound_lock = threading.RLock()
         self.stream_started = False
+        self.save_temp_recordings = self.config_manager.get("save_audio_for_debug")
+        self.temp_file_path = None  # caminho do arquivo temporário salvo para depuração
 
         # Carregar configurações de som
         self.sound_enabled = self.config_manager.get("sound_enabled")
@@ -198,6 +201,12 @@ class AudioHandler:
                 # Se já for mono mas em formato 2D (n, 1), achata para 1D (n,)
                 logging.info("Áudio já é mono, achatando para formato 1D.")
                 full_audio = full_audio.flatten()
+
+        if self.save_temp_recordings:
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            self.temp_file_path = f"temp_recording_{ts}.wav"
+            # arquivo salvo apenas para fins de depuração de áudio bruto
+            sf.write(self.temp_file_path, full_audio, AUDIO_SAMPLE_RATE)
         
         self.start_time = None
         # Mudar o estado para TRANSCRIBING ANTES de enviar o áudio para processamento
@@ -288,6 +297,7 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+        self.save_temp_recordings = self.config_manager.get("save_audio_for_debug")
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_threshold = self.config_manager.get("vad_threshold")
