@@ -58,6 +58,12 @@ class AudioHandlerTest(unittest.TestCase):
 
         self.handler = AudioHandler(self.config, noop, noop)
 
+    def tearDown(self):
+        """Remove any temporary recordings created during tests."""
+        for f in glob.glob('temp_recording_*.wav'):
+            os.remove(f)
+        self.handler.temp_file_path = None
+
     def test_stream_cleanup_on_portaudio_error(self):
         fake_sd.InputStream.side_effect = fake_sd.PortAudioError()
         with patch('src.audio_handler.sd', fake_sd):
@@ -96,7 +102,8 @@ class AudioHandlerTest(unittest.TestCase):
         mock_warn.assert_not_called()
 
     def test_temp_recording_saved_and_cleanup(self):
-        self.config.data[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = True
+        """Garante que o arquivo temporário é salvo e removido ao final."""
+        self.config.data['save_temp_recordings'] = True
 
         handler = AudioHandler(self.config, lambda *_: None, lambda *_: None)
 
@@ -117,10 +124,12 @@ class AudioHandlerTest(unittest.TestCase):
                     handler.stop_recording()
                     self.assertEqual(handler.temp_file_path, 'temp_recording_1111111111.wav')
 
+        # Confere se o arquivo temporário foi criado corretamente
         filename = 'temp_recording_1111111111.wav'
         self.assertTrue(os.path.exists(filename))
         self.assertEqual(handler.temp_file_path, filename)
 
+        # Limpeza explícita de todos os arquivos temporários gerados
         for f in glob.glob('temp_recording_*.wav'):
             os.remove(f)
         handler.temp_file_path = None
