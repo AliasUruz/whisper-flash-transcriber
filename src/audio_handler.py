@@ -3,7 +3,9 @@ import numpy as np
 import threading
 import logging
 import time
-from .vad_manager import VADManager # Assumindo que vad_manager.py está na raiz ou em um path acessível
+import os
+import wave
+from .vad_manager import VADManager  # Assumindo que vad_manager.py está na raiz ou em um path acessível
 
 # Constantes de áudio (movidas de whisper_tkinter.py)
 AUDIO_SAMPLE_RATE = 16000
@@ -21,6 +23,8 @@ class AudioHandler:
         self.audio_stream = None
         self.sound_lock = threading.RLock()
         self.stream_started = False
+        self.save_audio_for_debug = self.config_manager.get("save_audio_for_debug")
+        self.temp_file_path = None
 
         # Carregar configurações de som
         self.sound_enabled = self.config_manager.get("sound_enabled")
@@ -28,6 +32,8 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+
+        self.save_audio_for_debug = self.config_manager.get("save_audio_for_debug")
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_threshold = self.config_manager.get("vad_threshold")
@@ -198,7 +204,26 @@ class AudioHandler:
                 # Se já for mono mas em formato 2D (n, 1), achata para 1D (n,)
                 logging.info("Áudio já é mono, achatando para formato 1D.")
                 full_audio = full_audio.flatten()
-        
+
+        self.temp_file_path = None
+        if self.save_audio_for_debug:
+            timestamp = int(time.time())
+            temp_filename = f"temp_recording_{timestamp}.wav"
+            try:
+                audio_int16 = (
+                    np.clip(full_audio, -1.0, 1.0) * (2**15 - 1)
+                ).astype(np.int16)
+                with wave.open(temp_filename, "wb") as wf:
+                    wf.setnchannels(AUDIO_CHANNELS)
+                    wf.setsampwidth(2)
+                    wf.setframerate(AUDIO_SAMPLE_RATE)
+                    wf.writeframes(audio_int16.tobytes())
+                self.temp_file_path = temp_filename
+                logging.info(f"Áudio salvo para depuração em {temp_filename}")
+            except Exception as e:
+                logging.error(f"Erro ao salvar áudio para depuração: {e}")
+                self.temp_file_path = None
+
         self.start_time = None
         # Mudar o estado para TRANSCRIBING ANTES de enviar o áudio para processamento
         self.on_recording_state_change_callback("TRANSCRIBING")
