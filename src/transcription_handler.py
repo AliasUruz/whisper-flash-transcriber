@@ -188,7 +188,7 @@ class TranscriptionHandler:
         finally:
             self.correction_in_progress = False
             if not cancel_event.is_set() and self.is_state_transcribing_fn and self.is_state_transcribing_fn():
-                if self.config_manager.get("save_audio_for_debug"):
+                if self.config_manager.get("save_temp_recordings"):
                     logging.info(f"Transcrição corrigida: {corrected}")
                 self.on_transcription_result_callback(corrected, text)
 

@@ -547,7 +547,7 @@ class AppCore:
                 "new_batch_size": "batch_size", "new_gpu_index": "gpu_index",
                 "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
                 "new_min_transcription_duration": "min_transcription_duration",
-                "new_save_audio_for_debug": "save_audio_for_debug",
+                "new_save_temp_recordings": "save_temp_recordings",
                 "new_gemini_model_options": "gemini_model_options",
                 "new_use_vad": "use_vad",
                 "new_vad_threshold": "vad_threshold",

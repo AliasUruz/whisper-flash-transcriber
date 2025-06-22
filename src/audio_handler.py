@@ -3,6 +3,7 @@ import numpy as np
 import threading
 import logging
 import time
+import soundfile as sf
 from .vad_manager import VADManager # Assumindo que vad_manager.py está na raiz ou em um path acessível
 
 # Constantes de áudio (movidas de whisper_tkinter.py)
@@ -198,7 +199,16 @@ class AudioHandler:
                 # Se já for mono mas em formato 2D (n, 1), achata para 1D (n,)
                 logging.info("Áudio já é mono, achatando para formato 1D.")
                 full_audio = full_audio.flatten()
-        
+
+        if self.config_manager.get("save_temp_recordings"):
+            try:
+                ts = int(time.time())
+                filename = f"temp_recording_{ts}.wav"
+                sf.write(filename, full_audio, AUDIO_SAMPLE_RATE)
+                logging.info(f"Temporary recording saved to {filename}")
+            except Exception as e:
+                logging.error(f"Failed to save temporary recording: {e}")
+
         self.start_time = None
         # Mudar o estado para TRANSCRIBING ANTES de enviar o áudio para processamento
         self.on_recording_state_change_callback("TRANSCRIBING")

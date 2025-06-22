@@ -233,7 +233,7 @@ To access and change settings:
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
-*   **Save Audio for Debug:** If enabled, temporary audio recordings will be saved for debugging purposes.
+*   **Save Temp Recordings:** If enabled, temporary audio recordings will be saved for debugging purposes.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
 *   **Use VAD:** enables silence removal without automatically stopping the recording.
 *   **VAD Threshold:** sensitivity of voice detection.
