@@ -3,9 +3,10 @@ import numpy as np
 import threading
 import logging
 import time
+import soundfile as sf
+from .vad_manager import VADManager # Assumindo que vad_manager.py está na raiz ou em um path acessível
 import os
 import wave
-from .vad_manager import VADManager  # Assumindo que vad_manager.py está na raiz ou em um path acessível
 
 # Constantes de áudio (movidas de whisper_tkinter.py)
 AUDIO_SAMPLE_RATE = 16000
@@ -205,24 +206,14 @@ class AudioHandler:
                 logging.info("Áudio já é mono, achatando para formato 1D.")
                 full_audio = full_audio.flatten()
 
-        self.temp_file_path = None
-        if self.save_audio_for_debug:
-            timestamp = int(time.time())
-            temp_filename = f"temp_recording_{timestamp}.wav"
+        if self.config_manager.get("save_temp_recordings"):
             try:
-                audio_int16 = (
-                    np.clip(full_audio, -1.0, 1.0) * (2**15 - 1)
-                ).astype(np.int16)
-                with wave.open(temp_filename, "wb") as wf:
-                    wf.setnchannels(AUDIO_CHANNELS)
-                    wf.setsampwidth(2)
-                    wf.setframerate(AUDIO_SAMPLE_RATE)
-                    wf.writeframes(audio_int16.tobytes())
-                self.temp_file_path = temp_filename
-                logging.info(f"Áudio salvo para depuração em {temp_filename}")
+                ts = int(time.time())
+                filename = f"temp_recording_{ts}.wav"
+                sf.write(filename, full_audio, AUDIO_SAMPLE_RATE)
+                logging.info(f"Temporary recording saved to {filename}")
             except Exception as e:
-                logging.error(f"Erro ao salvar áudio para depuração: {e}")
-                self.temp_file_path = None
+                logging.error(f"Failed to save temporary recording: {e}")
 
         self.start_time = None
         # Mudar o estado para TRANSCRIBING ANTES de enviar o áudio para processamento

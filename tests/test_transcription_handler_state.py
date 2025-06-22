@@ -61,6 +61,7 @@ class DummyConfig:
             "gemini_prompt": "",
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY: 1.0,
             DISPLAY_TRANSCRIPTS_KEY: False,
+            'save_temp_recordings': False,
         }
 
     def get(self, key):

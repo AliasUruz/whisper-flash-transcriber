@@ -51,7 +51,6 @@ Transcribed speech: {text}""",
         "gemini-2.5-flash",
         "gemini-2.5-pro"
     ],
-    "save_audio_for_debug": False,
     "save_temp_recordings": False,
     "min_transcription_duration": 1.0 # Nova configuração
 }
@@ -69,7 +68,6 @@ BATCH_SIZE_CONFIG_KEY = "batch_size" # Agora é o batch size padrão para o modo
 BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
-SAVE_AUDIO_FOR_DEBUG_CONFIG_KEY = "save_audio_for_debug"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"

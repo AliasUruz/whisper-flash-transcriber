@@ -1,5 +1,6 @@
 import sys
 import os
+import glob
 import unittest
 from unittest.mock import MagicMock, patch
 import types
@@ -40,6 +41,7 @@ class DummyConfig:
             'use_vad': False,
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
+            'save_temp_recordings': False,
         }
 
     def get(self, key):
@@ -92,23 +94,34 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertTrue(len(results) == 1)
         mock_warn.assert_not_called()
 
-    def test_temp_recording_saved(self):
-        config = DummyConfig()
-        config.data['save_audio_for_debug'] = True
-        handler = AudioHandler(config, lambda *_: None, lambda *_: None)
-        handler.is_recording = True
-        handler.start_time = time.time() - 1
-        handler.stream_started = True
-        handler.recording_data = [np.zeros((2, 1), dtype=np.float32)]
+    def test_temp_recording_saved_and_cleanup(self):
+        self.config.data['save_temp_recordings'] = True
 
-        with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
-            with patch('src.audio_handler.sf.write') as mock_write:
-                with patch('src.audio_handler.time.strftime', return_value='20240101_120000'):
+        handler = AudioHandler(self.config, lambda *_: None, lambda *_: None)
+
+        def fake_record_audio_task(self):
+            self.stream_started = True
+            while not self._stop_event.is_set() and self.is_recording:
+                self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
+                time.sleep(0.01)
+            self.stream_started = False
+            self._stop_event.clear()
+            self._record_thread = None
+
+        with patch.object(AudioHandler, '_record_audio_task', fake_record_audio_task):
+            with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
+                with patch('time.time', return_value=1111111111):
+                    handler.start_recording()
+                    time.sleep(0.05)
                     handler.stop_recording()
 
-        mock_write.assert_called_once()
-        expected = 'temp_recording_20240101_120000.wav'
-        self.assertEqual(handler.temp_file_path, expected)
+        filename = 'temp_recording_1111111111.wav'
+        self.assertTrue(os.path.exists(filename))
+
+        for f in glob.glob('temp_recording_*.wav'):
+            os.remove(f)
+
+        self.assertFalse(os.path.exists(filename))
 
 
 if __name__ == '__main__':
