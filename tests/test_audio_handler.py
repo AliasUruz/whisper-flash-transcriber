@@ -103,7 +103,7 @@ class AudioHandlerTest(unittest.TestCase):
 
     def test_temp_recording_saved_and_cleanup(self):
         """Garante que o arquivo temporário é salvo e removido ao final."""
-        self.config.data['save_temp_recordings'] = True
+        self.config.data[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = True
 
         handler = AudioHandler(self.config, lambda *_: None, lambda *_: None)
 
