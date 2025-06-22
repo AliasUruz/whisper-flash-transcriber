@@ -184,7 +184,7 @@ class UIManager:
                 use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
                 vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
-                save_audio_var = ctk.BooleanVar(value=self.config_manager.get("save_temp_recordings"))
+                save_temp_recordings_var = ctk.BooleanVar(value=self.config_manager.get("save_temp_recordings"))
                 display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
 
                 def update_text_correction_fields():
@@ -246,7 +246,7 @@ class UIManager:
                     use_vad_to_apply = use_vad_var.get()
                     vad_threshold_to_apply = float(vad_threshold_var.get())
                     vad_silence_duration_to_apply = float(vad_silence_duration_var.get())
-                    save_temp_recordings_to_apply = save_audio_var.get()
+                    save_temp_recordings_to_apply = save_temp_recordings_var.get()
                     display_transcripts_to_apply = display_transcripts_var.get()
 
                     # Logic for converting UI to GPU index
@@ -354,7 +354,7 @@ class UIManager:
                     use_vad_var.set(DEFAULT_CONFIG["use_vad"])
                     vad_threshold_var.set(DEFAULT_CONFIG["vad_threshold"])
                     vad_silence_duration_var.set(DEFAULT_CONFIG["vad_silence_duration"])
-                    save_audio_var.set(DEFAULT_CONFIG["save_temp_recordings"])
+                    save_temp_recordings_var.set(DEFAULT_CONFIG["save_temp_recordings"])
                     display_transcripts_var.set(DEFAULT_CONFIG["display_transcripts_in_terminal"])
 
                     self.config_manager.save_config()
@@ -557,11 +557,6 @@ class UIManager:
                 vad_silence_entry = ctk.CTkEntry(vad_params_frame, textvariable=vad_silence_duration_var, width=60)
                 vad_silence_entry.pack(side="left", padx=5)
                 Tooltip(vad_silence_entry, "Length of silence before a cut.")
-                save_audio_frame = ctk.CTkFrame(transcription_frame)
-                save_audio_frame.pack(fill="x", pady=5)
-                save_audio_switch = ctk.CTkSwitch(save_audio_frame, text="Save Audio for Debug", variable=save_audio_var)
-                save_audio_switch.pack(side="left", padx=5)
-                Tooltip(save_audio_switch, "Store captured audio files for troubleshooting.")
 
                 temp_recordings_frame = ctk.CTkFrame(transcription_frame)
                 temp_recordings_frame.pack(fill="x", pady=5)
