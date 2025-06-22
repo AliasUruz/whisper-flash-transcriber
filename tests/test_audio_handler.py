@@ -92,6 +92,24 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertTrue(len(results) == 1)
         mock_warn.assert_not_called()
 
+    def test_temp_recording_saved(self):
+        config = DummyConfig()
+        config.data['save_audio_for_debug'] = True
+        handler = AudioHandler(config, lambda *_: None, lambda *_: None)
+        handler.is_recording = True
+        handler.start_time = time.time() - 1
+        handler.stream_started = True
+        handler.recording_data = [np.zeros((2, 1), dtype=np.float32)]
+
+        with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
+            with patch('src.audio_handler.sf.write') as mock_write:
+                with patch('src.audio_handler.time.strftime', return_value='20240101_120000'):
+                    handler.stop_recording()
+
+        mock_write.assert_called_once()
+        expected = 'temp_recording_20240101_120000.wav'
+        self.assertEqual(handler.temp_file_path, expected)
+
 
 if __name__ == '__main__':
     unittest.main()
