@@ -234,7 +234,7 @@ To access and change settings:
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Audio for Debug:** If enabled, temporary audio recordings will be saved for debugging purposes.
-*   **Save Temp Recordings:** Toggle whether the app keeps temporary audio files generated during transcription.
+*   **Save Temporary Recordings:** Keep the temporary `.wav` files after transcription for further review.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
 *   **Use VAD:** enables silence removal without automatically stopping the recording.
 *   **VAD Threshold:** sensitivity of voice detection.
