@@ -563,6 +563,12 @@ class UIManager:
                 save_audio_switch.pack(side="left", padx=5)
                 Tooltip(save_audio_switch, "Store captured audio files for troubleshooting.")
 
+                temp_recordings_frame = ctk.CTkFrame(transcription_frame)
+                temp_recordings_frame.pack(fill="x", pady=5)
+                temp_recordings_switch = ctk.CTkSwitch(temp_recordings_frame, text="Save Temporary Recordings", variable=save_temp_recordings_var)
+                temp_recordings_switch.pack(side="left", padx=5)
+                Tooltip(temp_recordings_switch, "Keep temporary audio files after processing.")
+
                 display_transcripts_frame = ctk.CTkFrame(transcription_frame)
                 display_transcripts_frame.pack(fill="x", pady=5)
                 display_switch = ctk.CTkSwitch(display_transcripts_frame, text="Display Transcript in Terminal", variable=display_transcripts_var)

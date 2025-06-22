@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+import os
 from threading import RLock
 import atexit
 try:
@@ -211,6 +212,7 @@ class AppCore:
             self.ui_manager.close_live_transcription_window()
         logging.info(f"Texto final corrigido para copiar/colar: {final_text}")
         self.full_transcription = ""  # Reset para a próxima gravação
+        self._delete_temp_audio_file()
 
     def _handle_agent_result_final(self, agent_response_text: str):
         """
@@ -240,6 +242,7 @@ class AppCore:
             self._set_state(STATE_IDLE)
             if self.ui_manager:
                 self.ui_manager.close_live_transcription_window()
+            self._delete_temp_audio_file()
 
     def _on_transcription_cancelled(self):
         """Callback quando uma transcrição é cancelada pelo usuário."""
@@ -248,6 +251,7 @@ class AppCore:
         if self.ui_manager:
             self.ui_manager.close_live_transcription_window()
         self.full_transcription = ""
+        self._delete_temp_audio_file()
 
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
@@ -712,6 +716,16 @@ class AppCore:
                 logging.debug("Cleanup (startup): No old audio files found.")
         except Exception as e:
             logging.error(f"Error during startup audio file cleanup: {e}")
+
+    def _delete_temp_audio_file(self):
+        path = getattr(self.audio_handler, "temp_file_path", None)
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+                logging.info(f"Deleted temp audio file: {path}")
+            except OSError as e:
+                logging.warning(f"Could not delete temp audio file '{path}': {e}")
+        self.audio_handler.temp_file_path = None
 
     def shutdown(self):
         if self.shutting_down: return

@@ -185,6 +185,14 @@ class ConfigManager:
         self.config[DISPLAY_TRANSCRIPTS_KEY] = bool(
             self.config.get(DISPLAY_TRANSCRIPTS_KEY, self.default_config[DISPLAY_TRANSCRIPTS_KEY])
         )
+
+        # Persistência opcional de gravações temporárias
+        self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(
+            self.config.get(
+                SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+                self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
+            )
+        )
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -359,3 +367,12 @@ class ConfigManager:
 
     def set_display_transcripts_in_terminal(self, value: bool):
         self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = bool(value)
+
+    def get_save_temp_recordings(self):
+        return self.config.get(
+            SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+            self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
+        )
+
+    def set_save_temp_recordings(self, value: bool):
+        self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(value)
