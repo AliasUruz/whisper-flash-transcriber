@@ -5,6 +5,7 @@ import logging
 import time
 import soundfile as sf
 from .vad_manager import VADManager # Assumindo que vad_manager.py está na raiz ou em um path acessível
+from .config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
 import os
 import wave
 
@@ -24,6 +25,7 @@ class AudioHandler:
         self.audio_stream = None
         self.sound_lock = threading.RLock()
         self.stream_started = False
+        self.save_temp_recordings = self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY)
         self.temp_file_path = None
 
         # Carregar configurações de som
@@ -203,7 +205,7 @@ class AudioHandler:
                 logging.info("Áudio já é mono, achatando para formato 1D.")
                 full_audio = full_audio.flatten()
 
-        if self.config_manager.get("save_temp_recordings"):
+        if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
             try:
                 ts = int(time.time())
                 filename = f"temp_recording_{ts}.wav"
@@ -303,6 +305,7 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+        self.save_temp_recordings = self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY)
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_threshold = self.config_manager.get("vad_threshold")

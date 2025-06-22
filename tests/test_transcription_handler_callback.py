@@ -32,6 +32,7 @@ from src.config_manager import (
     GEMINI_API_KEY_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
+    SAVE_TEMP_RECORDINGS_CONFIG_KEY,
 )
 
 
@@ -53,7 +54,7 @@ class DummyConfig:
             "gemini_prompt": "",
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY: 1.0,
             DISPLAY_TRANSCRIPTS_KEY: False,
-            'save_temp_recordings': False,
+            SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 
     def get(self, key):

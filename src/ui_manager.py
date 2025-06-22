@@ -13,6 +13,7 @@ from .config_manager import (
     GEMINI_MODEL_OPTIONS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
     DEFAULT_CONFIG,
+    SAVE_TEMP_RECORDINGS_CONFIG_KEY,
 )
 
 from .utils.tooltip import Tooltip
@@ -184,7 +185,7 @@ class UIManager:
                 use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
                 vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
-                save_temp_recordings_var = ctk.BooleanVar(value=self.config_manager.get("save_temp_recordings"))
+                save_temp_recordings_var = ctk.BooleanVar(value=self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY))
                 display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
 
                 def update_text_correction_fields():
@@ -354,7 +355,7 @@ class UIManager:
                     use_vad_var.set(DEFAULT_CONFIG["use_vad"])
                     vad_threshold_var.set(DEFAULT_CONFIG["vad_threshold"])
                     vad_silence_duration_var.set(DEFAULT_CONFIG["vad_silence_duration"])
-                    save_temp_recordings_var.set(DEFAULT_CONFIG["save_temp_recordings"])
+                    save_temp_recordings_var.set(DEFAULT_CONFIG[SAVE_TEMP_RECORDINGS_CONFIG_KEY])
                     display_transcripts_var.set(DEFAULT_CONFIG["display_transcripts_in_terminal"])
 
                     self.config_manager.save_config()
