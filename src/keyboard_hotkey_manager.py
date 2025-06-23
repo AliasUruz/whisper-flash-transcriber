@@ -67,12 +67,13 @@ class KeyboardHotkeyManager:
             return True
 
         try:
-            # Registrar as hotkeys
-            result = self._register_hotkeys()
-            if not result:
+            # Registrar as hotkeys e verificar o resultado
+            success = self._register_hotkeys()
+            if not success:
                 logging.error("Falha ao registrar hotkeys.")
                 self.stop()
                 return False
+
             self.is_running = True
             logging.info("KeyboardHotkeyManager iniciado com sucesso.")
             return True
