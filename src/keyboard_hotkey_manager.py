@@ -68,7 +68,11 @@ class KeyboardHotkeyManager:
 
         try:
             # Registrar as hotkeys
-            self._register_hotkeys()
+            result = self._register_hotkeys()
+            if not result:
+                logging.error("Falha ao registrar hotkeys.")
+                self.stop()
+                return False
             self.is_running = True
             logging.info("KeyboardHotkeyManager iniciado com sucesso.")
             return True
@@ -117,7 +121,11 @@ class KeyboardHotkeyManager:
 
             # Registrar novas hotkeys se estava em execução
             if was_running:
-                self._register_hotkeys()
+                result = self._register_hotkeys()
+                if not result:
+                    logging.error("Falha ao registrar hotkeys após atualização.")
+                    self.is_running = False
+                    return False
 
             logging.info(f"Configuração atualizada: record_key={self.record_key}, agent_key={self.agent_key}, record_mode={self.record_mode}")
             return True
