@@ -70,7 +70,6 @@ class AppCore:
             on_agent_result_callback=self._handle_agent_result_final, # Usa o novo callback
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
             is_state_transcribing_fn=self.is_state_transcribing,
-            on_transcription_cancelled_callback=self._on_transcription_cancelled,
         )
         self.ui_manager = None # Será setado externamente pelo main.py
 
@@ -244,15 +243,6 @@ class AppCore:
             if self.ui_manager:
                 self.ui_manager.close_live_transcription_window()
             self._delete_temp_audio_file()
-
-    def _on_transcription_cancelled(self):
-        """Callback quando uma transcrição é cancelada pelo usuário."""
-        logging.info("AppCore: transcrição cancelada.")
-        self._set_state(STATE_IDLE)
-        if self.ui_manager:
-            self.ui_manager.close_live_transcription_window()
-        self.full_transcription = ""
-        self._delete_temp_audio_file()
 
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
@@ -478,14 +468,8 @@ class AppCore:
 
     def stop_recording(self, agent_mode=False):
         with self.recording_lock:
-            if not self.audio_handler.is_recording: return
-
-        # Cancela qualquer transcrição ou correção pendente ANTES de finalizar a
-        # gravação atual. Isso evita que o áudio recém-capturado seja afetado
-        # por eventos de cancelamento disparados após o envio do segmento para o
-        # TranscriptionHandler.
-        self.cancel_transcription()
-        self.cancel_text_correction()
+            if not self.audio_handler.is_recording:
+                return
 
         self.audio_handler.stop_recording()
 
@@ -519,12 +503,6 @@ class AppCore:
         self.start_recording()
 
     # --- Cancelamentos e consultas ---
-    def cancel_transcription(self):
-        self.transcription_handler.cancel_transcription()
-
-    def cancel_text_correction(self):
-        self.transcription_handler.cancel_text_correction()
-
     def is_transcription_running(self) -> bool:
         return self.transcription_handler.is_transcription_running()
 
@@ -540,10 +518,7 @@ class AppCore:
             or self.current_state == STATE_LOADING_MODEL
         )
 
-    def cancel_all_operations(self):
-        """Cancela transcri\u00e7\u00f5es e corre\u00e7\u00f5es em andamento."""
-        self.cancel_transcription()
-        self.cancel_text_correction()
+
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
     def apply_settings_from_external(self, **kwargs):
