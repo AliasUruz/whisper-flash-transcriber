@@ -165,10 +165,8 @@ class TranscriptionHandler:
             logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
             return text
 
-    def _async_text_correction(self, text: str, service: str, cancel_event: threading.Event) -> None:
-        """Corrige o texto de forma assíncrona com timeout e verificação de cancelamento."""
-        if cancel_event.is_set():
-            return
+    def _async_text_correction(self, text: str, service: str) -> None:
+        """Corrige o texto de forma assíncrona com timeout."""
 
         corrected = text
         self.correction_in_progress = True
@@ -191,7 +189,7 @@ class TranscriptionHandler:
                     logging.error(f"Erro ao corrigir texto: {exc}")
         finally:
             self.correction_in_progress = False
-            if not cancel_event.is_set() and self.is_state_transcribing_fn and self.is_state_transcribing_fn():
+            if self.is_state_transcribing_fn and self.is_state_transcribing_fn():
                 if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
                     logging.info(f"Transcrição corrigida: {corrected}")
                 self.on_transcription_result_callback(corrected, text)
@@ -410,7 +408,7 @@ class TranscriptionHandler:
                 self.correction_cancel_event.clear()
                 self.correction_thread = threading.Thread(
                     target=self._async_text_correction,
-                    args=(text_result, service, self.correction_cancel_event),
+                    args=(text_result, service),
                     daemon=True,
                     name="TextCorrectionThread",
                 )
