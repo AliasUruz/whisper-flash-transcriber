@@ -44,8 +44,8 @@ class TranscriptionHandler:
         self.correction_in_progress = False
 
         self.pipe = None
-        self.transcription_in_progress = False
-        self.transcription_lock = threading.RLock()
+        # Futura tarefa de transcrição em andamento
+        self.transcription_future = None
         # Executor dedicado para a tarefa de transcrição em background
         self.transcription_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1
@@ -208,8 +208,11 @@ class TranscriptionHandler:
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
 
     def is_transcription_running(self) -> bool:
-        """Indica se há transcrição em andamento."""
-        return self.transcription_in_progress
+        """Indica se existe tarefa de transcrição ainda não concluída."""
+        return (
+            self.transcription_future is not None
+            and not self.transcription_future.done()
+        )
 
     def is_text_correction_running(self) -> bool:
         """Indica se há correção de texto em andamento."""
@@ -275,14 +278,17 @@ class TranscriptionHandler:
             return None, None # Retorna None em caso de falha
 
     def transcribe_audio_segment(self, audio_input: np.ndarray, agent_mode: bool = False):
-        with self.transcription_lock:
-            if self.transcription_in_progress:
-                logging.warning("Transcrição já em andamento, ignorando nova solicitação.")
-                return
-            self.transcription_in_progress = True
-        self.transcription_future = self.transcription_executor.submit(self._transcription_task, audio_input, agent_mode)
+        """Envia segmento para transcrição assíncrona."""
+        self.transcription_cancel_event.clear()
+
+        self.transcription_future = self.transcription_executor.submit(
+            self._transcription_task, audio_input, agent_mode
+        )
 
     def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+        if self.transcription_cancel_event.is_set():
+            logging.info("Transcrição cancelada antes do início do processamento.")
+            return
 
         text_result = None
         try:
@@ -322,8 +328,10 @@ class TranscriptionHandler:
             text_result = f"[Transcription Error: {e}]"
 
         finally:
-            with self.transcription_lock:
-                self.transcription_in_progress = False
+            if self.transcription_cancel_event.is_set():
+                logging.info("Transcrição cancelada. Resultado descartado.")
+                self.transcription_cancel_event.clear()
+                return
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
                 logging.info(f"Transcrição bruta: {text_result}")
