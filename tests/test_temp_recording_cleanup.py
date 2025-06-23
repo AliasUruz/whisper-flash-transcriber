@@ -63,11 +63,14 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
 
     class DummyTranscriptionHandler:
         def __init__(self, *a, **k):
-            self.transcription_in_progress = False
             self.pipe = True
+            self.transcription_future = None
 
         def start_model_loading(self):
             pass
+
+        def is_transcription_running(self):
+            return False
 
         def cancel_transcription(self):
             pass
@@ -109,6 +112,10 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     dummy_root = types.SimpleNamespace(after=lambda *a, **k: None)
     app = core_module.AppCore(dummy_root)
     app.current_state = core_module.STATE_IDLE
+
+    # Evita erros caso o AppCore chame métodos de cancelamento inexistentes
+    app.cancel_transcription = lambda: None
+    app.cancel_text_correction = lambda: None
 
     app.start_recording()
     app.stop_recording()

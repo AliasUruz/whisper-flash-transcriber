@@ -30,7 +30,6 @@ class TranscriptionHandler:
         on_agent_result_callback,
         on_segment_transcribed_callback,
         is_state_transcribing_fn,
-        on_transcription_cancelled_callback=None,
     ):
         self.config_manager = config_manager
         self.gemini_client = gemini_api_client # Instância da API Gemini injetada
@@ -40,16 +39,13 @@ class TranscriptionHandler:
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
-        self.on_transcription_cancelled_callback = on_transcription_cancelled_callback
         # Alias para manter compatibilidade com referências existentes
         self.state_check_callback = is_state_transcribing_fn
-        self.correction_cancel_event = threading.Event()
-        self.transcription_cancel_event = threading.Event()
         self.correction_in_progress = False
 
         self.pipe = None
-        self.transcription_in_progress = False
-        self.transcription_lock = threading.RLock()
+        # Futura tarefa de transcrição em andamento
+        self.transcription_future = None
         # Executor dedicado para a tarefa de transcrição em background
         self.transcription_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1
@@ -165,10 +161,8 @@ class TranscriptionHandler:
             logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
             return text
 
-    def _async_text_correction(self, text: str, service: str, cancel_event: threading.Event) -> None:
-        """Corrige o texto de forma assíncrona com timeout e verificação de cancelamento."""
-        if cancel_event.is_set():
-            return
+    def _async_text_correction(self, text: str, service: str) -> None:
+        """Corrige o texto de forma assíncrona com timeout."""
 
         corrected = text
         self.correction_in_progress = True
@@ -191,7 +185,7 @@ class TranscriptionHandler:
                     logging.error(f"Erro ao corrigir texto: {exc}")
         finally:
             self.correction_in_progress = False
-            if not cancel_event.is_set() and self.is_state_transcribing_fn and self.is_state_transcribing_fn():
+            if self.is_state_transcribing_fn and self.is_state_transcribing_fn():
                 if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
                     logging.info(f"Transcrição corrigida: {corrected}")
                 self.on_transcription_result_callback(corrected, text)
@@ -213,25 +207,12 @@ class TranscriptionHandler:
     def start_model_loading(self):
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
 
-    def cancel_transcription(self):
-        """Cancela a transcrição em andamento."""
-        self.transcription_cancel_event.set()
-        # Notifica o callback se ele existir
-        if self.on_transcription_cancelled_callback:
-            self.on_transcription_cancelled_callback()
-
     def is_transcription_running(self) -> bool:
-        """Indica se há transcrição em andamento."""
-        return self.transcription_in_progress
-
-    def cancel_text_correction(self):
-        """Cancela a correção de texto em andamento."""
-        self.correction_cancel_event.set()
-
-    def cancel_all(self):
-        """Cancela transcrição e correção de texto."""
-        self.cancel_transcription()
-        self.cancel_text_correction()
+        """Indica se existe tarefa de transcrição ainda não concluída."""
+        return (
+            self.transcription_future is not None
+            and not self.transcription_future.done()
+        )
 
     def is_text_correction_running(self) -> bool:
         """Indica se há correção de texto em andamento."""
@@ -305,8 +286,6 @@ class TranscriptionHandler:
 
     def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
         if self.transcription_cancel_event.is_set():
-            with self.transcription_lock:
-                self.transcription_in_progress = False
             logging.info("Transcrição cancelada antes do início do processamento.")
             return
 
@@ -348,9 +327,6 @@ class TranscriptionHandler:
             text_result = f"[Transcription Error: {e}]"
 
         finally:
-            with self.transcription_lock:
-                self.transcription_in_progress = False
-
             if self.transcription_cancel_event.is_set():
                 logging.info("Transcrição cancelada. Resultado descartado.")
                 self.transcription_cancel_event.clear()
@@ -404,10 +380,9 @@ class TranscriptionHandler:
                         )
             else:
                 service = self._get_text_correction_service()
-                self.correction_cancel_event.clear()
                 self.correction_thread = threading.Thread(
                     target=self._async_text_correction,
-                    args=(text_result, service, self.correction_cancel_event),
+                    args=(text_result, service),
                     daemon=True,
                     name="TextCorrectionThread",
                 )
