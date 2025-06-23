@@ -688,7 +688,7 @@ class UIManager:
             pystray.MenuItem(
                 '🚫 Cancel Transcription',
                 lambda: self.core_instance_ref.cancel_transcription(),
-                enabled=lambda item: self.core_instance_ref.is_transcription_running()
+                enabled=lambda item: self.core_instance_ref.is_state_transcribing()
             ),
             pystray.MenuItem(
                 '⛔ Cancel Correction',

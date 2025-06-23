@@ -525,9 +525,6 @@ class AppCore:
     def cancel_text_correction(self):
         self.transcription_handler.cancel_text_correction()
 
-    def is_transcription_running(self) -> bool:
-        return self.transcription_handler.is_transcription_running()
-
     def is_correction_running(self) -> bool:
         return self.transcription_handler.is_text_correction_running()
 
@@ -535,7 +532,7 @@ class AppCore:
         """Indica se h\u00e1 alguma grava\u00e7\u00e3o, transcri\u00e7\u00e3o ou corre\u00e7\u00e3o em andamento."""
         return (
             self.audio_handler.is_recording
-            or self.transcription_handler.is_transcription_running()
+            or self.is_state_transcribing()
             or self.transcription_handler.is_text_correction_running()
             or self.current_state == STATE_LOADING_MODEL
         )

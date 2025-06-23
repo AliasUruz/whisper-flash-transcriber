@@ -220,10 +220,6 @@ class TranscriptionHandler:
         if self.on_transcription_cancelled_callback:
             self.on_transcription_cancelled_callback()
 
-    def is_transcription_running(self) -> bool:
-        """Indica se há transcrição em andamento."""
-        return self.transcription_in_progress
-
     def cancel_text_correction(self):
         """Cancela a correção de texto em andamento."""
         self.correction_cancel_event.set()
