@@ -468,8 +468,8 @@ class AppCore:
 
     def stop_recording(self, agent_mode=False):
         with self.recording_lock:
-            if not self.audio_handler.is_recording: return
-
+            if not self.audio_handler.is_recording:
+                return
 
         self.audio_handler.stop_recording()
 
@@ -501,6 +501,22 @@ class AppCore:
                     self._log_status(f"Cannot start command: state {self.current_state}", error=True); return
         self.agent_mode_active = True
         self.start_recording()
+
+    # --- Cancelamentos e consultas ---
+    def is_transcription_running(self) -> bool:
+        return self.transcription_handler.is_transcription_running()
+
+    def is_correction_running(self) -> bool:
+        return self.transcription_handler.is_text_correction_running()
+
+    def is_any_operation_running(self) -> bool:
+        """Indica se h\u00e1 alguma grava\u00e7\u00e3o, transcri\u00e7\u00e3o ou corre\u00e7\u00e3o em andamento."""
+        return (
+            self.audio_handler.is_recording
+            or self.transcription_handler.is_transcription_running()
+            or self.transcription_handler.is_text_correction_running()
+            or self.current_state == STATE_LOADING_MODEL
+        )
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
     def apply_settings_from_external(self, **kwargs):
