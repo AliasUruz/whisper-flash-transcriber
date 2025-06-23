@@ -167,6 +167,9 @@ class TranscriptionHandler:
 
     def _async_text_correction(self, text: str, service: str, cancel_event: threading.Event) -> None:
         """Corrige o texto de forma assíncrona com timeout e verificação de cancelamento."""
+        if cancel_event.is_set():
+            return
+
         corrected = text
         self.correction_in_progress = True
         def _call():

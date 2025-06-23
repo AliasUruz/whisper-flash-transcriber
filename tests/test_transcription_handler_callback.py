@@ -1,6 +1,7 @@
 import importlib.machinery
 import types
 import concurrent.futures
+import threading
 from unittest.mock import MagicMock
 
 # Stub simples de torch
@@ -27,6 +28,8 @@ from src.config_manager import (
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     SERVICE_NONE,
+    SERVICE_GEMINI,
+    SERVICE_OPENROUTER,
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
@@ -95,3 +98,98 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
     handler._transcription_task(None, agent_mode=False)
 
     assert results == ["dummy"]
+
+
+def test_async_text_correction_service_selection(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[TEXT_CORRECTION_ENABLED_CONFIG_KEY] = True
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: False,
+    )
+
+    handler.openrouter_client = MagicMock()
+    handler.gemini_client = MagicMock(is_valid=True)
+
+    monkeypatch.setattr(handler, "_correct_text_with_gemini", MagicMock())
+    monkeypatch.setattr(handler, "_correct_text_with_openrouter", MagicMock())
+
+    scenarios = [SERVICE_GEMINI, SERVICE_OPENROUTER, SERVICE_NONE]
+    for service in scenarios:
+        handler.text_correction_service = service
+        selected = handler._get_text_correction_service()
+        handler._correct_text_with_gemini.reset_mock()
+        handler._correct_text_with_openrouter.reset_mock()
+        handler._async_text_correction("txt", selected, threading.Event())
+
+        if service == SERVICE_GEMINI:
+            assert handler._correct_text_with_gemini.called
+            assert not handler._correct_text_with_openrouter.called
+        elif service == SERVICE_OPENROUTER:
+            assert handler._correct_text_with_openrouter.called
+            assert not handler._correct_text_with_gemini.called
+        else:
+            assert not handler._correct_text_with_gemini.called
+            assert not handler._correct_text_with_openrouter.called
+
+
+def test_async_text_correction_is_cancelled(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[TEXT_CORRECTION_ENABLED_CONFIG_KEY] = True
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: False,
+    )
+
+    handler.gemini_client = MagicMock(is_valid=True)
+
+    called = []
+    def fake_correct(text):
+        called.append(True)
+        return text
+
+    monkeypatch.setattr(handler, "_correct_text_with_gemini", fake_correct)
+
+    cancel_event = threading.Event()
+    cancel_event.set()
+    handler._async_text_correction("txt", SERVICE_GEMINI, cancel_event)
+
+    assert not called
+
+
+def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[GPU_INDEX_CONFIG_KEY] = 0
+    cfg.data[BATCH_SIZE_MODE_CONFIG_KEY] = "manual"
+    cfg.data[MANUAL_BATCH_SIZE_CONFIG_KEY] = 8
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: False,
+    )
+
+    monkeypatch.setattr(fake_torch.cuda, "is_available", lambda: True)
+    assert handler._get_dynamic_batch_size() == 8
+
+    monkeypatch.setattr(fake_torch.cuda, "is_available", lambda: False)
+    assert handler._get_dynamic_batch_size() == 4
