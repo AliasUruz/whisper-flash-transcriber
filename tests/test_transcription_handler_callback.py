@@ -92,7 +92,11 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
     handler.transcription_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
     monkeypatch.setattr(handler, "_get_dynamic_batch_size", lambda: 1)
-    monkeypatch.setattr(handler, "_async_text_correction", lambda text, service: result_callback(text, text))
+    monkeypatch.setattr(
+        handler,
+        "_async_text_correction",
+        lambda text, service, was_transcribing: result_callback(text, text),
+    )
 
     handler._transcription_task(None, agent_mode=False)
 
@@ -126,7 +130,7 @@ def test_async_text_correction_service_selection(monkeypatch):
         selected = handler._get_text_correction_service()
         handler._correct_text_with_gemini.reset_mock()
         handler._correct_text_with_openrouter.reset_mock()
-        handler._async_text_correction("txt", selected)
+        handler._async_text_correction("txt", selected, True)
 
         if service == SERVICE_GEMINI:
             assert handler._correct_text_with_gemini.called
