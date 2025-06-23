@@ -50,6 +50,8 @@ class TranscriptionHandler:
         self.transcription_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1
         )
+        # Evento para sinalizar cancelamento de transcrição em andamento
+        self.transcription_cancel_event = threading.Event()
 
         # Configurações de modelo e API (carregadas do config_manager)
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
@@ -217,6 +219,10 @@ class TranscriptionHandler:
     def is_text_correction_running(self) -> bool:
         """Indica se há correção de texto em andamento."""
         return self.correction_in_progress
+
+    def stop_transcription(self) -> None:
+        """Sinaliza que a transcrição em andamento deve ser cancelada."""
+        self.transcription_cancel_event.set()
 
     def _load_model_task(self):
         # Removido: model_loaded_successfully = False
