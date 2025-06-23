@@ -69,7 +69,8 @@ class VADManager:
             return True
 
         if not isinstance(audio_chunk, np.ndarray):
-            raise TypeError("audio_chunk deve ser um np.ndarray")
+            # Entradas inválidas não devem gerar exceção, apenas retornar False
+            return False
         if audio_chunk.dtype != np.float32:
             audio_chunk = audio_chunk.astype(np.float32)
         if audio_chunk.ndim > 1:
