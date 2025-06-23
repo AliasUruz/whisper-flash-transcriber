@@ -278,6 +278,7 @@ class TranscriptionHandler:
             return None, None # Retorna None em caso de falha
 
     def transcribe_audio_segment(self, audio_input: np.ndarray, agent_mode: bool = False):
+        """Envia segmento para transcrição assíncrona."""
         self.transcription_cancel_event.clear()
 
         self.transcription_future = self.transcription_executor.submit(
