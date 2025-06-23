@@ -642,12 +642,12 @@ class UIManager:
                 '⏹️ Stop Recording' if is_recording else '▶️ Start Recording',
                 lambda: self.core_instance_ref.toggle_recording(),
                 default=True,
-                enabled=(is_recording or is_idle)
+                enabled=lambda item: self.core_instance_ref.current_state in ['RECORDING', 'IDLE']
             ),
             pystray.MenuItem(
                 '⚙️ Settings',
                 lambda: self.main_tk_root.after(0, self.run_settings_gui), # Call on main thread
-                enabled=(not is_loading and not is_recording)
+                enabled=lambda item: self.core_instance_ref.current_state not in ['LOADING_MODEL', 'RECORDING']
             ),
             pystray.MenuItem(
                 'Gemini Model',
@@ -688,12 +688,17 @@ class UIManager:
             pystray.MenuItem(
                 '🚫 Cancel Transcription',
                 lambda: self.core_instance_ref.cancel_transcription(),
-                enabled=self.core_instance_ref.is_transcription_running()
+                enabled=lambda item: self.core_instance_ref.is_transcription_running()
             ),
             pystray.MenuItem(
                 '⛔ Cancel Correction',
                 lambda: self.core_instance_ref.cancel_text_correction(),
-                enabled=self.core_instance_ref.is_correction_running()
+                enabled=lambda item: self.core_instance_ref.is_correction_running()
+            ),
+            pystray.MenuItem(
+                '❌ Cancel Operation',
+                lambda: self.core_instance_ref.cancel_all_operations(),
+                enabled=lambda item: self.core_instance_ref.is_any_operation_running()
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('❌ Exit', self.on_exit_app)
