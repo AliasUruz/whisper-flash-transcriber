@@ -685,21 +685,6 @@ class UIManager:
                     )
                 )
             ),
-            pystray.MenuItem(
-                '🚫 Cancel Transcription',
-                lambda: self.core_instance_ref.cancel_transcription(),
-                enabled=lambda item: self.core_instance_ref.is_transcription_running()
-            ),
-            pystray.MenuItem(
-                '⛔ Cancel Correction',
-                lambda: self.core_instance_ref.cancel_text_correction(),
-                enabled=lambda item: self.core_instance_ref.is_correction_running()
-            ),
-            pystray.MenuItem(
-                '❌ Cancel Operation',
-                lambda: self.core_instance_ref.cancel_all_operations(),
-                enabled=lambda item: self.core_instance_ref.is_any_operation_running()
-            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('❌ Exit', self.on_exit_app)
         ]
