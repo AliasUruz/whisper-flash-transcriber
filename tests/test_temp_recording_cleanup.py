@@ -63,11 +63,14 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
 
     class DummyTranscriptionHandler:
         def __init__(self, *a, **k):
-            self.transcription_in_progress = False
             self.pipe = True
+            self.transcription_future = None
 
         def start_model_loading(self):
             pass
+
+        def is_transcription_running(self):
+            return False
 
         def cancel_transcription(self):
             pass

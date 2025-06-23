@@ -463,7 +463,7 @@ class AppCore:
         with self.recording_lock:
             if self.audio_handler.is_recording: return
             with self.transcription_lock:
-                if self.transcription_handler.transcription_in_progress:
+                if self.transcription_handler.is_transcription_running():
                     self._log_status("Cannot record: Transcription running.", error=True); return
             with self.state_lock:
                 if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
@@ -498,7 +498,7 @@ class AppCore:
 
     def toggle_recording(self):
         with self.recording_lock: rec = self.audio_handler.is_recording
-        with self.transcription_lock: transcribing = self.transcription_handler.transcription_in_progress
+        with self.transcription_lock: transcribing = self.transcription_handler.is_transcription_running()
         if rec: self.stop_recording()
         elif transcribing: self._log_status("Cannot start recording, transcription in progress.", error=True)
         else: self.start_recording()
@@ -509,7 +509,8 @@ class AppCore:
                 self.stop_recording(agent_mode=True); self.agent_mode_active = False; return
             elif self.audio_handler.is_recording: return
             with self.transcription_lock:
-                if self.transcription_handler.transcription_in_progress: return
+                if self.transcription_handler.is_transcription_running():
+                    return
             with self.state_lock:
                 if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
                     self._log_status("Model not loaded.", error=True); return
@@ -775,7 +776,7 @@ class AppCore:
             self.audio_handler.recording_data.clear()
 
         with self.transcription_lock:
-            if self.transcription_handler.transcription_in_progress:
+            if self.transcription_handler.is_transcription_running():
                 logging.warning("Shutting down while transcription is in progress. Transcription may not complete.")
 
         try:
