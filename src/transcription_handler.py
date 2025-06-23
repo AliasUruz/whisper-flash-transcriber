@@ -297,14 +297,11 @@ class TranscriptionHandler:
             return None, None # Retorna None em caso de falha
 
     def transcribe_audio_segment(self, audio_input: np.ndarray, agent_mode: bool = False):
-        with self.transcription_lock:
-            if self.transcription_in_progress:
-                logging.warning("Transcrição já em andamento, ignorando nova solicitação.")
-                return
-            self.transcription_in_progress = True
         self.transcription_cancel_event.clear()
 
-        self.transcription_future = self.transcription_executor.submit(self._transcription_task, audio_input, agent_mode)
+        self.transcription_future = self.transcription_executor.submit(
+            self._transcription_task, audio_input, agent_mode
+        )
 
     def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
         if self.transcription_cancel_event.is_set():
