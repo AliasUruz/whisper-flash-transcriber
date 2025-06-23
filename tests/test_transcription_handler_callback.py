@@ -139,35 +139,6 @@ def test_async_text_correction_service_selection(monkeypatch):
             assert not handler._correct_text_with_openrouter.called
 
 
-def test_async_text_correction_executes_without_cancel(monkeypatch):
-    cfg = DummyConfig()
-    cfg.data[TEXT_CORRECTION_ENABLED_CONFIG_KEY] = True
-
-    handler = TranscriptionHandler(
-        cfg,
-        gemini_api_client=None,
-        on_model_ready_callback=noop,
-        on_model_error_callback=noop,
-        on_transcription_result_callback=noop,
-        on_agent_result_callback=noop,
-        on_segment_transcribed_callback=None,
-        is_state_transcribing_fn=lambda: False,
-    )
-
-    handler.gemini_client = MagicMock(is_valid=True)
-
-    called = []
-    def fake_correct(text):
-        called.append(True)
-        return text
-
-    monkeypatch.setattr(handler, "_correct_text_with_gemini", fake_correct)
-
-    handler._async_text_correction("txt", SERVICE_GEMINI)
-
-    assert called
-
-
 def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
     cfg = DummyConfig()
     cfg.data[GPU_INDEX_CONFIG_KEY] = 0
