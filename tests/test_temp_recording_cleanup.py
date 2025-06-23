@@ -69,12 +69,6 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
         def start_model_loading(self):
             pass
 
-        def cancel_transcription(self):
-            pass
-
-        def cancel_text_correction(self):
-            pass
-
         def shutdown(self):
             pass
 
@@ -109,6 +103,10 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     dummy_root = types.SimpleNamespace(after=lambda *a, **k: None)
     app = core_module.AppCore(dummy_root)
     app.current_state = core_module.STATE_IDLE
+
+    # Evita erros caso o AppCore chame métodos de cancelamento inexistentes
+    app.cancel_transcription = lambda: None
+    app.cancel_text_correction = lambda: None
 
     app.start_recording()
     app.stop_recording()
