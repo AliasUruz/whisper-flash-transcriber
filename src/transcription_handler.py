@@ -50,6 +50,7 @@ class TranscriptionHandler:
         self.transcription_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1
         )
+        self._stop_signal_event = threading.Event()
 
         # Configurações de modelo e API (carregadas do config_manager)
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
@@ -279,16 +280,11 @@ class TranscriptionHandler:
 
     def transcribe_audio_segment(self, audio_input: np.ndarray, agent_mode: bool = False):
         """Envia segmento para transcrição assíncrona."""
-        self.transcription_cancel_event.clear()
-
         self.transcription_future = self.transcription_executor.submit(
             self._transcription_task, audio_input, agent_mode
         )
 
     def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
-        if self.transcription_cancel_event.is_set():
-            logging.info("Transcrição cancelada antes do início do processamento.")
-            return
 
         text_result = None
         try:
@@ -328,10 +324,6 @@ class TranscriptionHandler:
             text_result = f"[Transcription Error: {e}]"
 
         finally:
-            if self.transcription_cancel_event.is_set():
-                logging.info("Transcrição cancelada. Resultado descartado.")
-                self.transcription_cancel_event.clear()
-                return
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
                 logging.info(f"Transcrição bruta: {text_result}")
