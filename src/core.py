@@ -461,15 +461,21 @@ class AppCore:
     # --- Recording Control (delegando para AudioHandler) ---
     def start_recording(self):
         with self.recording_lock:
-            if self.audio_handler.is_recording: return
-            with self.transcription_lock:
-                if self.transcription_handler.transcription_in_progress:
-                    self._log_status("Cannot record: Transcription running.", error=True); return
+            if self.audio_handler.is_recording:
+                return
             with self.state_lock:
+                if self.current_state == STATE_TRANSCRIBING:
+                    self._log_status("Cannot record: Transcription running.", error=True)
+                    return
                 if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
-                    self._log_status("Cannot record: Model not loaded.", error=True); return
+                    self._log_status("Cannot record: Model not loaded.", error=True)
+                    return
                 if self.current_state.startswith("ERROR"):
-                    self._log_status(f"Cannot record: App in error state ({self.current_state}).", error=True); return
+                    self._log_status(
+                        f"Cannot record: App in error state ({self.current_state}).",
+                        error=True,
+                    )
+                    return
         
         # if self.ui_manager:
         #     self.ui_manager.show_live_transcription_window()
@@ -497,24 +503,34 @@ class AppCore:
         self.stop_recording()
 
     def toggle_recording(self):
-        with self.recording_lock: rec = self.audio_handler.is_recording
-        with self.transcription_lock: transcribing = self.transcription_handler.transcription_in_progress
-        if rec: self.stop_recording()
-        elif transcribing: self._log_status("Cannot start recording, transcription in progress.", error=True)
-        else: self.start_recording()
+        with self.recording_lock:
+            rec = self.audio_handler.is_recording
+        if rec:
+            self.stop_recording()
+            return
+        with self.state_lock:
+            if self.current_state == STATE_TRANSCRIBING:
+                self._log_status("Cannot start recording, transcription in progress.", error=True)
+                return
+        self.start_recording()
 
     def start_agent_command(self):
         with self.recording_lock:
-            if self.audio_handler.is_recording and self.agent_mode_active:
-                self.stop_recording(agent_mode=True); self.agent_mode_active = False; return
-            elif self.audio_handler.is_recording: return
-            with self.transcription_lock:
-                if self.transcription_handler.transcription_in_progress: return
-            with self.state_lock:
-                if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
-                    self._log_status("Model not loaded.", error=True); return
-                if self.current_state.startswith("ERROR"):
-                    self._log_status(f"Cannot start command: state {self.current_state}", error=True); return
+            if self.audio_handler.is_recording:
+                if self.agent_mode_active:
+                    self.stop_recording(agent_mode=True)
+                    self.agent_mode_active = False
+                return
+        with self.state_lock:
+            if self.current_state == STATE_TRANSCRIBING:
+                self._log_status("Cannot start command: transcription in progress.", error=True)
+                return
+            if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
+                self._log_status("Model not loaded.", error=True)
+                return
+            if self.current_state.startswith("ERROR"):
+                self._log_status(f"Cannot start command: state {self.current_state}", error=True)
+                return
         self.agent_mode_active = True
         self.start_recording()
 
@@ -774,9 +790,11 @@ class AppCore:
                     logging.error(f"Error stopping audio stream on close: {e}")
             self.audio_handler.recording_data.clear()
 
-        with self.transcription_lock:
-            if self.transcription_handler.transcription_in_progress:
-                logging.warning("Shutting down while transcription is in progress. Transcription may not complete.")
+        with self.state_lock:
+            if self.current_state == STATE_TRANSCRIBING:
+                logging.warning(
+                    "Shutting down while transcription is in progress. Transcription may not complete."
+                )
 
         try:
             self.transcription_handler.shutdown()
