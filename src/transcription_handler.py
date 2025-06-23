@@ -331,66 +331,67 @@ class TranscriptionHandler:
             if self.transcription_cancel_event.is_set():
                 logging.info("Transcrição cancelada. Resultado descartado.")
                 self.transcription_cancel_event.clear()
+                return
+
+            if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
+                logging.info(f"Transcrição bruta: {text_result}")
+
+            if not text_result or text_result == "[No speech detected]" or text_result.strip().startswith("[Transcription Error:"):
+                logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
+                if text_result and self.on_segment_transcribed_callback:
+                    self.on_segment_transcribed_callback(text_result or "")
+                if (
+                    not agent_mode
+                    and text_result
+                    and (
+                        not self.is_state_transcribing_fn
+                        or self.is_state_transcribing_fn()
+                    )
+                ):
+                    self.on_transcription_result_callback(text_result, text_result)
+                elif not agent_mode and text_result:
+                    logging.warning(
+                        "Estado mudou antes do resultado de transcrição. UI não será atualizada."
+                    )
+                return
+
+            if self.on_segment_transcribed_callback:
+                self.on_segment_transcribed_callback(text_result)
+
+            if agent_mode:
+                try:
+                    logging.info(f"Enviando texto para o modo agente: '{text_result}'")
+                    agent_response = self.gemini_client.get_agent_response(text_result)
+                    logging.info(
+                        f"Resposta recebida do modo agente: '{agent_response}'"
+                    )
+                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
+                        self.on_agent_result_callback(agent_response)
+                    else:
+                        logging.warning(
+                            "Estado mudou antes do resultado do agente. UI não será atualizada."
+                        )
+                except Exception as e:
+                    logging.error(f"Erro ao processar o comando do agente: {e}", exc_info=True)
+                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
+                        self.on_agent_result_callback(text_result)  # Falha, retorna o texto original
+                    else:
+                        logging.warning(
+                            "Estado mudou antes do resultado do agente. UI não será atualizada."
+                        )
+            else:
+                service = self._get_text_correction_service()
+                self.correction_thread = threading.Thread(
+                    target=self._async_text_correction,
+                    args=(text_result, service),
+                    daemon=True,
+                    name="TextCorrectionThread",
+                )
+                self.correction_thread.start()
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 logging.debug("Cache da GPU limpo após tarefa de transcrição.")
-
-        if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
-            logging.info(f"Transcrição bruta: {text_result}")
-
-        if not text_result or text_result == "[No speech detected]" or text_result.strip().startswith("[Transcription Error:"):
-            logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
-            if text_result and self.on_segment_transcribed_callback:
-                self.on_segment_transcribed_callback(text_result or "")
-            if (
-                not agent_mode
-                and text_result
-                and (
-                    not self.is_state_transcribing_fn
-                    or self.is_state_transcribing_fn()
-                )
-            ):
-                self.on_transcription_result_callback(text_result, text_result)
-            elif not agent_mode and text_result:
-                logging.warning(
-                    "Estado mudou antes do resultado de transcrição. UI não será atualizada."
-                )
-            return
-
-        if self.on_segment_transcribed_callback:
-            self.on_segment_transcribed_callback(text_result)
-
-        if agent_mode:
-            try:
-                logging.info(f"Enviando texto para o modo agente: '{text_result}'")
-                agent_response = self.gemini_client.get_agent_response(text_result)
-                logging.info(
-                    f"Resposta recebida do modo agente: '{agent_response}'"
-                )
-                if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
-                    self.on_agent_result_callback(agent_response)
-                else:
-                    logging.warning(
-                        "Estado mudou antes do resultado do agente. UI não será atualizada."
-                    )
-            except Exception as e:
-                logging.error(f"Erro ao processar o comando do agente: {e}", exc_info=True)
-                if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
-                    self.on_agent_result_callback(text_result)  # Falha, retorna o texto original
-                else:
-                    logging.warning(
-                        "Estado mudou antes do resultado do agente. UI não será atualizada."
-                    )
-        else:
-            service = self._get_text_correction_service()
-            self.correction_cancel_event.clear()
-            self.correction_thread = threading.Thread(
-                target=self._async_text_correction,
-                args=(text_result, service, self.correction_cancel_event),
-                daemon=True,
-                name="TextCorrectionThread",
-            )
-            self.correction_thread.start()
 
     def shutdown(self) -> None:
         """Encerra o executor de transcrição."""
