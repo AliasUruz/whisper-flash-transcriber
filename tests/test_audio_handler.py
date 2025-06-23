@@ -82,11 +82,11 @@ class AudioHandlerTest(unittest.TestCase):
 
         def fake_record_audio_task(self):
             self.stream_started = True
-            while not self._stop_event.is_set() and self.is_recording:
+            while not self._stop_signal_event.is_set():
                 self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
                 time.sleep(0.01)
             self.stream_started = False
-            self._stop_event.clear()
+            self._stop_signal_event.clear()
             self._record_thread = None
 
         with patch.object(AudioHandler, '_record_audio_task', fake_record_audio_task):
@@ -109,11 +109,11 @@ class AudioHandlerTest(unittest.TestCase):
 
         def fake_record_audio_task(self):
             self.stream_started = True
-            while not self._stop_event.is_set() and self.is_recording:
+            while not self._stop_signal_event.is_set():
                 self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
                 time.sleep(0.01)
             self.stream_started = False
-            self._stop_event.clear()
+            self._stop_signal_event.clear()
             self._record_thread = None
 
         with patch.object(AudioHandler, '_record_audio_task', fake_record_audio_task):
@@ -143,11 +143,11 @@ class AudioHandlerTest(unittest.TestCase):
 
         def fake_record_audio_task(self):
             self.stream_started = True
-            while not self._stop_event.is_set() and self.is_recording:
+            while not self._stop_signal_event.is_set():
                 self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
                 time.sleep(0.01)
             self.stream_started = False
-            self._stop_event.clear()
+            self._stop_signal_event.clear()
             self._record_thread = None
 
         with patch.object(AudioHandler, '_record_audio_task', fake_record_audio_task):

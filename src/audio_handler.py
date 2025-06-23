@@ -43,7 +43,8 @@ class AudioHandler:
             self.use_vad = False
             self.vad_manager = None
         self._vad_silence_counter = 0.0
-        self._stop_event = threading.Event()
+        # Evento utilizado para interromper gravações e loops
+        self._stop_signal_event = threading.Event()
         self._record_thread = None
 
     def _audio_callback(self, indata, frames, time_data, status):
@@ -80,7 +81,7 @@ class AudioHandler:
             self.stream_started = True
             logging.info("Audio stream started.")
 
-            while not self._stop_event.is_set() and self.is_recording:
+            while not self._stop_signal_event.is_set():
                 sd.sleep(100)
             logging.info("Recording flag is off. Stopping audio stream.")
         except sd.PortAudioError as e:
@@ -96,7 +97,7 @@ class AudioHandler:
                 self._close_input_stream()
                 self.audio_stream = None
             self.stream_started = False
-            self._stop_event.clear()
+            self._stop_signal_event.clear()
             self._record_thread = None
             logging.info("Audio recording thread finished.")
 
@@ -129,10 +130,10 @@ class AudioHandler:
 
         if self._record_thread and self._record_thread.is_alive():
             logging.debug("Aguardando término da thread de gravação anterior.")
-            self._stop_event.set()
+            self._stop_signal_event.set()
             self._record_thread.join(timeout=2)
 
-        self._stop_event.clear()
+        self._stop_signal_event.clear()
 
         self.is_recording = True
         self.start_time = time.time()
@@ -162,7 +163,7 @@ class AudioHandler:
 
         self.is_recording = False
         stream_was_started = self.stream_started
-        self._stop_event.set()
+        self._stop_signal_event.set()
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()

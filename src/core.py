@@ -123,8 +123,8 @@ class AppCore:
     def _on_audio_segment_ready(self, audio_segment: np.ndarray):
         """Callback do AudioHandler quando um segmento de áudio está pronto para transcrição."""
         duration_seconds = len(audio_segment) / AUDIO_SAMPLE_RATE
-        min_duration = self.config_manager.get('min_transcription_duration')
-        
+        min_duration = self.config_manager.get('min_transcription_duration') or 0.0
+
         if duration_seconds < min_duration:
             logging.info(f"Segmento de áudio ({duration_seconds:.2f}s) é mais curto que o mínimo configurado ({min_duration}s). Ignorando.")
             self._set_state(STATE_IDLE) # Volta para o estado IDLE
