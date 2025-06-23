@@ -4,14 +4,15 @@ import time
 import numpy as np
 import concurrent.futures
 from unittest.mock import MagicMock
+import os, sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 # Stub simples de torch
 fake_torch = types.ModuleType("torch")
 fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
 fake_torch.__version__ = "0.0"
 fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
-
-import sys
 sys.modules["torch"] = fake_torch
 
 fake_transformers = types.ModuleType("transformers")
@@ -100,4 +101,48 @@ def test_callback_called_on_cancel(monkeypatch):
     handler.cancel_transcription()
     handler.transcription_future.result(timeout=1)
 
+    assert called == [True]
+
+
+def test_cancel_text_correction_sets_event():
+    cfg = DummyConfig()
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: True,
+    )
+
+    assert not handler.correction_cancel_event.is_set()
+    handler.cancel_text_correction()
+    assert handler.correction_cancel_event.is_set()
+
+
+def test_cancel_all_signals_events_and_callback():
+    cfg = DummyConfig()
+    called = []
+
+    def cancelled():
+        called.append(True)
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: True,
+        on_transcription_cancelled_callback=cancelled,
+    )
+
+    handler.cancel_all()
+
+    assert handler.transcription_cancel_event.is_set()
+    assert handler.correction_cancel_event.is_set()
     assert called == [True]
