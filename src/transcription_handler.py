@@ -39,7 +39,8 @@ class TranscriptionHandler:
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
-        # Alias para manter compatibilidade com referências existentes
+        # "state_check_callback" é preservado apenas para retrocompatibilidade;
+        # utilize "is_state_transcribing_fn" nas novas implementações.
         self.state_check_callback = is_state_transcribing_fn
         self.correction_in_progress = False
 
