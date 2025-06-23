@@ -108,7 +108,7 @@ class DummyTranscriptionHandler:
         else:
             self.on_transcription_result_callback("raw", "raw")
 
-    def cancel_transcription(self):
+    def stop_transcription(self):
         pass
 
     def cancel_text_correction(self):

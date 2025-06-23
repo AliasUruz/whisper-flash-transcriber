@@ -283,7 +283,7 @@ update to the latest version. The attribute is now properly initialized in `Tran
 ### New callback `on_transcription_cancelled_callback`
 
 For developers instantiating `TranscriptionHandler` manually, there is now an optional `on_transcription_cancelled_callback` parameter. It
-is invoked when `cancel_transcription()` is called and the segment is still being processed, allowing you to reset state or close custom windows.
+is invoked when `stop_transcription()` is called and the segment is still being processed, allowing you to reset state or close custom windows.
 
 ## Contributing
 

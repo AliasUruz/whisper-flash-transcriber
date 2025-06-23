@@ -61,7 +61,7 @@ class DummyTranscriptionHandler:
     def is_text_correction_running(self):
         return self.correction_in_progress
 
-    def cancel_transcription(self):
+    def stop_transcription(self):
         pass
 
     def cancel_text_correction(self):
