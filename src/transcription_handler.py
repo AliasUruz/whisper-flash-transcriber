@@ -225,6 +225,11 @@ class TranscriptionHandler:
         """Cancela a correção de texto em andamento."""
         self.correction_cancel_event.set()
 
+    def cancel_all(self):
+        """Cancela transcrição e correção de texto."""
+        self.cancel_transcription()
+        self.cancel_text_correction()
+
     def is_text_correction_running(self) -> bool:
         """Indica se há correção de texto em andamento."""
         return self.correction_in_progress
