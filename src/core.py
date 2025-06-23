@@ -518,8 +518,6 @@ class AppCore:
             or self.current_state == STATE_LOADING_MODEL
         )
 
-
-
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
     def apply_settings_from_external(self, **kwargs):
         logging.info("AppCore: Applying new configuration from external source.")
