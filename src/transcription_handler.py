@@ -30,7 +30,6 @@ class TranscriptionHandler:
         on_agent_result_callback,
         on_segment_transcribed_callback,
         is_state_transcribing_fn,
-        on_transcription_cancelled_callback=None,
     ):
         self.config_manager = config_manager
         self.gemini_client = gemini_api_client # Instância da API Gemini injetada
@@ -40,11 +39,8 @@ class TranscriptionHandler:
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
-        self.on_transcription_cancelled_callback = on_transcription_cancelled_callback
         # Alias para manter compatibilidade com referências existentes
         self.state_check_callback = is_state_transcribing_fn
-        self.correction_cancel_event = threading.Event()
-        self.transcription_cancel_event = threading.Event()
         self.correction_in_progress = False
 
         self.pipe = None
@@ -211,25 +207,9 @@ class TranscriptionHandler:
     def start_model_loading(self):
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
 
-    def cancel_transcription(self):
-        """Cancela a transcrição em andamento."""
-        self.transcription_cancel_event.set()
-        # Notifica o callback se ele existir
-        if self.on_transcription_cancelled_callback:
-            self.on_transcription_cancelled_callback()
-
     def is_transcription_running(self) -> bool:
         """Indica se há transcrição em andamento."""
         return self.transcription_in_progress
-
-    def cancel_text_correction(self):
-        """Cancela a correção de texto em andamento."""
-        self.correction_cancel_event.set()
-
-    def cancel_all(self):
-        """Cancela transcrição e correção de texto."""
-        self.cancel_transcription()
-        self.cancel_text_correction()
 
     def is_text_correction_running(self) -> bool:
         """Indica se há correção de texto em andamento."""
@@ -300,16 +280,9 @@ class TranscriptionHandler:
                 logging.warning("Transcrição já em andamento, ignorando nova solicitação.")
                 return
             self.transcription_in_progress = True
-        self.transcription_cancel_event.clear()
-
         self.transcription_future = self.transcription_executor.submit(self._transcription_task, audio_input, agent_mode)
 
     def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
-        if self.transcription_cancel_event.is_set():
-            with self.transcription_lock:
-                self.transcription_in_progress = False
-            logging.info("Transcrição cancelada antes do início do processamento.")
-            return
 
         text_result = None
         try:
@@ -351,11 +324,6 @@ class TranscriptionHandler:
         finally:
             with self.transcription_lock:
                 self.transcription_in_progress = False
-
-            if self.transcription_cancel_event.is_set():
-                logging.info("Transcrição cancelada. Resultado descartado.")
-                self.transcription_cancel_event.clear()
-                return
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
                 logging.info(f"Transcrição bruta: {text_result}")
@@ -405,7 +373,6 @@ class TranscriptionHandler:
                         )
             else:
                 service = self._get_text_correction_service()
-                self.correction_cancel_event.clear()
                 self.correction_thread = threading.Thread(
                     target=self._async_text_correction,
                     args=(text_result, service),
