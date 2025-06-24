@@ -113,7 +113,7 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     app = core_module.AppCore(dummy_root)
     app.current_state = core_module.STATE_IDLE
 
-    # Evita erros caso o AppCore chame métodos de cancelamento inexistentes
+    # Evita erros caso o AppCore envie stop signal para métodos inexistentes
     app.cancel_transcription = lambda: None
     app.cancel_text_correction = lambda: None
 

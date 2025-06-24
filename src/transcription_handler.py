@@ -294,8 +294,8 @@ class TranscriptionHandler:
         )
 
     def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
-        if self._stop_signal_event.is_set():
-            logging.info("Transcrição cancelada antes do início do processamento.")
+        if self.transcription_cancel_event.is_set():
+            logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
             return
 
         text_result = None
@@ -336,9 +336,9 @@ class TranscriptionHandler:
             text_result = f"[Transcription Error: {e}]"
 
         finally:
-            if self._stop_signal_event.is_set():
-                logging.info("Transcrição cancelada. Resultado descartado.")
-                self._stop_signal_event.clear()
+            if self.transcription_cancel_event.is_set():
+                logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
+                self.transcription_cancel_event.clear()
                 return
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):

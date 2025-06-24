@@ -280,6 +280,10 @@ If `pip install -r requirements.txt` fails or the application doesn't run due to
 If you encounter the message `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
 update to the latest version. The attribute is now properly initialized in `TranscriptionHandler.__init__`.
 
+### Stop Signal Replaces Cancellation
+
+Transcription can now be halted at any moment by sending a **stop signal** to `TranscriptionHandler`. The previous cancellation method and its related callback have been removed to simplify the API and improve reliability.
+
 ## Contributing
 
 Contributions are welcome! If you have ideas for improvements, bug fixes, or new features, please:
