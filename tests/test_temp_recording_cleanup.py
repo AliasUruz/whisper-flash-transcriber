@@ -72,7 +72,6 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
         def is_transcription_running(self):
             return False
 
-
         def shutdown(self):
             pass
 
@@ -107,7 +106,6 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     dummy_root = types.SimpleNamespace(after=lambda *a, **k: None)
     app = core_module.AppCore(dummy_root)
     app.current_state = core_module.STATE_IDLE
-
 
     app.start_recording()
     app.stop_recording()

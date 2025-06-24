@@ -61,7 +61,6 @@ class DummyTranscriptionHandler:
     def is_text_correction_running(self):
         return self.correction_in_progress
 
-
     def shutdown(self):
         pass
 
