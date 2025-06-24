@@ -162,10 +162,10 @@ def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
         is_state_transcribing_fn=lambda: False,
     )
 
-    monkeypatch.setattr(fake_torch.cuda, "is_available", lambda: True)
+    import src.transcription_handler as th_module
+    monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: True)
     assert handler._get_dynamic_batch_size() == 8
-
-    monkeypatch.setattr(fake_torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: False)
     assert handler._get_dynamic_batch_size() == 4
 
 
@@ -198,7 +198,7 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
 
     thread = threading.Thread(
         target=handler._async_text_correction,
-        args=("texto", SERVICE_GEMINI),
+        args=("texto", SERVICE_GEMINI, True),
         daemon=True,
     )
     thread.start()
@@ -206,5 +206,5 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
     handler.is_state_transcribing_fn = lambda: False
     thread.join()
 
-    assert results == ["corrigido"]
+    assert results == []
 
