@@ -23,7 +23,6 @@ def setup_fake_modules(monkeypatch):
     fake_transformers.pipeline = MagicMock()
     fake_transformers.AutoProcessor = MagicMock()
     fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
-    fake_requests = types.ModuleType("requests")
     fake_keyboard = types.ModuleType("keyboard")
     fake_google = types.ModuleType("google")
     fake_genai = types.ModuleType("generativeai")
@@ -36,7 +35,6 @@ def setup_fake_modules(monkeypatch):
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_onnx)
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
-    monkeypatch.setitem(sys.modules, "requests", fake_requests)
     monkeypatch.setitem(sys.modules, "keyboard", fake_keyboard)
     monkeypatch.setitem(sys.modules, "google", fake_google)
     monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai)
@@ -60,12 +58,6 @@ class DummyTranscriptionHandler:
 
     def is_text_correction_running(self):
         return self.correction_in_progress
-
-    def cancel_transcription(self):
-        pass
-
-    def cancel_text_correction(self):
-        pass
 
     def shutdown(self):
         pass

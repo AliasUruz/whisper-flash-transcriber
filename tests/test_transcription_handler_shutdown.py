@@ -1,18 +1,16 @@
 import importlib.machinery
 import types
-from types import SimpleNamespace
-import os, sys
 from unittest.mock import MagicMock
+import os, sys
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-# Stub simples de torch para evitar importacoes pesadas
+# Stub torch and transformers
 fake_torch = types.ModuleType("torch")
 fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
 fake_torch.__version__ = "0.0"
-fake_torch.cuda = SimpleNamespace(is_available=lambda: False)
-
-import sys  # noqa: E402
+fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
 sys.modules["torch"] = fake_torch
 
 fake_transformers = types.ModuleType("transformers")
@@ -20,9 +18,6 @@ fake_transformers.pipeline = MagicMock()
 fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
-
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.transcription_handler import TranscriptionHandler
 from src.config_manager import (
@@ -40,7 +35,6 @@ from src.config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
 )
-
 
 class DummyConfig:
     def __init__(self):
@@ -67,23 +61,22 @@ class DummyConfig:
         return self.data.get(key)
 
 
-# Funções de callback dummy
-
-def noop(*_a, **_k):
-    return None
-
-
-def test_state_check_callback_attribute():
+def test_executor_shutdown_parameters():
     cfg = DummyConfig()
     handler = TranscriptionHandler(
         cfg,
         gemini_api_client=None,
-        on_model_ready_callback=noop,
-        on_model_error_callback=noop,
-        on_transcription_result_callback=noop,
-        on_agent_result_callback=noop,
-        on_segment_transcribed_callback=noop,
-        is_state_transcribing_fn=noop,
+        on_model_ready_callback=lambda: None,
+        on_model_error_callback=lambda *_: None,
+        on_transcription_result_callback=lambda *_: None,
+        on_agent_result_callback=lambda *_: None,
+        on_segment_transcribed_callback=lambda *_: None,
+        is_state_transcribing_fn=lambda: False,
     )
-    assert hasattr(handler, "state_check_callback")
-    assert handler.state_check_callback is handler.is_state_transcribing_fn
+    dummy_exec = MagicMock()
+    handler.transcription_executor = dummy_exec
+
+    handler.shutdown()
+
+    dummy_exec.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
+

@@ -11,37 +11,31 @@ fake_pyautogui.hotkey = MagicMock()
 fake_pyperclip = types.ModuleType("pyperclip")
 fake_pyperclip.copy = MagicMock()
 fake_sd = types.SimpleNamespace(PortAudioError=Exception, InputStream=MagicMock())
-fake_sf = types.ModuleType("soundfile")
-fake_sf.write = MagicMock()
 fake_onnx = types.ModuleType("onnxruntime")
 fake_onnx.InferenceSession = MagicMock()
 fake_torch = types.ModuleType("torch")
 fake_torch.from_numpy = MagicMock(return_value=types.SimpleNamespace())
+fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
 fake_transformers = types.ModuleType("transformers")
 fake_transformers.pipeline = MagicMock()
 fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
-fake_requests = types.ModuleType("requests")
 fake_keyboard = types.ModuleType("keyboard")
 fake_google = types.ModuleType("google")
 fake_genai = types.ModuleType("generativeai")
+fake_genai.configure = lambda api_key=None: None
+fake_genai.GenerativeModel = MagicMock()
 fake_google.generativeai = fake_genai
-fake_numpy = types.ModuleType("numpy")
-fake_numpy.ndarray = object
-fake_numpy.array = lambda *a, **k: []
 
 sys.modules.setdefault("pyautogui", fake_pyautogui)
 sys.modules.setdefault("pyperclip", fake_pyperclip)
 sys.modules.setdefault("sounddevice", fake_sd)
-sys.modules.setdefault("soundfile", fake_sf)
 sys.modules.setdefault("onnxruntime", fake_onnx)
 sys.modules.setdefault("torch", fake_torch)
 sys.modules.setdefault("transformers", fake_transformers)
-sys.modules.setdefault("requests", fake_requests)
 sys.modules.setdefault("keyboard", fake_keyboard)
 sys.modules.setdefault("google", fake_google)
 sys.modules.setdefault("google.generativeai", fake_genai)
-sys.modules.setdefault("numpy", fake_numpy)
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
@@ -64,6 +58,7 @@ class DummyConfig:
             "hotkey_stability_service_enabled": False,
             "keyboard_library": "win32",
             "min_record_duration": 0.0,
+            "min_transcription_duration": 0.0,
             TEXT_CORRECTION_ENABLED_CONFIG_KEY: True,
             TEXT_CORRECTION_SERVICE_CONFIG_KEY: SERVICE_NONE,
         }
@@ -91,7 +86,7 @@ class DummyTranscriptionHandler:
     def __init__(self, config_manager, gemini_api_client, on_model_ready_callback,
                  on_model_error_callback, on_transcription_result_callback,
                  on_agent_result_callback, on_segment_transcribed_callback,
-                 is_state_transcribing_fn, on_transcription_cancelled_callback=None):
+                 is_state_transcribing_fn):
         self.pipe = True
         self.on_transcription_result_callback = on_transcription_result_callback
         self.config_manager = config_manager
@@ -107,12 +102,6 @@ class DummyTranscriptionHandler:
             threading.Thread(target=_run).start()
         else:
             self.on_transcription_result_callback("raw", "raw")
-
-    def cancel_transcription(self):
-        pass
-
-    def cancel_text_correction(self):
-        pass
 
     def shutdown(self):
         pass
@@ -141,37 +130,31 @@ def setup_app(monkeypatch):
     fake_pyperclip = types.ModuleType("pyperclip")
     fake_pyperclip.copy = MagicMock()
     fake_sd = types.SimpleNamespace(PortAudioError=Exception, InputStream=MagicMock())
-    fake_sf = types.ModuleType("soundfile")
-    fake_sf.write = MagicMock()
     fake_onnx = types.ModuleType("onnxruntime")
     fake_onnx.InferenceSession = MagicMock()
     fake_torch = types.ModuleType("torch")
     fake_torch.from_numpy = MagicMock(return_value=types.SimpleNamespace())
+    fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
     fake_transformers = types.ModuleType("transformers")
     fake_transformers.pipeline = MagicMock()
     fake_transformers.AutoProcessor = MagicMock()
     fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
-    fake_requests = types.ModuleType("requests")
     fake_keyboard = types.ModuleType("keyboard")
     fake_google = types.ModuleType("google")
     fake_genai = types.ModuleType("generativeai")
+    fake_genai.configure = lambda api_key=None: None
+    fake_genai.GenerativeModel = MagicMock()
     fake_google.generativeai = fake_genai
-    fake_numpy = types.ModuleType("numpy")
-    fake_numpy.ndarray = object
-    fake_numpy.array = lambda *a, **k: []
 
     monkeypatch.setitem(sys.modules, "pyautogui", fake_pyautogui)
     monkeypatch.setitem(sys.modules, "pyperclip", fake_pyperclip)
     monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
-    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_onnx)
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
-    monkeypatch.setitem(sys.modules, "requests", fake_requests)
     monkeypatch.setitem(sys.modules, "keyboard", fake_keyboard)
     monkeypatch.setitem(sys.modules, "google", fake_google)
     monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai)
-    monkeypatch.setitem(sys.modules, "numpy", fake_numpy)
 
     monkeypatch.setattr(core_module, "AudioHandler", DummyAudioHandler)
     monkeypatch.setattr(core_module, "TranscriptionHandler", DummyTranscriptionHandler)

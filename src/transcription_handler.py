@@ -47,11 +47,14 @@ class TranscriptionHandler:
         self.pipe = None
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
+        # Evento de sinalização para parar tarefas de transcrição
+        self._stop_signal_event = threading.Event()
         # Executor dedicado para a tarefa de transcrição em background
         self.transcription_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1
         )
-        self._stop_signal_event = threading.Event()
+        # Evento para sinalizar cancelamento de transcrição em andamento
+        self.transcription_cancel_event = threading.Event()
 
         # Configurações de modelo e API (carregadas do config_manager)
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
@@ -163,7 +166,9 @@ class TranscriptionHandler:
             logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
             return text
 
-    def _async_text_correction(self, text: str, service: str, was_transcribing: bool) -> None:
+    def _async_text_correction(
+        self, text: str, service: str, was_transcribing_when_started: bool
+    ) -> None:
         """Corrige o texto de forma assíncrona com timeout."""
 
         corrected = text
@@ -187,14 +192,14 @@ class TranscriptionHandler:
                     logging.error(f"Erro ao corrigir texto: {exc}")
         finally:
             self.correction_in_progress = False
-            if (
-                self.is_state_transcribing_fn
-                and was_transcribing
-                and self.is_state_transcribing_fn()
-            ):
+            if was_transcribing_when_started:
                 if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
                     logging.info(f"Transcrição corrigida: {corrected}")
                 self.on_transcription_result_callback(corrected, text)
+            else:
+                logging.warning(
+                    "Estado mudou antes da correção de texto. UI não será atualizada."
+                )
 
     def _get_dynamic_batch_size(self) -> int:
         if not torch.cuda.is_available() or self.gpu_index < 0:
@@ -223,6 +228,10 @@ class TranscriptionHandler:
     def is_text_correction_running(self) -> bool:
         """Indica se há correção de texto em andamento."""
         return self.correction_in_progress
+
+    def stop_transcription(self) -> None:
+        """Sinaliza que a transcrição em andamento deve ser cancelada."""
+        self.transcription_cancel_event.set()
 
     def _load_model_task(self):
         # Removido: model_loaded_successfully = False
@@ -285,11 +294,16 @@ class TranscriptionHandler:
 
     def transcribe_audio_segment(self, audio_input: np.ndarray, agent_mode: bool = False):
         """Envia segmento para transcrição assíncrona."""
+        self._stop_signal_event.clear()
+
         self.transcription_future = self.transcription_executor.submit(
             self._transcription_task, audio_input, agent_mode
         )
 
     def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+        if self.transcription_cancel_event.is_set():
+            logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
+            return
 
         text_result = None
         try:
@@ -329,6 +343,10 @@ class TranscriptionHandler:
             text_result = f"[Transcription Error: {e}]"
 
         finally:
+            if self.transcription_cancel_event.is_set():
+                logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
+                self.transcription_cancel_event.clear()
+                return
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
                 logging.info(f"Transcrição bruta: {text_result}")
@@ -378,14 +396,14 @@ class TranscriptionHandler:
                         )
             else:
                 service = self._get_text_correction_service()
-                was_transcribing = (
+                was_transcribing_when_started = (
                     self.is_state_transcribing_fn()
                     if self.is_state_transcribing_fn
                     else False
                 )
                 self.correction_thread = threading.Thread(
                     target=self._async_text_correction,
-                    args=(text_result, service, was_transcribing),
+                    args=(text_result, service, was_transcribing_when_started),
                     daemon=True,
                     name="TextCorrectionThread",
                 )
@@ -398,6 +416,6 @@ class TranscriptionHandler:
     def shutdown(self) -> None:
         """Encerra o executor de transcrição."""
         try:
-            self.transcription_executor.shutdown(wait=False)
+            self.transcription_executor.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
             logging.error(f"Erro ao encerrar o executor de transcrição: {e}")
