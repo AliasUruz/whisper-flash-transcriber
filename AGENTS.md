@@ -2,3 +2,7 @@ Whenever you create suggested tasks to the user, you've got to give as much deta
 
 
 Do whatever the user tells you to.
+
+Run the following commands to prepare the environment and run tests:
+1. `bash setup.sh`
+2. `pytest -q`
