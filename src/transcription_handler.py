@@ -47,6 +47,8 @@ class TranscriptionHandler:
         self.pipe = None
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
+        # Evento de sinalização para parar tarefas de transcrição
+        self._stop_signal_event = threading.Event()
         # Executor dedicado para a tarefa de transcrição em background
         self.transcription_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1
@@ -285,11 +287,16 @@ class TranscriptionHandler:
 
     def transcribe_audio_segment(self, audio_input: np.ndarray, agent_mode: bool = False):
         """Envia segmento para transcrição assíncrona."""
+        self._stop_signal_event.clear()
+
         self.transcription_future = self.transcription_executor.submit(
             self._transcription_task, audio_input, agent_mode
         )
 
     def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+        if self._stop_signal_event.is_set():
+            logging.info("Transcrição cancelada antes do início do processamento.")
+            return
 
         text_result = None
         try:
@@ -329,6 +336,10 @@ class TranscriptionHandler:
             text_result = f"[Transcription Error: {e}]"
 
         finally:
+            if self._stop_signal_event.is_set():
+                logging.info("Transcrição cancelada. Resultado descartado.")
+                self._stop_signal_event.clear()
+                return
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
                 logging.info(f"Transcrição bruta: {text_result}")
