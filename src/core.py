@@ -768,6 +768,8 @@ class AppCore:
                 logging.warning(
                     "Shutting down while transcription is in progress. Transcription may not complete."
                 )
+                # Sinaliza para a thread de transcrição cancelar o processamento
+                self.transcription_handler.stop_transcription()
 
         try:
             self.transcription_handler.shutdown()
