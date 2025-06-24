@@ -91,7 +91,7 @@ class DummyTranscriptionHandler:
     def __init__(self, config_manager, gemini_api_client, on_model_ready_callback,
                  on_model_error_callback, on_transcription_result_callback,
                  on_agent_result_callback, on_segment_transcribed_callback,
-                 is_state_transcribing_fn, on_transcription_cancelled_callback=None):
+                 is_state_transcribing_fn):
         self.pipe = True
         self.on_transcription_result_callback = on_transcription_result_callback
         self.config_manager = config_manager

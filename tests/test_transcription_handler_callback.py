@@ -132,7 +132,7 @@ def test_async_text_correction_service_selection(monkeypatch):
         selected = handler._get_text_correction_service()
         handler._correct_text_with_gemini.reset_mock()
         handler._correct_text_with_openrouter.reset_mock()
-        handler._async_text_correction("txt", selected, False)
+        handler._async_text_correction("txt", selected, True)
 
         if service == SERVICE_GEMINI:
             assert handler._correct_text_with_gemini.called
