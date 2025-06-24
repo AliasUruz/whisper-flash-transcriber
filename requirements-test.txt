@@ -1,6 +1,15 @@
+# Ferramentas de Teste e Qualidade
 pytest
-numpy>=2.3.0
-requests>=2.32.4
-soundfile>=0.13.1
 flake8==7.2.0
+
+# Dependências da Aplicação usadas nos Testes
+transformers
+sounddevice
+numpy>=2.3.0
+pyautogui
+pyperclip
+requests>=2.32.4
+google-generativeai
+keyboard
+soundfile>=0.13.1
 onnxruntime
