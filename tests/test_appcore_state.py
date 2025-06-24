@@ -11,8 +11,6 @@ fake_pyautogui.hotkey = MagicMock()
 fake_pyperclip = types.ModuleType("pyperclip")
 fake_pyperclip.copy = MagicMock()
 fake_sd = types.SimpleNamespace(PortAudioError=Exception, InputStream=MagicMock())
-fake_sf = types.ModuleType("soundfile")
-fake_sf.write = MagicMock()
 fake_onnx = types.ModuleType("onnxruntime")
 fake_onnx.InferenceSession = MagicMock()
 fake_torch = types.ModuleType("torch")
@@ -88,7 +86,7 @@ class DummyTranscriptionHandler:
     def __init__(self, config_manager, gemini_api_client, on_model_ready_callback,
                  on_model_error_callback, on_transcription_result_callback,
                  on_agent_result_callback, on_segment_transcribed_callback,
-                 is_state_transcribing_fn, on_transcription_cancelled_callback=None):
+                 is_state_transcribing_fn):
         self.pipe = True
         self.on_transcription_result_callback = on_transcription_result_callback
         self.config_manager = config_manager
@@ -104,12 +102,6 @@ class DummyTranscriptionHandler:
             threading.Thread(target=_run).start()
         else:
             self.on_transcription_result_callback("raw", "raw")
-
-    def cancel_transcription(self):
-        pass
-
-    def cancel_text_correction(self):
-        pass
 
     def shutdown(self):
         pass
@@ -138,8 +130,6 @@ def setup_app(monkeypatch):
     fake_pyperclip = types.ModuleType("pyperclip")
     fake_pyperclip.copy = MagicMock()
     fake_sd = types.SimpleNamespace(PortAudioError=Exception, InputStream=MagicMock())
-    fake_sf = types.ModuleType("soundfile")
-    fake_sf.write = MagicMock()
     fake_onnx = types.ModuleType("onnxruntime")
     fake_onnx.InferenceSession = MagicMock()
     fake_torch = types.ModuleType("torch")
@@ -152,12 +142,13 @@ def setup_app(monkeypatch):
     fake_keyboard = types.ModuleType("keyboard")
     fake_google = types.ModuleType("google")
     fake_genai = types.ModuleType("generativeai")
+    fake_genai.configure = lambda api_key=None: None
+    fake_genai.GenerativeModel = MagicMock()
     fake_google.generativeai = fake_genai
 
     monkeypatch.setitem(sys.modules, "pyautogui", fake_pyautogui)
     monkeypatch.setitem(sys.modules, "pyperclip", fake_pyperclip)
     monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
-    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_onnx)
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)

@@ -136,7 +136,7 @@ def test_async_text_correction_service_selection(monkeypatch):
         selected = handler._get_text_correction_service()
         handler._correct_text_with_gemini.reset_mock()
         handler._correct_text_with_openrouter.reset_mock()
-        handler._async_text_correction("txt", selected, False)
+        handler._async_text_correction("txt", selected, True)
 
         if service == SERVICE_GEMINI:
             assert handler._correct_text_with_gemini.called
@@ -166,10 +166,10 @@ def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
         is_state_transcribing_fn=lambda: False,
     )
 
-    monkeypatch.setattr(fake_torch.cuda, "is_available", lambda: True)
+    import src.transcription_handler as th_module
+    monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: True)
     assert handler._get_dynamic_batch_size() == 8
-
-    monkeypatch.setattr(fake_torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: False)
     assert handler._get_dynamic_batch_size() == 4
 
 

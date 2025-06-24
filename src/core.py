@@ -275,7 +275,7 @@ class AppCore:
                     if self.key_detection_callback:
                         self.main_tk_root.after(0, lambda: self.key_detection_callback(detected_key.upper()))
                 else:
-                    logging.warning("Nenhuma tecla detectada ou detecção cancelada.")
+                    logging.warning("Nenhuma tecla detectada ou stop signal recebido.")
                     if self.key_detection_callback:
                         self.main_tk_root.after(0, lambda: self.key_detection_callback("N/A")) # Ou algum valor padrão
             except Exception as e:
@@ -768,6 +768,8 @@ class AppCore:
                 logging.warning(
                     "Shutting down while transcription is in progress. Transcription may not complete."
                 )
+                # Sinaliza para a thread de transcrição cancelar o processamento
+                self.transcription_handler.stop_transcription()
 
         try:
             self.transcription_handler.shutdown()
