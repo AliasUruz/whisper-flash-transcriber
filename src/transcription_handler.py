@@ -39,17 +39,21 @@ class TranscriptionHandler:
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
-        # Alias para manter compatibilidade com referências existentes
+        # "state_check_callback" é preservado apenas para retrocompatibilidade;
+        # utilize "is_state_transcribing_fn" nas novas implementações.
         self.state_check_callback = is_state_transcribing_fn
         self.correction_in_progress = False
 
         self.pipe = None
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
+        # Evento de sinalização para parar tarefas de transcrição
+        self._stop_signal_event = threading.Event()
         # Executor dedicado para a tarefa de transcrição em background
         self.transcription_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1
         )
+        self._stop_signal_event = threading.Event()
 
         # Configurações de modelo e API (carregadas do config_manager)
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
@@ -161,7 +165,7 @@ class TranscriptionHandler:
             logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
             return text
 
-    def _async_text_correction(self, text: str, service: str) -> None:
+    def _async_text_correction(self, text: str, service: str, was_transcribing: bool) -> None:
         """Corrige o texto de forma assíncrona com timeout."""
 
         corrected = text
@@ -185,7 +189,11 @@ class TranscriptionHandler:
                     logging.error(f"Erro ao corrigir texto: {exc}")
         finally:
             self.correction_in_progress = False
-            if self.is_state_transcribing_fn and self.is_state_transcribing_fn():
+            if (
+                self.is_state_transcribing_fn
+                and was_transcribing
+                and self.is_state_transcribing_fn()
+            ):
                 if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
                     logging.info(f"Transcrição corrigida: {corrected}")
                 self.on_transcription_result_callback(corrected, text)
@@ -279,7 +287,7 @@ class TranscriptionHandler:
 
     def transcribe_audio_segment(self, audio_input: np.ndarray, agent_mode: bool = False):
         """Envia segmento para transcrição assíncrona."""
-        self.transcription_cancel_event.clear()
+        self._stop_signal_event.clear()
 
         self.transcription_future = self.transcription_executor.submit(
             self._transcription_task, audio_input, agent_mode
@@ -381,9 +389,14 @@ class TranscriptionHandler:
                         )
             else:
                 service = self._get_text_correction_service()
+                was_transcribing = (
+                    self.is_state_transcribing_fn()
+                    if self.is_state_transcribing_fn
+                    else False
+                )
                 self.correction_thread = threading.Thread(
                     target=self._async_text_correction,
-                    args=(text_result, service),
+                    args=(text_result, service, was_transcribing),
                     daemon=True,
                     name="TextCorrectionThread",
                 )
