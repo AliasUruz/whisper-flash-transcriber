@@ -108,6 +108,7 @@ class DummyTranscriptionHandler:
         else:
             self.on_transcription_result_callback("raw", "raw")
 
+
     def shutdown(self):
         pass
 
