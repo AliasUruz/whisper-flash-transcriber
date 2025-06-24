@@ -505,23 +505,18 @@ class AppCore:
         self.start_recording()
 
     def start_agent_command(self):
-        with self.recording_lock:
-            if self.audio_handler.is_recording:
-                if self.agent_mode_active:
-                    self.stop_recording(agent_mode=True)
-                    self.agent_mode_active = False
-                return
         with self.state_lock:
-            if self.current_state == STATE_TRANSCRIBING:
-                self._log_status("Cannot start command: transcription in progress.", error=True)
+            if self.is_recording():
+                self._log_status("Command ignored: already recording.", "orange")
                 return
-            if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
-                self._log_status("Model not loaded.", error=True)
+            if self.current_state == STATE_TRANSCRIBING:
+                self._log_status("Command ignored: busy transcribing.", "orange")
                 return
             if self.current_state.startswith("ERROR"):
                 self._log_status(f"Cannot start command: state {self.current_state}", error=True)
                 return
-        self.agent_mode_active = True
+        with self.agent_mode_lock:
+            self.agent_mode_active = True
         self.start_recording()
 
     # --- Cancelamentos e consultas ---
