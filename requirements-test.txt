@@ -3,3 +3,4 @@ numpy>=2.3.0
 requests>=2.32.4
 soundfile>=0.13.1
 flake8==7.2.0
+onnxruntime
