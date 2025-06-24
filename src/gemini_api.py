@@ -202,3 +202,10 @@ class GeminiAPI:
         self.current_model_id = original_model
         self.last_model_id = None
         return agent_response if agent_response else text
+
+    def correct_text_async(self, text: str, prompt: str, api_key: str) -> str:
+        self.last_api_key = api_key
+        self.current_api_key = api_key
+        self.current_prompt = prompt
+        full_prompt = prompt.format(text=text)
+        return self._execute_request(full_prompt) or text
