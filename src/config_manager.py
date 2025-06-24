@@ -25,6 +25,7 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
+    "openrouter_prompt": "",
     "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
     "gemini_prompt": """You are a meticulous speech-to-text correction AI. Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below while preserving the original content and structure as closely as possible.
 Key instructions:
@@ -78,6 +79,7 @@ KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
 TEXT_CORRECTION_ENABLED_CONFIG_KEY = "text_correction_enabled"
 TEXT_CORRECTION_SERVICE_CONFIG_KEY = "text_correction_service"
+ENABLE_AI_CORRECTION_CONFIG_KEY = TEXT_CORRECTION_ENABLED_CONFIG_KEY
 SERVICE_NONE = "none"
 SERVICE_OPENROUTER = "openrouter"
 SERVICE_GEMINI = "gemini"
@@ -87,6 +89,8 @@ GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
 GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
+GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
+OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
