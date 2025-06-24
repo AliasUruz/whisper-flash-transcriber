@@ -22,9 +22,6 @@ from .config_manager import (
     HOTKEY_HEALTH_CHECK_INTERVAL,
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
-    ENABLE_AI_CORRECTION_CONFIG_KEY,
-    GEMINI_PROMPT_CONFIG_KEY,
-    OPENROUTER_PROMPT_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
@@ -124,29 +121,27 @@ class AppCore:
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
 
-    def _on_audio_segment_ready(self, audio_segment_path, duration_seconds):
-        with self.transcription_lock:
-            if not os.path.exists(audio_segment_path):
-                logging.warning(f"AppCore: Arquivo de segmento de áudio não encontrado: {audio_segment_path}. Cancelando transcrição.")
-                self._set_state(STATE_IDLE) # Volta para o estado IDLE
-                return # Interrompe o processamento
+    def _on_audio_segment_ready(self, audio_segment: np.ndarray):
+        """Callback do AudioHandler quando um segmento de áudio está pronto para transcrição."""
+        duration_seconds = len(audio_segment) / AUDIO_SAMPLE_RATE
+        min_duration = self.config_manager.get('min_transcription_duration')
+        
+        if duration_seconds < min_duration:
+            logging.info(f"Segmento de áudio ({duration_seconds:.2f}s) é mais curto que o mínimo configurado ({min_duration}s). Ignorando.")
+            self._set_state(STATE_IDLE) # Volta para o estado IDLE
+            return # Interrompe o processamento
 
-            # Captura e reseta o estado do modo agente de forma atômica para evitar race conditions.
-            with self.agent_mode_lock:
-                is_agent_mode = self.agent_mode_active
-                if is_agent_mode:
-                    self.agent_mode_active = False
+        # Captura o estado do modo agente ANTES de qualquer coisa.
+        is_agent_mode = self.agent_mode_active
+        
+        # Reseta o estado imediatamente após capturá-lo para a próxima gravação.
+        if is_agent_mode:
+            self.agent_mode_active = False
 
-            logging.info(f"AppCore: Segmento de áudio pronto ({duration_seconds:.2f}s). Enviando para TranscriptionHandler (Modo Agente: {is_agent_mode}).")
-
-            # Delega a tarefa de transcrição para o TranscriptionHandler
-            self.transcription_handler.transcribe_audio_segment(
-                audio_segment_path,
-                is_agent_mode,
-                self.config_manager.get(ENABLE_AI_CORRECTION_CONFIG_KEY),
-                self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY),
-                self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
-            )
+        logging.info(f"AppCore: Segmento de áudio pronto ({duration_seconds:.2f}s). Enviando para TranscriptionHandler (Modo Agente: {is_agent_mode}).")
+        
+        # Passa o estado capturado para o handler de transcrição.
+        self.transcription_handler.transcribe_audio_segment(audio_segment, agent_mode=is_agent_mode)
 
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
@@ -442,13 +437,13 @@ class AppCore:
     def _hotkey_health_check_task(self):
         while not self.stop_health_check_event.wait(HOTKEY_HEALTH_CHECK_INTERVAL):
             with self.state_lock: current_state = self.current_state
-            if current_state in [STATE_IDLE, STATE_TRANSCRIBING]:
+            if current_state == STATE_IDLE: # Only check/fix if IDLE
                 if not self.ahk_running:
-                    logging.warning("KeyboardHotkeyManager não está em execução. Tentando reiniciar.")
+                    logging.warning("Hotkey health check: KeyboardHotkeyManager not running while IDLE. Attempting restart.")
                     self.force_reregister_hotkeys()
                     self._log_status("Tentativa de reiniciar KeyboardHotkeyManager.", error=False)
                 else:
-                    logging.debug("KeyboardHotkeyManager está funcionando corretamente.")
+                    logging.debug("Hotkey health check: KeyboardHotkeyManager is running correctly while IDLE.")
             # Se o serviço de estabilidade estiver desativado, esta thread não deveria estar rodando.
             # Se estiver rodando, significa que o estado mudou ou houve um erro.
             # Não é necessário logar "Pulando verificação" se o serviço está desativado.
@@ -505,18 +500,23 @@ class AppCore:
         self.start_recording()
 
     def start_agent_command(self):
-        with self.state_lock:
-            if self.is_recording():
-                self._log_status("Command ignored: already recording.", "orange")
+        with self.recording_lock:
+            if self.audio_handler.is_recording:
+                if self.agent_mode_active:
+                    self.stop_recording(agent_mode=True)
+                    self.agent_mode_active = False
                 return
+        with self.state_lock:
             if self.current_state == STATE_TRANSCRIBING:
-                self._log_status("Command ignored: busy transcribing.", "orange")
+                self._log_status("Cannot start command: transcription in progress.", error=True)
+                return
+            if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
+                self._log_status("Model not loaded.", error=True)
                 return
             if self.current_state.startswith("ERROR"):
                 self._log_status(f"Cannot start command: state {self.current_state}", error=True)
                 return
-        with self.agent_mode_lock:
-            self.agent_mode_active = True
+        self.agent_mode_active = True
         self.start_recording()
 
     # --- Cancelamentos e consultas ---
