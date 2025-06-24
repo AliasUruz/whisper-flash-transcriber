@@ -1,6 +1,6 @@
-cat <<EOF > requirements-test.txt
 pytest
 numpy
 requests
 soundfile
 EOF
+flake8==7.2.0
