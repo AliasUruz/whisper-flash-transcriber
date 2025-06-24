@@ -256,6 +256,10 @@ Once the application is running and configured:
 5.  **Wait for Transcription:** The application will process the audio. This might take a few moments depending on the length of the recording and whether you are using CPU or GPU for transcription. If text correction is enabled, it will also communicate with the API.
 6.  **Text Appears:** The transcribed (and corrected) text will automatically appear in the application window that was active when you stopped recording.
 
+## Safe Shutdown
+
+The application terminates immediately and safely when closed. Even if a transcription is still running, the executor shuts down to prevent zombie processes.
+
 ## Troubleshooting
 
 ### Hotkeys Stop Working on Windows 11
