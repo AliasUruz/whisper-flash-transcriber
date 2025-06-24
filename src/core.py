@@ -48,6 +48,7 @@ class AppCore:
         self.transcription_lock = RLock()
         self.state_lock = RLock()
         self.keyboard_lock = RLock()
+        self.agent_mode_lock = RLock()
 
         # --- Callbacks para UI (definidos externamente pelo UIManager) ---
         self.state_update_callback = None
