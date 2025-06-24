@@ -79,4 +79,30 @@ def test_executor_shutdown_parameters():
     handler.shutdown()
 
     dummy_exec.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
+    assert handler.transcription_cancel_event.is_set()
+
+
+def test_correction_thread_join_called_when_alive():
+    cfg = DummyConfig()
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=lambda: None,
+        on_model_error_callback=lambda *_: None,
+        on_transcription_result_callback=lambda *_: None,
+        on_agent_result_callback=lambda *_: None,
+        on_segment_transcribed_callback=lambda *_: None,
+        is_state_transcribing_fn=lambda: False,
+    )
+
+    dummy_exec = MagicMock()
+    handler.transcription_executor = dummy_exec
+
+    dummy_thread = MagicMock()
+    dummy_thread.is_alive.return_value = True
+    handler.correction_thread = dummy_thread
+
+    handler.shutdown()
+
+    dummy_thread.join.assert_called_once()
 
