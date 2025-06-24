@@ -157,3 +157,7 @@ class OpenRouterAPI:
             "returning original text",
         )
         return text
+
+    def correct_text_async(self, text: str, prompt: str, api_key: str, model: str) -> str:
+        self.reinitialize_client(api_key=api_key, model_id=model)
+        return self.correct_text(text)
