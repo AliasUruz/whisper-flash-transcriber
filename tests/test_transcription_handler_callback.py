@@ -20,6 +20,10 @@ fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
 
+import importlib
+if "src.transcription_handler" in sys.modules:
+    importlib.reload(sys.modules["src.transcription_handler"])
+
 from src.transcription_handler import TranscriptionHandler
 from src.config_manager import (
     BATCH_SIZE_CONFIG_KEY,
