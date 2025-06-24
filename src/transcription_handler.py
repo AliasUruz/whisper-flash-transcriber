@@ -43,6 +43,7 @@ class TranscriptionHandler:
         # utilize "is_state_transcribing_fn" nas novas implementações.
         self.state_check_callback = is_state_transcribing_fn
         self.correction_in_progress = False
+        self.correction_thread = None
 
         self.pipe = None
         # Futura tarefa de transcrição em andamento
@@ -192,7 +193,12 @@ class TranscriptionHandler:
                     logging.error(f"Erro ao corrigir texto: {exc}")
         finally:
             self.correction_in_progress = False
-            if was_transcribing_when_started:
+            still_transcribing = (
+                self.is_state_transcribing_fn()
+                if self.is_state_transcribing_fn
+                else was_transcribing_when_started
+            )
+            if was_transcribing_when_started and still_transcribing:
                 if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
                     logging.info(f"Transcrição corrigida: {corrected}")
                 self.on_transcription_result_callback(corrected, text)
@@ -416,6 +422,14 @@ class TranscriptionHandler:
     def shutdown(self) -> None:
         """Encerra o executor de transcrição."""
         try:
+            # Sinaliza cancelamento para qualquer tarefa em andamento
+            self.transcription_cancel_event.set()
+
+            # Aguarda a conclusão da thread de correção, se estiver ativa
+            if hasattr(self, "correction_thread") and self.correction_thread:
+                if self.correction_thread.is_alive():
+                    self.correction_thread.join(timeout=1)
+
             self.transcription_executor.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
             logging.error(f"Erro ao encerrar o executor de transcrição: {e}")
