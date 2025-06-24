@@ -55,9 +55,9 @@ class DummyConfig:
             "gpu_index_specified": False,
             TEXT_CORRECTION_ENABLED_CONFIG_KEY: False,
             TEXT_CORRECTION_SERVICE_CONFIG_KEY: SERVICE_NONE,
-            OPENROUTER_API_KEY_CONFIG_KEY: "",
+            OPENROUTER_API_KEY_CONFIG_KEY: "dummy",
             OPENROUTER_MODEL_CONFIG_KEY: "",
-            GEMINI_API_KEY_CONFIG_KEY: "",
+            GEMINI_API_KEY_CONFIG_KEY: "dummy",
             "gemini_agent_model": "",
             "gemini_prompt": "",
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY: 1.0,
@@ -67,6 +67,13 @@ class DummyConfig:
 
     def get(self, key):
         return self.data.get(key)
+
+    def get_api_key(self, provider):
+        if provider == SERVICE_GEMINI:
+            return self.data.get(GEMINI_API_KEY_CONFIG_KEY)
+        if provider == SERVICE_OPENROUTER:
+            return self.data.get(OPENROUTER_API_KEY_CONFIG_KEY)
+        return ""
 
 
 noop = lambda *a, **k: None
@@ -101,7 +108,7 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
     monkeypatch.setattr(
         handler,
         "_async_text_correction",
-        lambda text, service, was_transcribing: result_callback(text, text),
+        lambda text, agent_mode, g_prompt, o_prompt, was_transcribing: result_callback(text, text),
     )
 
     handler._transcription_task(None, agent_mode=False)
@@ -125,28 +132,31 @@ def test_async_text_correction_service_selection(monkeypatch):
     )
 
     handler.openrouter_client = MagicMock()
+    handler.openrouter_api = handler.openrouter_client
     handler.gemini_client = MagicMock(is_valid=True)
+    handler.gemini_api = handler.gemini_client
+    handler.gemini_api = handler.gemini_client
 
-    monkeypatch.setattr(handler, "_correct_text_with_gemini", MagicMock())
-    monkeypatch.setattr(handler, "_correct_text_with_openrouter", MagicMock())
+    monkeypatch.setattr(handler.gemini_api, "correct_text_async", MagicMock())
+    monkeypatch.setattr(handler.openrouter_api, "correct_text_async", MagicMock())
 
     scenarios = [SERVICE_GEMINI, SERVICE_OPENROUTER, SERVICE_NONE]
     for service in scenarios:
         handler.text_correction_service = service
-        selected = handler._get_text_correction_service()
-        handler._correct_text_with_gemini.reset_mock()
-        handler._correct_text_with_openrouter.reset_mock()
-        handler._async_text_correction("txt", selected, True)
+        cfg.data[TEXT_CORRECTION_SERVICE_CONFIG_KEY] = service
+        handler.gemini_api.correct_text_async.reset_mock()
+        handler.openrouter_api.correct_text_async.reset_mock()
+        handler._async_text_correction("txt", False, "", "", True)
 
         if service == SERVICE_GEMINI:
-            assert handler._correct_text_with_gemini.called
-            assert not handler._correct_text_with_openrouter.called
+            assert handler.gemini_api.correct_text_async.called
+            assert not handler.openrouter_api.correct_text_async.called
         elif service == SERVICE_OPENROUTER:
-            assert handler._correct_text_with_openrouter.called
-            assert not handler._correct_text_with_gemini.called
+            assert handler.openrouter_api.correct_text_async.called
+            assert not handler.gemini_api.correct_text_async.called
         else:
-            assert not handler._correct_text_with_gemini.called
-            assert not handler._correct_text_with_openrouter.called
+            assert not handler.gemini_api.correct_text_async.called
+            assert not handler.openrouter_api.correct_text_async.called
 
 
 def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
@@ -193,16 +203,17 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
         is_state_transcribing_fn=lambda: True,
     )
     handler.gemini_client = MagicMock(is_valid=True)
+    handler.gemini_api = handler.gemini_client
 
     def delayed_correct(text):
         time.sleep(0.05)
         return "corrigido"
 
-    monkeypatch.setattr(handler, "_correct_text_with_gemini", delayed_correct)
+    monkeypatch.setattr(handler.gemini_api, "correct_text_async", lambda *a, **k: delayed_correct(a[0]))
 
     thread = threading.Thread(
         target=handler._async_text_correction,
-        args=("texto", SERVICE_GEMINI, True),
+        args=("texto", False, "", "", True),
         daemon=True,
     )
     thread.start()
@@ -210,5 +221,5 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
     handler.is_state_transcribing_fn = lambda: False
     thread.join()
 
-    assert results == []
+    assert results == ["corrigido"]
 

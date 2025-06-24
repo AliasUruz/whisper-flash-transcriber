@@ -15,6 +15,9 @@ from .config_manager import (
     SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
     OPENROUTER_API_KEY_CONFIG_KEY, OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
+    AI_PROVIDER_CONFIG_KEY,
+    GEMINI_AGENT_PROMPT_CONFIG_KEY,
+    OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY, # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
 )
@@ -33,6 +36,7 @@ class TranscriptionHandler:
     ):
         self.config_manager = config_manager
         self.gemini_client = gemini_api_client # Instância da API Gemini injetada
+        self.gemini_api = gemini_api_client
         self.on_model_ready_callback = on_model_ready_callback
         self.on_model_error_callback = on_model_error_callback
         self.on_transcription_result_callback = on_transcription_result_callback # Para resultado final
@@ -44,6 +48,7 @@ class TranscriptionHandler:
         self.state_check_callback = is_state_transcribing_fn
         self.correction_in_progress = False
         self.correction_thread = None
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
         self.pipe = None
         # Futura tarefa de transcrição em andamento
@@ -86,9 +91,11 @@ class TranscriptionHandler:
         # (movida de WhisperCore._init_openrouter_client e _init_gemini_client)
         # ...
         self.openrouter_client = None
+        self.openrouter_api = None
         if self.text_correction_enabled and self.text_correction_service == SERVICE_OPENROUTER and self.openrouter_api_key and OpenRouterAPI:
             try:
                 self.openrouter_client = OpenRouterAPI(api_key=self.openrouter_api_key, model_id=self.openrouter_model)
+                self.openrouter_api = self.openrouter_client
                 logging.info("OpenRouter API client initialized.")
             except Exception as e:
                 logging.error(f"Error initializing OpenRouter API client: {e}")
@@ -167,45 +174,50 @@ class TranscriptionHandler:
             logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
             return text
 
-    def _async_text_correction(
-        self, text: str, service: str, was_transcribing_when_started: bool
-    ) -> None:
-        """Corrige o texto de forma assíncrona com timeout."""
-
-        corrected = text
+    def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str, was_transcribing_when_started: bool):
         self.correction_in_progress = True
-        def _call():
-            if service == SERVICE_GEMINI:
-                return self._correct_text_with_gemini(text)
-            if service == SERVICE_OPENROUTER:
-                return self._correct_text_with_openrouter(text)
-            return text
-
+        corrected = text  # Default to original text
+        future = None
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(_call)
-                try:
-                    corrected = future.result(timeout=30)
-                except concurrent.futures.TimeoutError:
-                    logging.error("Tempo esgotado na correção de texto.")
-                    future.cancel()
-                except Exception as exc:
-                    logging.error(f"Erro ao corrigir texto: {exc}")
+            active_provider = self.config_manager.get(AI_PROVIDER_CONFIG_KEY)
+            api_key = self.config_manager.get_api_key(active_provider)
+
+            if not api_key:
+                logging.warning(f"Nenhuma chave de API encontrada para o provedor {active_provider}. Pulando correção de texto.")
+                return
+
+            if active_provider == "gemini":
+                if not is_agent_mode:
+                    prompt = gemini_prompt
+                else:
+                    logging.info("Modo Agente ativado. Usando prompt do Agente para o Gemini.")
+                    prompt = self.config_manager.get(GEMINI_AGENT_PROMPT_CONFIG_KEY)
+                future = self.executor.submit(self.gemini_api.correct_text_async, corrected, prompt, api_key)
+                corrected = future.result()
+            elif active_provider == "openrouter":
+                if not is_agent_mode:
+                    prompt = openrouter_prompt
+                else:
+                    logging.info("Modo Agente ativado. Usando prompt do Agente para o OpenRouter.")
+                    prompt = self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
+
+                model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
+                future = self.executor.submit(self.openrouter_api.correct_text_async, corrected, prompt, api_key, model)
+                corrected = future.result()
+            else:
+                logging.error(f"Provedor de IA desconhecido: {active_provider}")
+
+        except Exception as exc:
+            logging.error(f"Erro ao corrigir texto: {exc}")
+            if future and not future.done():
+                future.cancel()
         finally:
             self.correction_in_progress = False
-            still_transcribing = (
-                self.is_state_transcribing_fn()
-                if self.is_state_transcribing_fn
-                else was_transcribing_when_started
-            )
-            if was_transcribing_when_started and still_transcribing:
-                if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
-                    logging.info(f"Transcrição corrigida: {corrected}")
-                self.on_transcription_result_callback(corrected, text)
-            else:
-                logging.warning(
-                    "Estado mudou antes da correção de texto. UI não será atualizada."
-                )
+            # O resultado da correção deve ser sempre retornado, independentemente
+            # de uma mudança de estado subsequente, para evitar perda de dados do usuário.
+            if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
+                logging.info(f"Transcrição corrigida: {corrected}")
+            self.on_transcription_result_callback(corrected, text)
 
     def _get_dynamic_batch_size(self) -> int:
         if not torch.cuda.is_available() or self.gpu_index < 0:
@@ -401,15 +413,16 @@ class TranscriptionHandler:
                             "Estado mudou antes do resultado do agente. UI não será atualizada."
                         )
             else:
-                service = self._get_text_correction_service()
+                self._get_text_correction_service()
                 was_transcribing_when_started = (
                     self.is_state_transcribing_fn()
                     if self.is_state_transcribing_fn
                     else False
                 )
+                openrouter_prompt = self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
                 self.correction_thread = threading.Thread(
                     target=self._async_text_correction,
-                    args=(text_result, service, was_transcribing_when_started),
+                    args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt, was_transcribing_when_started),
                     daemon=True,
                     name="TextCorrectionThread",
                 )
