@@ -42,6 +42,9 @@ def setup_fake_genai(monkeypatch):
     fake_google.generativeai = fake_genai
     monkeypatch.setitem(sys.modules, "google", fake_google)
     monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai)
+    import importlib
+    if "src.gemini_api" in sys.modules:
+        importlib.reload(sys.modules["src.gemini_api"])
 
 
 

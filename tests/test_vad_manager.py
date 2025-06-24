@@ -11,7 +11,13 @@ class DummyTensor(SimpleNamespace):
         return np.zeros((1,), dtype=np.float32)
 
 # Evita dependência real de torch durante os testes
-sys.modules.setdefault("torch", SimpleNamespace(from_numpy=lambda *_: DummyTensor()))
+sys.modules.setdefault(
+    "torch",
+    SimpleNamespace(
+        from_numpy=lambda *_: DummyTensor(),
+        cuda=SimpleNamespace(is_available=lambda: False),
+    ),
+)
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))

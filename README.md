@@ -35,7 +35,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
 *   **Automatically remove silent sections** using the Silero VAD. Initialization uses `onnxruntime` with automatic selection of `CUDAExecutionProvider` when available, falling back to `CPUExecutionProvider`.
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
-*   **Simplified State Management:** the former "SAVING" state was removed as no functionality depended on it.
+*   **Unified `TRANSCRIBING` State:** recording, Whisper processing, and optional AI correction all occur while the application remains in this state. Once the final text is ready, the state returns to `IDLE`.
 
 ## System Architecture
 
@@ -99,10 +99,10 @@ Follow these steps carefully to get the app running on your Windows computer.
 
 You need to install two essential tools before setting up the application:
 
-1.  **Install Python 3.8 or higher:**
+1.  **Install Python 3.9 or higher:**
     *   Python is the programming language the application is built with.
     *   Go to the official Python website: [https://www.python.org/downloads/](https://www.python.org/downloads/)
-    *   Download the latest version of Python 3.8 or newer for Windows.
+    *   Download the latest version of Python 3.9 or newer for Windows.
     *   Run the downloaded installer.
     *   **VERY IMPORTANT:** On the first screen of the installer, make sure to check the box that says **"Add Python to PATH"**. This step is crucial! If you miss this, you won't be able to run Python commands easily from your terminal. If you forget, you might need to uninstall and reinstall Python.
     *   Follow the rest of the installer prompts (usually clicking "Next" or "Install").
@@ -256,6 +256,10 @@ Once the application is running and configured:
 5.  **Wait for Transcription:** The application will process the audio. This might take a few moments depending on the length of the recording and whether you are using CPU or GPU for transcription. If text correction is enabled, it will also communicate with the API.
 6.  **Text Appears:** The transcribed (and corrected) text will automatically appear in the application window that was active when you stopped recording.
 
+## Safe Shutdown
+
+The application terminates immediately and safely when closed. Even if a transcription is still running, the executor shuts down to prevent zombie processes.
+
 ## Troubleshooting
 
 ### Hotkeys Stop Working on Windows 11
@@ -280,10 +284,9 @@ If `pip install -r requirements.txt` fails or the application doesn't run due to
 If you encounter the message `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
 update to the latest version. The attribute is now properly initialized in `TranscriptionHandler.__init__`.
 
-### New callback `on_transcription_cancelled_callback`
+### Stop Signal Replaces Cancellation
 
-For developers instantiating `TranscriptionHandler` manually, there is now an optional `on_transcription_cancelled_callback` parameter. It
-is invoked when `cancel_transcription()` is called and the segment is still being processed, allowing you to reset state or close custom windows.
+Transcription can now be halted at any moment by sending a **stop signal** to `TranscriptionHandler`. The previous cancellation method and its related callback have been removed to simplify the API and improve reliability.
 
 ## Contributing
 
