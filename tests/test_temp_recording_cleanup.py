@@ -72,12 +72,6 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
         def is_transcription_running(self):
             return False
 
-        def cancel_transcription(self):
-            pass
-
-        def cancel_text_correction(self):
-            pass
-
         def shutdown(self):
             pass
 
@@ -113,9 +107,6 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     app = core_module.AppCore(dummy_root)
     app.current_state = core_module.STATE_IDLE
 
-    # Evita erros caso o AppCore envie stop signal para métodos inexistentes
-    app.cancel_transcription = lambda: None
-    app.cancel_text_correction = lambda: None
 
     app.start_recording()
     app.stop_recording()
