@@ -107,7 +107,6 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     app = core_module.AppCore(dummy_root)
     app.current_state = core_module.STATE_IDLE
 
-
     app.start_recording()
     app.stop_recording()
 
