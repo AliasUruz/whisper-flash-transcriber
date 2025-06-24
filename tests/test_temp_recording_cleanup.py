@@ -72,12 +72,6 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
         def is_transcription_running(self):
             return False
 
-        def cancel_transcription(self):
-            pass
-
-        def cancel_text_correction(self):
-            pass
-
         def shutdown(self):
             pass
 
