@@ -745,6 +745,12 @@ class AppCore:
         except Exception as e:
             logging.error(f"Error during hotkey cleanup in shutdown: {e}")
 
+        if self.ui_manager and getattr(self.ui_manager, "tray_icon", None):
+            try:
+                self.ui_manager.tray_icon.stop()
+            except Exception as e:
+                logging.error(f"Erro ao encerrar tray icon: {e}")
+
         # Sinaliza para o AudioHandler parar a gravação e processamento
         if self.audio_handler.is_recording:
             logging.warning("Recording active during shutdown. Forcing stop...")
@@ -763,16 +769,17 @@ class AppCore:
                     logging.error(f"Error stopping audio stream on close: {e}")
             self.audio_handler.recording_data.clear()
 
-        with self.state_lock:
-            if self.current_state == STATE_TRANSCRIBING:
-                logging.warning(
-                    "Shutting down while transcription is in progress. Transcription may not complete."
-                )
+        if self.transcription_handler:
+            try:
+                self.transcription_handler.shutdown()
+            except Exception as e:
+                logging.error(f"Error shutting down TranscriptionHandler executor: {e}")
 
-        try:
-            self.transcription_handler.shutdown()
-        except Exception as e:
-            logging.error(f"Error shutting down TranscriptionHandler executor: {e}")
+        if hasattr(self.audio_handler, "cleanup"):
+            try:
+                self.audio_handler.cleanup()
+            except Exception as e:
+                logging.error(f"Erro no cleanup do AudioHandler: {e}")
 
         if self.reregister_timer_thread and self.reregister_timer_thread.is_alive():
             self.reregister_timer_thread.join(timeout=1.5)

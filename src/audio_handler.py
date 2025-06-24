@@ -324,3 +324,21 @@ class AudioHandler:
         self._vad_silence_counter = 0.0
 
         logging.info("AudioHandler: Configurações atualizadas.")
+
+    def cleanup(self):
+        """Libera recursos do stream de áudio e limpa dados temporários."""
+        if self.is_recording:
+            self.stop_recording()
+        elif self.audio_stream is not None:
+            try:
+                if self.audio_stream.active:
+                    self.audio_stream.stop()
+                self.audio_stream.close()
+                logging.info("Audio stream stopped during cleanup.")
+            except Exception as e:
+                logging.error(f"Erro ao fechar stream de áudio: {e}")
+            finally:
+                self.audio_stream = None
+
+        self.recording_data.clear()
+        self.temp_file_path = None
