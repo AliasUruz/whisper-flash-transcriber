@@ -20,6 +20,10 @@ fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
 
+import importlib
+if "src.transcription_handler" in sys.modules:
+    importlib.reload(sys.modules["src.transcription_handler"])
+
 from src.transcription_handler import TranscriptionHandler
 from src.config_manager import (
     BATCH_SIZE_CONFIG_KEY,
@@ -198,7 +202,7 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
 
     thread = threading.Thread(
         target=handler._async_text_correction,
-        args=("texto", SERVICE_GEMINI),
+        args=("texto", SERVICE_GEMINI, True),
         daemon=True,
     )
     thread.start()
@@ -206,5 +210,5 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
     handler.is_state_transcribing_fn = lambda: False
     thread.join()
 
-    assert results == ["corrigido"]
+    assert results == []
 

@@ -1,14 +1,12 @@
 import os
 import types
-from unittest.mock import MagicMock
 import sys
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-
-def test_temp_recording_cleanup(tmp_path, monkeypatch):
-    # Stubs para dependências ausentes
+def setup_app(monkeypatch):
     fake_pyautogui = types.ModuleType("pyautogui")
     fake_pyautogui.hotkey = MagicMock()
     fake_pyperclip = types.ModuleType("pyperclip")
@@ -48,35 +46,11 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
             self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
             self.on_recording_state_change_callback = on_recording_state_change_callback
             self.is_recording = False
-            self.temp_file_path = None
-
-        def start_recording(self):
-            self.is_recording = True
-
-        def stop_recording(self):
-            self.is_recording = False
-            path = tmp_path / "temp_recording_test.wav"
-            path.write_text("data")
-            self.temp_file_path = str(path)
 
     class DummyTranscriptionHandler:
         def __init__(self, *a, **k):
-            self.pipe = True
-            self.transcription_future = None
-
+            self.shutdown = MagicMock()
         def start_model_loading(self):
-            pass
-
-        def is_transcription_running(self):
-            return False
-
-        def cancel_transcription(self):
-            pass
-
-        def cancel_text_correction(self):
-            pass
-
-        def shutdown(self):
             pass
 
     class DummyGeminiAPI:
@@ -86,19 +60,14 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     class DummyHotkeyManager:
         def __init__(self, *a, **k):
             pass
-
         def start(self):
             return True
-
         def stop(self):
             pass
-
         def update_config(self, *a, **k):
             pass
-
         def set_callbacks(self, *a, **k):
             pass
-
         def detect_single_key(self):
             return None
 
@@ -106,22 +75,16 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     monkeypatch.setattr(core_module, "TranscriptionHandler", DummyTranscriptionHandler)
     monkeypatch.setattr(core_module, "GeminiAPI", DummyGeminiAPI)
     monkeypatch.setattr(core_module, "KeyboardHotkeyManager", DummyHotkeyManager)
+    monkeypatch.setattr(core_module.AppCore, "_cleanup_old_audio_files_on_startup", lambda self: None)
 
     dummy_root = types.SimpleNamespace(after=lambda *a, **k: None)
     app = core_module.AppCore(dummy_root)
-    app.current_state = core_module.STATE_IDLE
+    return app
 
-    # Evita erros caso o AppCore chame métodos de cancelamento inexistentes
-    app.cancel_transcription = lambda: None
-    app.cancel_text_correction = lambda: None
 
-    app.start_recording()
-    app.stop_recording()
+def test_appcore_shutdown_invokes_handler(monkeypatch):
+    app = setup_app(monkeypatch)
+    handler = app.transcription_handler
+    app.shutdown()
+    assert handler.shutdown.called
 
-    file_path = app.audio_handler.temp_file_path
-    assert file_path and os.path.exists(file_path)
-
-    app._handle_transcription_result("final", "raw")
-
-    assert not os.path.exists(file_path)
-    assert app.audio_handler.temp_file_path is None

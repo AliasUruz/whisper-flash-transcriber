@@ -398,6 +398,6 @@ class TranscriptionHandler:
     def shutdown(self) -> None:
         """Encerra o executor de transcrição."""
         try:
-            self.transcription_executor.shutdown(wait=False)
+            self.transcription_executor.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
             logging.error(f"Erro ao encerrar o executor de transcrição: {e}")
