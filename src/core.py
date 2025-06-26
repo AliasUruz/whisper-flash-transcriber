@@ -59,7 +59,7 @@ class AppCore:
         self.config_manager = ConfigManager()
         self.audio_handler = AudioHandler(
             self.config_manager,
-            on_audio_segment_ready_callback=self._on_audio_data_ready,
+            on_audio_segment_ready_callback=self._on_audio_segment_ready,
             on_recording_state_change_callback=self._set_state
         )
         self.gemini_api = GeminiAPI(self.config_manager) # Instancia o GeminiAPI
