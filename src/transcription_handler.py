@@ -15,7 +15,6 @@ from .config_manager import (
     SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
     OPENROUTER_API_KEY_CONFIG_KEY, OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
-    AI_PROVIDER_CONFIG_KEY,
     GEMINI_AGENT_PROMPT_CONFIG_KEY,
     OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
@@ -186,11 +185,19 @@ class TranscriptionHandler:
         corrected = text  # Default to original text
         future = None
         try:
-            active_provider = self.config_manager.get(AI_PROVIDER_CONFIG_KEY)
+            active_provider = self._get_text_correction_service()
+            if active_provider == SERVICE_NONE:
+                logging.info(
+                    "Correção de texto desativada ou provedor indisponível."
+                )
+                return
+
             api_key = self.config_manager.get_api_key(active_provider)
 
             if not api_key:
-                logging.warning(f"Nenhuma chave de API encontrada para o provedor {active_provider}. Pulando correção de texto.")
+                logging.warning(
+                    f"Nenhuma chave de API encontrada para o provedor {active_provider}. Pulando correção de texto."
+                )
                 return
 
             if active_provider == "gemini":
