@@ -167,6 +167,71 @@ class OpenRouterAPI:
         )
         return text
 
-    def correct_text_async(self, text: str, prompt: str, api_key: str, model: str) -> str:
+    def correct_text_async(
+        self, text: str, prompt: str, api_key: str, model: str
+    ) -> str:
+        """Corrige texto usando prompt customizado de forma assíncrona.
+
+        Esta função reusa a lógica de :py:meth:`correct_text`, mas permite
+        especificar um *prompt* diferente, do qual são derivados tanto a
+        mensagem de sistema quanto a do usuário.
+        """
         self.reinitialize_client(api_key=api_key, model_id=model)
-        return self.correct_text(text)
+
+        if not text or not text.strip():
+            logging.warning(
+                "Empty text provided to OpenRouter API; skipping correction"
+            )
+            return text
+
+        system_message = prompt.replace("{text}", "").strip()
+        user_message = text
+
+        payload = {
+            "model": self.model_id,
+            "messages": [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 10000,
+        }
+
+        for attempt in range(3):
+            try:
+                logging.info(
+                    "Sending text to OpenRouter API (attempt %s/%s)",
+                    attempt + 1,
+                    3,
+                )
+                response = requests.post(
+                    self.base_url,
+                    headers=self.headers,
+                    data=json.dumps(payload),
+                    timeout=30,
+                )
+
+                response.raise_for_status()
+                result = response.json()
+
+                if "choices" in result and result["choices"]:
+                    corrected_text = result["choices"][0]["message"]["content"]
+                    return corrected_text
+                else:
+                    logging.error(
+                        "Unexpected response format from OpenRouter API: %s",
+                        result,
+                    )
+            except requests.exceptions.RequestException as e:
+                logging.error("Error calling OpenRouter API: %s", e)
+                if attempt < 2:
+                    time.sleep(1)
+            except Exception as e:
+                logging.error("Unexpected error with OpenRouter API: %s", e)
+                break
+
+        logging.warning(
+            "Failed to correct text with OpenRouter API, "
+            "returning original text"
+        )
+        return text
