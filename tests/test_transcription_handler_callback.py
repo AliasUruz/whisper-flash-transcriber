@@ -67,8 +67,8 @@ class DummyConfig:
             TEXT_CORRECTION_TIMEOUT_CONFIG_KEY: 30,
         }
 
-    def get(self, key):
-        return self.data.get(key)
+    def get(self, key, default=None):
+        return self.data.get(key, default)
 
     def get_api_key(self, provider):
         if provider == SERVICE_GEMINI:

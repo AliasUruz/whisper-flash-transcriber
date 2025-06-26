@@ -18,8 +18,8 @@ class DummyConfig:
             'prompt_agentico': 'agent prompt',
         }
 
-    def get(self, key):
-        return self.values.get(key)
+    def get(self, key, default=None):
+        return self.values.get(key, default)
 
 
 created_models = []

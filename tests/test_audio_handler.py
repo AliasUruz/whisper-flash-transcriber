@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 fake_sd = types.SimpleNamespace(
     PortAudioError=Exception,
     InputStream=MagicMock(),
-    sleep=lambda ms: time.sleep(ms / 1000),
+    sleep=time.sleep,
 )
 fake_onnx = types.ModuleType('onnxruntime')
 fake_onnx.InferenceSession = MagicMock()
@@ -44,8 +44,8 @@ class DummyConfig:
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 
-    def get(self, key):
-        return self.data.get(key)
+    def get(self, key, default=None):
+        return self.data.get(key, default)
 
 
 class AudioHandlerTest(unittest.TestCase):
@@ -79,21 +79,17 @@ class AudioHandlerTest(unittest.TestCase):
 
         handler = AudioHandler(self.config, on_ready, lambda *_: None)
 
-        # Simulated recording task that waits for stop signal then sleeps
-        def mock_record_audio_task_with_delay(self_instance):
-            self_instance.stream_started = True
-            self_instance.recording_data.append(np.zeros((1, 1), dtype=np.float32))
-            while not self_instance._stop_event.is_set() and self_instance.is_recording:
-                time.sleep(0.01)
-            time.sleep(0.1)  # Delay that stop_recording should wait for
+        original_record_audio_task = handler._record_audio_task
+
+        # This mock will be executed by the thread created in start_recording
+        def mock_record_audio_task_with_delay():
+            # Call the original task logic
+            original_record_audio_task()
+            # Simulate some work that happens *after* the recording loop exits
+            time.sleep(0.1)  # This is the delay that stop_recording should wait for
 
         # Patch the method that the thread will execute
-        with patch.object(
-            AudioHandler,
-            '_record_audio_task',
-            side_effect=mock_record_audio_task_with_delay,
-            autospec=True,
-        ):
+        with patch.object(handler, '_record_audio_task', mock_record_audio_task_with_delay):
             with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
                 with patch('logging.warning') as mock_warn:
                     started = handler.start_recording()

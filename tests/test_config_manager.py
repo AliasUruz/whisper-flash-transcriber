@@ -5,7 +5,7 @@ import os, sys
 from unittest import mock
 import json
 import pytest
-from unittest import mock
+import unittest.mock as mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 from src import config_manager

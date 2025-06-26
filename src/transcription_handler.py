@@ -19,8 +19,10 @@ from .config_manager import (
     OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
-    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY, # Nova constante
+    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
+    DISPLAY_TRANSCRIPTS_KEY,  # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -81,6 +83,10 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.text_correction_timeout = self.config_manager.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.text_correction_timeout = self.config_manager.get(
+            TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+            30,
+        )
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -121,6 +127,10 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.text_correction_timeout = self.config_manager.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.text_correction_timeout = self.config_manager.get(
+            TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+            30,
+        )
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
@@ -203,7 +213,7 @@ class TranscriptionHandler:
                     api_key,
                     self.config_manager.get("gemini_model"),
                 )
-                corrected = future.result(timeout=timeout_val)
+                corrected = future.result(timeout=self.text_correction_timeout)
             elif active_provider == "openrouter":
                 if not is_agent_mode:
                     prompt = openrouter_prompt
@@ -219,23 +229,22 @@ class TranscriptionHandler:
                     api_key,
                     model,
                 )
-                corrected = future.result()
+                corrected = future.result(timeout=self.text_correction_timeout)
             else:
                 logging.error(f"Provedor de IA desconhecido: {active_provider}")
 
-        except concurrent.futures.TimeoutError as exc:
+        except concurrent.futures.TimeoutError:
             logging.error(
-                "Corre\u00e7\u00e3o de texto excedeu o tempo limite de %ss", timeout_val
+                "Correção de texto excedeu o tempo limite. Retornando texto original."
             )
             if future and not future.done():
                 future.cancel()
             corrected = text
-
         except Exception as exc:
             logging.error(f"Erro ao corrigir texto: {exc}")
             if future and not future.done():
                 future.cancel()
-            corrected = text # Ensure original text is used if correction fails
+            corrected = text  # Ensure original text is used if correction fails
         finally:
             self.correction_in_progress = False
             # O resultado da correção deve ser sempre retornado, independentemente
