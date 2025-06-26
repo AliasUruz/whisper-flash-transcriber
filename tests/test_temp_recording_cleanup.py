@@ -2,6 +2,7 @@ import os
 import types
 from unittest.mock import MagicMock
 import sys
+import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
@@ -58,6 +59,8 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
             path = tmp_path / "temp_recording_test.wav"
             path.write_text("data")
             self.temp_file_path = str(path)
+            audio = np.zeros(1600, dtype=np.float32)
+            self.on_audio_segment_ready_callback(audio)
 
     class DummyTranscriptionHandler:
         def __init__(self, *a, **k):
