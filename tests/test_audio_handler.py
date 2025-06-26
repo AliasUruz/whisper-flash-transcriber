@@ -165,7 +165,6 @@ class AudioHandlerTest(unittest.TestCase):
             while not self._stop_event.is_set() and self.is_recording:
                 self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
                 time.sleep(0.01)
-            self.stream_started = False
             self._stop_event.clear()
             self._record_thread = None
 

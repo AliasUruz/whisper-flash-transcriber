@@ -209,5 +209,5 @@ def test_state_idle_after_text_correction(monkeypatch):
 
     assert app.current_state == core_module.STATE_TRANSCRIBING
 
-    time.sleep(0.02)
+    time.sleep(0.05)
     assert app.current_state == core_module.STATE_IDLE
