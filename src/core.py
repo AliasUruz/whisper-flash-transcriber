@@ -59,7 +59,7 @@ class AppCore:
         self.config_manager = ConfigManager()
         self.audio_handler = AudioHandler(
             self.config_manager,
-            on_audio_segment_ready_callback=self._on_audio_segment_ready,
+            on_audio_segment_ready_callback=self._on_audio_data_ready,
             on_recording_state_change_callback=self._set_state
         )
         self.gemini_api = GeminiAPI(self.config_manager) # Instancia o GeminiAPI
@@ -136,14 +136,14 @@ class AppCore:
             self._set_state(STATE_IDLE) # Volta para o estado IDLE
             return # Interrompe o processamento
 
-        # Captura o estado do modo agente ANTES de qualquer coisa.
-        is_agent_mode = self.agent_mode_active
-        
-        # Reseta o estado imediatamente após capturá-lo para a próxima gravação.
-        if is_agent_mode:
-            self.agent_mode_active = False
+        with self.agent_mode_lock:
+            is_agent_mode = self.agent_mode_active
+            if is_agent_mode:
+                self.agent_mode_active = False
 
-        logging.info(f"AppCore: Segmento de áudio pronto ({duration_seconds:.2f}s). Enviando para TranscriptionHandler (Modo Agente: {is_agent_mode}).")
+        logging.info(
+            f"AppCore: Segmento de áudio pronto ({duration_seconds:.2f}s). Enviando para TranscriptionHandler (Modo Agente: {is_agent_mode})."
+        )
         
         # Passa o estado capturado para o handler de transcrição.
         self.transcription_handler.transcribe_audio_segment(audio_segment, is_agent_mode)

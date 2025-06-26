@@ -22,11 +22,13 @@ DEFAULT_CONFIG = {
     "text_correction_service": "none",
     "openrouter_api_key": "",
     "openrouter_model": "deepseek/deepseek-chat-v3-0324:free",
+    "openrouter_prompt": "",
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
     "ai_provider": "gemini",
     "openrouter_agent_prompt": "",
+    "openrouter_prompt": "",
     "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
     "gemini_prompt": """You are a meticulous speech-to-text correction AI. Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below while preserving the original content and structure as closely as possible.
 Key instructions:
@@ -265,7 +267,10 @@ class ConfigManager:
             )
             self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
 
-        logging.info(f"Configurações aplicadas: {self.config}")
+        safe_config = self.config.copy()
+        safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
+        safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
+        logging.info(f"Configurações aplicadas: {safe_config}")
 
 
     def save_config(self):
