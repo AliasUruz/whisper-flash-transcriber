@@ -23,6 +23,7 @@ def setup_app(monkeypatch):
     fake_transformers.AutoProcessor = MagicMock()
     fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
     fake_keyboard = types.ModuleType("keyboard")
+    fake_keyboard.unhook_all = lambda *a, **k: None
     fake_google = types.ModuleType("google")
     fake_genai = types.ModuleType("generativeai")
     fake_types = types.ModuleType("types")

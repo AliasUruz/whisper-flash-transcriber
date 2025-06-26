@@ -22,6 +22,7 @@ fake_transformers.pipeline = MagicMock()
 fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 fake_keyboard = types.ModuleType("keyboard")
+fake_keyboard.unhook_all = lambda *a, **k: None
 fake_google = types.ModuleType("google")
 fake_genai = types.ModuleType("generativeai")
 fake_genai.configure = lambda api_key=None: None
@@ -151,6 +152,7 @@ def setup_app(monkeypatch):
     fake_transformers.AutoProcessor = MagicMock()
     fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
     fake_keyboard = types.ModuleType("keyboard")
+    fake_keyboard.unhook_all = lambda *a, **k: None
     fake_google = types.ModuleType("google")
     fake_genai = types.ModuleType("generativeai")
     fake_genai.configure = lambda api_key=None: None
@@ -207,5 +209,5 @@ def test_state_idle_after_text_correction(monkeypatch):
 
     assert app.current_state == core_module.STATE_TRANSCRIBING
 
-    time.sleep(0.02)
+    time.sleep(0.05)
     assert app.current_state == core_module.STATE_IDLE

@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 fake_sd = types.SimpleNamespace(
     PortAudioError=Exception,
     InputStream=MagicMock(),
-    sleep=lambda *_a, **_k: None,
+    sleep=lambda ms: None
 )
 fake_onnx = types.ModuleType('onnxruntime')
 fake_onnx.InferenceSession = MagicMock()
@@ -79,15 +79,16 @@ class AudioHandlerTest(unittest.TestCase):
 
         handler = AudioHandler(self.config, on_ready, lambda *_: None)
 
+        # This mock simula a captura de áudio sem depender de hardware real
         def mock_record_audio_task_with_delay():
             handler.stream_started = True
             while not handler._stop_event.is_set() and handler.is_recording:
-                handler.recording_data.append(np.zeros((1,), dtype=np.float32))
+                handler.recording_data.append(np.zeros((2, 1), dtype=np.float32))
                 time.sleep(0.01)
-            time.sleep(0.1)
-            handler.stream_started = False
             handler._stop_event.clear()
             handler._record_thread = None
+            # Simula processamento extra após sair do loop
+            time.sleep(0.1)
 
         # Patch the method that the thread will execute
         with patch.object(handler, '_record_audio_task', side_effect=mock_record_audio_task_with_delay):
@@ -125,7 +126,6 @@ class AudioHandlerTest(unittest.TestCase):
             while not self._stop_event.is_set() and self.is_recording:
                 self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
                 time.sleep(0.01)
-            self.stream_started = False
             self._stop_event.clear()
             self._record_thread = None
 
@@ -159,7 +159,6 @@ class AudioHandlerTest(unittest.TestCase):
             while not self._stop_event.is_set() and self.is_recording:
                 self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
                 time.sleep(0.01)
-            self.stream_started = False
             self._stop_event.clear()
             self._record_thread = None
 

@@ -164,7 +164,6 @@ class TranscriptionHandler:
         if self.text_correction_service == SERVICE_GEMINI and self.gemini_client and self.gemini_client.is_valid: return SERVICE_GEMINI
         return SERVICE_NONE
 
-
     def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str, was_transcribing_when_started: bool):
         if not self.text_correction_enabled:
             self.correction_in_progress = False
