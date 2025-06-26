@@ -3,6 +3,7 @@ import sys
 import importlib
 import numpy as np
 from types import SimpleNamespace
+from pathlib import Path
 
 
 class DummyTensor(SimpleNamespace):
@@ -113,3 +114,23 @@ def test_is_speech_handles_invalid_input(monkeypatch):
     vad = vad_module.VADManager()
     assert vad.is_speech(None) is False
     assert vad.is_speech([1, 2, 3]) is False
+
+
+def test_model_path_resolves_with_meipass(monkeypatch):
+    """Se sys._MEIPASS estiver definido, MODEL_PATH deve usar esse caminho."""
+    tmp_meipass = os.path.abspath("/tmp/meipass")
+    monkeypatch.setattr(sys, "_MEIPASS", tmp_meipass, raising=False)
+
+    sys.modules.pop("onnxruntime", None)
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(from_numpy=lambda *_: DummyTensor()),
+    )
+    real_onnx = importlib.import_module("onnxruntime")
+    monkeypatch.setitem(sys.modules, "onnxruntime", real_onnx)
+    vad_module = importlib.reload(importlib.import_module("src.vad_manager"))
+
+    expected_path = Path(tmp_meipass) / "models" / "silero_vad.onnx"
+    assert vad_module.MODEL_PATH == expected_path
+
