@@ -40,6 +40,7 @@ from src.config_manager import (  # noqa: E402
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
+    TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
@@ -65,10 +66,11 @@ class DummyConfig:
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY: 1.0,
             DISPLAY_TRANSCRIPTS_KEY: False,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
+            TEXT_CORRECTION_TIMEOUT_CONFIG_KEY: 30,
         }
 
-    def get(self, key):
-        return self.data.get(key)
+    def get(self, key, default=None):
+        return self.data.get(key, default)
 
 
 # Funções de callback dummy

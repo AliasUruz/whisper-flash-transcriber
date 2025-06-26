@@ -9,13 +9,16 @@ except Exception:  # Python >= 3.12
     from setuptools._distutils.util import strtobool
 
 
-def _parse_bool(value):
-    """Converte diferentes representações de booleanos em objetos ``bool``."""
+def _parse_bool(value, default=False):
+    """Converte diferentes representações de booleanos em objetos ``bool``.
+
+    Se o valor for uma string não reconhecida, retorna ``default``.
+    """
     if isinstance(value, str):
         try:
             return bool(strtobool(value))
         except ValueError:
-            return bool(value)
+            return None
     return bool(value)
 
 # --- Constantes de Configuração (movidas de whisper_tkinter.py) ---
@@ -68,6 +71,7 @@ Transcribed speech: {text}""",
         "gemini-2.5-flash",
         "gemini-2.5-pro"
     ],
+    "text_correction_timeout": 30,
     "save_temp_recordings": False,
     "min_transcription_duration": 1.0 # Nova configuração
 }
@@ -110,6 +114,7 @@ GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 OPENROUTER_AGENT_PROMPT_CONFIG_KEY = OPENROUTER_PROMPT_CONFIG_KEY
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
+TEXT_CORRECTION_TIMEOUT_CONFIG_KEY = "text_correction_timeout"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
@@ -236,14 +241,32 @@ class ConfigManager:
             self.config["manual_batch_size"] = self.default_config["manual_batch_size"]
 
         # Validate hotkey_stability_service_enabled
-        self.config["hotkey_stability_service_enabled"] = _parse_bool(
-            self.config.get("hotkey_stability_service_enabled", self.default_config["hotkey_stability_service_enabled"])
+        hse_val = _parse_bool(
+            self.config.get(
+                "hotkey_stability_service_enabled",
+                self.default_config["hotkey_stability_service_enabled"],
+            )
         )
+        if hse_val is None:
+            logging.warning(
+                f"Invalid hotkey_stability_service_enabled '{self.config.get('hotkey_stability_service_enabled')}'. Using default ({self.default_config['hotkey_stability_service_enabled']})."
+            )
+            hse_val = self.default_config["hotkey_stability_service_enabled"]
+        self.config["hotkey_stability_service_enabled"] = hse_val
 
         # Validate text_correction_enabled
-        self.config["text_correction_enabled"] = _parse_bool(
-            self.config.get("text_correction_enabled", self.default_config["text_correction_enabled"])
+        tce_val = _parse_bool(
+            self.config.get(
+                "text_correction_enabled",
+                self.default_config["text_correction_enabled"],
+            )
         )
+        if tce_val is None:
+            logging.warning(
+                f"Invalid text_correction_enabled '{self.config.get('text_correction_enabled')}'. Using default ({self.default_config['text_correction_enabled']})."
+            )
+            tce_val = self.default_config["text_correction_enabled"]
+        self.config["text_correction_enabled"] = tce_val
 
         # Validate text_correction_service
         if self.config.get("text_correction_service") not in [SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI]:
@@ -257,6 +280,24 @@ class ConfigManager:
         else:
             # Ensure all elements in the list are strings
             self.config["gemini_model_options"] = [str(m) for m in self.config["gemini_model_options"]]
+
+        try:
+            raw_timeout = self.config.get(
+                TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+                self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY],
+            )
+            timeout_val = float(raw_timeout)
+            if timeout_val <= 0:
+                logging.warning(
+                    f"Invalid text_correction_timeout '{timeout_val}'. Using default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+                )
+                timeout_val = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+            self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = timeout_val
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid text_correction_timeout value '{self.config.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY)}' in config. Using default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+            )
+            self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
 
         # Validate min_record_duration
         try:
@@ -298,7 +339,8 @@ class ConfigManager:
         
         # Unificar auto_paste e agent_auto_paste
         self.config["auto_paste"] = _parse_bool(
-            self.config.get("auto_paste", self.default_config["auto_paste"])
+            self.config.get("auto_paste", self.default_config["auto_paste"]),
+            default=self.default_config["auto_paste"],
         )
         self.config["agent_auto_paste"] = self.config["auto_paste"]  # Garante que agent_auto_paste seja sempre igual a auto_paste
 
@@ -307,7 +349,8 @@ class ConfigManager:
             self.config.get(
                 DISPLAY_TRANSCRIPTS_KEY,
                 self.default_config[DISPLAY_TRANSCRIPTS_KEY],
-            )
+            ),
+            default=self.default_config[DISPLAY_TRANSCRIPTS_KEY],
         )
 
         # Persistência opcional de gravações temporárias
@@ -315,7 +358,8 @@ class ConfigManager:
             self.config.get(
                 SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
-            )
+            ),
+            default=self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
         )
     
         # Para gpu_index_specified e batch_size_specified
@@ -349,15 +393,37 @@ class ConfigManager:
             logging.warning(f"Invalid min_transcription_duration value '{self.config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]}).")
             self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
 
+        # Lógica de validação para text_correction_timeout
+        try:
+            raw_timeout_val = loaded_config.get(
+                TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+                self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY],
+            )
+            timeout_val = float(raw_timeout_val)
+            if timeout_val <= 0:
+                logging.warning(
+                    f"Invalid text_correction_timeout '{timeout_val}'. Using default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+                )
+                self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+            else:
+                self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = timeout_val
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid text_correction_timeout value '{self.config.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+            )
+            self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+
         # Lógica para uso do VAD
         self.config[USE_VAD_CONFIG_KEY] = _parse_bool(
-            self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])
+            self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY]),
+            default=self.default_config[USE_VAD_CONFIG_KEY],
         )
         self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = _parse_bool(
             self.config.get(
                 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
-                self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY]
-            )
+                self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
+            ),
+            default=self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
         )
         try:
             raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
