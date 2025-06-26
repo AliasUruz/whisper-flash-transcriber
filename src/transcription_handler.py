@@ -348,19 +348,17 @@ class TranscriptionHandler:
                 attn_implementation="flash_attention_2" if self.use_flash_attention_2 else None,
             )
 
-            # Converter para BetterTransformer se habilitado
-            if self.use_flash_attention_2:
+            if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
                 try:
                     from optimum.bettertransformer import BetterTransformer
-                    model = (
-                        model.to_bettertransformer()
-                        if hasattr(model, "to_bettertransformer")
-                        else BetterTransformer.transform(model)
-                    )
-                    logging.info("Modelo convertido com BetterTransformer.")
-                except Exception as e:
+                    if hasattr(model, "to_bettertransformer"):
+                        model = model.to_bettertransformer()
+                    else:
+                        model = BetterTransformer.transform(model)
+                    logging.info("Modelo convertido para Flash Attention 2.")
+                except Exception as exc:
                     logging.warning(
-                        f"Falha ao aplicar BetterTransformer: {e}. Continuando com o modelo padrão."
+                        f"Falha ao aplicar Flash Attention 2: {exc}. Prosseguindo com o modelo padrão."
                     )
 
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
