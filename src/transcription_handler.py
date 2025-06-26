@@ -18,6 +18,7 @@ from .config_manager import (
     AI_PROVIDER_CONFIG_KEY,
     GEMINI_AGENT_PROMPT_CONFIG_KEY,
     OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
+    GEMINI_PROMPT_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY, # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
@@ -77,7 +78,7 @@ class TranscriptionHandler:
         self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
         self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
-        self.gemini_prompt = self.config_manager.get("gemini_prompt")
+        self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
 
         self.openrouter_client = None
@@ -116,7 +117,7 @@ class TranscriptionHandler:
         self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
         self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
-        self.gemini_prompt = self.config_manager.get("gemini_prompt")
+        self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
@@ -200,7 +201,7 @@ class TranscriptionHandler:
                     prompt = openrouter_prompt
                 else:
                     logging.info("Modo Agente ativado. Usando prompt do Agente para o OpenRouter.")
-                    prompt = self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
+                    prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
 
                 model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
                 future = self.executor.submit(self.openrouter_api.correct_text_async, corrected, prompt, api_key, model)
@@ -420,11 +421,7 @@ class TranscriptionHandler:
                     if self.is_state_transcribing_fn
                     else False
                 )
-                openrouter_prompt = (
-                    self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
-                    if agent_mode
-                    else self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
-                )
+                openrouter_prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
                 self.correction_thread = threading.Thread(
                     target=self._async_text_correction,
                     args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt, was_transcribing_when_started),

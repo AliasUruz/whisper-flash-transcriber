@@ -5,7 +5,7 @@ from typing import Optional
 import google.generativeai as genai
 
 
-from .config_manager import ConfigManager  # Importar ConfigManager
+from .config_manager import ConfigManager, GEMINI_PROMPT_CONFIG_KEY  # Importar ConfigManager e constante
 
 
 class GeminiAPI:
@@ -66,7 +66,7 @@ class GeminiAPI:
             or self.config_manager.get("gemini_api_key")
         )
         self.current_model_id = self.config_manager.get('gemini_model')
-        self.current_prompt = self.config_manager.get('gemini_prompt')
+        self.current_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
 
         # A reinicialização considera apenas chave e modelo. O prompt é lido a
         # cada chamada pública, portanto não dispara reload.
@@ -182,7 +182,7 @@ class GeminiAPI:
         """
         if not text:
             return ""
-        correction_prompt_template = self.config_manager.get('gemini_prompt')
+        correction_prompt_template = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         full_prompt = correction_prompt_template.format(text=text)
         corrected_text = self._execute_request(full_prompt)
         return corrected_text if corrected_text else text
