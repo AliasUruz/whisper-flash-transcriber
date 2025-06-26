@@ -54,9 +54,11 @@ class KeyboardHotkeyManagerFailureTests(unittest.TestCase):
         self.assertFalse(self.manager.is_running)
 
     def test_restart_calls_unhook_and_sleep(self):
-        with patch('src.keyboard_hotkey_manager.keyboard.unhook_all') as mock_unhook_all,
-             patch('src.keyboard_hotkey_manager.time.sleep') as mock_sleep,
-             patch.object(self.manager, "_register_hotkeys", return_value=True):
+        with (
+            patch('src.keyboard_hotkey_manager.keyboard.unhook_all') as mock_unhook_all,
+            patch('src.keyboard_hotkey_manager.time.sleep') as mock_sleep,
+            patch.object(self.manager, "_register_hotkeys", return_value=True)
+        ):
             
             self.manager.restart()
             
