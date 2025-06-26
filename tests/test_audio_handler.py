@@ -14,7 +14,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 # Módulos falsos para dependências nativas ausentes
 fake_sd = types.SimpleNamespace(
     PortAudioError=Exception,
-    InputStream=MagicMock()
+    InputStream=MagicMock(),
+    sleep=time.sleep,
 )
 fake_onnx = types.ModuleType('onnxruntime')
 fake_onnx.InferenceSession = MagicMock()
@@ -43,8 +44,8 @@ class DummyConfig:
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 
-    def get(self, key):
-        return self.data.get(key)
+    def get(self, key, default=None):
+        return self.data.get(key, default)
 
 
 class AudioHandlerTest(unittest.TestCase):
@@ -81,14 +82,14 @@ class AudioHandlerTest(unittest.TestCase):
         original_record_audio_task = handler._record_audio_task
 
         # This mock will be executed by the thread created in start_recording
-        def mock_record_audio_task_with_delay(self_instance):
+        def mock_record_audio_task_with_delay():
             # Call the original task logic
-            original_record_audio_task.__get__(self_instance, AudioHandler)()
+            original_record_audio_task()
             # Simulate some work that happens *after* the recording loop exits
-            time.sleep(0.1) # This is the delay that stop_recording should wait for
+            time.sleep(0.1)  # This is the delay that stop_recording should wait for
 
         # Patch the method that the thread will execute
-        with patch.object(handler, '_record_audio_task', side_effect=mock_record_audio_task_with_delay):
+        with patch.object(handler, '_record_audio_task', mock_record_audio_task_with_delay):
             with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
                 with patch('logging.warning') as mock_warn:
                     started = handler.start_recording()

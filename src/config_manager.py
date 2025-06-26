@@ -15,7 +15,7 @@ def _parse_bool(value):
         try:
             return bool(strtobool(value))
         except ValueError:
-            return bool(value)
+            return None
     return bool(value)
 
 # --- Constantes de Configuração (movidas de whisper_tkinter.py) ---
@@ -68,6 +68,7 @@ Transcribed speech: {text}""",
         "gemini-2.5-flash",
         "gemini-2.5-pro"
     ],
+    "text_correction_timeout": 30,
     "save_temp_recordings": False,
     "min_transcription_duration": 1.0 # Nova configuração
 }
@@ -110,6 +111,7 @@ GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 OPENROUTER_AGENT_PROMPT_CONFIG_KEY = OPENROUTER_PROMPT_CONFIG_KEY
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
+TEXT_CORRECTION_TIMEOUT_CONFIG_KEY = "text_correction_timeout"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
@@ -236,14 +238,32 @@ class ConfigManager:
             self.config["manual_batch_size"] = self.default_config["manual_batch_size"]
 
         # Validate hotkey_stability_service_enabled
-        self.config["hotkey_stability_service_enabled"] = _parse_bool(
-            self.config.get("hotkey_stability_service_enabled", self.default_config["hotkey_stability_service_enabled"])
+        hse_val = _parse_bool(
+            self.config.get(
+                "hotkey_stability_service_enabled",
+                self.default_config["hotkey_stability_service_enabled"],
+            )
         )
+        if hse_val is None:
+            logging.warning(
+                f"Invalid hotkey_stability_service_enabled '{self.config.get('hotkey_stability_service_enabled')}'. Using default ({self.default_config['hotkey_stability_service_enabled']})."
+            )
+            hse_val = self.default_config["hotkey_stability_service_enabled"]
+        self.config["hotkey_stability_service_enabled"] = hse_val
 
         # Validate text_correction_enabled
-        self.config["text_correction_enabled"] = _parse_bool(
-            self.config.get("text_correction_enabled", self.default_config["text_correction_enabled"])
+        tce_val = _parse_bool(
+            self.config.get(
+                "text_correction_enabled",
+                self.default_config["text_correction_enabled"],
+            )
         )
+        if tce_val is None:
+            logging.warning(
+                f"Invalid text_correction_enabled '{self.config.get('text_correction_enabled')}'. Using default ({self.default_config['text_correction_enabled']})."
+            )
+            tce_val = self.default_config["text_correction_enabled"]
+        self.config["text_correction_enabled"] = tce_val
 
         # Validate text_correction_service
         if self.config.get("text_correction_service") not in [SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI]:
@@ -348,6 +368,26 @@ class ConfigManager:
         except (ValueError, TypeError):
             logging.warning(f"Invalid min_transcription_duration value '{self.config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]}).")
             self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
+
+        # Lógica de validação para text_correction_timeout
+        try:
+            raw_timeout_val = loaded_config.get(
+                TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+                self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY],
+            )
+            timeout_val = float(raw_timeout_val)
+            if timeout_val <= 0:
+                logging.warning(
+                    f"Invalid text_correction_timeout '{timeout_val}'. Using default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+                )
+                self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+            else:
+                self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = timeout_val
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid text_correction_timeout value '{self.config.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+            )
+            self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
 
         # Lógica para uso do VAD
         self.config[USE_VAD_CONFIG_KEY] = _parse_bool(
