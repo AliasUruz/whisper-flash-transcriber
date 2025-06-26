@@ -6,12 +6,9 @@ from unittest.mock import MagicMock, patch
 import types
 import time
 import numpy as np
-import os, sys
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
-
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Módulos falsos para dependências nativas ausentes
 fake_sd = types.SimpleNamespace(
@@ -28,7 +25,7 @@ sys.modules['onnxruntime'] = fake_onnx
 sys.modules['torch'] = fake_torch
 
 from src.audio_handler import AudioHandler  # noqa: E402
-from src.config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
+from src.config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY  # noqa: E402
 
 
 class DummyConfig:
