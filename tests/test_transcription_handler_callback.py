@@ -160,18 +160,18 @@ def test_async_text_correction_service_selection(monkeypatch):
         handler.text_correction_service = service
         cfg.data[TEXT_CORRECTION_SERVICE_CONFIG_KEY] = service
         handler.gemini_api.correct_text_async.reset_mock()
-        handler.openrouter_api.correct_text_async.reset_mock()
+        handler.openrouter_api.correct_text.reset_mock()
         handler._async_text_correction("txt", False, "", "", True)
 
         if service == SERVICE_GEMINI:
             assert handler.gemini_api.correct_text_async.called
-            assert not handler.openrouter_api.correct_text_async.called
+            assert not handler.openrouter_api.correct_text.called
         elif service == SERVICE_OPENROUTER:
-            assert handler.openrouter_api.correct_text_async.called
+            assert handler.openrouter_api.correct_text.called
             assert not handler.gemini_api.correct_text_async.called
         else:
             assert not handler.gemini_api.correct_text_async.called
-            assert not handler.openrouter_api.correct_text_async.called
+            assert not handler.openrouter_api.correct_text.called
 
 
 def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
