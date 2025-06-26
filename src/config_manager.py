@@ -3,6 +3,20 @@ import json
 import logging
 import copy
 import hashlib
+try:
+    from distutils.util import strtobool
+except Exception:  # Python >= 3.12
+    from setuptools._distutils.util import strtobool
+
+
+def _parse_bool(value):
+    """Converte diferentes representações de booleanos em objetos ``bool``."""
+    if isinstance(value, str):
+        try:
+            return bool(strtobool(value))
+        except ValueError:
+            return bool(value)
+    return bool(value)
 
 # --- Constantes de Configuração (movidas de whisper_tkinter.py) ---
 CONFIG_FILE = "config.json"
@@ -187,16 +201,21 @@ class ConfigManager:
             self.config["record_mode"] = self.default_config['record_mode']
         
         # Unificar auto_paste e agent_auto_paste
-        self.config["auto_paste"] = bool(self.config.get("auto_paste", self.default_config["auto_paste"]))
-        self.config["agent_auto_paste"] = self.config["auto_paste"] # Garante que agent_auto_paste seja sempre igual a auto_paste
+        self.config["auto_paste"] = _parse_bool(
+            self.config.get("auto_paste", self.default_config["auto_paste"])
+        )
+        self.config["agent_auto_paste"] = self.config["auto_paste"]  # Garante que agent_auto_paste seja sempre igual a auto_paste
 
         # Flag para exibir transcrições brutas no log
-        self.config[DISPLAY_TRANSCRIPTS_KEY] = bool(
-            self.config.get(DISPLAY_TRANSCRIPTS_KEY, self.default_config[DISPLAY_TRANSCRIPTS_KEY])
+        self.config[DISPLAY_TRANSCRIPTS_KEY] = _parse_bool(
+            self.config.get(
+                DISPLAY_TRANSCRIPTS_KEY,
+                self.default_config[DISPLAY_TRANSCRIPTS_KEY],
+            )
         )
 
         # Persistência opcional de gravações temporárias
-        self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(
+        self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = _parse_bool(
             self.config.get(
                 SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
@@ -235,8 +254,10 @@ class ConfigManager:
             self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
 
         # Lógica para uso do VAD
-        self.config[USE_VAD_CONFIG_KEY] = bool(self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY]))
-        self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = bool(
+        self.config[USE_VAD_CONFIG_KEY] = _parse_bool(
+            self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])
+        )
+        self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = _parse_bool(
             self.config.get(
                 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
                 self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY]
