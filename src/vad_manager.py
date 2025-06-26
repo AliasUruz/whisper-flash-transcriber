@@ -1,12 +1,19 @@
 import logging
+import sys
 import numpy as np
 import onnxruntime
 import torch
 from pathlib import Path
 
-# Construir um caminho absoluto para o modelo ONNX, relativo a este arquivo.
-# Isso garante que o modelo seja encontrado independentemente do diretório de trabalho.
-MODEL_PATH = Path(__file__).resolve().parent / "models" / "silero_vad.onnx"
+# Detecta se o aplicativo está rodando em um diretório temporário (PyInstaller)
+if hasattr(sys, "_MEIPASS"):
+    base_dir = Path(sys._MEIPASS)
+else:
+    base_dir = Path(__file__).resolve().parent
+
+# Construir o caminho absoluto para o modelo ONNX
+MODEL_PATH = base_dir / "models" / "silero_vad.onnx"
+logging.info("Caminho do modelo VAD definido como '%s'", MODEL_PATH)
 
 class VADManager:
     """Gerencia a detecção de voz usando o modelo Silero."""
