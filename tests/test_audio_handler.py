@@ -133,7 +133,7 @@ class AudioHandlerTest(unittest.TestCase):
             with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
                 with patch('time.time', return_value=1111111111):
                     handler.start_recording()
-                    time.sleep(0.05)
+                    time.sleep(0.1)
                     handler.stop_recording()
                     self.assertEqual(handler.temp_file_path, 'temp_recording_1111111111.wav')
 

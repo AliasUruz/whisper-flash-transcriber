@@ -79,6 +79,7 @@ class TranscriptionHandler:
         self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
+        self.text_correction_timeout = self.config_manager.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
 
         self.openrouter_client = None
@@ -118,6 +119,7 @@ class TranscriptionHandler:
         self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
+        self.text_correction_timeout = self.config_manager.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
@@ -162,8 +164,6 @@ class TranscriptionHandler:
         if self.text_correction_service == SERVICE_GEMINI and self.gemini_client and self.gemini_client.is_valid: return SERVICE_GEMINI
         return SERVICE_NONE
 
-
-
     def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str, was_transcribing_when_started: bool):
         if not self.text_correction_enabled:
             self.correction_in_progress = False
@@ -173,6 +173,7 @@ class TranscriptionHandler:
         self.correction_in_progress = True
         corrected = text  # Default to original text
         future = None
+        timeout_val = self.text_correction_timeout or 30
         try:
             active_provider = self._get_text_correction_service()
             if active_provider == SERVICE_NONE:
@@ -195,8 +196,14 @@ class TranscriptionHandler:
                 else:
                     logging.info("Modo Agente ativado. Usando prompt do Agente para o Gemini.")
                     prompt = self.config_manager.get(GEMINI_AGENT_PROMPT_CONFIG_KEY)
-                future = self.executor.submit(self.gemini_api.correct_text_async, corrected, prompt, api_key, self.config_manager.get("gemini_model"))
-                corrected = future.result()
+                future = self.executor.submit(
+                    self.gemini_api.correct_text_async,
+                    corrected,
+                    prompt,
+                    api_key,
+                    self.config_manager.get("gemini_model"),
+                )
+                corrected = future.result(timeout=timeout_val)
             elif active_provider == "openrouter":
                 if not is_agent_mode:
                     prompt = openrouter_prompt
@@ -205,10 +212,24 @@ class TranscriptionHandler:
                     prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
 
                 model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-                future = self.executor.submit(self.openrouter_api.correct_text, corrected, prompt, api_key, model)
+                future = self.executor.submit(
+                    self.openrouter_api.correct_text_async,
+                    corrected,
+                    prompt,
+                    api_key,
+                    model,
+                )
                 corrected = future.result()
             else:
                 logging.error(f"Provedor de IA desconhecido: {active_provider}")
+
+        except concurrent.futures.TimeoutError as exc:
+            logging.error(
+                "Corre\u00e7\u00e3o de texto excedeu o tempo limite de %ss", timeout_val
+            )
+            if future and not future.done():
+                future.cancel()
+            corrected = text
 
         except Exception as exc:
             logging.error(f"Erro ao corrigir texto: {exc}")

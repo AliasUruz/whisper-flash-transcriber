@@ -11,6 +11,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 
 # Adicionar o diretório pai (WhisperTeste) ao sys.path para importações absolutas
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.dirname(__file__))
 
 # Importar os módulos da aplicação
 from src.core import AppCore
