@@ -437,7 +437,6 @@ class TranscriptionHandler:
                         )
             else:
                 if self.text_correction_enabled:
-                    self._get_text_correction_service()
                     was_transcribing_when_started = (
                         self.is_state_transcribing_fn()
                         if self.is_state_transcribing_fn
