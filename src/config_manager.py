@@ -591,6 +591,12 @@ class ConfigManager:
         except (ValueError, TypeError):
             self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
 
+    def get_use_flash_attention_2(self):
+        return self.config.get(USE_FLASH_ATTENTION_2_CONFIG_KEY, self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY])
+
+    def set_use_flash_attention_2(self, value: bool):
+        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = bool(value)
+
     def get_display_transcripts_in_terminal(self):
         return self.config.get(
             DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
