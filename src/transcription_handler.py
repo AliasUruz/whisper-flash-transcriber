@@ -22,6 +22,7 @@ from .config_manager import (
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,  # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    USE_FLASH_ATTENTION_2_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     USE_FLASH_ATTENTION_2_CONFIG_KEY,
 )
@@ -88,6 +89,9 @@ class TranscriptionHandler:
         self.min_transcription_duration = self.config_manager.get(
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY
         )
+        self.use_flash_attention_2 = self.config_manager.get(
+            USE_FLASH_ATTENTION_2_CONFIG_KEY
+        )
 
         self.openrouter_client = None
         # self.gemini_api é injetado
@@ -131,6 +135,9 @@ class TranscriptionHandler:
         )
         self.min_transcription_duration = self.config_manager.get(
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY
+        )
+        self.use_flash_attention_2 = self.config_manager.get(
+            USE_FLASH_ATTENTION_2_CONFIG_KEY
         )
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
@@ -331,13 +338,14 @@ class TranscriptionHandler:
                 logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
 
             logging.info(f"Carregando modelo {model_id}...")
-            
+
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_id,
                 torch_dtype=torch_dtype_local,
-                low_cpu_mem_usage=True, # Ajuda a reduzir o uso de RAM durante o carregamento
+                low_cpu_mem_usage=True,  # Ajuda a reduzir o uso de RAM durante o carregamento
                 use_safetensors=True,
-                device_map={'': device} # Especifica que todo o modelo vai para o dispositivo alvo
+                device_map={'': device}, # Especifica que todo o modelo vai para o dispositivo alvo
+                attn_implementation="flash_attention_2" if self.use_flash_attention_2 else None,
             )
 
             if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):

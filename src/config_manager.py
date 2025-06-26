@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
+    "use_flash_attention_2": False,
     "ai_provider": "gemini",
     "openrouter_agent_prompt": "",
     "openrouter_prompt": "",
@@ -66,6 +67,7 @@ Transcribed speech: {text}""",
     # Duração máxima da pausa preservada antes que o silêncio seja descartado
     "vad_silence_duration": 1.0,
     "display_transcripts_in_terminal": False,
+    "use_flash_attention_2": False,
     "gemini_model_options": [
         "gemini-2.5-flash-lite-preview-06-17",
         "gemini-2.5-flash",
@@ -91,10 +93,12 @@ BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
+USE_FLASH_ATTENTION_2_CONFIG_KEY = "use_flash_attention_2"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
 VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
+USE_FLASH_ATTENTION_2_CONFIG_KEY = "use_flash_attention_2"
 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY = DISPLAY_TRANSCRIPTS_KEY
 KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
@@ -110,6 +114,7 @@ GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
 GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
+USE_FLASH_ATTENTION_2_CONFIG_KEY = "use_flash_attention_2"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
@@ -429,12 +434,26 @@ class ConfigManager:
             self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY]),
             default=self.default_config[USE_VAD_CONFIG_KEY],
         )
+        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = _parse_bool(
+            self.config.get(
+                USE_FLASH_ATTENTION_2_CONFIG_KEY,
+                self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+            ),
+            default=self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+        )
         self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = _parse_bool(
             self.config.get(
                 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
                 self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
             ),
             default=self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
+        )
+        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = _parse_bool(
+            self.config.get(
+                USE_FLASH_ATTENTION_2_CONFIG_KEY,
+                self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+            ),
+            default=self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
         )
         try:
             raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
