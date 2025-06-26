@@ -18,6 +18,7 @@ from .config_manager import (
     AI_PROVIDER_CONFIG_KEY,
     GEMINI_AGENT_PROMPT_CONFIG_KEY,
     OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
+    OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY, # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
 )
@@ -419,7 +420,11 @@ class TranscriptionHandler:
                     if self.is_state_transcribing_fn
                     else False
                 )
-                openrouter_prompt = self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
+                openrouter_prompt = (
+                    self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
+                    if agent_mode
+                    else self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                )
                 self.correction_thread = threading.Thread(
                     target=self._async_text_correction,
                     args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt, was_transcribing_when_started),

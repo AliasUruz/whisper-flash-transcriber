@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
     "text_correction_service": "none",
     "openrouter_api_key": "",
     "openrouter_model": "deepseek/deepseek-chat-v3-0324:free",
+    "openrouter_prompt": "",
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
@@ -93,6 +94,7 @@ GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_AGENT_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
+OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
