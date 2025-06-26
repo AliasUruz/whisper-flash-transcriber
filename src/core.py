@@ -561,6 +561,7 @@ class AppCore:
                 "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 "new_gemini_model_options": "gemini_model_options",
                 "new_use_vad": "use_vad",
+                "new_use_flash_attention_2": "use_flash_attention_2",
                 "new_vad_threshold": "vad_threshold",
                 "new_vad_silence_duration": "vad_silence_duration",
                 "new_display_transcripts_in_terminal": "display_transcripts_in_terminal"
