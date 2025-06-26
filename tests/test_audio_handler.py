@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import types
 import time
 import numpy as np
+import threading
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
@@ -156,6 +157,40 @@ class AudioHandlerTest(unittest.TestCase):
                         handler.stop_recording()
 
         self.assertIsNone(handler.temp_file_path)
+
+    def test_close_input_stream_thread_does_not_block(self):
+        class SlowStream:
+            def __init__(self):
+                self.active = True
+
+            def stop(self):
+                time.sleep(0.2)
+                self.active = False
+
+            def close(self):
+                time.sleep(0.2)
+
+        self.handler.audio_stream = SlowStream()
+
+        captured = {}
+        orig_thread = threading.Thread
+
+        def capture_thread(*args, **kwargs):
+            t = orig_thread(*args, **kwargs)
+            captured['t'] = t
+            return t
+
+        with patch('src.audio_handler.threading.Thread', side_effect=capture_thread):
+            start = time.time()
+            self.handler._close_input_stream(timeout=0.05)
+            elapsed = time.time() - start
+
+        t = captured['t']
+        self.assertTrue(elapsed < 0.15)
+        self.assertTrue(t.daemon)
+        alive_after = t.is_alive()
+        t.join()
+        self.assertTrue(alive_after)
 
 
 if __name__ == '__main__':

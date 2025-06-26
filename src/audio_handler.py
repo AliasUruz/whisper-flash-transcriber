@@ -113,7 +113,9 @@ class AudioHandler:
             finally:
                 finished_event.set()
 
-        t = threading.Thread(target=_closer)
+        # A thread de fechamento é iniciada como daemon para não bloquear o encerramento
+        # da aplicação caso o fechamento demore mais que o esperado.
+        t = threading.Thread(target=_closer, daemon=True)
         t.start()
         finished_event.wait(timeout)
         t.join(timeout)
