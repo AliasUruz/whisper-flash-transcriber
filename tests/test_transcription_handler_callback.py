@@ -151,7 +151,7 @@ def test_async_text_correction_service_selection(monkeypatch):
     monkeypatch.setattr(handler.gemini_api, "correct_text_async", MagicMock())
     monkeypatch.setattr(
         handler.openrouter_api,
-        "correct_text",
+        "correct_text_async",
         MagicMock(),
     )
 
@@ -162,6 +162,14 @@ def test_async_text_correction_service_selection(monkeypatch):
         handler.gemini_api.correct_text_async.reset_mock()
         handler.openrouter_api.correct_text_async.reset_mock()
         handler._async_text_correction("txt", False, "", "", True)
+
+        if service == SERVICE_OPENROUTER:
+            handler.openrouter_api.correct_text_async.assert_called_once_with(
+                "txt",
+                "",
+                cfg.get(OPENROUTER_API_KEY_CONFIG_KEY),
+                cfg.get(OPENROUTER_MODEL_CONFIG_KEY),
+            )
 
         if service == SERVICE_GEMINI:
             assert handler.gemini_api.correct_text_async.called
