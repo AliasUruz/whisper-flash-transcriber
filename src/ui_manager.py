@@ -191,6 +191,7 @@ class UIManager:
                 gemini_api_key_var = ctk.StringVar(value=self.config_manager.get("gemini_api_key"))
                 gemini_model_var = ctk.StringVar(value=self.config_manager.get("gemini_model"))
                 batch_size_var = ctk.StringVar(value=str(self.config_manager.get("batch_size")))
+                flash_attention_var = ctk.BooleanVar(value=self.config_manager.get("use_flash_attention_2"))
                 use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
                 vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
@@ -272,6 +273,7 @@ class UIManager:
                         return
                     save_temp_recordings_to_apply = save_temp_recordings_var.get()
                     display_transcripts_to_apply = display_transcripts_var.get()
+                    flash_attention_to_apply = flash_attention_var.get()
 
                     # Logic for converting UI to GPU index
                     selected_device_str = gpu_selection_var.get()
@@ -319,7 +321,8 @@ class UIManager:
                         new_use_vad=use_vad_to_apply,
                         new_vad_threshold=vad_threshold_to_apply,
                         new_vad_silence_duration=vad_silence_duration_to_apply,
-                        new_display_transcripts_in_terminal=display_transcripts_to_apply
+                        new_display_transcripts_in_terminal=display_transcripts_to_apply,
+                        new_use_flash_attention_2=flash_attention_to_apply
                     )
                     self._close_settings_window() # Call class method
 
@@ -359,6 +362,8 @@ class UIManager:
                     gemini_models_textbox.delete("1.0", "end")
                     gemini_models_textbox.insert("1.0", "\n".join(DEFAULT_CONFIG["gemini_model_options"]))
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
+                    flash_attention_var.set(DEFAULT_CONFIG["use_flash_attention_2"])
+                    flash_attention_var.set(DEFAULT_CONFIG["use_flash_attention_2"])
 
                     if DEFAULT_CONFIG["gpu_index"] == -1:
                         gpu_selection_var.set("Force CPU")
@@ -551,6 +556,12 @@ class UIManager:
                 batch_entry = ctk.CTkEntry(batch_size_frame, textvariable=batch_size_var, width=60)
                 batch_entry.pack(side="left", padx=5)
                 Tooltip(batch_entry, "Number of segments processed together.")
+
+                flash_attention_frame = ctk.CTkFrame(transcription_frame)
+                flash_attention_frame.pack(fill="x", pady=5)
+                flash_attention_checkbox = ctk.CTkCheckBox(flash_attention_frame, text="Use Flash Attention 2", variable=flash_attention_var)
+                flash_attention_checkbox.pack(side="left", padx=5)
+                Tooltip(flash_attention_checkbox, "Enable Flash Attention 2 if supported.")
     
                 # New: Ignore Transcriptions Shorter Than
                 min_transcription_duration_frame = ctk.CTkFrame(transcription_frame)

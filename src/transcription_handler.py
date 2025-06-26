@@ -87,6 +87,7 @@ class TranscriptionHandler:
         self.min_transcription_duration = self.config_manager.get(
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY
         )
+        self.use_flash_attention_2 = self.config_manager.get('use_flash_attention_2')
 
         self.openrouter_client = None
         # self.gemini_api é injetado
@@ -131,6 +132,7 @@ class TranscriptionHandler:
         self.min_transcription_duration = self.config_manager.get(
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY
         )
+        self.use_flash_attention_2 = self.config_manager.get('use_flash_attention_2')
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
@@ -336,7 +338,8 @@ class TranscriptionHandler:
                 torch_dtype=torch_dtype_local,
                 low_cpu_mem_usage=True, # Ajuda a reduzir o uso de RAM durante o carregamento
                 use_safetensors=True,
-                device_map={'': device} # Especifica que todo o modelo vai para o dispositivo alvo
+                device_map={'': device}, # Especifica que todo o modelo vai para o dispositivo alvo
+                attn_implementation="flash_attention_2" if self.use_flash_attention_2 else "sdpa"
             )
             
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função

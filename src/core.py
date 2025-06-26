@@ -109,6 +109,7 @@ class AppCore:
         self.keyboard_library = self.config_manager.get("keyboard_library")
         self.min_record_duration = self.config_manager.get("min_record_duration")
         self.display_transcripts_in_terminal = self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY)
+        self.use_flash_attention_2 = self.config_manager.get("use_flash_attention_2")
         # ... e outras configurações que AppCore precisa diretamente
 
     # --- Callbacks de Módulos ---
@@ -563,7 +564,8 @@ class AppCore:
                 "new_use_vad": "use_vad",
                 "new_vad_threshold": "vad_threshold",
                 "new_vad_silence_duration": "vad_silence_duration",
-                "new_display_transcripts_in_terminal": "display_transcripts_in_terminal"
+                "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
+                "new_use_flash_attention_2": "use_flash_attention_2"
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
@@ -591,7 +593,7 @@ class AppCore:
             self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
             self.audio_handler.config_manager = self.config_manager # Atualizar referência
             self.transcription_handler.config_manager = self.config_manager # Atualizar referência
-            if any(key in kwargs for key in ["new_use_vad", "new_vad_threshold", "new_vad_silence_duration"]):
+            if any(key in kwargs for key in ["new_use_vad", "new_vad_threshold", "new_vad_silence_duration", "new_use_flash_attention_2"]):
                 self.audio_handler.update_config()
             self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
             # Re-inicializar clientes API existentes em vez de recriá-los
