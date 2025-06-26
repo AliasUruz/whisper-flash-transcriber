@@ -38,6 +38,7 @@ from src.config_manager import (  # noqa: E402
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
+    TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
@@ -63,6 +64,7 @@ class DummyConfig:
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY: 1.0,
             DISPLAY_TRANSCRIPTS_KEY: False,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
+            TEXT_CORRECTION_TIMEOUT_CONFIG_KEY: 30,
         }
 
     def get(self, key):
@@ -151,7 +153,7 @@ def test_async_text_correction_service_selection(monkeypatch):
     monkeypatch.setattr(handler.gemini_api, "correct_text_async", MagicMock())
     monkeypatch.setattr(
         handler.openrouter_api,
-        "correct_text",
+        "correct_text_async",
         MagicMock(),
     )
 
@@ -160,18 +162,26 @@ def test_async_text_correction_service_selection(monkeypatch):
         handler.text_correction_service = service
         cfg.data[TEXT_CORRECTION_SERVICE_CONFIG_KEY] = service
         handler.gemini_api.correct_text_async.reset_mock()
-        handler.openrouter_api.correct_text_async.reset_mock()
+        handler.openrouter_api.correct_text.reset_mock()
         handler._async_text_correction("txt", False, "", "", True)
+
+        if service == SERVICE_OPENROUTER:
+            handler.openrouter_api.correct_text_async.assert_called_once_with(
+                "txt",
+                "",
+                cfg.get(OPENROUTER_API_KEY_CONFIG_KEY),
+                cfg.get(OPENROUTER_MODEL_CONFIG_KEY),
+            )
 
         if service == SERVICE_GEMINI:
             assert handler.gemini_api.correct_text_async.called
-            assert not handler.openrouter_api.correct_text_async.called
+            assert not handler.openrouter_api.correct_text.called
         elif service == SERVICE_OPENROUTER:
-            assert handler.openrouter_api.correct_text_async.called
+            assert handler.openrouter_api.correct_text.called
             assert not handler.gemini_api.correct_text_async.called
         else:
             assert not handler.gemini_api.correct_text_async.called
-            assert not handler.openrouter_api.correct_text_async.called
+            assert not handler.openrouter_api.correct_text.called
 
 
 def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
@@ -283,3 +293,37 @@ def test_transcribe_audio_segment_waits_for_model(monkeypatch):
     assert mock_transcription_task.called # Should be called now
 
     transcription_thread.join(timeout=1) # Clean up the thread
+
+
+def test_text_correction_timeout(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[TEXT_CORRECTION_ENABLED_CONFIG_KEY] = True
+    cfg.data[TEXT_CORRECTION_SERVICE_CONFIG_KEY] = SERVICE_GEMINI
+    cfg.data[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = 0.01
+    results = []
+
+    def result_callback(text, original):
+        results.append(text)
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=result_callback,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: True,
+    )
+    handler.gemini_client = MagicMock(is_valid=True)
+    handler.gemini_api = handler.gemini_client
+
+    def slow_correction(*_a, **_k):
+        time.sleep(0.05)
+        return "corrigido"
+
+    monkeypatch.setattr(handler.gemini_api, "correct_text_async", slow_correction)
+
+    handler._async_text_correction("texto", False, "", "", True)
+
+    assert results == ["texto"]
