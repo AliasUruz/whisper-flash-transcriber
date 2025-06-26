@@ -305,21 +305,20 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
     ```
 8.  Run `flake8 src/gemini_api.py src/openrouter_api.py` to check the lint.
 
+
 ## Running Tests
 
-Follow these steps to run the test suite:
+Before running the tests, install the dependencies:
 
-1. Install the test dependencies:
+```bash
+pip install -r requirements-test.txt
+```
 
-   ```bash
-   pip install -r requirements-test.txt
-   ```
+Run the suite with:
 
-2. Execute the tests:
-
-   ```bash
-   pytest -q
-   ```
+```bash
+pytest -q
+```
 
 ## License
 
