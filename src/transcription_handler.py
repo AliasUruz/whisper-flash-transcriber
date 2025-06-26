@@ -214,13 +214,13 @@ class TranscriptionHandler:
 
                 model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
                 future = self.executor.submit(
-                    self.openrouter_api.correct_text,
+                    self.openrouter_api.correct_text_async,
                     corrected,
                     prompt,
                     api_key,
                     model,
                 )
-                corrected = future.result(timeout=timeout_val)
+                corrected = future.result()
             else:
                 logging.error(f"Provedor de IA desconhecido: {active_provider}")
 

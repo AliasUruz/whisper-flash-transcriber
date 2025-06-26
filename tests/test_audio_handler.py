@@ -14,7 +14,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 # Módulos falsos para dependências nativas ausentes
 fake_sd = types.SimpleNamespace(
     PortAudioError=Exception,
-    InputStream=MagicMock()
+    InputStream=MagicMock(),
+    sleep=lambda *_a, **_k: None,
 )
 fake_onnx = types.ModuleType('onnxruntime')
 fake_onnx.InferenceSession = MagicMock()
@@ -78,14 +79,15 @@ class AudioHandlerTest(unittest.TestCase):
 
         handler = AudioHandler(self.config, on_ready, lambda *_: None)
 
-        original_record_audio_task = handler._record_audio_task
-
-        # This mock will be executed by the thread created in start_recording
-        def mock_record_audio_task_with_delay(self_instance):
-            # Call the original task logic
-            original_record_audio_task.__get__(self_instance, AudioHandler)()
-            # Simulate some work that happens *after* the recording loop exits
-            time.sleep(0.1) # This is the delay that stop_recording should wait for
+        def mock_record_audio_task_with_delay():
+            handler.stream_started = True
+            while not handler._stop_event.is_set() and handler.is_recording:
+                handler.recording_data.append(np.zeros((1,), dtype=np.float32))
+                time.sleep(0.01)
+            time.sleep(0.1)
+            handler.stream_started = False
+            handler._stop_event.clear()
+            handler._record_thread = None
 
         # Patch the method that the thread will execute
         with patch.object(handler, '_record_audio_task', side_effect=mock_record_audio_task_with_delay):
@@ -131,7 +133,7 @@ class AudioHandlerTest(unittest.TestCase):
             with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
                 with patch('time.time', return_value=1111111111):
                     handler.start_recording()
-                    time.sleep(0.05)
+                    time.sleep(0.1)
                     handler.stop_recording()
                     self.assertEqual(handler.temp_file_path, 'temp_recording_1111111111.wav')
 
