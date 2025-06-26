@@ -10,19 +10,17 @@ except Exception:  # Python >= 3.12
 
 
 def _parse_bool(value, default=False):
-    """Converte diferentes representações de booleanos em objetos ``bool``."""
+    """Converte diferentes representações de booleanos em objetos ``bool``.
+
+    Se o valor for uma string não reconhecida, retorna ``default``.
+    """
     if isinstance(value, str):
         try:
             return bool(strtobool(value))
         except ValueError:
-            logging.warning(
-                f"Could not parse boolean value '{value}'. Using default ({default})."
-            )
+            logging.warning(f"Invalid boolean value '{value}'. Using default ({default}).")
             return default
-    try:
-        return bool(value)
-    except Exception:
-        return default
+    return bool(value)
 
 # --- Constantes de Configuração (movidas de whisper_tkinter.py) ---
 CONFIG_FILE = "config.json"
@@ -245,14 +243,20 @@ class ConfigManager:
 
         # Validate hotkey_stability_service_enabled
         self.config["hotkey_stability_service_enabled"] = _parse_bool(
-            self.config.get("hotkey_stability_service_enabled", self.default_config["hotkey_stability_service_enabled"]),
-            self.default_config["hotkey_stability_service_enabled"],
+            self.config.get(
+                "hotkey_stability_service_enabled",
+                self.default_config["hotkey_stability_service_enabled"],
+            ),
+            default=self.default_config["hotkey_stability_service_enabled"],
         )
 
         # Validate text_correction_enabled
         self.config["text_correction_enabled"] = _parse_bool(
-            self.config.get("text_correction_enabled", self.default_config["text_correction_enabled"]),
-            self.default_config["text_correction_enabled"],
+            self.config.get(
+                "text_correction_enabled",
+                self.default_config["text_correction_enabled"],
+            ),
+            default=self.default_config["text_correction_enabled"],
         )
 
         # Validate text_correction_service
@@ -327,7 +331,7 @@ class ConfigManager:
         # Unificar auto_paste e agent_auto_paste
         self.config["auto_paste"] = _parse_bool(
             self.config.get("auto_paste", self.default_config["auto_paste"]),
-            self.default_config["auto_paste"],
+            default=self.default_config["auto_paste"],
         )
         self.config["agent_auto_paste"] = self.config["auto_paste"]  # Garante que agent_auto_paste seja sempre igual a auto_paste
 
@@ -337,7 +341,7 @@ class ConfigManager:
                 DISPLAY_TRANSCRIPTS_KEY,
                 self.default_config[DISPLAY_TRANSCRIPTS_KEY],
             ),
-            self.default_config[DISPLAY_TRANSCRIPTS_KEY],
+            default=self.default_config[DISPLAY_TRANSCRIPTS_KEY],
         )
 
         # Persistência opcional de gravações temporárias
@@ -346,7 +350,7 @@ class ConfigManager:
                 SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
             ),
-            self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
+            default=self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
         )
     
         # Para gpu_index_specified e batch_size_specified
@@ -383,14 +387,14 @@ class ConfigManager:
         # Lógica para uso do VAD
         self.config[USE_VAD_CONFIG_KEY] = _parse_bool(
             self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY]),
-            self.default_config[USE_VAD_CONFIG_KEY],
+            default=self.default_config[USE_VAD_CONFIG_KEY],
         )
         self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = _parse_bool(
             self.config.get(
                 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
-                self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY]
+                self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
             ),
-            self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
+            default=self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
         )
         try:
             raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
