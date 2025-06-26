@@ -96,7 +96,7 @@ def test_config_validation_and_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(
         config_manager,
         "_parse_bool",
-        lambda v: str(v).lower() in ("1", "true", "yes", "on"),
+        lambda v, default=None: str(v).lower() in ("1", "true", "yes", "on"),
     )
     
     # Mock logging.warning to capture warnings

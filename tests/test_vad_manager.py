@@ -53,6 +53,34 @@ def test_initialization_disables_vad_if_model_not_found(monkeypatch):
     assert not vad.enabled
 
 
+def test_vad_disabled_when_onnxruntime_missing(monkeypatch):
+    """VAD deve ser desativado se onnxruntime n\u00e3o puder ser importado."""
+    sys.modules.pop("onnxruntime", None)
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(from_numpy=lambda *_: DummyTensor()),
+    )
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "onnxruntime":
+            raise ImportError
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    vad_module = importlib.reload(importlib.import_module("src.vad_manager"))
+    monkeypatch.setattr(
+        vad_module.MODEL_PATH.__class__,
+        "exists",
+        lambda self: True,
+    )
+    vad = vad_module.VADManager()
+    assert vad_module.onnxruntime is None
+    assert not vad.enabled
+
+
 def test_is_speech_detects_speech(monkeypatch):
     """Confere se is_speech retorna True quando a probabilidade é alta."""
     sys.modules.pop("onnxruntime", None)
