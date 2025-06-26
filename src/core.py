@@ -59,7 +59,7 @@ class AppCore:
         self.config_manager = ConfigManager()
         self.audio_handler = AudioHandler(
             self.config_manager,
-            on_audio_segment_ready_callback=self._on_audio_segment_ready,
+            on_audio_segment_ready_callback=self._on_audio_data_ready,
             on_recording_state_change_callback=self._set_state
         )
         self.gemini_api = GeminiAPI(self.config_manager) # Instancia o GeminiAPI
@@ -122,27 +122,28 @@ class AppCore:
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
 
-    def _on_audio_segment_ready(self, audio_segment: np.ndarray):
-        """Callback do AudioHandler quando um segmento de áudio está pronto para transcrição."""
-        duration_seconds = len(audio_segment) / AUDIO_SAMPLE_RATE
+    def _on_audio_data_ready(self, audio_data: np.ndarray):
+        """Callback do AudioHandler quando dados de áudio estão prontos para transcrição."""
+        audio_duration = len(audio_data) / AUDIO_SAMPLE_RATE
         min_duration = self.config_manager.get('min_transcription_duration')
-        
-        if duration_seconds < min_duration:
-            logging.info(f"Segmento de áudio ({duration_seconds:.2f}s) é mais curto que o mínimo configurado ({min_duration}s). Ignorando.")
+
+        if audio_duration < min_duration:
+            logging.info(
+                f"Segmento de áudio ({audio_duration:.2f}s) é mais curto que o mínimo configurado ({min_duration}s). Ignorando."
+            )
             self._set_state(STATE_IDLE) # Volta para o estado IDLE
             return # Interrompe o processamento
 
-        # Captura o estado do modo agente ANTES de qualquer coisa.
-        is_agent_mode = self.agent_mode_active
-        
-        # Reseta o estado imediatamente após capturá-lo para a próxima gravação.
-        if is_agent_mode:
-            self.agent_mode_active = False
+        with self.agent_mode_lock:
+            is_agent_mode = self.agent_mode_active
+            if is_agent_mode:
+                self.agent_mode_active = False
 
-        logging.info(f"AppCore: Segmento de áudio pronto ({duration_seconds:.2f}s). Enviando para TranscriptionHandler (Modo Agente: {is_agent_mode}).")
-        
-        # Passa o estado capturado para o handler de transcrição.
-        self.transcription_handler.transcribe_audio_segment(audio_segment, agent_mode=is_agent_mode)
+        logging.info(
+            f"AppCore: Segmento de áudio pronto ({audio_duration:.2f}s). Enviando para TranscriptionHandler (Modo Agente: {is_agent_mode})."
+        )
+
+        self.transcription_handler.transcribe_audio_segment(audio_data, is_agent_mode)
 
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
