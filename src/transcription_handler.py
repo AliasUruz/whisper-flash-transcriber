@@ -177,6 +177,11 @@ class TranscriptionHandler:
             return text
 
     def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str, was_transcribing_when_started: bool):
+        if not self.text_correction_enabled:
+            self.correction_in_progress = False
+            self.on_transcription_result_callback(text, text)
+            return
+
         self.correction_in_progress = True
         corrected = text  # Default to original text
         future = None
@@ -415,20 +420,23 @@ class TranscriptionHandler:
                             "Estado mudou antes do resultado do agente. UI não será atualizada."
                         )
             else:
-                self._get_text_correction_service()
-                was_transcribing_when_started = (
-                    self.is_state_transcribing_fn()
-                    if self.is_state_transcribing_fn
-                    else False
-                )
-                openrouter_prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
-                self.correction_thread = threading.Thread(
-                    target=self._async_text_correction,
-                    args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt, was_transcribing_when_started),
-                    daemon=True,
-                    name="TextCorrectionThread",
-                )
-                self.correction_thread.start()
+                if self.text_correction_enabled:
+                    self._get_text_correction_service()
+                    was_transcribing_when_started = (
+                        self.is_state_transcribing_fn()
+                        if self.is_state_transcribing_fn
+                        else False
+                    )
+                    openrouter_prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                    self.correction_thread = threading.Thread(
+                        target=self._async_text_correction,
+                        args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt, was_transcribing_when_started),
+                        daemon=True,
+                        name="TextCorrectionThread",
+                    )
+                    self.correction_thread.start()
+                else:
+                    self.on_transcription_result_callback(text_result, text_result)
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
