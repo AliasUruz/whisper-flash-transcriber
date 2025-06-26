@@ -37,6 +37,13 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     fake_keyboard = types.ModuleType("keyboard")
     fake_google = types.ModuleType("google")
     fake_genai = types.ModuleType("generativeai")
+    fake_types = types.ModuleType("types")
+    fake_helper = types.ModuleType("helper_types")
+    fake_helper.RequestOptions = MagicMock()
+    fake_types.helper_types = fake_helper
+    fake_types.BrokenResponseError = type("BrokenResponseError", (Exception,), {})
+    fake_types.IncompleteIterationError = type("IncompleteIterationError", (Exception,), {})
+    fake_genai.types = fake_types
     fake_google.generativeai = fake_genai
 
     monkeypatch.setitem(sys.modules, "pyautogui", fake_pyautogui)
@@ -49,6 +56,12 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "keyboard", fake_keyboard)
     monkeypatch.setitem(sys.modules, "google", fake_google)
     monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai)
+    monkeypatch.setitem(sys.modules, "google.generativeai.types", fake_types)
+    monkeypatch.setitem(
+        sys.modules,
+        "google.generativeai.types.helper_types",
+        fake_helper,
+    )
 
     from src import core as core_module
 

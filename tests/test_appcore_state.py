@@ -26,6 +26,13 @@ fake_google = types.ModuleType("google")
 fake_genai = types.ModuleType("generativeai")
 fake_genai.configure = lambda api_key=None: None
 fake_genai.GenerativeModel = MagicMock()
+fake_types = types.ModuleType("types")
+fake_helper = types.ModuleType("helper_types")
+fake_helper.RequestOptions = MagicMock()
+fake_types.helper_types = fake_helper
+fake_types.BrokenResponseError = type("BrokenResponseError", (Exception,), {})
+fake_types.IncompleteIterationError = type("IncompleteIterationError", (Exception,), {})
+fake_genai.types = fake_types
 fake_google.generativeai = fake_genai
 
 sys.modules.setdefault("pyautogui", fake_pyautogui)
@@ -37,6 +44,8 @@ sys.modules.setdefault("transformers", fake_transformers)
 sys.modules.setdefault("keyboard", fake_keyboard)
 sys.modules.setdefault("google", fake_google)
 sys.modules.setdefault("google.generativeai", fake_genai)
+sys.modules.setdefault("google.generativeai.types", fake_types)
+sys.modules.setdefault("google.generativeai.types.helper_types", fake_helper)
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
@@ -146,6 +155,13 @@ def setup_app(monkeypatch):
     fake_genai = types.ModuleType("generativeai")
     fake_genai.configure = lambda api_key=None: None
     fake_genai.GenerativeModel = MagicMock()
+    fake_types = types.ModuleType("types")
+    fake_helper = types.ModuleType("helper_types")
+    fake_helper.RequestOptions = MagicMock()
+    fake_types.helper_types = fake_helper
+    fake_types.BrokenResponseError = type("BrokenResponseError", (Exception,), {})
+    fake_types.IncompleteIterationError = type("IncompleteIterationError", (Exception,), {})
+    fake_genai.types = fake_types
     fake_google.generativeai = fake_genai
 
     monkeypatch.setitem(sys.modules, "pyautogui", fake_pyautogui)
@@ -157,6 +173,12 @@ def setup_app(monkeypatch):
     monkeypatch.setitem(sys.modules, "keyboard", fake_keyboard)
     monkeypatch.setitem(sys.modules, "google", fake_google)
     monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai)
+    monkeypatch.setitem(sys.modules, "google.generativeai.types", fake_types)
+    monkeypatch.setitem(
+        sys.modules,
+        "google.generativeai.types.helper_types",
+        fake_helper,
+    )
 
     monkeypatch.setattr(core_module, "AudioHandler", DummyAudioHandler)
     monkeypatch.setattr(core_module, "TranscriptionHandler", DummyTranscriptionHandler)
