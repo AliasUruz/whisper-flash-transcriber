@@ -599,8 +599,8 @@ class AppCore:
                 api_key=self.config_manager.get("gemini_api_key"),
                 model_id=self.config_manager.get("gemini_model")
             ) # Re-inicializar cliente principal
-            if self.transcription_handler.gemini_client:
-                self.transcription_handler.gemini_client.reinitialize_client(
+            if self.transcription_handler.gemini_api:
+                self.transcription_handler.gemini_api.reinitialize_client(
                     api_key=self.config_manager.get("gemini_api_key"),
                     model_id=self.config_manager.get("gemini_model")
                 ) # Re-inicializar cliente Gemini do TranscriptionHandler
@@ -674,8 +674,8 @@ class AppCore:
                 api_key=self.config_manager.get("gemini_api_key"),
                 model_id=self.config_manager.get("gemini_model")
             )
-            if self.transcription_handler.gemini_client:
-                self.transcription_handler.gemini_client.reinitialize_client(
+            if self.transcription_handler.gemini_api:
+                self.transcription_handler.gemini_api.reinitialize_client(
                     api_key=self.config_manager.get("gemini_api_key"),
                     model_id=self.config_manager.get("gemini_model")
                 )
