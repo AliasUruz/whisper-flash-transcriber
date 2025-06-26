@@ -1,8 +1,10 @@
+import importlib
 import importlib.machinery
 import types
 import concurrent.futures
 import threading
 import time
+import sys
 from unittest.mock import MagicMock
 
 # Stub simples de torch
@@ -11,7 +13,6 @@ fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
 fake_torch.__version__ = "0.0"
 fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
 
-import sys
 sys.modules["torch"] = fake_torch
 
 fake_transformers = types.ModuleType("transformers")
@@ -20,12 +21,11 @@ fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
 
-import importlib
 if "src.transcription_handler" in sys.modules:
     importlib.reload(sys.modules["src.transcription_handler"])
 
-from src.transcription_handler import TranscriptionHandler
-from src.config_manager import (
+from src.transcription_handler import TranscriptionHandler  # noqa: E402
+from src.config_manager import (  # noqa: E402
     BATCH_SIZE_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY,
     MANUAL_BATCH_SIZE_CONFIG_KEY,
@@ -76,7 +76,8 @@ class DummyConfig:
         return ""
 
 
-noop = lambda *a, **k: None
+def noop(*_a, **_k):
+    return None
 
 
 class DummyPipe:
@@ -102,14 +103,22 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
         is_state_transcribing_fn=lambda: True,
     )
     handler.pipe = DummyPipe()
-    handler.transcription_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    handler.transcription_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1
+    )
 
     monkeypatch.setattr(handler, "_get_dynamic_batch_size", lambda: 1)
-    monkeypatch.setattr(
-        handler,
-        "_async_text_correction",
-        lambda text, agent_mode, g_prompt, o_prompt, was_transcribing: result_callback(text, text),
-    )
+
+    def fake_correction(
+        text,
+        agent_mode,
+        g_prompt,
+        o_prompt,
+        was_transcribing,
+    ):
+        return result_callback(text, text)
+
+    monkeypatch.setattr(handler, "_async_text_correction", fake_correction)
 
     handler._transcription_task(None, agent_mode=False)
 
@@ -138,7 +147,11 @@ def test_async_text_correction_service_selection(monkeypatch):
     handler.gemini_api = handler.gemini_client
 
     monkeypatch.setattr(handler.gemini_api, "correct_text_async", MagicMock())
-    monkeypatch.setattr(handler.openrouter_api, "correct_text_async", MagicMock())
+    monkeypatch.setattr(
+        handler.openrouter_api,
+        "correct_text_async",
+        MagicMock(),
+    )
 
     scenarios = [SERVICE_GEMINI, SERVICE_OPENROUTER, SERVICE_NONE]
     for service in scenarios:
@@ -209,7 +222,11 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
         time.sleep(0.05)
         return "corrigido"
 
-    monkeypatch.setattr(handler.gemini_api, "correct_text_async", lambda *a, **k: delayed_correct(a[0]))
+    monkeypatch.setattr(
+        handler.gemini_api,
+        "correct_text_async",
+        lambda *a, **k: delayed_correct(a[0]),
+    )
 
     thread = threading.Thread(
         target=handler._async_text_correction,
@@ -222,4 +239,3 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
     thread.join()
 
     assert results == ["corrigido"]
-
