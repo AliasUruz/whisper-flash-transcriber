@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
     "ai_provider": "gemini",
     "openrouter_agent_prompt": "",
+    "openrouter_prompt": "",
     "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
     "gemini_prompt": """You are a meticulous speech-to-text correction AI. Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below while preserving the original content and structure as closely as possible.
 Key instructions:
@@ -93,6 +94,7 @@ GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_AGENT_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
+OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
