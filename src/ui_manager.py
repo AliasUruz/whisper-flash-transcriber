@@ -119,6 +119,22 @@ class UIManager:
             dc.rectangle((width // 4, height // 4, width * 3 // 4, height * 3 // 4), fill=color2)
         return image
 
+    def _safe_get_int(self, var, field_name, parent):
+        """Converte o valor de uma StringVar para int com validação."""
+        try:
+            return int(var.get())
+        except (TypeError, ValueError):
+            messagebox.showerror("Valor inválido", f"Valor inválido para {field_name}.", parent=parent)
+            return None
+
+    def _safe_get_float(self, var, field_name, parent):
+        """Converte o valor de uma StringVar para float com validação."""
+        try:
+            return float(var.get())
+        except (TypeError, ValueError):
+            messagebox.showerror("Valor inválido", f"Valor inválido para {field_name}.", parent=parent)
+            return None
+
     def update_tray_icon(self, state):
         # Logic moved from global, adjusted to use self.tray_icon and self.core_instance_ref
         if self.tray_icon:
@@ -232,9 +248,15 @@ class UIManager:
                     model_to_apply = agent_model_var.get()
                     hotkey_stability_service_enabled_to_apply = hotkey_stability_service_enabled_var.get() # Coleta o valor da nova variável
                     sound_enabled_to_apply = sound_enabled_var.get()
-                    sound_freq_to_apply = int(sound_frequency_var.get())
-                    sound_duration_to_apply = float(sound_duration_var.get())
-                    sound_volume_to_apply = float(sound_volume_var.get())
+                    sound_freq_to_apply = self._safe_get_int(sound_frequency_var, "Frequência do Som", settings_win)
+                    if sound_freq_to_apply is None:
+                        return
+                    sound_duration_to_apply = self._safe_get_float(sound_duration_var, "Duração do Som", settings_win)
+                    if sound_duration_to_apply is None:
+                        return
+                    sound_volume_to_apply = self._safe_get_float(sound_volume_var, "Volume do Som", settings_win)
+                    if sound_volume_to_apply is None:
+                        return
                     text_correction_enabled_to_apply = text_correction_enabled_var.get()
                     text_correction_service_to_apply = text_correction_service_var.get()
                     openrouter_api_key_to_apply = openrouter_api_key_var.get()
@@ -243,11 +265,19 @@ class UIManager:
                     gemini_model_to_apply = gemini_model_var.get()
                     gemini_prompt_correction_to_apply = gemini_prompt_correction_textbox.get("1.0", "end-1c")
                     agentico_prompt_to_apply = agentico_prompt_textbox.get("1.0", "end-1c")
-                    batch_size_to_apply = int(batch_size_var.get())
-                    min_transcription_duration_to_apply = float(min_transcription_duration_var.get()) # Coleta o valor
+                    batch_size_to_apply = self._safe_get_int(batch_size_var, "Batch Size", settings_win)
+                    if batch_size_to_apply is None:
+                        return
+                    min_transcription_duration_to_apply = self._safe_get_float(min_transcription_duration_var, "Duração Mínima", settings_win)
+                    if min_transcription_duration_to_apply is None:
+                        return
                     use_vad_to_apply = use_vad_var.get()
-                    vad_threshold_to_apply = float(vad_threshold_var.get())
-                    vad_silence_duration_to_apply = float(vad_silence_duration_var.get())
+                    vad_threshold_to_apply = self._safe_get_float(vad_threshold_var, "Limiar do VAD", settings_win)
+                    if vad_threshold_to_apply is None:
+                        return
+                    vad_silence_duration_to_apply = self._safe_get_float(vad_silence_duration_var, "Duração do Silêncio", settings_win)
+                    if vad_silence_duration_to_apply is None:
+                        return
                     save_temp_recordings_to_apply = save_temp_recordings_var.get()
                     display_transcripts_to_apply = display_transcripts_var.get()
 
@@ -260,8 +290,8 @@ class UIManager:
                         try:
                             gpu_index_to_apply = int(selected_device_str.split(":")[0].replace("GPU", "").strip())
                         except (ValueError, IndexError):
-                            logging.error(f"Could not parse GPU index from string: '{selected_device_str}'. Using auto-select.")
-                            gpu_index_to_apply = -1
+                            messagebox.showerror("Valor inválido", "Índice de GPU inválido.", parent=settings_win)
+                            return
 
                     models_text = gemini_models_textbox.get("1.0", "end-1c")
                     new_models_list = [line.strip() for line in models_text.split("\n") if line.strip()]
