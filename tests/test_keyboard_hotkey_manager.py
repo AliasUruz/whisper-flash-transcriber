@@ -61,9 +61,8 @@ class KeyboardHotkeyManagerFailureTests(unittest.TestCase):
         ):
             
             self.manager.restart()
-            
             mock_unhook_all.assert_called()
-            self.assertEqual(mock_sleep.call_count, 2) # Two sleep calls in restart
+            self.assertEqual(mock_sleep.call_count, 2)  # Two sleep calls in restart
 
     def test_start_success(self):
         patcher = patch.object(self.manager, "_register_hotkeys", return_value=True)

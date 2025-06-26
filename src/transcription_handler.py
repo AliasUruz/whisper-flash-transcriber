@@ -81,6 +81,7 @@ class TranscriptionHandler:
         self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
+        self.text_correction_timeout = self.config_manager.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.text_correction_timeout = self.config_manager.get(
             TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
@@ -124,6 +125,7 @@ class TranscriptionHandler:
         self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
+        self.text_correction_timeout = self.config_manager.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.text_correction_timeout = self.config_manager.get(
             TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
@@ -172,21 +174,6 @@ class TranscriptionHandler:
         if self.text_correction_service == SERVICE_GEMINI and self.gemini_client and self.gemini_client.is_valid: return SERVICE_GEMINI
         return SERVICE_NONE
 
-    def _correct_text_with_openrouter(self, text):
-        if not self.openrouter_client or not text: return text
-        try: return self.openrouter_client.correct_text(text)
-        except Exception as e: logging.error(f"Error correcting text with OpenRouter API: {e}"); return text
-
-    def _correct_text_with_gemini(self, text: str) -> str:
-        """Chama o novo método de correção da API Gemini."""
-        if not self.gemini_client or not text or not self.gemini_client.is_valid:
-            return text
-        try:
-            return self.gemini_client.get_correction(text)
-        except Exception as e:
-            logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
-            return text
-
     def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str, was_transcribing_when_started: bool):
         if not self.text_correction_enabled:
             self.correction_in_progress = False
@@ -196,6 +183,7 @@ class TranscriptionHandler:
         self.correction_in_progress = True
         corrected = text  # Default to original text
         future = None
+        timeout_val = self.text_correction_timeout or 30
         try:
             active_provider = self._get_text_correction_service()
             if active_provider == SERVICE_NONE:

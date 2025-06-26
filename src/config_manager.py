@@ -9,8 +9,11 @@ except Exception:  # Python >= 3.12
     from setuptools._distutils.util import strtobool
 
 
-def _parse_bool(value):
-    """Converte diferentes representações de booleanos em objetos ``bool``."""
+def _parse_bool(value, default=False):
+    """Converte diferentes representações de booleanos em objetos ``bool``.
+
+    Se o valor for uma string não reconhecida, retorna ``default``.
+    """
     if isinstance(value, str):
         try:
             return bool(strtobool(value))
@@ -278,6 +281,24 @@ class ConfigManager:
             # Ensure all elements in the list are strings
             self.config["gemini_model_options"] = [str(m) for m in self.config["gemini_model_options"]]
 
+        try:
+            raw_timeout = self.config.get(
+                TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+                self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY],
+            )
+            timeout_val = float(raw_timeout)
+            if timeout_val <= 0:
+                logging.warning(
+                    f"Invalid text_correction_timeout '{timeout_val}'. Using default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+                )
+                timeout_val = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+            self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = timeout_val
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid text_correction_timeout value '{self.config.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY)}' in config. Using default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+            )
+            self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+
         # Validate min_record_duration
         try:
             self.config["min_record_duration"] = float(self.config.get("min_record_duration", self.default_config["min_record_duration"]))
@@ -318,7 +339,8 @@ class ConfigManager:
         
         # Unificar auto_paste e agent_auto_paste
         self.config["auto_paste"] = _parse_bool(
-            self.config.get("auto_paste", self.default_config["auto_paste"])
+            self.config.get("auto_paste", self.default_config["auto_paste"]),
+            default=self.default_config["auto_paste"],
         )
         self.config["agent_auto_paste"] = self.config["auto_paste"]  # Garante que agent_auto_paste seja sempre igual a auto_paste
 
@@ -327,7 +349,8 @@ class ConfigManager:
             self.config.get(
                 DISPLAY_TRANSCRIPTS_KEY,
                 self.default_config[DISPLAY_TRANSCRIPTS_KEY],
-            )
+            ),
+            default=self.default_config[DISPLAY_TRANSCRIPTS_KEY],
         )
 
         # Persistência opcional de gravações temporárias
@@ -335,7 +358,8 @@ class ConfigManager:
             self.config.get(
                 SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
-            )
+            ),
+            default=self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
         )
     
         # Para gpu_index_specified e batch_size_specified
@@ -391,13 +415,15 @@ class ConfigManager:
 
         # Lógica para uso do VAD
         self.config[USE_VAD_CONFIG_KEY] = _parse_bool(
-            self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])
+            self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY]),
+            default=self.default_config[USE_VAD_CONFIG_KEY],
         )
         self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = _parse_bool(
             self.config.get(
                 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
-                self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY]
-            )
+                self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
+            ),
+            default=self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
         )
         try:
             raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])

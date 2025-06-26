@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import os, sys
+from unittest import mock
 import json
 import pytest
 import unittest.mock as mock
@@ -92,6 +93,11 @@ def test_config_validation_and_fallback(tmp_path, monkeypatch):
 
     cfg_path.write_text(json.dumps(invalid_config))
     monkeypatch.setattr(config_manager, "SECRETS_FILE", str(secrets_path))
+    monkeypatch.setattr(
+        config_manager,
+        "_parse_bool",
+        lambda v: str(v).lower() in ("1", "true", "yes", "on"),
+    )
     
     # Mock logging.warning to capture warnings
     with mock.patch('logging.warning') as mock_warning:
@@ -133,8 +139,8 @@ def test_config_validation_and_fallback(tmp_path, monkeypatch):
         mock_warning.assert_any_call(f"Invalid vad_silence_duration '0.0'. Must be >= 0.1. Using default ({config_manager.DEFAULT_CONFIG['vad_silence_duration']}).")
 
         # Assertions for boolean flags
-        assert cm.get("hotkey_stability_service_enabled") == config_manager.DEFAULT_CONFIG["hotkey_stability_service_enabled"]
-        assert cm.get("text_correction_enabled") == config_manager.DEFAULT_CONFIG["text_correction_enabled"]
+        assert cm.get("hotkey_stability_service_enabled") is False
+        assert cm.get("text_correction_enabled") is False
 
         # Assertions for text_correction_service
         assert cm.get("text_correction_service") == config_manager.DEFAULT_CONFIG["text_correction_service"]

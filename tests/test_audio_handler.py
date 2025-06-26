@@ -93,8 +93,10 @@ class AudioHandlerTest(unittest.TestCase):
             with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
                 with patch('logging.warning') as mock_warn:
                     started = handler.start_recording()
-                    # Give the recording thread some time to start and record
-                    time.sleep(0.05)
+                    # Wait for the mock thread to mark stream_started
+                    timeout = time.time() + 1
+                    while not handler.stream_started and time.time() < timeout:
+                        time.sleep(0.01)
                     
                     # Get a reference to the actual recording thread
                     record_thread_before_stop = handler._record_thread
@@ -124,7 +126,6 @@ class AudioHandlerTest(unittest.TestCase):
             while not self._stop_event.is_set() and self.is_recording:
                 self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
                 time.sleep(0.01)
-            self.stream_started = False
             self._stop_event.clear()
             self._record_thread = None
 
@@ -132,7 +133,9 @@ class AudioHandlerTest(unittest.TestCase):
             with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
                 with patch('time.time', return_value=1111111111):
                     handler.start_recording()
-                    time.sleep(0.05)
+                    timeout = time.time() + 1
+                    while not handler.stream_started and time.time() < timeout:
+                        time.sleep(0.01)
                     handler.stop_recording()
                     self.assertEqual(handler.temp_file_path, 'temp_recording_1111111111.wav')
 
@@ -158,7 +161,6 @@ class AudioHandlerTest(unittest.TestCase):
             while not self._stop_event.is_set() and self.is_recording:
                 self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
                 time.sleep(0.01)
-            self.stream_started = False
             self._stop_event.clear()
             self._record_thread = None
 
