@@ -4,6 +4,7 @@ import threading
 import os
 import sys
 from unittest.mock import MagicMock
+import numpy as np
 
 # Stub external dependencies before importing core module
 fake_pyautogui = types.ModuleType("pyautogui")
