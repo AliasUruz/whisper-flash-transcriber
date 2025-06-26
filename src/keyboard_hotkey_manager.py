@@ -84,10 +84,7 @@ class KeyboardHotkeyManager:
 
     def stop(self):
         """Para o gerenciador de hotkeys."""
-        if not self.is_running:
-            return
-
-        # Desregistrar as hotkeys
+        # Sempre tente remover as hotkeys, mesmo que o estado esteja incorreto
         self._unregister_hotkeys()
         self.is_running = False
         logging.info("KeyboardHotkeyManager encerrado.")
@@ -127,6 +124,8 @@ class KeyboardHotkeyManager:
                     logging.error("Falha ao registrar hotkeys após atualização.")
                     self.is_running = False
                     return False
+                # Retomar o estado de execução se o registro foi bem-sucedido
+                self.is_running = True
 
             logging.info(f"Configuração atualizada: record_key={self.record_key}, agent_key={self.agent_key}, record_mode={self.record_mode}")
             return True
@@ -220,6 +219,8 @@ class KeyboardHotkeyManager:
                 # Mesmo com erro, continuamos para garantir que o estado seja consistente
 
             logging.info("Hotkeys desregistradas com sucesso.")
+            # Garantir que o estado reflita a ausência de hotkeys registradas
+            self.is_running = False
 
         except Exception as e:
             logging.error(f"Erro ao desregistrar hotkeys: {e}", exc_info=True)
