@@ -1,6 +1,7 @@
 import os
 import sys
 import requests
+import json
 from unittest.mock import patch, MagicMock
 
 # Garantir que o diretório src esteja no path
@@ -44,3 +45,26 @@ def test_correct_text_with_empty_string():
         result = api.correct_text('')
     assert result == ''
     mock_post.assert_not_called()
+
+
+def test_correct_text_async_custom_prompt():
+    api = OpenRouterAPI(api_key='old')
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        'choices': [{'message': {'content': 'corrigido'}}]
+    }
+    mock_response.raise_for_status.return_value = None
+
+    prompt = 'Corrija o texto: {text}'
+    with patch('src.openrouter_api.requests.post', return_value=mock_response) as mock_post:
+        result = api.correct_text_async('texto original', prompt, 'newkey', 'modelo1')
+
+        assert result == 'corrigido'
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        sent_payload = json.loads(kwargs['data'])
+        assert sent_payload['model'] == 'modelo1'
+        assert sent_payload['messages'][0]['content'] == 'Corrija o texto:'
+        assert sent_payload['messages'][1]['content'] == 'texto original'
+        assert kwargs['headers']['Authorization'] == 'Bearer newkey'
