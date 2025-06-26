@@ -20,6 +20,7 @@ from .config_manager import (
     GEMINI_PROMPT_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
+    USE_TURBO_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,  # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     USE_FLASH_ATTENTION_2_CONFIG_KEY,
@@ -73,6 +74,7 @@ class TranscriptionHandler:
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY) # Novo
         self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY) # Novo
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
+        self.use_turbo = self.config_manager.get(USE_TURBO_CONFIG_KEY)
         self.batch_size_specified = self.config_manager.get("batch_size_specified") # Ainda usado para validação
         self.gpu_index_specified = self.config_manager.get("gpu_index_specified") # Ainda usado para validação
 
@@ -121,6 +123,7 @@ class TranscriptionHandler:
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY)
         self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
+        self.use_turbo = self.config_manager.get(USE_TURBO_CONFIG_KEY)
         self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
         self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
         self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
@@ -317,7 +320,10 @@ class TranscriptionHandler:
                         logging.info("Nenhuma GPU disponível, usando CPU.")
                         self.gpu_index = -1 # Garante que o índice seja -1 se não houver GPU
                 
-            model_id = "openai/whisper-large-v3"
+            if self.use_turbo:
+                model_id = "openai/whisper-large-v3-turbo"
+            else:
+                model_id = "openai/whisper-large-v3"
             
             logging.info(f"Carregando processador de {model_id}...")
             processor = AutoProcessor.from_pretrained(model_id)

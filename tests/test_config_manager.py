@@ -65,6 +65,25 @@ def test_parse_bool_values(tmp_path, monkeypatch, value, expected):
     assert cm.get(config_manager.USE_VAD_CONFIG_KEY) is expected
 
 
+def test_use_turbo_default_and_override(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.json"
+    secrets_path = tmp_path / "secrets.json"
+    monkeypatch.setattr(config_manager, "SECRETS_FILE", str(secrets_path))
+
+    cm_default = config_manager.ConfigManager(
+        config_file=str(cfg_path),
+        default_config=config_manager.DEFAULT_CONFIG,
+    )
+    assert cm_default.get(config_manager.USE_TURBO_CONFIG_KEY) is False
+
+    cfg_path.write_text(json.dumps({"use_turbo": True}))
+    cm_override = config_manager.ConfigManager(
+        config_file=str(cfg_path),
+        default_config=config_manager.DEFAULT_CONFIG,
+    )
+    assert cm_override.get(config_manager.USE_TURBO_CONFIG_KEY) is True
+
+
 def test_config_validation_and_fallback(tmp_path, monkeypatch):
     cfg_path = tmp_path / "config.json"
     secrets_path = tmp_path / "secrets.json"

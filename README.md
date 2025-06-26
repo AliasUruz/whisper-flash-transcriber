@@ -20,6 +20,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 
 *   **High-Quality Transcription:** Powered by the `openai/whisper-large-v3` model for state-of-the-art speech recognition.
 *   **GPU Acceleration:** Automatically utilizes your NVIDIA GPU (if available) for significantly faster transcriptions, with fallback to CPU.
+*   **Turbo Mode:** When enabled, loads `openai/whisper-large-v3-turbo` for even faster processing. Requires an NVIDIA Ampere or newer GPU.
 *   **Dynamic Performance:** Intelligently adjusts batch sizes based on available VRAM for optimal performance.
 *   **Customizable Hotkeys:**
     *   Activate recording with a global hotkey that works anywhere in Windows.
@@ -236,6 +237,7 @@ To access and change settings:
 *   **Agent Mode Prompt:** Customize the prompt sent to Gemini when using "Agent Mode".
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
+*   **Turbo Mode:** Use the optimized Turbo model when you have an Ampere or newer NVIDIA GPU.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Temporary Recordings:** When enabled, the captured audio is stored as `temp_recording_<timestamp>.wav` in the application folder. This temporary file is automatically deleted once transcription completes.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.

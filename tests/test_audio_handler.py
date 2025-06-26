@@ -39,6 +39,7 @@ class DummyConfig:
             'sound_volume': 0.5,
             'min_record_duration': 0,
             'use_vad': False,
+            'use_turbo': False,
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
