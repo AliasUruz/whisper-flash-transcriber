@@ -145,9 +145,7 @@ def test_async_text_correction_service_selection(monkeypatch):
 
     handler.openrouter_client = MagicMock()
     handler.openrouter_api = handler.openrouter_client
-    handler.gemini_client = MagicMock(is_valid=True)
-    handler.gemini_api = handler.gemini_client
-    handler.gemini_api = handler.gemini_client
+    handler.gemini_api = MagicMock(is_valid=True)
 
     monkeypatch.setattr(handler.gemini_api, "correct_text_async", MagicMock())
     monkeypatch.setattr(
@@ -226,8 +224,7 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
         on_segment_transcribed_callback=None,
         is_state_transcribing_fn=lambda: True,
     )
-    handler.gemini_client = MagicMock(is_valid=True)
-    handler.gemini_api = handler.gemini_client
+    handler.gemini_api = MagicMock(is_valid=True)
 
     def delayed_correct(text):
         time.sleep(0.05)
@@ -314,8 +311,7 @@ def test_text_correction_timeout(monkeypatch):
         on_segment_transcribed_callback=None,
         is_state_transcribing_fn=lambda: True,
     )
-    handler.gemini_client = MagicMock(is_valid=True)
-    handler.gemini_api = handler.gemini_client
+    handler.gemini_api = MagicMock(is_valid=True)
 
     def slow_correction(*_a, **_k):
         time.sleep(0.05)
