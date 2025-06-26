@@ -263,7 +263,10 @@ class ConfigManager:
             )
             self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
 
-        logging.info(f"Configurações aplicadas: {self.config}")
+        safe_config = self.config.copy()
+        safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
+        safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
+        logging.info(f"Configurações aplicadas: {safe_config}")
 
 
     def save_config(self):
