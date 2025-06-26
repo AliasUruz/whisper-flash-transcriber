@@ -7,7 +7,6 @@ import soundfile as sf
 from .vad_manager import VADManager # Assumindo que vad_manager.py está na raiz ou em um path acessível
 from .config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
 import os
-import wave
 
 # Constantes de áudio (movidas de whisper_tkinter.py)
 AUDIO_SAMPLE_RATE = 16000

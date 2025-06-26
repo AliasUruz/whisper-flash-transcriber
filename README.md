@@ -307,17 +307,19 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
 
 ## Running Tests
 
-Install the test dependencies:
+Follow these steps to run the test suite:
 
-```bash
-pip install -r requirements-test.txt
-```
+1. Install the test dependencies:
 
-Then execute the test suite:
+   ```bash
+   pip install -r requirements-test.txt
+   ```
 
-```bash
-pytest -q
-```
+2. Execute the tests:
+
+   ```bash
+   pytest -q
+   ```
 
 ## License
 
