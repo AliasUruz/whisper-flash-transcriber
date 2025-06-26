@@ -197,25 +197,23 @@ You are now ready to run the Whisper Transcription App!
 
 **Important:** make sure you ran `pip install -r requirements.txt` before executing the command below.
 
-1.  **Start the main script:** In your **activated virtual environment** within the `whisper-flash-transcriber` directory, run:
+1.  **Start the main script:** In your **activated virtual environment** within the `whisper-flash-transcriber` directory, execute um dos comandos abaixo:
     ```bash
     python src/main.py
-    ```
-    This command executes the main application file. Alternatively, you can run:
-    ```bash
+    # ou
     python -m src.main
     ```
-    which launches the same program using Python's module syntax.
+    Ambos executam o arquivo principal da aplicação.
 2.  **Application Window:** A graphical window should appear. This is the application's main interface.
 3.  **System Tray Icon:** The application will likely minimize to your Windows system tray (near the clock). You can usually interact with it by right-clicking the icon.
 
 ## Configuration
 
-The application's settings are managed through its graphical interface and stored in two files: `config.json` (for general settings) and `secrets.json` (for sensitive API keys). These files are automatically created the first time you run `src/main.py`.
+The application's settings are managed through its graphical interface and stored in two files: `config.json` (for general settings) and `secrets.json` (for sensitive API keys). These files are automatically created the first time you run `src/main.py` ou `python -m src.main`.
 
 To access and change settings:
 
-1.  Run the application (`python src/main.py`).
+1.  Run the application (`python src/main.py` ou `python -m src.main`).
 2.  Look for a "Settings" or "Configuration" option within the application window or by right-clicking the system tray icon. Click it to open the settings window.
 
 ### Key Configuration Options:
