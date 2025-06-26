@@ -73,7 +73,8 @@ Transcribed speech: {text}""",
     ],
     "text_correction_timeout": 30,
     "save_temp_recordings": False,
-    "min_transcription_duration": 1.0 # Nova configuração
+    "min_transcription_duration": 1.0, # Nova configuração
+    "use_flash_attention_2": False
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -115,6 +116,7 @@ OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 OPENROUTER_AGENT_PROMPT_CONFIG_KEY = OPENROUTER_PROMPT_CONFIG_KEY
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
 TEXT_CORRECTION_TIMEOUT_CONFIG_KEY = "text_correction_timeout"
+USE_FLASH_ATTENTION_2_CONFIG_KEY = "use_flash_attention_2"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
@@ -361,6 +363,15 @@ class ConfigManager:
             ),
             default=self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
         )
+
+        # Uso opcional do Flash Attention 2
+        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = _parse_bool(
+            self.config.get(
+                USE_FLASH_ATTENTION_2_CONFIG_KEY,
+                self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+            ),
+            default=self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+        )
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -578,3 +589,12 @@ class ConfigManager:
 
     def set_save_temp_recordings(self, value: bool):
         self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(value)
+
+    def get_use_flash_attention_2(self):
+        return self.config.get(
+            USE_FLASH_ATTENTION_2_CONFIG_KEY,
+            self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+        )
+
+    def set_use_flash_attention_2(self, value: bool):
+        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = bool(value)

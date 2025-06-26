@@ -13,3 +13,4 @@ customtkinter==5.2.2
 keyboard==0.13.5
 soundfile==0.13.1
 onnxruntime==1.22.0
+optimum==1.17.1

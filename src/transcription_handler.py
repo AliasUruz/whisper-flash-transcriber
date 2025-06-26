@@ -23,6 +23,7 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,  # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+    USE_FLASH_ATTENTION_2_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -338,7 +339,20 @@ class TranscriptionHandler:
                 use_safetensors=True,
                 device_map={'': device} # Especifica que todo o modelo vai para o dispositivo alvo
             )
-            
+
+            if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
+                try:
+                    from optimum.bettertransformer import BetterTransformer
+                    if hasattr(model, "to_bettertransformer"):
+                        model = model.to_bettertransformer()
+                    else:
+                        model = BetterTransformer.transform(model)
+                    logging.info("Modelo convertido para Flash Attention 2.")
+                except Exception as exc:
+                    logging.warning(
+                        f"Falha ao aplicar Flash Attention 2: {exc}. Prosseguindo com o modelo padrão."
+                    )
+
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
             return model, processor
 
