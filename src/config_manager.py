@@ -67,6 +67,7 @@ Transcribed speech: {text}""",
     # Duração máxima da pausa preservada antes que o silêncio seja descartado
     "vad_silence_duration": 1.0,
     "display_transcripts_in_terminal": False,
+    "use_flash_attention_2": False,
     "gemini_model_options": [
         "gemini-2.5-flash-lite-preview-06-17",
         "gemini-2.5-flash",
@@ -74,7 +75,8 @@ Transcribed speech: {text}""",
     ],
     "text_correction_timeout": 30,
     "save_temp_recordings": False,
-    "min_transcription_duration": 1.0 # Nova configuração
+    "min_transcription_duration": 1.0, # Nova configuração
+    "use_flash_attention_2": False
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -91,10 +93,12 @@ BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
+USE_FLASH_ATTENTION_2_CONFIG_KEY = "use_flash_attention_2"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
 VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
+USE_FLASH_ATTENTION_2_CONFIG_KEY = "use_flash_attention_2"
 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY = DISPLAY_TRANSCRIPTS_KEY
 KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
@@ -363,6 +367,15 @@ class ConfigManager:
             ),
             default=self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
         )
+
+        # Habilitar uso do Flash Attention 2 via BetterTransformer
+        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = _parse_bool(
+            self.config.get(
+                USE_FLASH_ATTENTION_2_CONFIG_KEY,
+                self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+            ),
+            default=self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+        )
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -433,6 +446,13 @@ class ConfigManager:
                 self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
             ),
             default=self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
+        )
+        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = _parse_bool(
+            self.config.get(
+                USE_FLASH_ATTENTION_2_CONFIG_KEY,
+                self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+            ),
+            default=self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
         )
         try:
             raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
