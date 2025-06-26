@@ -60,6 +60,7 @@ Transcribed speech: {text}""",
     "batch_size_mode": "auto", # Novo: 'auto' ou 'manual'
     "manual_batch_size": 8, # Novo: Valor para o modo manual
     "gpu_index": 0,
+    "use_turbo": False,
     "hotkey_stability_service_enabled": True, # Nova configuração unificada
     "use_vad": False,
     "vad_threshold": 0.5,
@@ -89,6 +90,7 @@ BATCH_SIZE_CONFIG_KEY = "batch_size" # Agora é o batch size padrão para o modo
 BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
+USE_TURBO_CONFIG_KEY = "use_turbo"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
@@ -380,6 +382,13 @@ class ConfigManager:
             self.config[GPU_INDEX_CONFIG_KEY] = -1
             self.config["gpu_index_specified"] = False # Se falhou a leitura, não foi especificado corretamente
 
+        # Lógica para uso do modelo Turbo
+        turbo_val = _parse_bool(
+            self.config.get(USE_TURBO_CONFIG_KEY, self.default_config[USE_TURBO_CONFIG_KEY]),
+            default=self.default_config[USE_TURBO_CONFIG_KEY],
+        )
+        self.config[USE_TURBO_CONFIG_KEY] = turbo_val
+
         # Lógica de validação para min_transcription_duration
         try:
             raw_min_duration_val = loaded_config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY])
@@ -578,3 +587,9 @@ class ConfigManager:
 
     def set_save_temp_recordings(self, value: bool):
         self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(value)
+
+    def get_use_turbo(self):
+        return self.config.get(USE_TURBO_CONFIG_KEY, self.default_config[USE_TURBO_CONFIG_KEY])
+
+    def set_use_turbo(self, value: bool):
+        self.config[USE_TURBO_CONFIG_KEY] = bool(value)

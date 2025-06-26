@@ -16,6 +16,7 @@ class DummyConfig:
             'gemini_agent_model': 'agent-model',
             'gemini_prompt': '{text}',
             'prompt_agentico': 'agent prompt',
+            'use_turbo': False,
         }
 
     def get(self, key, default=None):

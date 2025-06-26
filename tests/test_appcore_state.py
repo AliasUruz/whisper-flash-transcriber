@@ -72,6 +72,7 @@ class DummyConfig:
             "min_transcription_duration": 0.0,
             TEXT_CORRECTION_ENABLED_CONFIG_KEY: True,
             TEXT_CORRECTION_SERVICE_CONFIG_KEY: SERVICE_NONE,
+            "use_turbo": False,
         }
 
     def get(self, key, default=None):

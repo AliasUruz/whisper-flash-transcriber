@@ -56,6 +56,7 @@ class DummyConfig:
             "gpu_index_specified": False,
             TEXT_CORRECTION_ENABLED_CONFIG_KEY: False,
             TEXT_CORRECTION_SERVICE_CONFIG_KEY: SERVICE_NONE,
+            "use_turbo": False,
             OPENROUTER_API_KEY_CONFIG_KEY: "",
             OPENROUTER_MODEL_CONFIG_KEY: "",
             GEMINI_API_KEY_CONFIG_KEY: "",
