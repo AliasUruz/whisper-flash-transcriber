@@ -66,6 +66,7 @@ Transcribed speech: {text}""",
     # Duração máxima da pausa preservada antes que o silêncio seja descartado
     "vad_silence_duration": 1.0,
     "display_transcripts_in_terminal": False,
+    "use_flash_attention_2": False,
     "gemini_model_options": [
         "gemini-2.5-flash-lite-preview-06-17",
         "gemini-2.5-flash",
@@ -96,6 +97,7 @@ DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
 VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
+USE_FLASH_ATTENTION_2_CONFIG_KEY = "use_flash_attention_2"
 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY = DISPLAY_TRANSCRIPTS_KEY
 KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
@@ -436,6 +438,13 @@ class ConfigManager:
             ),
             default=self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
         )
+        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = _parse_bool(
+            self.config.get(
+                USE_FLASH_ATTENTION_2_CONFIG_KEY,
+                self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+            ),
+            default=self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+        )
         try:
             raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
             self.config[VAD_THRESHOLD_CONFIG_KEY] = float(raw_threshold)
@@ -589,3 +598,12 @@ class ConfigManager:
 
     def set_save_temp_recordings(self, value: bool):
         self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(value)
+
+    def get_use_flash_attention_2(self):
+        return self.config.get(
+            USE_FLASH_ATTENTION_2_CONFIG_KEY,
+            self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
+        )
+
+    def set_use_flash_attention_2(self, value: bool):
+        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = bool(value)
