@@ -22,7 +22,9 @@ from .config_manager import (
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,  # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    USE_FLASH_ATTENTION_2_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+    USE_FLASH_ATTENTION_2_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -332,16 +334,29 @@ class TranscriptionHandler:
                 logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
 
             logging.info(f"Carregando modelo {model_id}...")
-            
+
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_id,
                 torch_dtype=torch_dtype_local,
-                low_cpu_mem_usage=True, # Ajuda a reduzir o uso de RAM durante o carregamento
+                low_cpu_mem_usage=True,  # Ajuda a reduzir o uso de RAM durante o carregamento
                 use_safetensors=True,
                 device_map={'': device}, # Especifica que todo o modelo vai para o dispositivo alvo
                 attn_implementation="flash_attention_2" if self.use_flash_attention_2 else "sdpa"
             )
-            
+
+            if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
+                try:
+                    from optimum.bettertransformer import BetterTransformer
+                    if hasattr(model, "to_bettertransformer"):
+                        model = model.to_bettertransformer()
+                    else:
+                        model = BetterTransformer.transform(model)
+                    logging.info("Modelo convertido para Flash Attention 2.")
+                except Exception as exc:
+                    logging.warning(
+                        f"Falha ao aplicar Flash Attention 2: {exc}. Prosseguindo com o modelo padrão."
+                    )
+
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
             return model, processor
 
