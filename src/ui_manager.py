@@ -55,11 +55,6 @@ class UIManager:
         self.live_textbox = None
 
 
-        # Assign methods to the instance
-        self.show_live_transcription_window = self._show_live_transcription_window
-        self.update_live_transcription = self._update_live_transcription
-        self.close_live_transcription_window = self._close_live_transcription_window
-        self.update_live_transcription_threadsafe = self._update_live_transcription_threadsafe
 
         # State mapping to icon colors (moved from global)
         self.ICON_COLORS = {

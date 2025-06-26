@@ -201,7 +201,11 @@ You are now ready to run the Whisper Transcription App!
     ```bash
     python src/main.py
     ```
-    This command executes the main application file.
+    This command executes the main application file. Alternatively, you can run:
+    ```bash
+    python -m src.main
+    ```
+    which launches the same program using Python's module syntax.
 2.  **Application Window:** A graphical window should appear. This is the application's main interface.
 3.  **System Tray Icon:** The application will likely minimize to your Windows system tray (near the clock). You can usually interact with it by right-clicking the icon.
 

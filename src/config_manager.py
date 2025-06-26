@@ -68,6 +68,7 @@ Transcribed speech: {text}""",
         "gemini-2.5-flash",
         "gemini-2.5-pro"
     ],
+    "text_correction_timeout": 30,
     "save_temp_recordings": False,
     "min_transcription_duration": 1.0 # Nova configuração
 }
@@ -110,6 +111,7 @@ GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 OPENROUTER_AGENT_PROMPT_CONFIG_KEY = OPENROUTER_PROMPT_CONFIG_KEY
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
+TEXT_CORRECTION_TIMEOUT_CONFIG_KEY = "text_correction_timeout"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
@@ -257,6 +259,24 @@ class ConfigManager:
         else:
             # Ensure all elements in the list are strings
             self.config["gemini_model_options"] = [str(m) for m in self.config["gemini_model_options"]]
+
+        try:
+            raw_timeout = self.config.get(
+                TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+                self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY],
+            )
+            timeout_val = float(raw_timeout)
+            if timeout_val <= 0:
+                logging.warning(
+                    f"Invalid text_correction_timeout '{timeout_val}'. Using default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+                )
+                timeout_val = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+            self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = timeout_val
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid text_correction_timeout value '{self.config.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY)}' in config. Using default ({self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]})."
+            )
+            self.config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY] = self.default_config[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
 
         # Validate min_record_duration
         try:
