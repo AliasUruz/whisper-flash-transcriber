@@ -5,7 +5,8 @@ from typing import Optional
 import google.generativeai as genai
 
 
-from .config_manager import ConfigManager, GEMINI_PROMPT_CONFIG_KEY  # Importar ConfigManager e constante
+from .config_manager import ConfigManager
+from .config_manager import GEMINI_PROMPT_CONFIG_KEY
 
 
 class GeminiAPI:
@@ -182,7 +183,9 @@ class GeminiAPI:
         """
         if not text:
             return ""
-        correction_prompt_template = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
+        correction_prompt_template = self.config_manager.get(
+            GEMINI_PROMPT_CONFIG_KEY
+        )
         full_prompt = correction_prompt_template.format(text=text)
         corrected_text = self._execute_request(full_prompt)
         return corrected_text if corrected_text else text
