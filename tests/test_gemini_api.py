@@ -30,18 +30,41 @@ class FakeGenerativeModel:
         self.model_id = model_id
         created_models.append(model_id)
 
-    def generate_content(self, text):
+    def generate_content(self, text, *, request_options=None):
         return MagicMock(text='texto corrigido via mock')
 
 
 def setup_fake_genai(monkeypatch):
     fake_google = types.ModuleType("google")
     fake_genai = types.ModuleType("generativeai")
+    fake_types = types.ModuleType("types")
+    class RequestOptions:
+        def __init__(self, *, retry=None, timeout=None):
+            self.retry = retry
+            self.timeout = timeout
+
+    class FakeBrokenResponseError(Exception):
+        pass
+
+    class FakeIncompleteIterationError(Exception):
+        pass
+    fake_helper = types.ModuleType("helper_types")
+    fake_helper.RequestOptions = RequestOptions
+    fake_types.helper_types = fake_helper
+    fake_types.BrokenResponseError = FakeBrokenResponseError
+    fake_types.IncompleteIterationError = FakeIncompleteIterationError
     fake_genai.configure = lambda api_key=None: None
     fake_genai.GenerativeModel = FakeGenerativeModel
+    fake_genai.types = fake_types
     fake_google.generativeai = fake_genai
     monkeypatch.setitem(sys.modules, "google", fake_google)
     monkeypatch.setitem(sys.modules, "google.generativeai", fake_genai)
+    monkeypatch.setitem(sys.modules, "google.generativeai.types", fake_types)
+    monkeypatch.setitem(
+        sys.modules,
+        "google.generativeai.types.helper_types",
+        fake_helper,
+    )
     import importlib
     if "src.gemini_api" in sys.modules:
         importlib.reload(sys.modules["src.gemini_api"])
@@ -116,3 +139,50 @@ def test_get_agent_response(monkeypatch):
     assert response == 'texto corrigido via mock'
     assert created_models == ['base-model', 'agent-model']
     assert api.current_model_id == 'base-model'
+
+
+def test_execute_request_passes_timeout(monkeypatch):
+    created_models.clear()
+    setup_fake_genai(monkeypatch)
+    from src.gemini_api import GeminiAPI
+    from google.generativeai.types.helper_types import RequestOptions
+
+    cfg = DummyConfig()
+    cfg.values['gemini_api_key'] = 'valid'
+    cfg.values['gemini_model'] = 'model'
+
+    captured = {}
+
+    def fake_generate(self, prompt, *, request_options=None):
+        captured['options'] = request_options
+        return MagicMock(text='ok')
+
+    monkeypatch.setattr(FakeGenerativeModel, 'generate_content', fake_generate)
+
+    api = GeminiAPI(cfg)
+    api._execute_request('oi', timeout=5)
+
+    assert isinstance(captured['options'], RequestOptions)
+    assert captured['options'].timeout == 5
+
+
+def test_execute_request_returns_empty_on_timeout(monkeypatch):
+    created_models.clear()
+    setup_fake_genai(monkeypatch)
+    from src.gemini_api import GeminiAPI
+    from google.generativeai.types import IncompleteIterationError
+
+    cfg = DummyConfig()
+    cfg.values['gemini_api_key'] = 'valid'
+    cfg.values['gemini_model'] = 'model'
+
+    def fake_generate(self, prompt, *, request_options=None):
+        raise IncompleteIterationError('timeout')
+
+    monkeypatch.setattr(FakeGenerativeModel, 'generate_content', fake_generate)
+    monkeypatch.setattr('src.gemini_api.time.sleep', lambda t: None)
+
+    api = GeminiAPI(cfg)
+    result = api._execute_request('oi', max_retries=2, retry_delay=0.01, timeout=0.1)
+
+    assert result == ''

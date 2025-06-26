@@ -3,6 +3,11 @@ import time
 from typing import Optional
 
 import google.generativeai as genai
+from google.generativeai.types import (
+    helper_types,
+    BrokenResponseError,
+    IncompleteIterationError,
+)
 
 
 from .config_manager import ConfigManager
@@ -119,6 +124,7 @@ class GeminiAPI:
         prompt: str,
         max_retries: int = 3,
         retry_delay: int = 1,
+        timeout: int | float = 120,
     ) -> str:
         """
         Executa uma requisição para a API Gemini com lógica de retry.
@@ -141,7 +147,10 @@ class GeminiAPI:
                     attempt + 1,
                     max_retries,
                 )
-                response = self.model.generate_content(prompt)
+                response = self.model.generate_content(
+                    prompt,
+                    request_options=helper_types.RequestOptions(timeout=timeout),
+                )
 
                 if hasattr(response, 'text') and response.text:
                     generated_text = response.text.strip()
@@ -156,6 +165,13 @@ class GeminiAPI:
                         max_retries,
                     )
 
+            except (BrokenResponseError, IncompleteIterationError) as e:
+                logging.error(
+                    "Erro específico da API Gemini (tentativa %s/%s): %s",
+                    attempt + 1,
+                    max_retries,
+                    e,
+                )
             except Exception as e:
                 logging.error(
                     "Erro durante a geração de conteúdo da API Gemini "
