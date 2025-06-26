@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
     "text_correction_service": "none",
     "openrouter_api_key": "",
     "openrouter_model": "deepseek/deepseek-chat-v3-0324:free",
+    "openrouter_prompt": "",
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
