@@ -4,8 +4,14 @@ from unittest.mock import MagicMock
 import sys
 import numpy as np
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+sys.path.insert(
+    0,
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+)
+sys.path.insert(
+    0,
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")),
+)
 
 
 def test_temp_recording_cleanup(tmp_path, monkeypatch):
@@ -14,7 +20,10 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     fake_pyautogui.hotkey = MagicMock()
     fake_pyperclip = types.ModuleType("pyperclip")
     fake_pyperclip.copy = MagicMock()
-    fake_sd = types.SimpleNamespace(PortAudioError=Exception, InputStream=MagicMock())
+    fake_sd = types.SimpleNamespace(
+        PortAudioError=Exception,
+        InputStream=MagicMock(),
+    )
     fake_sf = types.ModuleType("soundfile")
     fake_sf.write = MagicMock()
     fake_onnx = types.ModuleType("onnxruntime")
@@ -44,10 +53,19 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
     from src import core as core_module
 
     class DummyAudioHandler:
-        def __init__(self, config, on_audio_segment_ready_callback, on_recording_state_change_callback):
+        def __init__(
+            self,
+            config,
+            on_audio_segment_ready_callback,
+            on_recording_state_change_callback,
+        ):
             self.config_manager = config
-            self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
-            self.on_recording_state_change_callback = on_recording_state_change_callback
+            self.on_audio_segment_ready_callback = (
+                on_audio_segment_ready_callback
+            )
+            self.on_recording_state_change_callback = (
+                on_recording_state_change_callback
+            )
             self.is_recording = False
             self.temp_file_path = None
 
@@ -99,10 +117,22 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
         def detect_single_key(self):
             return None
 
-    monkeypatch.setattr(core_module, "AudioHandler", DummyAudioHandler)
-    monkeypatch.setattr(core_module, "TranscriptionHandler", DummyTranscriptionHandler)
+    monkeypatch.setattr(
+        core_module,
+        "AudioHandler",
+        DummyAudioHandler,
+    )
+    monkeypatch.setattr(
+        core_module,
+        "TranscriptionHandler",
+        DummyTranscriptionHandler,
+    )
     monkeypatch.setattr(core_module, "GeminiAPI", DummyGeminiAPI)
-    monkeypatch.setattr(core_module, "KeyboardHotkeyManager", DummyHotkeyManager)
+    monkeypatch.setattr(
+        core_module,
+        "KeyboardHotkeyManager",
+        DummyHotkeyManager,
+    )
 
     dummy_root = types.SimpleNamespace(after=lambda *a, **k: None)
     app = core_module.AppCore(dummy_root)

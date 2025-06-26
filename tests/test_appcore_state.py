@@ -82,11 +82,7 @@ class DummyAudioHandler:
     def stop_recording(self):
         self.is_recording = False
         self.on_recording_state_change_callback(core_module.STATE_TRANSCRIBING)
-<<<<<<< codex/instalar-dependências-e-executar-testes
         audio = np.zeros(1600, dtype=np.float32)
-=======
-        audio = np.zeros(160, dtype=np.float32)
->>>>>>> main
         self.on_audio_segment_ready_callback(audio)
 
 class DummyTranscriptionHandler:

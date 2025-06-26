@@ -1,10 +1,17 @@
 import importlib.machinery
 import types
 from unittest.mock import MagicMock
-import os, sys
+import os
+import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+sys.path.insert(
+    0,
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+)
+sys.path.insert(
+    0,
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")),
+)
 
 # Stub torch and transformers
 fake_torch = types.ModuleType("torch")
@@ -19,8 +26,8 @@ fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
 
-from src.transcription_handler import TranscriptionHandler
-from src.config_manager import (
+from src.transcription_handler import TranscriptionHandler  # noqa: E402
+from src.config_manager import (  # noqa: E402
     BATCH_SIZE_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY,
     MANUAL_BATCH_SIZE_CONFIG_KEY,
@@ -35,6 +42,7 @@ from src.config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
 )
+
 
 class DummyConfig:
     def __init__(self):
@@ -78,7 +86,10 @@ def test_executor_shutdown_parameters():
 
     handler.shutdown()
 
-    dummy_exec.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
+    dummy_exec.shutdown.assert_called_once_with(
+        wait=False,
+        cancel_futures=True,
+    )
     assert handler.transcription_cancel_event.is_set()
 
 
@@ -105,4 +116,3 @@ def test_correction_thread_join_called_when_alive():
     handler.shutdown()
 
     dummy_thread.join.assert_called_once()
-
