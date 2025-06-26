@@ -101,3 +101,27 @@ def test_appcore_shutdown_invokes_handler(monkeypatch):
     app.shutdown()
     assert handler.shutdown.called
 
+def test_appcore_shutdown_sets_flags_and_is_idempotent(monkeypatch):
+    app = setup_app(monkeypatch)
+    
+    # Mock the cleanup_hotkeys to check if it's called
+    app._cleanup_hotkeys = MagicMock()
+
+    # First call to shutdown
+    app.shutdown()
+
+    assert app.shutting_down is True
+    assert app.stop_reregister_event.is_set()
+    assert app.stop_health_check_event.is_set()
+    assert app._cleanup_hotkeys.called
+
+    # Reset mocks and call shutdown again to check idempotence
+    app._cleanup_hotkeys.reset_mock()
+    app.transcription_handler.shutdown.reset_mock()
+
+    app.shutdown()
+
+    # Assert that cleanup_hotkeys and transcription_handler.shutdown were NOT called again
+    assert not app._cleanup_hotkeys.called
+    assert not app.transcription_handler.shutdown.called
+

@@ -134,3 +134,42 @@ def test_model_path_resolves_with_meipass(monkeypatch):
     expected_path = Path(tmp_meipass) / "models" / "silero_vad.onnx"
     assert vad_module.MODEL_PATH == expected_path
 
+def test_is_speech_input_reshaping(monkeypatch):
+    """Confere se o input é corretamente reshaped para o ONNX runtime."""
+    sys.modules.pop("onnxruntime", None)
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(from_numpy=lambda *_: DummyTensor()),
+    )
+    real_onnx = importlib.import_module("onnxruntime")
+    monkeypatch.setitem(sys.modules, "onnxruntime", real_onnx)
+    vad_module = importlib.reload(importlib.import_module("src.vad_manager"))
+    monkeypatch.setattr(
+        vad_module.MODEL_PATH.__class__,
+        "exists",
+        lambda self: True,
+    )
+
+    class DummySession:
+        def run(self, input_names, ort_inputs):
+            # Assert the shape of the input 'input'
+            assert ort_inputs["input"].shape[0] == 1
+            assert ort_inputs["input"].ndim == 2
+            return [np.array([[0.9]]), np.zeros((2, 1, 128), dtype=np.float32)]
+
+    monkeypatch.setattr(
+        "onnxruntime.InferenceSession",
+        lambda *a, **k: DummySession(),
+    )
+
+    vad = vad_module.VADManager()
+
+    # Test with 1D array
+    audio_1d = np.zeros(160, dtype=np.float32)
+    vad.is_speech(audio_1d)
+
+    # Test with 2D array (e.g., from sounddevice, shape (N, 1))
+    audio_2d = np.zeros((160, 1), dtype=np.float32)
+    vad.is_speech(audio_2d)
+

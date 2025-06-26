@@ -60,7 +60,7 @@ def on_exit_app_enhanced(*_):
     main_tk_root.after(0, main_tk_root.quit)
 
 if __name__ == "__main__":
-    atexit.register(lambda: logging.info("Aplicação encerrada."))
+    atexit.register(on_exit_app_enhanced)
 
     main_tk_root = tk.Tk()
     main_tk_root.withdraw()

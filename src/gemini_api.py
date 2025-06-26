@@ -49,11 +49,16 @@ class GeminiAPI:
         # Inicializa o cliente Gemini
         self.reinitialize_client()
 
-    def reinitialize_client(self):
+    def reinitialize_client(self, api_key: Optional[str] = None, model_id: Optional[str] = None):
         """
         Recarrega o cliente Gemini com as configurações mais recentes.
         Útil quando as configurações mudam em tempo de execução.
         """
+        if api_key is not None:
+            self.last_api_key = api_key
+        if model_id is not None:
+            self.last_model_id = model_id
+
         logging.info(
             "Gemini API client re/initializing due to external request."
         )
@@ -125,6 +130,7 @@ class GeminiAPI:
         max_retries: int = 3,
         retry_delay: int = 1,
         timeout: int | float = 120,
+        model_id: Optional[str] = None,
     ) -> str:
         """
         Executa uma requisição para a API Gemini com lógica de retry.
@@ -143,11 +149,11 @@ class GeminiAPI:
                 logging.info(
                     "Enviando prompt para a API Gemini usando o modelo %s "
                     "(tentativa %s/%s)",
-                    self.last_model_id,
+                    model_id or self.last_model_id,
                     attempt + 1,
                     max_retries,
                 )
-                response = self.model.generate_content(
+                response = (model_id and genai.GenerativeModel(model_id) or self.model).generate_content(
                     prompt,
                     request_options=helper_types.RequestOptions(timeout=timeout),
                 )
@@ -214,17 +220,15 @@ class GeminiAPI:
             return ""
         agent_prompt_template = self.config_manager.get('prompt_agentico')
         full_prompt = f"{agent_prompt_template}\n\n{text}"
-        original_model = self.current_model_id
-        self.current_model_id = self.config_manager.get('gemini_agent_model')
-        self.last_model_id = None
-        agent_response = self._execute_request(full_prompt)
-        self.current_model_id = original_model
-        self.last_model_id = None
+        agent_response = self._execute_request(full_prompt, model_id=self.config_manager.get('gemini_agent_model'))
         return agent_response if agent_response else text
 
-    def correct_text_async(self, text: str, prompt: str, api_key: str) -> str:
+    def correct_text_async(self, text: str, prompt: str, api_key: str, model_id: Optional[str] = None) -> str:
         self.last_api_key = api_key
         self.current_api_key = api_key
+        if model_id is not None:
+            self.last_model_id = model_id
+            self.current_model_id = model_id
         self.current_prompt = prompt
         full_prompt = prompt.format(text=text)
-        return self._execute_request(full_prompt) or text
+        return self._execute_request(full_prompt, model_id=model_id) or text

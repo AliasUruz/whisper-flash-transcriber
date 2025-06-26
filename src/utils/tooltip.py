@@ -13,6 +13,7 @@ class Tooltip:
 
         self.widget.bind("<Enter>", self._schedule)
         self.widget.bind("<Leave>", self._hide)
+        self.widget.bind("<Destroy>", self._hide) # Ensure tooltip is hidden if widget is destroyed
 
     def _schedule(self, _event=None) -> None:
         self._unschedule()

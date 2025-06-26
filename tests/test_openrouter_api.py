@@ -81,6 +81,14 @@ def test_correct_text_async_custom_prompt():
         args, kwargs = mock_post.call_args
         sent_payload = json.loads(kwargs['data'])
         assert sent_payload['model'] == 'modelo1'
-        assert sent_payload['messages'][0]['content'] == 'Corrija o texto:'
-        assert sent_payload['messages'][1]['content'] == 'texto original'
+        assert sent_payload['messages'][0]['content'] == (
+            "You are a text correction assistant. "
+            "Your task is to correct the following transcribed text:\n"
+            "1. Fix punctuation (commas, periods, question marks, etc.)\n"
+            "2. Maintain the original meaning and all content\n"
+            "3. Do not add, edit, or remove information/words.\n"
+            "4. Return only the corrected text without any explanations or "
+            "additional comments"
+        )
+        assert sent_payload['messages'][1]['content'] == 'Corrija o texto: texto original'
         assert kwargs['headers']['Authorization'] == 'Bearer newkey'

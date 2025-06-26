@@ -62,6 +62,7 @@ class TranscriptionHandler:
         )
         # Evento para sinalizar cancelamento de transcrição em andamento
         self.transcription_cancel_event = threading.Event()
+        self.model_loaded_event = threading.Event()
 
         # Configurações de modelo e API (carregadas do config_manager)
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
@@ -143,6 +144,7 @@ class TranscriptionHandler:
                     generate_kwargs=generate_kwargs_init
                 )
                 logging.info("Pipeline de transcrição inicializada com sucesso.")
+                self.model_loaded_event.set() # Sinaliza que o modelo foi carregado
                 self.on_model_ready_callback()
             else:
                 error_message = "Falha ao carregar modelo ou processador."
@@ -206,7 +208,7 @@ class TranscriptionHandler:
                 else:
                     logging.info("Modo Agente ativado. Usando prompt do Agente para o Gemini.")
                     prompt = self.config_manager.get(GEMINI_AGENT_PROMPT_CONFIG_KEY)
-                future = self.executor.submit(self.gemini_api.correct_text_async, corrected, prompt, api_key)
+                future = self.executor.submit(self.gemini_api.correct_text_async, corrected, prompt, api_key, self.config_manager.get("gemini_model"))
                 corrected = future.result()
             elif active_provider == "openrouter":
                 if not is_agent_mode:
@@ -216,7 +218,7 @@ class TranscriptionHandler:
                     prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
 
                 model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-                future = self.executor.submit(self.openrouter_api.correct_text_async, corrected, prompt, api_key, model)
+                future = self.executor.submit(self.openrouter_api.correct_text, corrected, prompt, api_key, model)
                 corrected = future.result()
             else:
                 logging.error(f"Provedor de IA desconhecido: {active_provider}")
@@ -225,6 +227,7 @@ class TranscriptionHandler:
             logging.error(f"Erro ao corrigir texto: {exc}")
             if future and not future.done():
                 future.cancel()
+            corrected = text # Ensure original text is used if correction fails
         finally:
             self.correction_in_progress = False
             # O resultado da correção deve ser sempre retornado, independentemente
@@ -328,6 +331,12 @@ class TranscriptionHandler:
         """Envia segmento para transcrição assíncrona."""
         self._stop_signal_event.clear()
 
+        # Espera o modelo carregar antes de submeter a tarefa
+        if not self.model_loaded_event.is_set():
+            logging.info("Modelo ainda não carregado. Aguardando...")
+            self.model_loaded_event.wait() # Bloqueia até o modelo estar pronto
+            logging.info("Modelo carregado. Prosseguindo com a transcrição.")
+
         self.transcription_future = self.transcription_executor.submit(
             self._transcription_task, audio_input, agent_mode
         )
@@ -342,7 +351,7 @@ class TranscriptionHandler:
             if self.pipe is None:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
-                self.on_model_error_callback(error_message)
+                self.on_model_error_callback(error_message) # Notify UI of the error
                 return
 
             dynamic_batch_size = self._get_dynamic_batch_size()

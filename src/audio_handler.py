@@ -162,8 +162,12 @@ class AudioHandler:
             return False
 
         self.is_recording = False
-        stream_was_started = self.stream_started
         self._stop_event.set()
+
+        if self._record_thread and self._record_thread.is_alive():
+            self._record_thread.join(timeout=2.0)
+
+        stream_was_started = self.stream_started
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()

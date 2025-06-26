@@ -194,6 +194,102 @@ class ConfigManager:
         self.save_config()
 
     def _validate_and_apply_config(self, loaded_config):
+        # Validate and convert sound settings
+        try:
+            self.config["sound_frequency"] = int(self.config.get("sound_frequency", self.default_config["sound_frequency"]))
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid sound_frequency value '{self.config.get('sound_frequency')}' in config. Using default ({self.default_config['sound_frequency']}).")
+            self.config["sound_frequency"] = self.default_config["sound_frequency"]
+
+        try:
+            self.config["sound_duration"] = float(self.config.get("sound_duration", self.default_config["sound_duration"]))
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid sound_duration value '{self.config.get('sound_duration')}' in config. Using default ({self.default_config['sound_duration']}).")
+            self.config["sound_duration"] = self.default_config["sound_duration"]
+
+        try:
+            self.config["sound_volume"] = float(self.config.get("sound_volume", self.default_config["sound_volume"]))
+            if not (0.0 <= self.config["sound_volume"] <= 1.0):
+                logging.warning(f"Invalid sound_volume value '{self.config['sound_volume']}'. Must be between 0.0 and 1.0. Using default ({self.default_config['sound_volume']}).")
+                self.config["sound_volume"] = self.default_config["sound_volume"]
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid sound_volume value '{self.config.get('sound_volume')}' in config. Using default ({self.default_config['sound_volume']}).")
+            self.config["sound_volume"] = self.default_config["sound_volume"]
+
+        # Validate and convert batch_size settings
+        try:
+            self.config["batch_size"] = int(self.config.get("batch_size", self.default_config["batch_size"]))
+            if self.config["batch_size"] <= 0:
+                logging.warning(f"Invalid batch_size value '{self.config['batch_size']}'. Must be positive. Using default ({self.default_config['batch_size']}).")
+                self.config["batch_size"] = self.default_config["batch_size"]
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid batch_size value '{self.config.get('batch_size')}' in config. Using default ({self.default_config['batch_size']}).")
+            self.config["batch_size"] = self.default_config["batch_size"]
+
+        try:
+            self.config["manual_batch_size"] = int(self.config.get("manual_batch_size", self.default_config["manual_batch_size"]))
+            if self.config["manual_batch_size"] <= 0:
+                logging.warning(f"Invalid manual_batch_size value '{self.config['manual_batch_size']}'. Must be positive. Using default ({self.default_config['manual_batch_size']}).")
+                self.config["manual_batch_size"] = self.default_config["manual_batch_size"]
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid manual_batch_size value '{self.config.get('manual_batch_size')}' in config. Using default ({self.default_config['manual_batch_size']}).")
+            self.config["manual_batch_size"] = self.default_config["manual_batch_size"]
+
+        # Validate hotkey_stability_service_enabled
+        self.config["hotkey_stability_service_enabled"] = _parse_bool(
+            self.config.get("hotkey_stability_service_enabled", self.default_config["hotkey_stability_service_enabled"])
+        )
+
+        # Validate text_correction_enabled
+        self.config["text_correction_enabled"] = _parse_bool(
+            self.config.get("text_correction_enabled", self.default_config["text_correction_enabled"])
+        )
+
+        # Validate text_correction_service
+        if self.config.get("text_correction_service") not in [SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI]:
+            logging.warning(f"Invalid text_correction_service '{self.config.get('text_correction_service')}'. Using default ('{self.default_config['text_correction_service']}').")
+            self.config["text_correction_service"] = self.default_config["text_correction_service"]
+
+        # Validate gemini_model_options
+        if not isinstance(self.config.get("gemini_model_options"), list):
+            logging.warning(f"Invalid gemini_model_options. Must be a list. Using default.")
+            self.config["gemini_model_options"] = self.default_config["gemini_model_options"]
+        else:
+            # Ensure all elements in the list are strings
+            self.config["gemini_model_options"] = [str(m) for m in self.config["gemini_model_options"]]
+
+        # Validate min_record_duration
+        try:
+            self.config["min_record_duration"] = float(self.config.get("min_record_duration", self.default_config["min_record_duration"]))
+            if self.config["min_record_duration"] < 0:
+                logging.warning(f"Invalid min_record_duration '{self.config['min_record_duration']}'. Must be non-negative. Using default ({self.default_config['min_record_duration']}).")
+                self.config["min_record_duration"] = self.default_config["min_record_duration"]
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid min_record_duration value '{self.config.get('min_record_duration')}' in config. Using default ({self.default_config['min_record_duration']}).")
+            self.config["min_record_duration"] = self.default_config["min_record_duration"]
+
+        # Validate keyboard_library
+        if self.config.get("keyboard_library") not in ["win32", "linux", "darwin"]: # Assuming these are the only valid values
+            logging.warning(f"Invalid keyboard_library '{self.config.get('keyboard_library')}'. Using default ('{self.default_config['keyboard_library']}').")
+            self.config["keyboard_library"] = self.default_config["keyboard_library"]
+
+        # Validate AI provider related models and keys (basic check for existence)
+        for key in ["openrouter_model", "gemini_model", "gemini_agent_model"]:
+            if not isinstance(self.config.get(key), str):
+                logging.warning(f"Invalid type for '{key}'. Must be a string. Using default.")
+                self.config[key] = self.default_config[key]
+
+        for key in ["openrouter_api_key", "gemini_api_key"]:
+            if not isinstance(self.config.get(key), str):
+                logging.warning(f"Invalid type for '{key}'. Must be a string. Using empty string.")
+                self.config[key] = ""
+
+        # Validate prompt strings
+        for key in ["openrouter_agent_prompt", "openrouter_prompt", "prompt_agentico", "gemini_prompt"]:
+            if not isinstance(self.config.get(key), str):
+                logging.warning(f"Invalid type for '{key}'. Must be a string. Using default.")
+                self.config[key] = self.default_config[key]
+
         self.config["record_key"] = str(self.config.get("record_key", self.default_config["record_key"])).lower()
         self.config["record_mode"] = str(self.config.get("record_mode", self.default_config["record_mode"])).lower()
         if self.config["record_mode"] not in ["toggle", "press"]:

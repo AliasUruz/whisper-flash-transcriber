@@ -82,7 +82,7 @@ def test_reinitialization(monkeypatch):
     cfg.values['gemini_api_key'] = 'valid-key'
     cfg.values['gemini_model'] = 'new-model'
 
-    api.reinitialize_client()
+    api.reinitialize_client(api_key='valid-key', model_id='new-model')
 
     assert api.is_valid
     assert created_models == ['new-model']
@@ -109,36 +109,20 @@ def test_get_agent_response(monkeypatch):
     setup_fake_genai(monkeypatch)
     from src import gemini_api as ga
 
-    def fake_load(self):
-        if self.current_model_id is None:
-            self.current_model_id = self.config_manager.get("gemini_model")
-        self.current_api_key = (
-            self.last_api_key or self.config_manager.get("gemini_api_key")
-        )
-        if not self.current_api_key:
-            self.model = None
-            self.is_valid = False
-            self.last_api_key = self.current_api_key
-            return
-        self.model = FakeGenerativeModel(self.current_model_id)
-        self.last_api_key = self.current_api_key
-        self.last_model_id = self.current_model_id
-        self.is_valid = True
-
-    monkeypatch.setattr(ga.GeminiAPI, "_load_model_from_config", fake_load)
-    GeminiAPI = ga.GeminiAPI
-
     cfg = DummyConfig()
     cfg.values['gemini_api_key'] = 'valid'
     cfg.values['gemini_model'] = 'base-model'
     cfg.values['gemini_agent_model'] = 'agent-model'
 
-    api = GeminiAPI(cfg)
+    api = ga.GeminiAPI(cfg)
+    
+    mock_execute_request = MagicMock(return_value='mocked agent response')
+    monkeypatch.setattr(api, '_execute_request', mock_execute_request)
+
     response = api.get_agent_response('oi')
 
-    assert response == 'texto corrigido via mock'
-    assert created_models == ['base-model', 'agent-model']
-    assert api.current_model_id == 'base-model'
+    assert response == 'mocked agent response'
+    mock_execute_request.assert_called_once_with('agent prompt\n\noi', model_id='agent-model')
 
 
 def test_execute_request_passes_timeout(monkeypatch):
@@ -186,3 +170,22 @@ def test_execute_request_returns_empty_on_timeout(monkeypatch):
     result = api._execute_request('oi', max_retries=2, retry_delay=0.01, timeout=0.1)
 
     assert result == ''
+
+def test_correct_text_async(monkeypatch):
+    created_models.clear()
+    setup_fake_genai(monkeypatch)
+    from src.gemini_api import GeminiAPI
+
+    cfg = DummyConfig()
+    cfg.values['gemini_api_key'] = 'valid'
+    cfg.values['gemini_model'] = 'base-model'
+
+    api = GeminiAPI(cfg)
+    
+    mock_execute_request = MagicMock(return_value='mocked async correction')
+    monkeypatch.setattr(api, '_execute_request', mock_execute_request)
+
+    result = api.correct_text_async('original text', 'prompt {text}', 'valid', 'async-model')
+
+    assert result == 'mocked async correction'
+    mock_execute_request.assert_called_once_with('prompt original text', model_id='async-model')

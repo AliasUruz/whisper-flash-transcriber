@@ -184,8 +184,16 @@ class OpenRouterAPI:
             )
             return text
 
-        system_message = prompt.replace("{text}", "").strip()
-        user_message = text
+        system_message = (
+            "You are a text correction assistant. "
+            "Your task is to correct the following transcribed text:\n"
+            "1. Fix punctuation (commas, periods, question marks, etc.)\n"
+            "2. Maintain the original meaning and all content\n"
+            "3. Do not add, edit, or remove information/words.\n"
+            "4. Return only the corrected text without any explanations or "
+            "additional comments"
+        )
+        user_message = prompt.format(text=text)
 
         payload = {
             "model": self.model_id,

@@ -78,21 +78,34 @@ class AudioHandlerTest(unittest.TestCase):
 
         handler = AudioHandler(self.config, on_ready, lambda *_: None)
 
-        def fake_record_audio_task(self):
-            self.stream_started = True
-            while not self._stop_event.is_set() and self.is_recording:
-                self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
-                time.sleep(0.01)
-            self.stream_started = False
-            self._stop_event.clear()
-            self._record_thread = None
+        original_record_audio_task = handler._record_audio_task
 
-        with patch.object(AudioHandler, '_record_audio_task', fake_record_audio_task):
+        # This mock will be executed by the thread created in start_recording
+        def mock_record_audio_task_with_delay(self_instance):
+            # Call the original task logic
+            original_record_audio_task.__get__(self_instance, AudioHandler)()
+            # Simulate some work that happens *after* the recording loop exits
+            time.sleep(0.1) # This is the delay that stop_recording should wait for
+
+        # Patch the method that the thread will execute
+        with patch.object(handler, '_record_audio_task', side_effect=mock_record_audio_task_with_delay):
             with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
                 with patch('logging.warning') as mock_warn:
                     started = handler.start_recording()
+                    # Give the recording thread some time to start and record
                     time.sleep(0.05)
+                    
+                    # Get a reference to the actual recording thread
+                    record_thread_before_stop = handler._record_thread
+                    self.assertIsNotNone(record_thread_before_stop)
+                    self.assertTrue(record_thread_before_stop.is_alive())
+
+                    # Call stop_recording, which should now wait for mock_record_audio_task_with_delay to finish
                     stopped = handler.stop_recording()
+                    
+                    # After stop_recording, the thread should no longer be alive
+                    # because stop_recording should have joined it.
+                    self.assertFalse(record_thread_before_stop.is_alive()) # This is the key assertion for Bug 2 fix
 
         self.assertTrue(started)
         self.assertTrue(stopped)

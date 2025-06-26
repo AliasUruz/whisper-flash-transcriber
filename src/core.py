@@ -189,7 +189,12 @@ class AppCore:
         """Callback para enviar texto de segmento para a UI ao vivo."""
         if self.on_segment_transcribed:
             self.on_segment_transcribed(text)
-        self.full_transcription += text + " " # Acumula a transcrição completa
+        
+        # Limitar o crescimento da transcrição completa para evitar consumo excessivo de memória
+        if len(self.full_transcription) < 10_000_000: # Limite de 10MB de caracteres
+            self.full_transcription += text + " " # Acumula a transcrição completa
+        else:
+            logging.warning("Limite de tamanho da transcrição completa atingido. Não serão acumulados mais segmentos.")
 
     def _handle_transcription_result(self, corrected_text, raw_text):
         """Lida com o texto final de transcrição, priorizando a versão corrigida."""
@@ -372,20 +377,12 @@ class AppCore:
 
     def _reload_keyboard_and_suppress(self):
         with self.keyboard_lock:
-            max_attempts = 3; attempt = 0; last_error = None
-            self._cleanup_hotkeys(); time.sleep(0.3)
-            while attempt < max_attempts:
-                attempt += 1
-                try:
-                    if self.ahk_running: self.ahk_manager.stop(); self.ahk_running = False; time.sleep(0.2)
-                    self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
-                    logging.info("Recarregamento do KeyboardHotkeyManager concluído com sucesso.")
-                    break
-                except Exception as e: last_error = e; logging.error(f"Erro na tentativa {attempt} de recarregamento: {e}"); time.sleep(1)
-            if attempt >= max_attempts and last_error is not None:
-                logging.error(f"Falha após {max_attempts} tentativas de recarregamento. Último erro: {last_error}")
-                return False
-            return self.register_hotkeys()
+            logging.info("Attempting to restart KeyboardHotkeyManager.")
+            success = self.ahk_manager.restart()
+            if not success:
+                logging.error("Failed to restart KeyboardHotkeyManager.")
+                self._set_state(STATE_ERROR_SETTINGS)
+            return success
 
     def _periodic_reregister_task(self):
         while not self.stop_reregister_event.wait(REREGISTER_INTERVAL_SECONDS):
@@ -598,9 +595,15 @@ class AppCore:
                 self.audio_handler.update_config()
             self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
             # Re-inicializar clientes API existentes em vez de recriá-los
-            self.gemini_api.reinitialize_client() # Re-inicializar cliente principal
+            self.gemini_api.reinitialize_client(
+                api_key=self.config_manager.get("gemini_api_key"),
+                model_id=self.config_manager.get("gemini_model")
+            ) # Re-inicializar cliente principal
             if self.transcription_handler.gemini_client:
-                self.transcription_handler.gemini_client.reinitialize_client() # Re-inicializar cliente Gemini do TranscriptionHandler
+                self.transcription_handler.gemini_client.reinitialize_client(
+                    api_key=self.config_manager.get("gemini_api_key"),
+                    model_id=self.config_manager.get("gemini_model")
+                ) # Re-inicializar cliente Gemini do TranscriptionHandler
             if self.transcription_handler.openrouter_client:
                 self.transcription_handler.openrouter_client.reinitialize_client(
                     api_key=self.config_manager.get("openrouter_api_key"),
@@ -667,9 +670,15 @@ class AppCore:
 
         # Re-inicializar clientes API se a chave ou modelo mudou
         if key in ["gemini_api_key", "gemini_model", "gemini_agent_model", "openrouter_api_key", "openrouter_model"]:
-            self.gemini_api.reinitialize_client()
+            self.gemini_api.reinitialize_client(
+                api_key=self.config_manager.get("gemini_api_key"),
+                model_id=self.config_manager.get("gemini_model")
+            )
             if self.transcription_handler.gemini_client:
-                self.transcription_handler.gemini_client.reinitialize_client()
+                self.transcription_handler.gemini_client.reinitialize_client(
+                    api_key=self.config_manager.get("gemini_api_key"),
+                    model_id=self.config_manager.get("gemini_model")
+                )
             if self.transcription_handler.openrouter_client:
                 self.transcription_handler.openrouter_client.reinitialize_client(
                     api_key=self.config_manager.get("openrouter_api_key"),
@@ -738,8 +747,10 @@ class AppCore:
         self.audio_handler.temp_file_path = None
 
     def shutdown(self):
-        if self.shutting_down: return
-        self.shutting_down = True
+        with self.state_lock:
+            if self.shutting_down:
+                return
+            self.shutting_down = True
         logging.info("Shutdown sequence initiated.")
 
         self.stop_reregister_event.set()
@@ -788,8 +799,8 @@ class AppCore:
                 logging.error(f"Erro no cleanup do AudioHandler: {e}")
 
         if self.reregister_timer_thread and self.reregister_timer_thread.is_alive():
-            self.reregister_timer_thread.join(timeout=1.5)
+            logging.info("Reregister timer thread is alive, but will not be joined (atexit context).")
         if self.health_check_thread and self.health_check_thread.is_alive():
-            self.health_check_thread.join(timeout=1.5)
+            logging.info("Health check thread is alive, but will not be joined (atexit context).")
 
         logging.info("Core shutdown sequence complete.")

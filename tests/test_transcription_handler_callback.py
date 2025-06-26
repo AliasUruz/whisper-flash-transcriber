@@ -88,6 +88,7 @@ class DummyPipe:
 def test_transcription_task_handles_missing_callback(monkeypatch):
     cfg = DummyConfig()
     results = []
+    mock_on_model_error = MagicMock()
 
     def result_callback(text, original):
         results.append(text)
@@ -96,13 +97,13 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
         cfg,
         gemini_api_client=None,
         on_model_ready_callback=noop,
-        on_model_error_callback=noop,
+        on_model_error_callback=mock_on_model_error,
         on_transcription_result_callback=result_callback,
         on_agent_result_callback=noop,
         on_segment_transcribed_callback=None,
         is_state_transcribing_fn=lambda: True,
     )
-    handler.pipe = DummyPipe()
+    handler.pipe = None # Simulate missing pipe
     handler.transcription_executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=1
     )
@@ -122,7 +123,8 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
 
     handler._transcription_task(None, agent_mode=False)
 
-    assert results == ["dummy"]
+    mock_on_model_error.assert_called_once() # Assert that the error callback was called
+    assert not results # No transcription result should be appended
 
 
 def test_async_text_correction_service_selection(monkeypatch):
@@ -149,7 +151,7 @@ def test_async_text_correction_service_selection(monkeypatch):
     monkeypatch.setattr(handler.gemini_api, "correct_text_async", MagicMock())
     monkeypatch.setattr(
         handler.openrouter_api,
-        "correct_text_async",
+        "correct_text",
         MagicMock(),
     )
 
@@ -239,3 +241,45 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
     thread.join()
 
     assert results == ["corrigido"]
+
+def test_transcribe_audio_segment_waits_for_model(monkeypatch):
+    cfg = DummyConfig()
+    
+    # Initially, model is not loaded
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=noop,
+        is_state_transcribing_fn=lambda: True,
+    )
+    handler.pipe = DummyPipe()
+    handler.model_loaded_event.clear() # Ensure it's not set
+
+    # Mock the transcription task to check if it's called
+    mock_transcription_task = MagicMock()
+    monkeypatch.setattr(handler, "_transcription_task", mock_transcription_task)
+
+    # Start transcription in a separate thread, it should block
+    transcription_thread = threading.Thread(
+        target=handler.transcribe_audio_segment,
+        args=(None, False),
+        daemon=True,
+    )
+    transcription_thread.start()
+
+    # Give it a moment to potentially block
+    time.sleep(0.1)
+    assert not mock_transcription_task.called # Should not be called yet
+
+    # Now, simulate model loading completion
+    handler.model_loaded_event.set()
+
+    # Give it a moment to unblock and call the task
+    time.sleep(0.1)
+    assert mock_transcription_task.called # Should be called now
+
+    transcription_thread.join(timeout=1) # Clean up the thread

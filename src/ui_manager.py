@@ -59,7 +59,7 @@ class UIManager:
         self.show_live_transcription_window = self._show_live_transcription_window
         self.update_live_transcription = self._update_live_transcription
         self.close_live_transcription_window = self._close_live_transcription_window
-        self.update_live_transcription_threadsafe = self.update_live_transcription_threadsafe
+        self.update_live_transcription_threadsafe = self._update_live_transcription_threadsafe
 
         # State mapping to icon colors (moved from global)
         self.ICON_COLORS = {
@@ -101,11 +101,14 @@ class UIManager:
             self.live_window = None
             self.live_textbox = None
     
+    def _update_live_transcription_threadsafe(self, text):
+        self.main_tk_root.after(0, lambda: self._update_live_transcription(text))
+
             # Assign methods to the instance
             self.show_live_transcription_window = self._show_live_transcription_window
             self.update_live_transcription = self._update_live_transcription
             self.close_live_transcription_window = self._close_live_transcription_window
-            self.update_live_transcription_threadsafe = self.update_live_transcription_threadsafe
+            self.update_live_transcription_threadsafe = self._update_live_transcription_threadsafe
 
     # Thread-safe method to update live transcription
     def update_live_transcription_threadsafe(self, text):
@@ -355,12 +358,7 @@ class UIManager:
                     text_correction_enabled_var.set(DEFAULT_CONFIG["text_correction_enabled"])
                     text_correction_service_var.set(DEFAULT_CONFIG["text_correction_service"])
                     # Sincroniza os campos de correção de texto caso os widgets existam
-                    try:
-                        service_menu  # Verifica se os widgets foram criados
-                    except NameError:
-                        pass
-                    else:
-                        update_text_correction_fields()
+                    update_text_correction_fields()
                     openrouter_api_key_var.set(DEFAULT_CONFIG["openrouter_api_key"])
                     openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
                     gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
@@ -643,7 +641,7 @@ class UIManager:
             menu=pystray.Menu(lambda: self.create_dynamic_menu())
         )
         # Set update callback in core_instance
-        self.core_instance_ref.set_state_update_callback(self.update_tray_icon)
+        self.core_instance_ref.set_state_update_callback(lambda state: self.main_tk_root.after(0, lambda: self.update_tray_icon(state)))
         self.core_instance_ref.set_segment_callback(self.update_live_transcription_threadsafe) # Connect segment callback
 
         def run_tray_icon_in_thread(icon):
@@ -736,7 +734,7 @@ class UIManager:
         new_batch_size_str = simpledialog.askstring(
             "Definir Batch Size Manual",
             f"Insira o novo Batch Size manual (atual: {current_manual_batch_size}):",
-            parent=self.settings_window_instance # Usar a janela de configurações como pai se estiver aberta
+            parent=self.settings_window_instance if self.settings_window_instance and self.settings_window_instance.winfo_exists() else self.main_tk_root # Usar a janela de configurações como pai se estiver aberta
         )
         if new_batch_size_str:
             try:

@@ -84,7 +84,7 @@ class VADManager:
             audio_chunk = audio_chunk.mean(axis=1)
 
         ort_inputs = {
-            "input": torch.from_numpy(audio_chunk).unsqueeze(0).numpy(),
+            "input": audio_chunk.reshape(1, -1),
             "state": self._state,
             "sr": np.array([self.sr], dtype=np.int64),
         }
