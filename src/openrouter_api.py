@@ -16,11 +16,20 @@ class OpenRouterAPI:
         self,
         api_key: str,
         model_id: str = "deepseek/deepseek-chat-v3-0324:free",
+        max_tokens: int = 4096,
     ) -> None:
-        """Inicializa o cliente OpenRouter."""
+        """Inicializa o cliente OpenRouter.
+
+        Args:
+            api_key: Chave de acesso para a API.
+            model_id: Identificador do modelo em uso.
+            max_tokens: Limite máximo de tokens retornados pela API. O padrão
+                ``4096`` é compatível com a maioria dos modelos do OpenRouter.
+        """
         self.api_key = api_key
         self.model_id = model_id
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
+        self.max_tokens = max_tokens
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -95,7 +104,7 @@ class OpenRouterAPI:
             ],
             "temperature": 0.0,
             # Low temperature for mais determinismo
-            "max_tokens": 10000   # Adjust based on your expected output length
+            "max_tokens": self.max_tokens  # Ajustável conforme o modelo em uso
         }
 
         # Try to make the API call with retries
