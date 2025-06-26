@@ -22,6 +22,7 @@ from .config_manager import (
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,  # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    USE_FLASH_ATTENTION_2_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     USE_FLASH_ATTENTION_2_CONFIG_KEY,
 )
@@ -89,7 +90,7 @@ class TranscriptionHandler:
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY
         )
         self.use_flash_attention_2 = self.config_manager.get(
-            USE_FLASH_ATTENTION_2_CONFIG_KEY, False
+            USE_FLASH_ATTENTION_2_CONFIG_KEY
         )
 
         self.openrouter_client = None
@@ -136,7 +137,7 @@ class TranscriptionHandler:
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY
         )
         self.use_flash_attention_2 = self.config_manager.get(
-            USE_FLASH_ATTENTION_2_CONFIG_KEY, False
+            USE_FLASH_ATTENTION_2_CONFIG_KEY
         )
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
@@ -346,7 +347,22 @@ class TranscriptionHandler:
                 device_map={"": device},  # Especifica que todo o modelo vai para o dispositivo alvo
                 attn_implementation="flash_attention_2" if self.use_flash_attention_2 else None,
             )
-            
+
+            # Converter para BetterTransformer se habilitado
+            if self.use_flash_attention_2:
+                try:
+                    from optimum.bettertransformer import BetterTransformer
+                    model = (
+                        model.to_bettertransformer()
+                        if hasattr(model, "to_bettertransformer")
+                        else BetterTransformer.transform(model)
+                    )
+                    logging.info("Modelo convertido com BetterTransformer.")
+                except Exception as e:
+                    logging.warning(
+                        f"Falha ao aplicar BetterTransformer: {e}. Continuando com o modelo padrão."
+                    )
+
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
             return model, processor
 
