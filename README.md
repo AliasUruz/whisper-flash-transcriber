@@ -176,6 +176,8 @@ With your virtual environment activated, you can now install the libraries the a
     ```
 The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
 
+These dependencies now include `optimum[bettertransformer]` and `accelerate`, which enable the optional **"Turbo"** mode via Flash Attention 2 for faster transcription.
+
 2.  **Optional: Install PyTorch with CUDA (For GPU Acceleration):**
     The `requirements.txt` includes a basic installation of PyTorch. However, if you have a compatible NVIDIA graphics card, you can significantly speed up the transcription process by installing a version of PyTorch that uses your GPU (CUDA).
     *   **How to check if you have CUDA:** Open Command Prompt and type `nvcc --version`. If you see version information, CUDA is installed. Note the version number (e.g., CUDA 11.8, CUDA 12.1). If the command is not found, you likely don't have CUDA installed or it's not in your PATH.
