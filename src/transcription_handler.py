@@ -174,7 +174,7 @@ class TranscriptionHandler:
         if self.text_correction_service == SERVICE_GEMINI and self.gemini_client and self.gemini_client.is_valid: return SERVICE_GEMINI
         return SERVICE_NONE
 
-    def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str, was_transcribing_when_started: bool):
+    def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str):
         if not self.text_correction_enabled:
             self.correction_in_progress = False
             self.on_transcription_result_callback(text, text)
@@ -183,7 +183,6 @@ class TranscriptionHandler:
         self.correction_in_progress = True
         corrected = text  # Default to original text
         future = None
-        timeout_val = self.text_correction_timeout or 30
         try:
             active_provider = self._get_text_correction_service()
             if active_provider == SERVICE_NONE:
@@ -454,15 +453,10 @@ class TranscriptionHandler:
                         )
             else:
                 if self.text_correction_enabled:
-                    was_transcribing_when_started = (
-                        self.is_state_transcribing_fn()
-                        if self.is_state_transcribing_fn
-                        else False
-                    )
                     openrouter_prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
                     self.correction_thread = threading.Thread(
                         target=self._async_text_correction,
-                        args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt, was_transcribing_when_started),
+                        args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt),
                         daemon=True,
                         name="TextCorrectionThread",
                     )

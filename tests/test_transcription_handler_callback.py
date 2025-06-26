@@ -117,7 +117,6 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
         agent_mode,
         g_prompt,
         o_prompt,
-        was_transcribing,
     ):
         return result_callback(text, text)
 
@@ -163,7 +162,7 @@ def test_async_text_correction_service_selection(monkeypatch):
         cfg.data[TEXT_CORRECTION_SERVICE_CONFIG_KEY] = service
         handler.gemini_api.correct_text_async.reset_mock()
         handler.openrouter_api.correct_text.reset_mock()
-        handler._async_text_correction("txt", False, "", "", True)
+        handler._async_text_correction("txt", False, "", "")
 
         if service == SERVICE_OPENROUTER:
             handler.openrouter_api.correct_text_async.assert_called_once_with(
@@ -242,7 +241,7 @@ def test_text_correction_preserves_result_when_state_changes(monkeypatch):
 
     thread = threading.Thread(
         target=handler._async_text_correction,
-        args=("texto", False, "", "", True),
+        args=("texto", False, "", ""),
         daemon=True,
     )
     thread.start()
@@ -324,6 +323,6 @@ def test_text_correction_timeout(monkeypatch):
 
     monkeypatch.setattr(handler.gemini_api, "correct_text_async", slow_correction)
 
-    handler._async_text_correction("texto", False, "", "", True)
+    handler._async_text_correction("texto", False, "", "")
 
     assert results == ["texto"]
