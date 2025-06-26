@@ -17,7 +17,11 @@ from src.core import AppCore
 from src.ui_manager import UIManager
 
 # --- Ajuste para evitar erros "main thread is not in main loop" ao destruir
-# variáveis Tkinter quando a aplicação encerra. (Mantido aqui por ser um hack de Tkinter)
+# variáveis Tkinter quando a aplicação encerra. Mantemos o destrutor original
+# em `_original_variable_del` para preservar comportamentos internos e facilitar
+# a manutenção em futuras versões do Tkinter.
+_original_variable_del = tk.Variable.__del__
+
 def _safe_variable_del(self):
     tk_root = getattr(self, "_tk", None)
     if not tk_root: return
@@ -28,9 +32,18 @@ def _safe_variable_del(self):
     cmds = getattr(self, "_tclCommands", None)
     if cmds:
         for name in cmds:
-            try: tk_root.deletecommand(name)
-            except Exception: pass
+            try:
+                tk_root.deletecommand(name)
+            except Exception:
+                pass
             self._tclCommands = None
+    try:
+        # Garante que eventuais comportamentos futuros do destrutor original
+        # sejam preservados.
+        _original_variable_del(self)
+    except Exception:
+        pass
+
 tk.Variable.__del__ = _safe_variable_del
 
 # Variáveis globais para referências (necessárias para pystray e callbacks)
