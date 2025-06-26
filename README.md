@@ -303,7 +303,7 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
     ```bash
     pip install -r requirements-test.txt
     ```
-8.  Run `flake8 src/gemini_api.py src/openrouter_api.py` to check the lint.
+8.  Optionally, run `flake8 src/gemini_api.py src/openrouter_api.py` to check code style.
 
 ## Running Tests
 
