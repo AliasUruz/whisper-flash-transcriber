@@ -4,6 +4,7 @@ import threading
 import os
 import sys
 from unittest.mock import MagicMock
+import numpy as np
 
 # Stub external dependencies before importing core module
 fake_pyautogui = types.ModuleType("pyautogui")
@@ -80,10 +81,8 @@ class DummyAudioHandler:
     def stop_recording(self):
         self.is_recording = False
         self.on_recording_state_change_callback(core_module.STATE_TRANSCRIBING)
-        path = "dummy.wav"
-        with open(path, "w") as f:
-            f.write("data")
-        self.on_audio_segment_ready_callback(path, 0.1)
+        audio = np.zeros(int(0.1 * core_module.AUDIO_SAMPLE_RATE), dtype=np.float32)
+        self.on_audio_segment_ready_callback(audio)
 
 class DummyTranscriptionHandler:
     def __init__(self, config_manager, gemini_api_client, on_model_ready_callback,
