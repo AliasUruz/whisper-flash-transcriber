@@ -151,7 +151,7 @@ def test_async_text_correction_service_selection(monkeypatch):
     monkeypatch.setattr(handler.gemini_api, "correct_text_async", MagicMock())
     monkeypatch.setattr(
         handler.openrouter_api,
-        "correct_text",
+        "correct_text_async",
         MagicMock(),
     )
 
