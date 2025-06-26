@@ -22,6 +22,7 @@ from .config_manager import (
     HOTKEY_HEALTH_CHECK_INTERVAL,
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    GEMINI_PROMPT_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
@@ -121,9 +122,13 @@ class AppCore:
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
 
-    def _on_audio_segment_ready(self, audio_segment: np.ndarray):
+    def _on_audio_segment_ready(self, audio_segment, duration_seconds: float | None = None):
         """Callback do AudioHandler quando um segmento de áudio está pronto para transcrição."""
-        duration_seconds = len(audio_segment) / AUDIO_SAMPLE_RATE
+        if isinstance(audio_segment, np.ndarray):
+            duration_seconds = len(audio_segment) / AUDIO_SAMPLE_RATE
+        else:
+            duration_seconds = duration_seconds or 0.0
+
         min_duration = self.config_manager.get('min_transcription_duration')
         
         if duration_seconds < min_duration:
@@ -141,7 +146,7 @@ class AppCore:
         logging.info(f"AppCore: Segmento de áudio pronto ({duration_seconds:.2f}s). Enviando para TranscriptionHandler (Modo Agente: {is_agent_mode}).")
         
         # Passa o estado capturado para o handler de transcrição.
-        self.transcription_handler.transcribe_audio_segment(audio_segment, agent_mode=is_agent_mode)
+        self.transcription_handler.transcribe_audio_segment(audio_segment, is_agent_mode)
 
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
@@ -552,7 +557,7 @@ class AppCore:
                 "new_openrouter_api_key": "openrouter_api_key", "new_openrouter_model": "openrouter_model",
                 "new_gemini_api_key": "gemini_api_key", "new_gemini_model": "gemini_model",
                 "new_agent_model": "gemini_agent_model",
-                "new_gemini_prompt": "gemini_prompt",
+                "new_gemini_prompt": GEMINI_PROMPT_CONFIG_KEY,
                 "new_batch_size": "batch_size", "new_gpu_index": "gpu_index",
                 "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
                 "new_min_transcription_duration": "min_transcription_duration",

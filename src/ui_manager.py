@@ -14,6 +14,7 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
     DEFAULT_CONFIG,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    GEMINI_PROMPT_CONFIG_KEY,
 )
 
 from .utils.tooltip import Tooltip
@@ -500,7 +501,7 @@ class UIManager:
                 ctk.CTkLabel(gemini_prompt_frame, text="Gemini Correction Prompt:").pack(anchor="w", pady=(5,0))
                 gemini_prompt_correction_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=100, wrap="word")
                 gemini_prompt_correction_textbox.pack(fill="x", expand=True, pady=5)
-                gemini_prompt_correction_textbox.insert("1.0", self.config_manager.get("gemini_prompt"))
+                gemini_prompt_correction_textbox.insert("1.0", self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY))
                 Tooltip(gemini_prompt_correction_textbox, "Prompt used to refine text.")
 
                 ctk.CTkLabel(gemini_prompt_frame, text="Prompt do Modo Agêntico:").pack(anchor="w", pady=(5,0))
