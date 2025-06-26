@@ -210,7 +210,7 @@ class AppCore:
         
         self._set_state(STATE_IDLE)
         if self.ui_manager:
-            self.ui_manager.close_live_transcription_window()
+            self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
         logging.info(f"Texto final corrigido para copiar/colar: {final_text}")
         self.full_transcription = ""  # Reset para a próxima gravação
         self._delete_temp_audio_file()
@@ -242,7 +242,7 @@ class AppCore:
         finally:
             self._set_state(STATE_IDLE)
             if self.ui_manager:
-                self.ui_manager.close_live_transcription_window()
+                self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
             self._delete_temp_audio_file()
 
     def _do_paste(self):
@@ -303,7 +303,7 @@ class AppCore:
             current_state_for_callback = new_state
         if callback_to_call:
             try:
-                callback_to_call(current_state_for_callback)
+                self.main_tk_root.after(0, lambda: callback_to_call(current_state_for_callback))
             except Exception as e:
                 logging.error(f"Error calling state update callback for state {current_state_for_callback}: {e}")
 
