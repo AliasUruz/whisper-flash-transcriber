@@ -344,7 +344,7 @@ class TranscriptionHandler:
                 torch_dtype=torch_dtype_local,
                 low_cpu_mem_usage=True,  # Ajuda a reduzir o uso de RAM durante o carregamento
                 use_safetensors=True,
-                device_map={"": device},  # Especifica que todo o modelo vai para o dispositivo alvo
+                device_map={'': device}, # Especifica que todo o modelo vai para o dispositivo alvo
                 attn_implementation="flash_attention_2" if self.use_flash_attention_2 else None,
             )
 
