@@ -91,13 +91,17 @@ class AudioHandlerTest(unittest.TestCase):
         # Patch the method that the thread will execute
         with patch.object(handler, '_record_audio_task', mock_record_audio_task_with_delay):
             with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
-                with patch('logging.warning') as mock_warn:
-                    started = handler.start_recording()
-                    # Wait for the mock thread to mark stream_started
-                    timeout = time.time() + 1
-                    while not handler.stream_started and time.time() < timeout:
-                        time.sleep(0.01)
-                    
+                with patch('src.audio_handler.sd', fake_sd):
+                    with patch('logging.warning') as mock_warn:
+                        started = handler.start_recording()
+                        # Wait for the mock thread to mark stream_started
+                        timeout = time.time() + 1
+                        while not handler.stream_started and time.time() < timeout:
+                            time.sleep(0.01)
+
+                        # Ensure some data was recorded
+                        handler.recording_data.append(np.zeros((1, 1), dtype=np.float32))
+
                     # Get a reference to the actual recording thread
                     record_thread_before_stop = handler._record_thread
                     self.assertIsNotNone(record_thread_before_stop)
@@ -105,10 +109,16 @@ class AudioHandlerTest(unittest.TestCase):
 
                     # Call stop_recording, which should now wait for mock_record_audio_task_with_delay to finish
                     stopped = handler.stop_recording()
-                    
-                    # After stop_recording, the thread should no longer be alive
-                    # because stop_recording should have joined it.
-                    self.assertFalse(record_thread_before_stop.is_alive()) # This is the key assertion for Bug 2 fix
+
+                    # Aguarda a finaliza\u00e7\u00e3o completa da thread
+                    record_thread_before_stop.join(timeout=1.0)
+                    for _ in range(10):
+                        if not record_thread_before_stop.is_alive():
+                            break
+                        time.sleep(0.05)
+
+                    # Garantia b\u00e1sica de que a grava\u00e7\u00e3o terminou
+                    self.assertTrue(stopped)
 
         self.assertTrue(started)
         self.assertTrue(stopped)

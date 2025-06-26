@@ -1,7 +1,11 @@
 import logging
 import sys
 import numpy as np
-import onnxruntime
+try:
+    import onnxruntime
+except ImportError:  # pragma: no cover - handled in tests
+    logging.warning("onnxruntime n\u00e3o encontrado. VAD desativado.")
+    onnxruntime = None
 import torch
 from pathlib import Path
 
@@ -25,6 +29,11 @@ class VADManager:
         self.sr = sampling_rate
         # Flag que indica se o VAD está pronto para uso
         self.enabled = False
+
+        if onnxruntime is None:
+            logging.warning("onnxruntime indispon\u00edvel. VAD desativado.")
+            self.session = None
+            return
 
         if not MODEL_PATH.exists():
             logging.error(

@@ -151,10 +151,14 @@ def test_async_text_correction_service_selection(monkeypatch):
     handler.gemini_api = handler.gemini_client
 
     monkeypatch.setattr(handler.gemini_api, "correct_text_async", MagicMock())
+
+    def _openrouter_async(*a, **k):
+        return handler.openrouter_api.correct_text(*a, **k)
+
     monkeypatch.setattr(
         handler.openrouter_api,
         "correct_text_async",
-        MagicMock(),
+        MagicMock(wraps=_openrouter_async),
     )
 
     scenarios = [SERVICE_GEMINI, SERVICE_OPENROUTER, SERVICE_NONE]
