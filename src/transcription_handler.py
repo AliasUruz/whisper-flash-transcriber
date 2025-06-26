@@ -83,10 +83,6 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.text_correction_timeout = self.config_manager.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
-        self.text_correction_timeout = self.config_manager.get(
-            TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
-            30,
-        )
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -127,10 +123,6 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.text_correction_timeout = self.config_manager.get(TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
-        self.text_correction_timeout = self.config_manager.get(
-            TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
-            30,
-        )
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
