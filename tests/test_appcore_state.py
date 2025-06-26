@@ -80,10 +80,8 @@ class DummyAudioHandler:
     def stop_recording(self):
         self.is_recording = False
         self.on_recording_state_change_callback(core_module.STATE_TRANSCRIBING)
-        path = "dummy.wav"
-        with open(path, "w") as f:
-            f.write("data")
-        self.on_audio_segment_ready_callback(path, 0.1)
+        audio_data = [0] * 16000
+        self.on_audio_segment_ready_callback(audio_data)
 
 class DummyTranscriptionHandler:
     def __init__(self, config_manager, gemini_api_client, on_model_ready_callback,
@@ -97,10 +95,11 @@ class DummyTranscriptionHandler:
     def start_model_loading(self):
         pass
 
-    def transcribe_audio_segment(self, *args):
+    def transcribe_audio_segment(self, *args, **kwargs):
         agent_mode = False
         if len(args) > 1:
             agent_mode = args[1]
+        agent_mode = kwargs.get('agent_mode', agent_mode)
         if self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY):
             def _run():
                 time.sleep(0.01)
