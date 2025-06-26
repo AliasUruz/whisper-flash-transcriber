@@ -13,7 +13,8 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 5.  [Usage](#how-to-use-the-app)
 6.  [Troubleshooting](#troubleshooting)
 7.  [Contributing](#contributing)
-8.  [License](#license)
+8.  [Running Tests](#running-tests)
+9.  [License](#license)
 
 ## Features
 
@@ -303,6 +304,20 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
     pip install -r requirements-dev.txt
     ```
 8.  Run `flake8 src/gemini_api.py src/openrouter_api.py` to check the lint.
+
+## Running Tests
+
+Install the test dependencies:
+
+```bash
+pip install -r requirements-test.txt
+```
+
+Then execute the test suite:
+
+```bash
+pytest -q
+```
 
 ## License
 
