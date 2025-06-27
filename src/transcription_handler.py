@@ -56,6 +56,8 @@ class TranscriptionHandler:
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
         self.pipe = None
+        self.transcription_pipeline = None
+        self.is_model_loading = False
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
         # Evento de sinalização para parar tarefas de transcrição
@@ -139,39 +141,20 @@ class TranscriptionHandler:
         self.use_flash_attention_2 = self.config_manager.get('use_flash_attention_2')
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
+    def _get_device_and_dtype(self):
+        """Define o dispositivo e o dtype ideais para o modelo."""
+        device = (
+            f"cuda:{self.gpu_index}"
+            if torch.cuda.is_available() and self.gpu_index >= 0
+            else "cpu"
+        )
+        torch_dtype = torch.float16 if device.startswith("cuda") else torch.float32
+        self.device_in_use = device
+        return device, torch_dtype
+
     def _initialize_model_and_processor(self):
-        # Este método será chamado para orquestrar o carregamento do modelo e a criação da pipeline
-        # Ele será chamado por start_model_loading
-        try:
-            model, processor = self._load_model_task()
-            if model and processor:
-                device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
-                # Forçar a detecção de idioma na inicialização da pipeline
-                generate_kwargs_init = {
-                    "task": "transcribe",
-                    "language": None
-                }
-                self.pipe = pipeline(
-                    "automatic-speech-recognition",
-                    model=model,
-                    tokenizer=processor.tokenizer,
-                    feature_extractor=processor.feature_extractor,
-                    chunk_length_s=30,
-                    batch_size=self.batch_size, # Usar o batch_size configurado
-                    torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
-                    generate_kwargs=generate_kwargs_init
-                )
-                logging.info("Pipeline de transcrição inicializada com sucesso.")
-                self.model_loaded_event.set() # Sinaliza que o modelo foi carregado
-                self.on_model_ready_callback()
-            else:
-                error_message = "Falha ao carregar modelo ou processador."
-                logging.error(error_message)
-                self.on_model_error_callback(error_message)
-        except Exception as e:
-            error_message = f"Erro na inicialização da pipeline: {e}"
-            logging.error(error_message, exc_info=True)
-            self.on_model_error_callback(error_message)
+        """Realiza o carregamento assíncrono do modelo."""
+        self._load_model_task()
 
     def _get_text_correction_service(self):
         if not self.text_correction_enabled: return SERVICE_NONE
@@ -278,6 +261,10 @@ class TranscriptionHandler:
         return select_batch_size(self.gpu_index, fallback=self.batch_size)
 
     def start_model_loading(self):
+        if self.is_model_loading:
+            logging.info("TranscriptionHandler: carregamento do modelo já em andamento.")
+            return
+        self.is_model_loading = True
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
 
     def is_transcription_running(self) -> bool:
@@ -296,80 +283,26 @@ class TranscriptionHandler:
         self.transcription_cancel_event.set()
 
     def _load_model_task(self):
-        # Removido: model_loaded_successfully = False
-        # Removido: error_message = "Unknown error during model load."
+        model_id = self.config_manager.get(WHISPER_MODEL_ID_CONFIG_KEY, "openai/whisper-large-v3")
         try:
-            # Removido: device_param = "cpu"
-            torch_dtype_local = torch.float32
-
-            if torch.cuda.is_available():
-                if self.gpu_index == -1: # Auto-seleção de GPU
-                    num_gpus = torch.cuda.device_count()
-                    if num_gpus > 0:
-                        best_gpu_index = 0
-                        max_vram = 0
-                        for i in range(num_gpus):
-                            props = torch.cuda.get_device_properties(i)
-                            if props.total_memory > max_vram:
-                                max_vram = props.total_memory
-                                best_gpu_index = i
-                        self.gpu_index = best_gpu_index
-                        logging.info(f"Auto-seleção de GPU: {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})")
-                    else:
-                        logging.info("Nenhuma GPU disponível, usando CPU.")
-                        self.gpu_index = -1 # Garante que o índice seja -1 se não houver GPU
-                
-            if self.use_turbo:
-                model_id = "openai/whisper-large-v3-turbo"
-            else:
-                model_id = "openai/whisper-large-v3"
-            
-            logging.info(f"Carregando processador de {model_id}...")
-            processor = AutoProcessor.from_pretrained(model_id)
-
-            # Determinar o dispositivo explicitamente antes de carregar o modelo
-            device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
-            logging.info(f"Dispositivo de carregamento do modelo definido explicitamente como: {device}")
-
-            if torch.cuda.is_available() and self.gpu_index >= 0:
-                torch_dtype_local = torch.float16
-                logging.info("GPU detectada e selecionada, usando torch.float16.")
-            else:
-                torch_dtype_local = torch.float32
-                logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
-
-            logging.info(f"Carregando modelo {model_id}...")
-
-            model = AutoModelForSpeechSeq2Seq.from_pretrained(
-                model_id,
-                torch_dtype=torch_dtype_local,
-                low_cpu_mem_usage=True,  # Ajuda a reduzir o uso de RAM durante o carregamento
-                use_safetensors=True,
-                device_map={'': device}, # Especifica que todo o modelo vai para o dispositivo alvo
-                attn_implementation="flash_attention_2" if self.use_flash_attention_2 else "sdpa"
-            )
-
+            device, torch_dtype = self._get_device_and_dtype()
+            logging.info(f"TranscriptionHandler: carregando pipeline para {model_id} no {device}...")
+            self.transcription_pipeline = pipeline("automatic-speech-recognition", model=model_id, torch_dtype=torch_dtype, device=device)
+            self.pipe = self.transcription_pipeline
             if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
                 try:
-                    from optimum.bettertransformer import BetterTransformer
-                    if hasattr(model, "to_bettertransformer"):
-                        model = model.to_bettertransformer()
-                    else:
-                        model = BetterTransformer.transform(model)
-                    logging.info("Modelo convertido para Flash Attention 2.")
+                    self.transcription_pipeline.model = self.transcription_pipeline.model.to_bettertransformer()
                 except Exception as exc:
-                    logging.warning(
-                        f"Falha ao aplicar Flash Attention 2: {exc}. Prosseguindo com o modelo padrão."
-                    )
-
-            # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
-            return model, processor
-
-        except Exception as e:
-            error_message = f"Falha ao carregar o modelo: {e}"
-            logging.error(error_message, exc_info=True)
-            # Removido: self.on_model_error_callback(error_message) # Notifica o erro imediatamente
-            return None, None # Retorna None em caso de falha
+                    logging.warning(f"Falha ao aplicar Flash Attention 2: {exc}")
+            self.model_loaded_event.set()
+            if self.on_model_ready_callback:
+                self.on_model_ready_callback()
+        except Exception as exc:
+            logging.error(f"Erro ao carregar o modelo Whisper: {exc}", exc_info=True)
+            if self.on_model_error_callback:
+                self.on_model_error_callback(str(exc))
+        finally:
+            self.is_model_loading = False
 
     def transcribe_audio_segment(self, audio_input: np.ndarray, agent_mode: bool = False):
         """Envia segmento para transcrição assíncrona."""

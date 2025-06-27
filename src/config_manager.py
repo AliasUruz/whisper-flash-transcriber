@@ -42,7 +42,8 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
-    "use_flash_attention_2": True,
+    "whisper_model_id": "openai/whisper-large-v3",
+    "use_flash_attention_2": False,
     "ai_provider": "gemini",
     "openrouter_agent_prompt": "",
     "openrouter_prompt": "",
@@ -112,6 +113,7 @@ OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
 GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
+WHISPER_MODEL_ID_CONFIG_KEY = "whisper_model_id"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
