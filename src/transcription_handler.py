@@ -316,10 +316,10 @@ class TranscriptionHandler:
             logging.info("Modelo carregado. Prosseguindo com a transcrição.")
 
         self.transcription_future = self.transcription_executor.submit(
-            self._transcription_task, audio_input, agent_mode
+            self._transcribe_audio_chunk, audio_input, agent_mode
         )
 
-    def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+    def _transcribe_audio_chunk(self, audio_input: np.ndarray, agent_mode: bool) -> None:
         if self.transcription_cancel_event.is_set():
             logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
             return
