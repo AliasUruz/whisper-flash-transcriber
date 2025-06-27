@@ -374,6 +374,13 @@ class ConfigManager:
             ),
             default=self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
         )
+        if not isinstance(self.config.get(USE_FLASH_ATTENTION_2_CONFIG_KEY), bool):
+            logging.warning(
+                f"Invalid type for '{USE_FLASH_ATTENTION_2_CONFIG_KEY}'. Must be a boolean. Using default."
+            )
+            self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = self.default_config[
+                USE_FLASH_ATTENTION_2_CONFIG_KEY
+            ]
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -438,26 +445,12 @@ class ConfigManager:
             self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY]),
             default=self.default_config[USE_VAD_CONFIG_KEY],
         )
-        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = _parse_bool(
-            self.config.get(
-                USE_FLASH_ATTENTION_2_CONFIG_KEY,
-                self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
-            ),
-            default=self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
-        )
         self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = _parse_bool(
             self.config.get(
                 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
                 self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
             ),
             default=self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY],
-        )
-        self.config[USE_FLASH_ATTENTION_2_CONFIG_KEY] = _parse_bool(
-            self.config.get(
-                USE_FLASH_ATTENTION_2_CONFIG_KEY,
-                self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
-            ),
-            default=self.default_config[USE_FLASH_ATTENTION_2_CONFIG_KEY],
         )
         try:
             raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
