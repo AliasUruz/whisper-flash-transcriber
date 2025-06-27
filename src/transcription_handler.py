@@ -3,20 +3,21 @@ import threading
 import concurrent.futures
 import torch
 from transformers import pipeline
-from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
-import numpy as np # Necessário para o audio_input
+from .openrouter_api import (
+    OpenRouterAPI,
+)  # Assumindo que está na raiz ou em path acessível
+import numpy as np  # Necessário para o audio_input
 
 # Importar constantes de configuração
 from utils import select_batch_size
 from .config_manager import (
     BATCH_SIZE_CONFIG_KEY, GPU_INDEX_CONFIG_KEY,
-    BATCH_SIZE_MODE_CONFIG_KEY, MANUAL_BATCH_SIZE_CONFIG_KEY, # Novos
+    BATCH_SIZE_MODE_CONFIG_KEY, MANUAL_BATCH_SIZE_CONFIG_KEY,  # Novos
     TEXT_CORRECTION_ENABLED_CONFIG_KEY, TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
     OPENROUTER_API_KEY_CONFIG_KEY, OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     GEMINI_AGENT_PROMPT_CONFIG_KEY,
-    OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
@@ -27,6 +28,7 @@ from .config_manager import (
     USE_FLASH_ATTENTION_2_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
 )
+
 
 class TranscriptionHandler:
     def __init__(
@@ -45,9 +47,9 @@ class TranscriptionHandler:
         self.gemini_api = gemini_api_client
         self.on_model_ready_callback = on_model_ready_callback
         self.on_model_error_callback = on_model_error_callback
-        self.on_transcription_result_callback = on_transcription_result_callback # Para resultado final
-        self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
-        self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
+        self.on_transcription_result_callback = on_transcription_result_callback  # Para resultado final
+        self.on_agent_result_callback = on_agent_result_callback  # Para resultado do agente
+        self.on_segment_transcribed_callback = on_segment_transcribed_callback  # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
         # "state_check_callback" é preservado apenas para retrocompatibilidade;
         # utilize "is_state_transcribing_fn" nas novas implementações.
@@ -72,13 +74,13 @@ class TranscriptionHandler:
         self.model_loaded_event = threading.Event()
 
         # Configurações de modelo e API (carregadas do config_manager)
-        self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
-        self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY) # Novo
-        self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY) # Novo
+        self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)  # Agora é o batch_size padrão para o modo auto
+        self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY)  # Novo
+        self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)  # Novo
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
         self.use_turbo = self.config_manager.get(USE_TURBO_CONFIG_KEY)
-        self.batch_size_specified = self.config_manager.get("batch_size_specified") # Ainda usado para validação
-        self.gpu_index_specified = self.config_manager.get("gpu_index_specified") # Ainda usado para validação
+        self.batch_size_specified = self.config_manager.get("batch_size_specified")  # Ainda usado para validação
+        self.gpu_index_specified = self.config_manager.get("gpu_index_specified")  # Ainda usado para validação
 
         self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
         self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
@@ -97,7 +99,7 @@ class TranscriptionHandler:
 
         self.openrouter_client = None
         # self.gemini_api é injetado
-        self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
+        self.device_in_use = None  # Nova variável para armazenar o dispositivo em uso
 
         self._init_api_clients()
         # Removido: self._initialize_model_and_processor() # Chamada para inicializar o modelo e o processador
@@ -108,7 +110,12 @@ class TranscriptionHandler:
         # ...
         self.openrouter_client = None
         self.openrouter_api = None
-        if self.text_correction_enabled and self.text_correction_service == SERVICE_OPENROUTER and self.openrouter_api_key and OpenRouterAPI:
+        if (
+            self.text_correction_enabled
+            and self.text_correction_service == SERVICE_OPENROUTER
+            and self.openrouter_api_key
+            and OpenRouterAPI
+        ):
             try:
                 self.openrouter_client = OpenRouterAPI(api_key=self.openrouter_api_key, model_id=self.openrouter_model)
                 self.openrouter_api = self.openrouter_client
@@ -158,8 +165,13 @@ class TranscriptionHandler:
         self._load_model_task()
 
     def _get_text_correction_service(self):
-        if not self.text_correction_enabled: return SERVICE_NONE
-        if self.text_correction_service == SERVICE_OPENROUTER and self.openrouter_client: return SERVICE_OPENROUTER
+        if not self.text_correction_enabled:
+            return SERVICE_NONE
+        if (
+            self.text_correction_service == SERVICE_OPENROUTER
+            and self.openrouter_client
+        ):
+            return SERVICE_OPENROUTER
         # Verifica se o cliente Gemini existe e se a chave é válida
         if (
             self.text_correction_service == SERVICE_GEMINI
@@ -288,7 +300,12 @@ class TranscriptionHandler:
         try:
             device, torch_dtype = self._get_device_and_dtype()
             logging.info(f"TranscriptionHandler: carregando pipeline para {model_id} no {device}...")
-            self.transcription_pipeline = pipeline("automatic-speech-recognition", model=model_id, torch_dtype=torch_dtype, device=device)
+            self.transcription_pipeline = pipeline(
+                "automatic-speech-recognition",
+                model=model_id,
+                torch_dtype=torch_dtype,
+                device=device,
+            )
             self.pipe = self.transcription_pipeline
             if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
                 try:
@@ -312,7 +329,7 @@ class TranscriptionHandler:
         # Espera o modelo carregar antes de submeter a tarefa
         if not self.model_loaded_event.is_set():
             logging.info("Modelo ainda não carregado. Aguardando...")
-            self.model_loaded_event.wait() # Bloqueia até o modelo estar pronto
+            self.model_loaded_event.wait()  # Bloqueia até o modelo estar pronto
             logging.info("Modelo carregado. Prosseguindo com a transcrição.")
 
         self.transcription_future = self.transcription_executor.submit(
@@ -329,7 +346,7 @@ class TranscriptionHandler:
             if self.transcription_pipeline is None:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
-                self.on_model_error_callback(error_message) # Notify UI of the error
+                self.on_model_error_callback(error_message)  # Notify UI of the error
                 return
 
             dynamic_batch_size = self._get_dynamic_batch_size()
@@ -370,7 +387,11 @@ class TranscriptionHandler:
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
                 logging.info(f"Transcrição bruta: {text_result}")
 
-            if not text_result or text_result == "[No speech detected]" or text_result.strip().startswith("[Transcription Error:"):
+            if (
+                not text_result
+                or text_result == "[No speech detected]"
+                or text_result.strip().startswith("[Transcription Error:")
+            ):
                 logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
                 if text_result and self.on_segment_transcribed_callback:
                     self.on_segment_transcribed_callback(text_result or "")
