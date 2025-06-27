@@ -61,6 +61,7 @@ class TranscriptionHandler:
         self.is_model_loading = False
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
+        # Indica se uma transcrição está em progresso
         self.is_transcribing = False
         # Evento de sinalização para parar tarefas de transcrição
         self._stop_signal_event = threading.Event()
@@ -271,10 +272,7 @@ class TranscriptionHandler:
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""
-        return (
-            self.transcription_future is not None
-            and not self.transcription_future.done()
-        )
+        return self.is_transcribing
 
     def is_text_correction_running(self) -> bool:
         """Indica se há correção de texto em andamento."""
@@ -283,6 +281,8 @@ class TranscriptionHandler:
     def stop_transcription(self) -> None:
         """Sinaliza que a transcrição em andamento deve ser cancelada."""
         self.transcription_cancel_event.set()
+        if self.is_transcribing and self.transcription_future:
+            self.transcription_future.cancel()
 
     def _load_model_task(self):
         model_id = self.config_manager.get(WHISPER_MODEL_ID_CONFIG_KEY, "openai/whisper-large-v3")
@@ -316,8 +316,9 @@ class TranscriptionHandler:
             self.model_loaded_event.wait() # Bloqueia até o modelo estar pronto
             logging.info("Modelo carregado. Prosseguindo com a transcrição.")
 
+        self.is_transcribing = True
         self.transcription_future = self.transcription_executor.submit(
-            self._transcribe_audio_chunk, audio_input
+            self._transcribe_audio_chunk, audio_input, agent_mode
         )
 
     def _transcribe_audio_chunk(self, audio_data: np.ndarray) -> None:
@@ -337,6 +338,13 @@ class TranscriptionHandler:
                 self.on_transcription_result_callback(transcription)
         except Exception as e:
             logging.error(f"Erro durante a transcrição: {e}", exc_info=True)
+        finally:
+            self.is_transcribing = False
+
+    def _transcribe_audio_chunk(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+        """Wrapper que controla o estado de transcrição."""
+        try:
+            self._transcription_task(audio_input, agent_mode)
         finally:
             self.is_transcribing = False
 
