@@ -2,7 +2,7 @@ import logging
 import threading
 import concurrent.futures
 import torch
-from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
+from transformers import pipeline
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
 import numpy as np # Necessário para o audio_input
 
@@ -20,6 +20,7 @@ from .config_manager import (
     GEMINI_PROMPT_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
+    WHISPER_MODEL_ID_CONFIG_KEY,
     USE_TURBO_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,  # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
@@ -299,6 +300,7 @@ class TranscriptionHandler:
         # Removido: model_loaded_successfully = False
         # Removido: error_message = "Unknown error during model load."
         try:
+            from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
             # Removido: device_param = "cpu"
             torch_dtype_local = torch.float32
 
