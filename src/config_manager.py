@@ -42,7 +42,7 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
-    "whisper_model_id": "openai/whisper-large-v3",
+    # Desativado por padrão; habilite manualmente se desejar ganho de desempenho
     "use_flash_attention_2": False,
     "ai_provider": "gemini",
     "openrouter_agent_prompt": "",
