@@ -321,7 +321,12 @@ class TranscriptionHandler:
             self._transcribe_audio_chunk, audio_input, agent_mode
         )
 
-    def _transcribe_audio_chunk(self, audio_data: np.ndarray) -> None:
+    def _transcribe_audio_chunk(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+        if self.transcription_cancel_event.is_set():
+            logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
+            return
+
+        text_result = None
         try:
             if not self.transcription_pipeline:
                 logging.warning(

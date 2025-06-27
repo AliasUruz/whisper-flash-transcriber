@@ -88,7 +88,7 @@ class DummyPipe:
         return {"text": "dummy"}
 
 
-def test_transcription_task_handles_missing_callback(monkeypatch):
+def test_transcribe_audio_chunk_handles_missing_callback(monkeypatch):
     cfg = DummyConfig()
     results = []
     mock_on_model_error = MagicMock()
@@ -123,7 +123,7 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
 
     monkeypatch.setattr(handler, "_async_text_correction", fake_correction)
 
-    handler._transcribe_audio_chunk(None)
+    handler._transcribe_audio_chunk(None, agent_mode=False)
 
     mock_on_model_error.assert_not_called()  # Callback não deve ser acionado
     assert not results  # Nenhum resultado de transcrição deve ser adicionado
@@ -270,9 +270,9 @@ def test_transcribe_audio_segment_waits_for_model(monkeypatch):
     handler.pipe = DummyPipe()
     handler.model_loaded_event.clear() # Ensure it's not set
 
-    # Mock the transcription task to check if it's called
-    mock_transcription_task = MagicMock()
-    monkeypatch.setattr(handler, "_transcribe_audio_chunk", mock_transcription_task)
+    # Mock the transcription function to check if it's called
+    mock_transcribe_audio_chunk = MagicMock()
+    monkeypatch.setattr(handler, "_transcribe_audio_chunk", mock_transcribe_audio_chunk)
 
     # Start transcription in a separate thread, it should block
     transcription_thread = threading.Thread(
@@ -284,14 +284,14 @@ def test_transcribe_audio_segment_waits_for_model(monkeypatch):
 
     # Give it a moment to potentially block
     time.sleep(0.1)
-    assert not mock_transcription_task.called # Should not be called yet
+    assert not mock_transcribe_audio_chunk.called # Should not be called yet
 
     # Now, simulate model loading completion
     handler.model_loaded_event.set()
 
     # Give it a moment to unblock and call the task
     time.sleep(0.1)
-    assert mock_transcription_task.called # Should be called now
+    assert mock_transcribe_audio_chunk.called # Should be called now
 
     transcription_thread.join(timeout=1) # Clean up the thread
 
