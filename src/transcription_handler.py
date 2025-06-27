@@ -63,6 +63,8 @@ class TranscriptionHandler:
         self.is_model_loading = False
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
+        # Indica se uma transcrição está em progresso
+        self.is_transcribing = False
         # Evento de sinalização para parar tarefas de transcrição
         self._stop_signal_event = threading.Event()
         # Executor dedicado para a tarefa de transcrição em background
@@ -282,10 +284,7 @@ class TranscriptionHandler:
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""
-        return (
-            self.transcription_future is not None
-            and not self.transcription_future.done()
-        )
+        return self.is_transcribing
 
     def is_text_correction_running(self) -> bool:
         """Indica se há correção de texto em andamento."""
@@ -294,6 +293,8 @@ class TranscriptionHandler:
     def stop_transcription(self) -> None:
         """Sinaliza que a transcrição em andamento deve ser cancelada."""
         self.transcription_cancel_event.set()
+        if self.is_transcribing and self.transcription_future:
+            self.transcription_future.cancel()
 
     def _load_model_task(self):
         model_id = self.config_manager.get(WHISPER_MODEL_ID_CONFIG_KEY, "openai/whisper-large-v3")
@@ -332,11 +333,12 @@ class TranscriptionHandler:
             self.model_loaded_event.wait()  # Bloqueia até o modelo estar pronto
             logging.info("Modelo carregado. Prosseguindo com a transcrição.")
 
+        self.is_transcribing = True
         self.transcription_future = self.transcription_executor.submit(
-            self._transcription_task, audio_input, agent_mode
+            self._transcribe_audio_chunk, audio_input, agent_mode
         )
 
-    def _transcription_task(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+    def _transcribe_audio_chunk(self, audio_input: np.ndarray, agent_mode: bool) -> None:
         if self.transcription_cancel_event.is_set():
             logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
             return
@@ -348,41 +350,18 @@ class TranscriptionHandler:
                 logging.error(error_message)
                 self.on_model_error_callback(error_message)  # Notify UI of the error
                 return
-
-            dynamic_batch_size = self._get_dynamic_batch_size()
-            logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
-
-            generate_kwargs = {
-                "task": "transcribe",
-                "language": None
-            }
-            result = self.transcription_pipeline(
-                audio_input,
-                chunk_length_s=30,
-                batch_size=dynamic_batch_size,
-                return_timestamps=False,
-                generate_kwargs=generate_kwargs
+            logging.debug(
+                f"Transcrevendo áudio de {len(audio_data)/16000:.2f} segundos."
             )
-
-            if result and "text" in result:
-                text_result = result["text"].strip()
-                if not text_result:
-                    text_result = "[No speech detected]"
-                else:
-                    logging.info("Transcrição de segmento bem-sucedida.")
-            else:
-                text_result = "[Transcription failed: Bad format]"
-                logging.error(f"Formato de resultado inesperado: {result}")
-
+            result = self.transcription_pipeline(audio_data.copy())
+            transcription = result["text"].strip()
+            logging.info(f"Transcrição recebida: {transcription}")
+            if self.on_transcription_result_callback:
+                self.on_transcription_result_callback(transcription)
         except Exception as e:
-            logging.error(f"Erro durante a transcrição de segmento: {e}", exc_info=True)
-            text_result = f"[Transcription Error: {e}]"
-
+            logging.error(f"Erro durante a transcrição: {e}", exc_info=True)
         finally:
-            if self.transcription_cancel_event.is_set():
-                logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
-                self.transcription_cancel_event.clear()
-                return
+            self.is_transcribing = False
 
             if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
                 logging.info(f"Transcrição bruta: {text_result}")
