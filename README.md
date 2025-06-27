@@ -90,9 +90,13 @@ graph TD
 *   **`ConfigManager`**: Loads and saves all user settings from `config.json` and `secrets.json`.
 *   **`UIManager`**: Manages all GUI elements, including the system tray icon and the settings window.
 *   **`AudioHandler`**: Manages microphone input, recording, and sound feedback.
-*   **`TranscriptionHandler`**: Manages the Whisper model, runs the transcription pipeline, and coordinates with AI correction services.
+*   **`TranscriptionHandler`**: Manages the Whisper model, runs the streaming transcription pipeline through the private method `_transcribe_audio_chunk`, and coordinates with AI correction services.
 *   **`KeyboardHotkeyManager`**: Listens for and handles global hotkeys.
 *   ****`GeminiAPI` / `OpenRouterAPI`**: Clients for interacting with external AI services and text correction. Both expose the method `reinitialize_client()` to reload key and model at runtime.
+### Streaming Transcription Pipeline
+
+Audio is processed in discrete chunks. `TranscriptionHandler` calls the private method `_transcribe_audio_chunk` for each recorded segment, enabling incremental transcription and lower memory usage. `AudioHandler` forwards the captured chunks as NumPy arrays while the handler coordinates model loading and optional text correction.
+
 
 ## Installation
 
