@@ -272,7 +272,7 @@ def test_transcribe_audio_segment_waits_for_model(monkeypatch):
 
     # Mock the transcription task to check if it's called
     mock_transcription_task = MagicMock()
-    monkeypatch.setattr(handler, "_transcription_task", mock_transcription_task)
+    monkeypatch.setattr(handler, "_transcribe_audio_chunk", mock_transcription_task)
 
     # Start transcription in a separate thread, it should block
     transcription_thread = threading.Thread(
