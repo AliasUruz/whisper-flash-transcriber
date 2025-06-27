@@ -42,7 +42,7 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
-    "use_flash_attention_2": False,
+    "use_flash_attention_2": True,
     "ai_provider": "gemini",
     "openrouter_agent_prompt": "",
     "openrouter_prompt": "",
@@ -68,7 +68,6 @@ Transcribed speech: {text}""",
     # Duração máxima da pausa preservada antes que o silêncio seja descartado
     "vad_silence_duration": 1.0,
     "display_transcripts_in_terminal": False,
-    "use_flash_attention_2": False,
     "gemini_model_options": [
         "gemini-2.5-flash-lite-preview-06-17",
         "gemini-2.5-flash",
@@ -77,7 +76,6 @@ Transcribed speech: {text}""",
     "text_correction_timeout": 30,
     "save_temp_recordings": False,
     "min_transcription_duration": 1.0, # Nova configuração
-    "use_flash_attention_2": False
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
