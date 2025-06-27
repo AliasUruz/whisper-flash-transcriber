@@ -25,7 +25,6 @@ from .config_manager import (
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     USE_FLASH_ATTENTION_2_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
-    USE_FLASH_ATTENTION_2_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
