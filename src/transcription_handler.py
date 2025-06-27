@@ -2,7 +2,7 @@ import logging
 import threading
 import concurrent.futures
 import torch
-from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
+from transformers import pipeline
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
 import numpy as np # Necessário para o audio_input
 
@@ -20,6 +20,7 @@ from .config_manager import (
     GEMINI_PROMPT_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
+    WHISPER_MODEL_ID_CONFIG_KEY,
     USE_TURBO_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,  # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
@@ -325,7 +326,7 @@ class TranscriptionHandler:
 
         text_result = None
         try:
-            if self.pipe is None:
+            if self.transcription_pipeline is None:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
                 self.on_model_error_callback(error_message) # Notify UI of the error
@@ -338,7 +339,7 @@ class TranscriptionHandler:
                 "task": "transcribe",
                 "language": None
             }
-            result = self.pipe(
+            result = self.transcription_pipeline(
                 audio_input,
                 chunk_length_s=30,
                 batch_size=dynamic_batch_size,
