@@ -56,7 +56,7 @@ class TranscriptionHandler:
         self.correction_thread = None
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-        # Pipeline de transcrição carregada após a inicialização do modelo
+        self.pipe = None
         self.transcription_pipeline = None
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
@@ -142,34 +142,12 @@ class TranscriptionHandler:
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
-        # Este método será chamado para orquestrar o carregamento do modelo e a criação da pipeline
-        # Ele será chamado por start_model_loading
+        """Inicia o carregamento do modelo chamando a tarefa dedicada."""
         try:
-            model, processor = self._load_model_task()
-            if model and processor:
-                device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
-                # Forçar a detecção de idioma na inicialização da pipeline
-                generate_kwargs_init = {
-                    "task": "transcribe",
-                    "language": None
-                }
-                self.transcription_pipeline = pipeline(
-                    "automatic-speech-recognition",
-                    model=model,
-                    tokenizer=processor.tokenizer,
-                    feature_extractor=processor.feature_extractor,
-                    chunk_length_s=30,
-                    batch_size=self.batch_size, # Usar o batch_size configurado
-                    torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
-                    generate_kwargs=generate_kwargs_init
-                )
-                logging.info("Pipeline de transcrição inicializada com sucesso.")
-                self.model_loaded_event.set() # Sinaliza que o modelo foi carregado
+            self._load_model_task()
+            if self.transcription_pipeline is not None:
+                self.model_loaded_event.set()
                 self.on_model_ready_callback()
-            else:
-                error_message = "Falha ao carregar modelo ou processador."
-                logging.error(error_message)
-                self.on_model_error_callback(error_message)
         except Exception as e:
             error_message = f"Erro na inicialização da pipeline: {e}"
             logging.error(error_message, exc_info=True)
@@ -365,8 +343,20 @@ class TranscriptionHandler:
                         f"Falha ao aplicar Flash Attention 2: {exc}. Prosseguindo com o modelo padrão."
                     )
 
-            # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
-            return model, processor
+            generate_kwargs_init = {"task": "transcribe", "language": None}
+            self.transcription_pipeline = pipeline(
+                "automatic-speech-recognition",
+                model=model,
+                tokenizer=processor.tokenizer,
+                feature_extractor=processor.feature_extractor,
+                chunk_length_s=30,
+                batch_size=self.batch_size,
+                torch_dtype=torch_dtype_local,
+                generate_kwargs=generate_kwargs_init,
+            )
+            self.pipe = self.transcription_pipeline
+            logging.info("Pipeline de transcrição inicializada com sucesso.")
+            return None, None
 
         except Exception as e:
             error_message = f"Falha ao carregar o modelo: {e}"
