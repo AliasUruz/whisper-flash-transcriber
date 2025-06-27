@@ -42,7 +42,8 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
     "gemini_agent_model": "gemini-2.5-flash-lite-preview-06-17",
-    "use_flash_attention_2": True,
+    # Por padrão, o recurso Flash Attention 2 fica desativado
+    "use_flash_attention_2": False,
     "ai_provider": "gemini",
     "openrouter_agent_prompt": "",
     "openrouter_prompt": "",
