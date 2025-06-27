@@ -61,6 +61,8 @@ class TranscriptionHandler:
         self.is_model_loading = False
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
+        # Indica se uma transcrição está em progresso
+        self.is_transcribing = False
         # Evento de sinalização para parar tarefas de transcrição
         self._stop_signal_event = threading.Event()
         # Executor dedicado para a tarefa de transcrição em background
@@ -270,10 +272,7 @@ class TranscriptionHandler:
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""
-        return (
-            self.transcription_future is not None
-            and not self.transcription_future.done()
-        )
+        return self.is_transcribing
 
     def is_text_correction_running(self) -> bool:
         """Indica se há correção de texto em andamento."""
@@ -282,6 +281,8 @@ class TranscriptionHandler:
     def stop_transcription(self) -> None:
         """Sinaliza que a transcrição em andamento deve ser cancelada."""
         self.transcription_cancel_event.set()
+        if self.is_transcribing and self.transcription_future:
+            self.transcription_future.cancel()
 
     def _load_model_task(self):
         model_id = self.config_manager.get(WHISPER_MODEL_ID_CONFIG_KEY, "openai/whisper-large-v3")
@@ -315,6 +316,7 @@ class TranscriptionHandler:
             self.model_loaded_event.wait() # Bloqueia até o modelo estar pronto
             logging.info("Modelo carregado. Prosseguindo com a transcrição.")
 
+        self.is_transcribing = True
         self.transcription_future = self.transcription_executor.submit(
             self._transcribe_audio_chunk, audio_input, agent_mode
         )
@@ -326,109 +328,30 @@ class TranscriptionHandler:
 
         text_result = None
         try:
-            if self.transcription_pipeline is None:
-                error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
-                logging.error(error_message)
-                self.on_model_error_callback(error_message) # Notify UI of the error
+            if not self.transcription_pipeline:
+                logging.warning(
+                    "Tentativa de transcrever, mas a pipeline não está carregada."
+                )
                 return
-
-            dynamic_batch_size = self._get_dynamic_batch_size()
-            logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
-
-            generate_kwargs = {
-                "task": "transcribe",
-                "language": None
-            }
-            result = self.transcription_pipeline(
-                audio_input,
-                chunk_length_s=30,
-                batch_size=dynamic_batch_size,
-                return_timestamps=False,
-                generate_kwargs=generate_kwargs
+            logging.debug(
+                f"Transcrevendo áudio de {len(audio_data)/16000:.2f} segundos."
             )
-
-            if result and "text" in result:
-                text_result = result["text"].strip()
-                if not text_result:
-                    text_result = "[No speech detected]"
-                else:
-                    logging.info("Transcrição de segmento bem-sucedida.")
-            else:
-                text_result = "[Transcription failed: Bad format]"
-                logging.error(f"Formato de resultado inesperado: {result}")
-
+            result = self.transcription_pipeline(audio_data.copy())
+            transcription = result["text"].strip()
+            logging.info(f"Transcrição recebida: {transcription}")
+            if self.on_transcription_result_callback:
+                self.on_transcription_result_callback(transcription)
         except Exception as e:
-            logging.error(f"Erro durante a transcrição de segmento: {e}", exc_info=True)
-            text_result = f"[Transcription Error: {e}]"
-
+            logging.error(f"Erro durante a transcrição: {e}", exc_info=True)
         finally:
-            if self.transcription_cancel_event.is_set():
-                logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
-                self.transcription_cancel_event.clear()
-                return
+            self.is_transcribing = False
 
-            if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
-                logging.info(f"Transcrição bruta: {text_result}")
-
-            if not text_result or text_result == "[No speech detected]" or text_result.strip().startswith("[Transcription Error:"):
-                logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
-                if text_result and self.on_segment_transcribed_callback:
-                    self.on_segment_transcribed_callback(text_result or "")
-                if (
-                    not agent_mode
-                    and text_result
-                    and (
-                        not self.is_state_transcribing_fn
-                        or self.is_state_transcribing_fn()
-                    )
-                ):
-                    self.on_transcription_result_callback(text_result, text_result)
-                elif not agent_mode and text_result:
-                    logging.warning(
-                        "Estado mudou antes do resultado de transcrição. UI não será atualizada."
-                    )
-                return
-
-            if self.on_segment_transcribed_callback:
-                self.on_segment_transcribed_callback(text_result)
-
-            if agent_mode:
-                try:
-                    logging.info(f"Enviando texto para o modo agente: '{text_result}'")
-                    agent_response = self.gemini_api.get_agent_response(text_result)
-                    logging.info(
-                        f"Resposta recebida do modo agente: '{agent_response}'"
-                    )
-                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
-                        self.on_agent_result_callback(agent_response)
-                    else:
-                        logging.warning(
-                            "Estado mudou antes do resultado do agente. UI não será atualizada."
-                        )
-                except Exception as e:
-                    logging.error(f"Erro ao processar o comando do agente: {e}", exc_info=True)
-                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
-                        self.on_agent_result_callback(text_result)  # Falha, retorna o texto original
-                    else:
-                        logging.warning(
-                            "Estado mudou antes do resultado do agente. UI não será atualizada."
-                        )
-            else:
-                if self.text_correction_enabled:
-                    openrouter_prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
-                    self.correction_thread = threading.Thread(
-                        target=self._async_text_correction,
-                        args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt),
-                        daemon=True,
-                        name="TextCorrectionThread",
-                    )
-                    self.correction_thread.start()
-                else:
-                    self.on_transcription_result_callback(text_result, text_result)
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logging.debug("Cache da GPU limpo após tarefa de transcrição.")
+    def _transcribe_audio_chunk(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+        """Wrapper que controla o estado de transcrição."""
+        try:
+            self._transcription_task(audio_input, agent_mode)
+        finally:
+            self.is_transcribing = False
 
     def shutdown(self) -> None:
         """Encerra o executor de transcrição."""
