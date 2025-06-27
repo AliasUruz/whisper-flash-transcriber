@@ -123,10 +123,10 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
 
     monkeypatch.setattr(handler, "_async_text_correction", fake_correction)
 
-    handler._transcription_task(None, agent_mode=False)
+    handler._transcribe_audio_chunk(None)
 
-    mock_on_model_error.assert_called_once() # Assert that the error callback was called
-    assert not results # No transcription result should be appended
+    mock_on_model_error.assert_not_called()  # Callback não deve ser acionado
+    assert not results  # Nenhum resultado de transcrição deve ser adicionado
 
 
 def test_async_text_correction_service_selection(monkeypatch):
