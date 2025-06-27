@@ -56,7 +56,8 @@ class TranscriptionHandler:
         self.correction_thread = None
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-        self.pipe = None
+        # Pipeline de transcrição carregada após a inicialização do modelo
+        self.transcription_pipeline = None
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
         # Evento de sinalização para parar tarefas de transcrição
@@ -152,7 +153,7 @@ class TranscriptionHandler:
                     "task": "transcribe",
                     "language": None
                 }
-                self.pipe = pipeline(
+                self.transcription_pipeline = pipeline(
                     "automatic-speech-recognition",
                     model=model,
                     tokenizer=processor.tokenizer,
@@ -394,7 +395,7 @@ class TranscriptionHandler:
 
         text_result = None
         try:
-            if self.pipe is None:
+            if self.transcription_pipeline is None:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
                 self.on_model_error_callback(error_message) # Notify UI of the error
@@ -407,7 +408,7 @@ class TranscriptionHandler:
                 "task": "transcribe",
                 "language": None
             }
-            result = self.pipe(
+            result = self.transcription_pipeline(
                 audio_input,
                 chunk_length_s=30,
                 batch_size=dynamic_batch_size,
