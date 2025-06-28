@@ -340,20 +340,23 @@ class TranscriptionHandler:
 
     def _transcribe_audio_chunk(self, audio_input: np.ndarray, agent_mode: bool) -> None:
         if self.transcription_cancel_event.is_set():
-            logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
+            logging.info(
+                "Transcrição interrompida por stop signal antes do início do processamento."
+            )
             return
 
         text_result = None
         try:
-            if self.transcription_pipeline is None:
-                error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
-                logging.error(error_message)
-                self.on_model_error_callback(error_message)  # Notify UI of the error
+            pipeline = self.transcription_pipeline or self.pipe
+            if pipeline is None:
+                logging.error(
+                    "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
+                )
                 return
             logging.debug(
-                f"Transcrevendo áudio de {len(audio_data)/16000:.2f} segundos."
+                f"Transcrevendo áudio de {len(audio_input)/16000:.2f} segundos."
             )
-            result = self.transcription_pipeline(audio_data.copy())
+            result = pipeline(audio_input.copy())
             transcription = result["text"].strip()
             logging.info(f"Transcrição recebida: {transcription}")
             if self.on_transcription_result_callback:
