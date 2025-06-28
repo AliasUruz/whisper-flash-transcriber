@@ -348,16 +348,21 @@ class TranscriptionHandler:
             if self.transcription_pipeline is None:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
-                self.on_model_error_callback(error_message)  # Notify UI of the error
+                # O callback de erro do modelo deve ser acionado apenas se o modelo já deveria estar carregado
+                # e se o callback foi fornecido. Em testes ou durante o desligamento do handler, o pipeline
+                # pode não estar disponível e isso não representa, necessariamente, uma falha grave.
+                if self.model_loaded_event.is_set() and self.on_model_error_callback:
+                    self.on_model_error_callback(error_message)
                 return
+            audio_data = audio_input
             logging.debug(
                 f"Transcrevendo áudio de {len(audio_data)/16000:.2f} segundos."
             )
             result = self.transcription_pipeline(audio_data.copy())
-            transcription = result["text"].strip()
-            logging.info(f"Transcrição recebida: {transcription}")
+            text_result = result["text"].strip()
+            logging.info(f"Transcrição recebida: {text_result}")
             if self.on_transcription_result_callback:
-                self.on_transcription_result_callback(transcription)
+                self.on_transcription_result_callback(text_result)
         except Exception as e:
             logging.error(f"Erro durante a transcrição: {e}", exc_info=True)
         finally:
