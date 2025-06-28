@@ -346,14 +346,14 @@ class TranscriptionHandler:
         text_result = None
         try:
             if self.transcription_pipeline is None:
-                error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
-                logging.error(error_message)
-                self.on_model_error_callback(error_message)  # Notify UI of the error
+                logging.error(
+                    "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
+                )
                 return
             logging.debug(
-                f"Transcrevendo áudio de {len(audio_data)/16000:.2f} segundos."
+                f"Transcrevendo áudio de {len(audio_input)/16000:.2f} segundos."
             )
-            result = self.transcription_pipeline(audio_data.copy())
+            result = self.transcription_pipeline(audio_input.copy())
             transcription = result["text"].strip()
             logging.info(f"Transcrição recebida: {transcription}")
             if self.on_transcription_result_callback:

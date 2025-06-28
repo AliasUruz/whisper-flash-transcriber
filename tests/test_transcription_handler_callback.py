@@ -4,6 +4,7 @@ import types
 import concurrent.futures
 import threading
 import time
+import numpy as np
 import sys
 from unittest.mock import MagicMock
 
@@ -327,3 +328,29 @@ def test_text_correction_timeout(monkeypatch):
     handler._async_text_correction("texto", False, "", "")
 
     assert results == ["texto"]
+
+
+def test_transcribe_audio_chunk_uses_audio_input(monkeypatch):
+    cfg = DummyConfig()
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: False,
+    )
+    dummy_result = {"text": "ok"}
+    pipeline_mock = MagicMock(return_value=dummy_result)
+    handler.transcription_pipeline = pipeline_mock
+    monkeypatch.setattr(handler, "_async_text_correction", lambda *_: None)
+
+    audio = np.zeros(16000, dtype=float)
+
+    handler._transcribe_audio_chunk(audio, agent_mode=False)
+
+    pipeline_mock.assert_called_once()
+    np.testing.assert_array_equal(pipeline_mock.call_args[0][0], audio)
