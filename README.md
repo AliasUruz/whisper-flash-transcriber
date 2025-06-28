@@ -326,6 +326,7 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
     ```bash
     pip install -r requirements-test.txt
     ```
+    The `requirements-test.txt` file also specifies `optimum[bettertransformer]==1.26.1` to match the application dependencies.
 8.  Optionally, run `flake8 src/gemini_api.py src/openrouter_api.py` to check code style.
 
 
@@ -336,6 +337,7 @@ Before running the tests, install the dependencies:
 ```bash
 pip install -r requirements-test.txt
 ```
+The testing requirements file also lists `optimum[bettertransformer]==1.26.1`.
 
 Run the suite with:
 
