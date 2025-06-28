@@ -58,7 +58,6 @@ class TranscriptionHandler:
         self.correction_thread = None
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-        self.pipe = None
         self.transcription_pipeline = None
         self.is_model_loading = False
         # Futura tarefa de transcrição em andamento
@@ -307,7 +306,6 @@ class TranscriptionHandler:
                 torch_dtype=torch_dtype,
                 device=device,
             )
-            self.pipe = self.transcription_pipeline
             if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
                 try:
                     self.transcription_pipeline.model = self.transcription_pipeline.model.to_bettertransformer()
