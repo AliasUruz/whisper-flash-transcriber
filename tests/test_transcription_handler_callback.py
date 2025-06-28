@@ -125,8 +125,8 @@ def test_transcribe_audio_chunk_handles_missing_callback(monkeypatch):
 
     handler._transcribe_audio_chunk(None, agent_mode=False)
 
-    mock_on_model_error.assert_not_called()  # Callback não deve ser acionado
-    assert not results  # Nenhum resultado de transcrição deve ser adicionado
+    mock_on_model_error.assert_called_once()  # Callback should notify about the missing model
+    assert not results  # No transcription result should be added
 
 
 def test_async_text_correction_service_selection(monkeypatch):
