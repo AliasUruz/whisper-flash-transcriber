@@ -107,7 +107,8 @@ def test_transcribe_audio_chunk_handles_missing_callback(monkeypatch):
         on_segment_transcribed_callback=None,
         is_state_transcribing_fn=lambda: True,
     )
-    handler.pipe = None # Simulate missing pipe
+    handler.transcription_pipeline = None  # Simulate missing pipeline
+    handler.model_loaded_event.set()
     handler.transcription_executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=1
     )
@@ -268,7 +269,7 @@ def test_transcribe_audio_segment_waits_for_model(monkeypatch):
         on_segment_transcribed_callback=noop,
         is_state_transcribing_fn=lambda: True,
     )
-    handler.pipe = DummyPipe()
+    handler.transcription_pipeline = DummyPipe()
     handler.model_loaded_event.clear() # Ensure it's not set
 
     # Mock the transcription function to check if it's called
