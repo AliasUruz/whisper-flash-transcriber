@@ -346,8 +346,8 @@ class TranscriptionHandler:
         text_result = None
         try:
             if self.transcription_pipeline is None:
-                logging.error(
-                    "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
+                logging.warning(
+                    "Tentativa de transcrever, mas a pipeline não está carregada."
                 )
                 return
             logging.debug(

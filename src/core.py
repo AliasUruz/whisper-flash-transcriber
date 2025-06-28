@@ -542,6 +542,7 @@ class AppCore:
     def apply_settings_from_external(self, **kwargs):
         logging.info("AppCore: Applying new configuration from external source.")
         config_changed = False
+        old_flash_attention = self.config_manager.get("use_flash_attention_2")
 
         # Atualizar ConfigManager e verificar se houve mudanças
         for key, value in kwargs.items():
@@ -562,7 +563,6 @@ class AppCore:
                 "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 "new_gemini_model_options": "gemini_model_options",
                 "new_use_vad": "use_vad",
-                "new_use_flash_attention_2": "use_flash_attention_2",
                 "new_vad_threshold": "vad_threshold",
                 "new_vad_silence_duration": "vad_silence_duration",
                 "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
@@ -645,6 +645,16 @@ class AppCore:
                     logging.info(f"Configuração 'min_transcription_duration' alterada para: {kwargs['new_min_transcription_duration']}")
 
             self._log_status("Configurações atualizadas.")
+
+            new_flash_attention = self.config_manager.get("use_flash_attention_2")
+            if new_flash_attention != old_flash_attention:
+                state = "habilitado" if new_flash_attention else "desabilitado"
+                logging.info(
+                    f"Flash Attention 2 {state} via apply_settings_from_external."
+                )
+                self.transcription_handler.update_config()
+                self.transcription_handler.start_model_loading()
+                self._set_state(STATE_LOADING_MODEL)
         else:
             logging.info("Nenhuma configuração alterada.")
 
@@ -675,7 +685,14 @@ class AppCore:
         ]:
             self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
             self.transcription_handler.update_config()
-            logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
+            logging.info(
+                f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'."
+            )
+            if key == "use_flash_attention_2":
+                state = "habilitado" if value else "desabilitado"
+                logging.info(f"Flash Attention 2 {state} via update_setting.")
+                self.transcription_handler.start_model_loading()
+                self._set_state(STATE_LOADING_MODEL)
 
         # Re-inicializar clientes API se a chave ou modelo mudou
         if key in ["gemini_api_key", "gemini_model", "gemini_agent_model", "openrouter_api_key", "openrouter_model"]:
