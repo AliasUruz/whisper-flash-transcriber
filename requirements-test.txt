@@ -11,6 +11,7 @@ pyperclip
 requests>=2.32.4
 google-generativeai
 keyboard
+setuptools
 soundfile>=0.13.1
 onnxruntime
 optimum
