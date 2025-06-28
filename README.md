@@ -254,7 +254,7 @@ To access and change settings:
 
 ### Flash Attention 2
 
-Flash Attention 2 is an optimized attention kernel that reduces memory consumption and accelerates inference. It requires an NVIDIA GPU from the Ampere generation or newer.
+Flash Attention 2 is an optimized attention kernel that reduces memory consumption and accelerates inference. It requires an NVIDIA GPU from the Ampere generation or newer and is enabled by default.
 
 You can toggle this feature in the settings window under **Flash Attention 2** or by setting `use_flash_attention_2` to `true` or `false` in `config.json`.
 
