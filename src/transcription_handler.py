@@ -11,11 +11,17 @@ import numpy as np  # Necessário para o audio_input
 # Importar constantes de configuração
 from utils import select_batch_size
 from .config_manager import (
-    BATCH_SIZE_CONFIG_KEY, GPU_INDEX_CONFIG_KEY,
-    BATCH_SIZE_MODE_CONFIG_KEY, MANUAL_BATCH_SIZE_CONFIG_KEY,  # Novos
-    TEXT_CORRECTION_ENABLED_CONFIG_KEY, TEXT_CORRECTION_SERVICE_CONFIG_KEY,
-    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
-    OPENROUTER_API_KEY_CONFIG_KEY, OPENROUTER_MODEL_CONFIG_KEY,
+    BATCH_SIZE_CONFIG_KEY,
+    GPU_INDEX_CONFIG_KEY,
+    BATCH_SIZE_MODE_CONFIG_KEY,
+    MANUAL_BATCH_SIZE_CONFIG_KEY,  # Novos
+    TEXT_CORRECTION_ENABLED_CONFIG_KEY,
+    TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+    SERVICE_NONE,
+    SERVICE_OPENROUTER,
+    SERVICE_GEMINI,
+    OPENROUTER_API_KEY_CONFIG_KEY,
+    OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     GEMINI_AGENT_PROMPT_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
@@ -47,9 +53,15 @@ class TranscriptionHandler:
         self.gemini_api = gemini_api_client
         self.on_model_ready_callback = on_model_ready_callback
         self.on_model_error_callback = on_model_error_callback
-        self.on_transcription_result_callback = on_transcription_result_callback  # Para resultado final
-        self.on_agent_result_callback = on_agent_result_callback  # Para resultado do agente
-        self.on_segment_transcribed_callback = on_segment_transcribed_callback  # Para segmentos em tempo real
+        self.on_transcription_result_callback = (
+            on_transcription_result_callback  # Para resultado final
+        )
+        self.on_agent_result_callback = (
+            on_agent_result_callback  # Para resultado do agente
+        )
+        self.on_segment_transcribed_callback = (
+            on_segment_transcribed_callback  # Para segmentos em tempo real
+        )
         self.is_state_transcribing_fn = is_state_transcribing_fn
         # "state_check_callback" é preservado apenas para retrocompatibilidade;
         # utilize "is_state_transcribing_fn" nas novas implementações.
@@ -76,20 +88,34 @@ class TranscriptionHandler:
         self.model_loaded_event = threading.Event()
 
         # Configurações de modelo e API (carregadas do config_manager)
-        self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)  # Agora é o batch_size padrão para o modo auto
-        self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY)  # Novo
-        self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)  # Novo
+        self.batch_size = self.config_manager.get(
+            BATCH_SIZE_CONFIG_KEY
+        )  # Agora é o batch_size padrão para o modo auto
+        self.batch_size_mode = self.config_manager.get(
+            BATCH_SIZE_MODE_CONFIG_KEY
+        )  # Novo
+        self.manual_batch_size = self.config_manager.get(
+            MANUAL_BATCH_SIZE_CONFIG_KEY
+        )  # Novo
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
         self.use_turbo = self.config_manager.get(USE_TURBO_CONFIG_KEY)
-        self.batch_size_specified = self.config_manager.get("batch_size_specified")  # Ainda usado para validação
-        self.gpu_index_specified = self.config_manager.get("gpu_index_specified")  # Ainda usado para validação
+        self.batch_size_specified = self.config_manager.get(
+            "batch_size_specified"
+        )  # Ainda usado para validação
+        self.gpu_index_specified = self.config_manager.get(
+            "gpu_index_specified"
+        )  # Ainda usado para validação
 
-        self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
-        self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
+        self.text_correction_enabled = self.config_manager.get(
+            TEXT_CORRECTION_ENABLED_CONFIG_KEY
+        )
+        self.text_correction_service = self.config_manager.get(
+            TEXT_CORRECTION_SERVICE_CONFIG_KEY
+        )
         self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
         self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
         self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
-        self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
+        self.gemini_agent_model = self.config_manager.get("gemini_agent_model")
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.text_correction_timeout = self.config_manager.get(
             TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30
@@ -97,7 +123,7 @@ class TranscriptionHandler:
         self.min_transcription_duration = self.config_manager.get(
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY
         )
-        self.use_flash_attention_2 = self.config_manager.get('use_flash_attention_2')
+        self.use_flash_attention_2 = self.config_manager.get("use_flash_attention_2")
 
         self.openrouter_client = None
         # self.gemini_api é injetado
@@ -119,7 +145,9 @@ class TranscriptionHandler:
             and OpenRouterAPI
         ):
             try:
-                self.openrouter_client = OpenRouterAPI(api_key=self.openrouter_api_key, model_id=self.openrouter_model)
+                self.openrouter_client = OpenRouterAPI(
+                    api_key=self.openrouter_api_key, model_id=self.openrouter_model
+                )
                 self.openrouter_api = self.openrouter_client
                 logging.info("OpenRouter API client initialized.")
             except Exception as e:
@@ -135,12 +163,16 @@ class TranscriptionHandler:
         self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
         self.use_turbo = self.config_manager.get(USE_TURBO_CONFIG_KEY)
-        self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
-        self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
+        self.text_correction_enabled = self.config_manager.get(
+            TEXT_CORRECTION_ENABLED_CONFIG_KEY
+        )
+        self.text_correction_service = self.config_manager.get(
+            TEXT_CORRECTION_SERVICE_CONFIG_KEY
+        )
         self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
         self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
         self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
-        self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
+        self.gemini_agent_model = self.config_manager.get("gemini_agent_model")
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.text_correction_timeout = self.config_manager.get(
             TEXT_CORRECTION_TIMEOUT_CONFIG_KEY, 30
@@ -148,7 +180,7 @@ class TranscriptionHandler:
         self.min_transcription_duration = self.config_manager.get(
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY
         )
-        self.use_flash_attention_2 = self.config_manager.get('use_flash_attention_2')
+        self.use_flash_attention_2 = self.config_manager.get("use_flash_attention_2")
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _get_device_and_dtype(self):
@@ -183,7 +215,9 @@ class TranscriptionHandler:
             return SERVICE_GEMINI
         return SERVICE_NONE
 
-    def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str):
+    def _async_text_correction(
+        self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str
+    ):
         if not self.text_correction_enabled:
             self.correction_in_progress = False
             self.on_transcription_result_callback(text, text)
@@ -195,9 +229,7 @@ class TranscriptionHandler:
         try:
             active_provider = self._get_text_correction_service()
             if active_provider == SERVICE_NONE:
-                logging.info(
-                    "Correção de texto desativada ou provedor indisponível."
-                )
+                logging.info("Correção de texto desativada ou provedor indisponível.")
                 return
 
             api_key = self.config_manager.get_api_key(active_provider)
@@ -212,7 +244,9 @@ class TranscriptionHandler:
                 if not is_agent_mode:
                     prompt = gemini_prompt
                 else:
-                    logging.info("Modo Agente ativado. Usando prompt do Agente para o Gemini.")
+                    logging.info(
+                        "Modo Agente ativado. Usando prompt do Agente para o Gemini."
+                    )
                     prompt = self.config_manager.get(GEMINI_AGENT_PROMPT_CONFIG_KEY)
                 future = self.executor.submit(
                     self.gemini_api.correct_text_async,
@@ -226,7 +260,9 @@ class TranscriptionHandler:
                 if not is_agent_mode:
                     prompt = openrouter_prompt
                 else:
-                    logging.info("Modo Agente ativado. Usando prompt do Agente para o OpenRouter.")
+                    logging.info(
+                        "Modo Agente ativado. Usando prompt do Agente para o OpenRouter."
+                    )
                     prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
 
                 model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
@@ -263,7 +299,9 @@ class TranscriptionHandler:
 
     def _get_dynamic_batch_size(self) -> int:
         if not torch.cuda.is_available() or self.gpu_index < 0:
-            logging.info("GPU não disponível ou não selecionada, usando batch size de CPU (4).")
+            logging.info(
+                "GPU não disponível ou não selecionada, usando batch size de CPU (4)."
+            )
             return 4
 
         if self.batch_size_mode == "manual":
@@ -277,10 +315,16 @@ class TranscriptionHandler:
 
     def start_model_loading(self):
         if self.is_model_loading:
-            logging.info("TranscriptionHandler: carregamento do modelo já em andamento.")
+            logging.info(
+                "TranscriptionHandler: carregamento do modelo já em andamento."
+            )
             return
         self.is_model_loading = True
-        threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
+        threading.Thread(
+            target=self._initialize_model_and_processor,
+            daemon=True,
+            name="ModelLoadThread",
+        ).start()
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""
@@ -297,10 +341,14 @@ class TranscriptionHandler:
             self.transcription_future.cancel()
 
     def _load_model_task(self):
-        model_id = self.config_manager.get(WHISPER_MODEL_ID_CONFIG_KEY, "openai/whisper-large-v3")
+        model_id = self.config_manager.get(
+            WHISPER_MODEL_ID_CONFIG_KEY, "openai/whisper-large-v3"
+        )
         try:
             device, torch_dtype = self._get_device_and_dtype()
-            logging.info(f"TranscriptionHandler: carregando pipeline para {model_id} no {device}...")
+            logging.info(
+                f"TranscriptionHandler: carregando pipeline para {model_id} no {device}..."
+            )
             self.transcription_pipeline = pipeline(
                 "automatic-speech-recognition",
                 model=model_id,
@@ -309,10 +357,29 @@ class TranscriptionHandler:
             )
             self.pipe = self.transcription_pipeline
             if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
-                try:
-                    self.transcription_pipeline.model = self.transcription_pipeline.model.to_bettertransformer()
-                except Exception as exc:
-                    logging.warning(f"Falha ao aplicar Flash Attention 2: {exc}")
+                if device.startswith("cuda"):
+                    logging.info(
+                        "Tentando aplicar Flash Attention 2 via BetterTransformer..."
+                    )
+                    try:
+                        cap = torch.cuda.get_device_capability(
+                            int(device.split(":")[1])
+                        )
+                        if cap[0] < 8:
+                            logging.warning(
+                                "GPU com compute capability %s não atende ao requisito mínimo (8.0) para Flash Attention 2.",
+                                cap,
+                            )
+                        self.transcription_pipeline.model = (
+                            self.transcription_pipeline.model.to_bettertransformer()
+                        )
+                        logging.info("Flash Attention 2 aplicada com sucesso.")
+                    except Exception as exc:
+                        logging.warning(f"Falha ao aplicar Flash Attention 2: {exc}")
+                else:
+                    logging.warning(
+                        "Flash Attention 2 solicitada, mas nenhum GPU foi detectado. Desative ou ajuste as configurações."
+                    )
             self.model_loaded_event.set()
             if self.on_model_ready_callback:
                 self.on_model_ready_callback()
@@ -323,7 +390,9 @@ class TranscriptionHandler:
         finally:
             self.is_model_loading = False
 
-    def transcribe_audio_segment(self, audio_input: np.ndarray, agent_mode: bool = False):
+    def transcribe_audio_segment(
+        self, audio_input: np.ndarray, agent_mode: bool = False
+    ):
         """Envia segmento para transcrição assíncrona."""
         self._stop_signal_event.clear()
 
@@ -338,7 +407,9 @@ class TranscriptionHandler:
             self._transcribe_audio_chunk, audio_input, agent_mode
         )
 
-    def _transcribe_audio_chunk(self, audio_input: np.ndarray, agent_mode: bool) -> None:
+    def _transcribe_audio_chunk(
+        self, audio_input: np.ndarray, agent_mode: bool
+    ) -> None:
         if self.transcription_cancel_event.is_set():
             logging.info(
                 "Transcrição interrompida por stop signal antes do início do processamento."
@@ -350,10 +421,7 @@ class TranscriptionHandler:
             if self.transcription_pipeline is None:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
-                # O callback de erro do modelo deve ser acionado apenas se o modelo já deveria estar carregado
-                # e se o callback foi fornecido. Em testes ou durante o desligamento do handler, o pipeline
-                # pode não estar disponível e isso não representa, necessariamente, uma falha grave.
-                if self.model_loaded_event.is_set() and self.on_model_error_callback:
+                if self.on_model_error_callback:
                     self.on_model_error_callback(error_message)
                 return
             audio_data = audio_input
@@ -378,7 +446,9 @@ class TranscriptionHandler:
                 or text_result == "[No speech detected]"
                 or text_result.strip().startswith("[Transcription Error:")
             ):
-                logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
+                logging.warning(
+                    f"Segmento processado sem texto significativo ou com erro: {text_result}"
+                )
                 if text_result and self.on_segment_transcribed_callback:
                     self.on_segment_transcribed_callback(text_result or "")
                 if (
@@ -406,26 +476,43 @@ class TranscriptionHandler:
                     logging.info(
                         f"Resposta recebida do modo agente: '{agent_response}'"
                     )
-                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
+                    if (
+                        not self.is_state_transcribing_fn
+                        or self.is_state_transcribing_fn()
+                    ):
                         self.on_agent_result_callback(agent_response)
                     else:
                         logging.warning(
                             "Estado mudou antes do resultado do agente. UI não será atualizada."
                         )
                 except Exception as e:
-                    logging.error(f"Erro ao processar o comando do agente: {e}", exc_info=True)
-                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
-                        self.on_agent_result_callback(text_result)  # Falha, retorna o texto original
+                    logging.error(
+                        f"Erro ao processar o comando do agente: {e}", exc_info=True
+                    )
+                    if (
+                        not self.is_state_transcribing_fn
+                        or self.is_state_transcribing_fn()
+                    ):
+                        self.on_agent_result_callback(
+                            text_result
+                        )  # Falha, retorna o texto original
                     else:
                         logging.warning(
                             "Estado mudou antes do resultado do agente. UI não será atualizada."
                         )
             else:
                 if self.text_correction_enabled:
-                    openrouter_prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                    openrouter_prompt = self.config_manager.get(
+                        OPENROUTER_PROMPT_CONFIG_KEY
+                    )
                     self.correction_thread = threading.Thread(
                         target=self._async_text_correction,
-                        args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt),
+                        args=(
+                            text_result,
+                            agent_mode,
+                            self.gemini_prompt,
+                            openrouter_prompt,
+                        ),
                         daemon=True,
                         name="TextCorrectionThread",
                     )
