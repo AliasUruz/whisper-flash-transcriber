@@ -124,6 +124,9 @@ def test_transcribe_audio_chunk_handles_missing_callback(monkeypatch):
 
     monkeypatch.setattr(handler, "_async_text_correction", fake_correction)
 
+    # Garante que o evento esteja acionado para simular modelo previamente carregado
+    handler.model_loaded_event.set()
+
     handler._transcribe_audio_chunk(None, agent_mode=False)
 
     mock_on_model_error.assert_called_once()  # Callback should notify about the missing model
