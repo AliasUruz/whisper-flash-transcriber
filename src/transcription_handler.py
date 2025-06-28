@@ -351,9 +351,9 @@ class TranscriptionHandler:
                 )
                 return
             logging.debug(
-                f"Transcrevendo áudio de {len(audio_data)/16000:.2f} segundos."
+                f"Transcrevendo áudio de {len(audio_input)/16000:.2f} segundos."
             )
-            result = self.transcription_pipeline(audio_data.copy())
+            result = self.transcription_pipeline(audio_input.copy())
             transcription = result["text"].strip()
             logging.info(f"Transcrição recebida: {transcription}")
             if self.on_transcription_result_callback:
