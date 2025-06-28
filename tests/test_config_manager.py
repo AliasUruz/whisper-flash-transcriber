@@ -93,7 +93,7 @@ def test_use_flash_attention_default_and_override(tmp_path, monkeypatch):
         config_file=str(cfg_path),
         default_config=config_manager.DEFAULT_CONFIG,
     )
-    assert cm_default.get(config_manager.USE_FLASH_ATTENTION_2_CONFIG_KEY) is False
+    assert cm_default.get(config_manager.USE_FLASH_ATTENTION_2_CONFIG_KEY) is True
 
     cfg_path.write_text(json.dumps({"use_flash_attention_2": True}))
     cm_override = config_manager.ConfigManager(
@@ -113,7 +113,7 @@ def test_use_flash_attention_invalid_fallback(tmp_path, monkeypatch):
         config_file=str(cfg_path),
         default_config=config_manager.DEFAULT_CONFIG,
     )
-    assert cm.get(config_manager.USE_FLASH_ATTENTION_2_CONFIG_KEY) is False
+    assert cm.get(config_manager.USE_FLASH_ATTENTION_2_CONFIG_KEY) is True
 
 
 def test_flash_attention_persistence(tmp_path, monkeypatch):
