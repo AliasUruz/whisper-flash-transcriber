@@ -116,6 +116,25 @@ def test_use_flash_attention_invalid_fallback(tmp_path, monkeypatch):
     assert cm.get(config_manager.USE_FLASH_ATTENTION_2_CONFIG_KEY) is False
 
 
+def test_flash_attention_persistence(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.json"
+    secrets_path = tmp_path / "secrets.json"
+    monkeypatch.setattr(config_manager, "SECRETS_FILE", str(secrets_path))
+
+    cm = config_manager.ConfigManager(
+        config_file=str(cfg_path),
+        default_config=config_manager.DEFAULT_CONFIG,
+    )
+    cm.set_use_flash_attention_2(True)
+    cm.save_config()
+
+    cm_reloaded = config_manager.ConfigManager(
+        config_file=str(cfg_path),
+        default_config=config_manager.DEFAULT_CONFIG,
+    )
+    assert cm_reloaded.get(config_manager.USE_FLASH_ATTENTION_2_CONFIG_KEY) is True
+
+
 def test_config_validation_and_fallback(tmp_path, monkeypatch):
     cfg_path = tmp_path / "config.json"
     secrets_path = tmp_path / "secrets.json"
