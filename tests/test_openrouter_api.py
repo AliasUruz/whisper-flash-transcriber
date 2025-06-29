@@ -91,4 +91,5 @@ def test_correct_text_async_custom_prompt():
             "additional comments"
         )
         assert sent_payload['messages'][1]['content'] == 'Corrija o texto: texto original'
+        assert sent_payload['max_tokens'] == api.max_tokens
         assert kwargs['headers']['Authorization'] == 'Bearer newkey'
