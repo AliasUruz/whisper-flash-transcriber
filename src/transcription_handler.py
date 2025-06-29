@@ -3,6 +3,11 @@ import threading
 import concurrent.futures
 import torch
 from transformers import pipeline
+import importlib.util
+
+BETTERTRANSFORMER_AVAILABLE = importlib.util.find_spec(
+    "optimum.bettertransformer"
+) is not None
 from .openrouter_api import (
     OpenRouterAPI,
 )  # Assumindo que está na raiz ou em path acessível
@@ -40,6 +45,12 @@ from .config_manager import (
     USE_FLASH_ATTENTION_2_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
 )
+
+try:
+    from optimum.bettertransformer import BetterTransformer  # noqa: F401
+    BETTERTRANSFORMER_AVAILABLE = True
+except Exception:
+    BETTERTRANSFORMER_AVAILABLE = False
 
 # Mensagem padronizada para falhas na otimização Turbo/Flash Attention 2
 OPTIMIZATION_TURBO_FALLBACK_MSG = (
@@ -394,7 +405,9 @@ class TranscriptionHandler:
                 if device.startswith("cuda"):
                     if not BETTERTRANSFORMER_AVAILABLE:
                         warn_msg = (
-                            "Pacote 'optimum[bettertransformer]' nao encontrado. Modo Turbo desativado."
+                            "Pacote 'optimum[bettertransformer]' nao encontrado."
+                            " Instale manualmente com `pip install \"optimum[bettertransformer]\"`."
+                            " Modo Turbo desativado."
                         )
                         logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
@@ -436,7 +449,6 @@ class TranscriptionHandler:
                 logging.info(
                     "Turbo Mode desativado; ignorando otimização Flash Attention 2."
                 )
-            self.model_loaded_event.set()
             if self.on_model_ready_callback:
                 self.on_model_ready_callback()
         except Exception as exc:
@@ -444,6 +456,7 @@ class TranscriptionHandler:
             if self.on_model_error_callback:
                 self.on_model_error_callback(str(exc))
         finally:
+            self.model_loaded_event.set()
             self.is_model_loading = False
 
     def transcribe_audio_segment(
@@ -488,7 +501,7 @@ class TranscriptionHandler:
             text_result = result["text"].strip()
             logging.info(f"Transcrição recebida: {text_result}")
             if self.on_transcription_result_callback:
-                self.on_transcription_result_callback(text_result)
+                self.on_transcription_result_callback(text_result, text_result)
         except Exception as e:
             logging.error(f"Erro durante a transcrição: {e}", exc_info=True)
         finally:
