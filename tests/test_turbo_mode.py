@@ -22,6 +22,13 @@ fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
 
+# Stub para optimum.bettertransformer
+fake_optimum = types.ModuleType("optimum")
+fake_bt = types.ModuleType("optimum.bettertransformer")
+fake_bt.BetterTransformer = object
+sys.modules["optimum"] = fake_optimum
+sys.modules["optimum.bettertransformer"] = fake_bt
+
 if "src.transcription_handler" in sys.modules:
     importlib.reload(sys.modules["src.transcription_handler"])
 
@@ -122,6 +129,36 @@ def test_bettertransformer_ignorado_sem_turbo(monkeypatch):
     cfg.data[USE_TURBO_CONFIG_KEY] = False
 
     import src.transcription_handler as th_module
+
+    called = {"flag": 0}
+
+    class DummyModel:
+        def to_bettertransformer(self):
+            called["flag"] += 1
+            return self
+
+    class DummyPipeline:
+        def __init__(self):
+            self.model = DummyModel()
+
+    monkeypatch.setattr(th_module, "pipeline", lambda *a, **k: DummyPipeline())
+
+    handler = _create_handler(cfg)
+    handler._load_model_task()
+
+    assert called["flag"] == 0
+
+
+def test_bettertransformer_indisponivel(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[USE_TURBO_CONFIG_KEY] = True
+
+    if "optimum.bettertransformer" in sys.modules:
+        del sys.modules["optimum.bettertransformer"]
+
+    import importlib
+    import src.transcription_handler as th_module
+    importlib.reload(th_module)
 
     called = {"flag": 0}
 
