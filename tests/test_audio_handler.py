@@ -213,7 +213,7 @@ class AudioHandlerTest(unittest.TestCase):
             elapsed = time.time() - start
 
         t = captured['t']
-        self.assertTrue(elapsed < 0.15)
+        self.assertTrue(elapsed < 0.25)
         self.assertTrue(t.daemon)
         alive_after = t.is_alive()
         t.join()

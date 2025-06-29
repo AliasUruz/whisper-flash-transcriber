@@ -97,6 +97,7 @@ def test_bettertransformer_aplicado_quando_turbo(monkeypatch):
     cfg.data[USE_TURBO_CONFIG_KEY] = True
 
     import src.transcription_handler as th_module
+    monkeypatch.setattr(th_module, "BETTERTRANSFORMER_AVAILABLE", True, raising=False)
 
     called = {"flag": False}
 
