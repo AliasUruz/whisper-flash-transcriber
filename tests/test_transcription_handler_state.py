@@ -87,6 +87,7 @@ def test_state_check_callback_attribute():
         gemini_api_client=None,
         on_model_ready_callback=noop,
         on_model_error_callback=noop,
+        on_optimization_fallback_callback=lambda *_: None,
         on_transcription_result_callback=noop,
         on_agent_result_callback=noop,
         on_segment_transcribed_callback=noop,

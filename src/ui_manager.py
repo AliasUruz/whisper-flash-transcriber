@@ -751,3 +751,7 @@ class UIManager:
                     messagebox.showerror("Erro de Entrada", "O Batch Size deve ser um número inteiro positivo.", parent=self.settings_window_instance)
             except ValueError:
                 messagebox.showerror("Erro de Entrada", "Entrada inválida. Por favor, insira um número inteiro.", parent=self.settings_window_instance)
+
+    def show_info_message(self, title: str, message: str):
+        """Exibe uma mensagem informativa de forma thread-safe."""
+        self.main_tk_root.after(0, lambda: messagebox.showinfo(title, message))
