@@ -195,6 +195,36 @@ def test_async_text_correction_service_selection(monkeypatch):
             assert not handler.openrouter_api.correct_text.called
 
 
+def test_update_config_initializes_openrouter_client():
+    cfg = DummyConfig()
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_optimization_fallback_callback=lambda *_: None,
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: False,
+    )
+
+    assert handler.openrouter_client is None
+
+    cfg.data[TEXT_CORRECTION_ENABLED_CONFIG_KEY] = True
+    cfg.data[TEXT_CORRECTION_SERVICE_CONFIG_KEY] = SERVICE_OPENROUTER
+    cfg.data[OPENROUTER_API_KEY_CONFIG_KEY] = "newkey"
+    cfg.data[OPENROUTER_MODEL_CONFIG_KEY] = "model1"
+
+    handler.update_config()
+
+    from src.openrouter_api import OpenRouterAPI
+
+    assert isinstance(handler.openrouter_client, OpenRouterAPI)
+    assert handler.openrouter_client.api_key == "newkey"
+    assert handler.openrouter_client.model_id == "model1"
+
+
 def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
     cfg = DummyConfig()
     cfg.data[GPU_INDEX_CONFIG_KEY] = 0
