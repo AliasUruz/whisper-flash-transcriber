@@ -12,7 +12,10 @@ from unittest.mock import MagicMock
 fake_torch = types.ModuleType("torch")
 fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
 fake_torch.__version__ = "0.0"
-fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+fake_torch.cuda = types.SimpleNamespace(
+    is_available=lambda: False,
+    empty_cache=lambda: None,
+)
 
 sys.modules["torch"] = fake_torch
 
@@ -40,6 +43,7 @@ from src.config_manager import (  # noqa: E402
     OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     USE_FLASH_ATTENTION_2_CONFIG_KEY,
+    USE_TURBO_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
@@ -58,7 +62,7 @@ class DummyConfig:
             "gpu_index_specified": False,
             TEXT_CORRECTION_ENABLED_CONFIG_KEY: False,
             TEXT_CORRECTION_SERVICE_CONFIG_KEY: SERVICE_NONE,
-            "use_turbo": False,
+            USE_TURBO_CONFIG_KEY: False,
             OPENROUTER_API_KEY_CONFIG_KEY: "dummy",
             OPENROUTER_MODEL_CONFIG_KEY: "",
             GEMINI_API_KEY_CONFIG_KEY: "dummy",
@@ -372,6 +376,7 @@ def test_transcribe_audio_chunk_uses_audio_input(monkeypatch):
 def test_optimization_fallback_callback(monkeypatch):
     cfg = DummyConfig()
     cfg.data[USE_FLASH_ATTENTION_2_CONFIG_KEY] = True
+    cfg.data[USE_TURBO_CONFIG_KEY] = True
     cfg.data[GPU_INDEX_CONFIG_KEY] = 0
 
     messages = []
@@ -413,4 +418,4 @@ def test_optimization_fallback_callback(monkeypatch):
     handler._load_model_task()
 
     assert messages
-    assert "otimização 'Turbo'" in messages[0]
+    assert "Falha ao aplicar Flash Attention 2" in messages[0]

@@ -356,7 +356,8 @@ class TranscriptionHandler:
                 torch_dtype=torch_dtype,
                 device=device,
             )
-            if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
+            flash_enabled = self.use_turbo and self.use_flash_attention_2
+            if flash_enabled:
                 if device.startswith("cuda"):
                     logging.info(
                         "Tentando aplicar Flash Attention 2 via BetterTransformer..."
@@ -388,6 +389,10 @@ class TranscriptionHandler:
                     logging.warning(warn_msg)
                     if self.on_optimization_fallback_callback:
                         self.on_optimization_fallback_callback(warn_msg)
+            elif self.use_flash_attention_2 and not self.use_turbo:
+                logging.info(
+                    "Turbo Mode desativado; ignorando otimização Flash Attention 2."
+                )
             self.model_loaded_event.set()
             if self.on_model_ready_callback:
                 self.on_model_ready_callback()
@@ -528,7 +533,7 @@ class TranscriptionHandler:
                 else:
                     self.on_transcription_result_callback(text_result, text_result)
 
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and hasattr(torch.cuda, "empty_cache"):
                 torch.cuda.empty_cache()
                 logging.debug("Cache da GPU limpo após tarefa de transcrição.")
 
