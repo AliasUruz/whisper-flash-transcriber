@@ -176,8 +176,6 @@ class AudioHandler:
 
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
 
-        if self._record_thread:
-            self._record_thread.join(timeout=2)
 
         if not stream_was_started:
             logging.warning("Stop recording called but audio stream never started. Ignoring data.")
