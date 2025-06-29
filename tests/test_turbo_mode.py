@@ -26,6 +26,8 @@ if "src.transcription_handler" in sys.modules:
     importlib.reload(sys.modules["src.transcription_handler"])
 
 from src.transcription_handler import TranscriptionHandler  # noqa: E402
+import src.transcription_handler as th_module  # noqa: E402
+th_module.BETTERTRANSFORMER_AVAILABLE = True
 from src.config_manager import (  # noqa: E402
     BATCH_SIZE_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY,
