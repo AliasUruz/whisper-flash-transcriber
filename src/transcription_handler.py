@@ -47,12 +47,14 @@ class TranscriptionHandler:
         on_agent_result_callback,
         on_segment_transcribed_callback,
         is_state_transcribing_fn,
+        on_optimization_fallback_callback=None,
     ):
         self.config_manager = config_manager
         # Cliente Gemini injetado
         self.gemini_api = gemini_api_client
         self.on_model_ready_callback = on_model_ready_callback
         self.on_model_error_callback = on_model_error_callback
+        self.on_optimization_fallback_callback = on_optimization_fallback_callback
         self.on_transcription_result_callback = (
             on_transcription_result_callback  # Para resultado final
         )
@@ -374,6 +376,12 @@ class TranscriptionHandler:
                         logging.info("Flash Attention 2 aplicada com sucesso.")
                     except Exception as exc:
                         logging.warning(f"Falha ao aplicar Flash Attention 2: {exc}")
+                        if self.on_optimization_fallback_callback:
+                            error_message = (
+                                "Não foi possível aplicar a otimização 'Turbo' (Flash Attention 2). "
+                                "O sistema usará o modo padrão.\n\nDetalhe técnico: {exc}"
+                            ).format(exc=exc)
+                            self.on_optimization_fallback_callback(error_message)
                 else:
                     logging.warning(
                         "Flash Attention 2 solicitada, mas nenhum GPU foi detectado. Desative ou ajuste as configurações."
@@ -419,8 +427,6 @@ class TranscriptionHandler:
             if self.transcription_pipeline is None:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
-                if self.on_model_error_callback:
-                    self.on_model_error_callback(error_message)
                 return
             audio_data = audio_input
             logging.debug(
