@@ -111,6 +111,7 @@ class AppCore:
         self.min_record_duration = self.config_manager.get("min_record_duration")
         self.display_transcripts_in_terminal = self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY)
         self.use_flash_attention_2 = self.config_manager.get("use_flash_attention_2")
+        self.use_turbo = self.config_manager.get("use_turbo")
         # ... e outras configurações que AppCore precisa diretamente
 
     # --- Callbacks de Módulos ---
@@ -555,6 +556,7 @@ class AppCore:
         logging.info("AppCore: Applying new configuration from external source.")
         config_changed = False
         old_flash_attention = self.config_manager.get("use_flash_attention_2")
+        old_use_turbo = self.config_manager.get("use_turbo")
 
         # Atualizar ConfigManager e verificar se houve mudanças
         for key, value in kwargs.items():
@@ -578,7 +580,8 @@ class AppCore:
                 "new_vad_threshold": "vad_threshold",
                 "new_vad_silence_duration": "vad_silence_duration",
                 "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
-                "new_use_flash_attention_2": "use_flash_attention_2"
+                "new_use_flash_attention_2": "use_flash_attention_2",
+                "new_use_turbo": "use_turbo"
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
@@ -606,7 +609,7 @@ class AppCore:
             self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
             self.audio_handler.config_manager = self.config_manager # Atualizar referência
             self.transcription_handler.config_manager = self.config_manager # Atualizar referência
-            if any(key in kwargs for key in ["new_use_vad", "new_vad_threshold", "new_vad_silence_duration", "new_use_flash_attention_2"]):
+            if any(key in kwargs for key in ["new_use_vad", "new_vad_threshold", "new_vad_silence_duration", "new_use_flash_attention_2", "new_use_turbo"]):
                 self.audio_handler.update_config()
             self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
             # Re-inicializar clientes API existentes em vez de recriá-los
@@ -667,6 +670,16 @@ class AppCore:
                 self.transcription_handler.update_config()
                 self.transcription_handler.start_model_loading()
                 self._set_state(STATE_LOADING_MODEL)
+
+            new_use_turbo = self.config_manager.get("use_turbo")
+            if new_use_turbo != old_use_turbo:
+                state = "habilitado" if new_use_turbo else "desabilitado"
+                logging.info(
+                    f"Turbo Mode {state} via apply_settings_from_external."
+                )
+                self.transcription_handler.update_config()
+                self.transcription_handler.start_model_loading()
+                self._set_state(STATE_LOADING_MODEL)
         else:
             logging.info("Nenhuma configuração alterada.")
 
@@ -694,6 +707,7 @@ class AppCore:
             "gpu_index",
             "min_transcription_duration",
             "use_flash_attention_2",
+            "use_turbo",
         ]:
             self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
             self.transcription_handler.update_config()
@@ -703,6 +717,11 @@ class AppCore:
             if key == "use_flash_attention_2":
                 state = "habilitado" if value else "desabilitado"
                 logging.info(f"Flash Attention 2 {state} via update_setting.")
+                self.transcription_handler.start_model_loading()
+                self._set_state(STATE_LOADING_MODEL)
+            elif key == "use_turbo":
+                state = "habilitado" if value else "desabilitado"
+                logging.info(f"Turbo Mode {state} via update_setting.")
                 self.transcription_handler.start_model_loading()
                 self._set_state(STATE_LOADING_MODEL)
 
