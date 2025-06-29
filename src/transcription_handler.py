@@ -231,6 +231,8 @@ class TranscriptionHandler:
             active_provider = self._get_text_correction_service()
             if active_provider == SERVICE_NONE:
                 logging.info("Correção de texto desativada ou provedor indisponível.")
+                self.correction_in_progress = False
+                self.on_transcription_result_callback(text, text)
                 return
 
             api_key = self.config_manager.get_api_key(active_provider)
@@ -239,6 +241,8 @@ class TranscriptionHandler:
                 logging.warning(
                     f"Nenhuma chave de API encontrada para o provedor {active_provider}. Pulando correção de texto."
                 )
+                self.correction_in_progress = False
+                self.on_transcription_result_callback(text, text)
                 return
 
             if active_provider == "gemini":
@@ -368,15 +372,16 @@ class TranscriptionHandler:
                         )
                         if cap[0] < 8:
                             warn_msg = (
-                                f"GPU com compute capability {cap} não atende ao requisito mínimo (8.0) para Flash Attention 2."
+                                f"GPU com compute capability {cap} não atende ao requisito mínimo (8.0) para Flash Attention 2. Otimização não aplicada."
                             )
                             logging.warning(warn_msg)
                             if self.on_optimization_fallback_callback:
                                 self.on_optimization_fallback_callback(warn_msg)
-                        self.transcription_pipeline.model = (
-                            self.transcription_pipeline.model.to_bettertransformer()
-                        )
-                        logging.info("Flash Attention 2 aplicada com sucesso.")
+                        else:
+                            self.transcription_pipeline.model = (
+                                self.transcription_pipeline.model.to_bettertransformer()
+                            )
+                            logging.info("Flash Attention 2 aplicada com sucesso.")
                     except Exception as exc:
                         warn_msg = f"Falha ao aplicar Flash Attention 2: {exc}"
                         logging.warning(warn_msg)
