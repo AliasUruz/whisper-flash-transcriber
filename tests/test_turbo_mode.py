@@ -98,11 +98,11 @@ def test_bettertransformer_aplicado_quando_turbo(monkeypatch):
 
     import src.transcription_handler as th_module
 
-    called = {"flag": False}
+    called = {"count": 0}
 
     class DummyModel:
         def to_bettertransformer(self):
-            called["flag"] = True
+            called["count"] += 1
             return self
 
     class DummyPipeline:
@@ -114,7 +114,7 @@ def test_bettertransformer_aplicado_quando_turbo(monkeypatch):
     handler = _create_handler(cfg)
     handler._load_model_task()
 
-    assert called["flag"]
+    assert called["count"] == 1
 
 
 def test_bettertransformer_ignorado_sem_turbo(monkeypatch):
