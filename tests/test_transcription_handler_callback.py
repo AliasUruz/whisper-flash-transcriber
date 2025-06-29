@@ -413,4 +413,51 @@ def test_optimization_fallback_callback(monkeypatch):
     handler._load_model_task()
 
     assert messages
-    assert "otimização 'Turbo'" in messages[0]
+    assert "Falha ao aplicar Flash Attention 2" in messages[0]
+
+
+def test_flash_attention_skipped_for_low_capability(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[USE_FLASH_ATTENTION_2_CONFIG_KEY] = True
+    cfg.data[GPU_INDEX_CONFIG_KEY] = 0
+
+    warnings = []
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_optimization_fallback_callback=lambda msg: warnings.append(msg),
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: False,
+    )
+
+    import src.transcription_handler as th_module
+
+    monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        th_module.torch.cuda,
+        "get_device_capability",
+        lambda _=0: (7, 5),
+        raising=False,
+    )
+    monkeypatch.setattr(th_module.torch, "float16", 1, raising=False)
+    monkeypatch.setattr(th_module.torch, "float32", 2, raising=False)
+
+    model_mock = MagicMock()
+    model_mock.to_bettertransformer = MagicMock()
+
+    class DummyPipeline:
+        def __init__(self):
+            self.model = model_mock
+
+    monkeypatch.setattr(th_module, "pipeline", lambda *a, **k: DummyPipeline())
+
+    handler._load_model_task()
+
+    model_mock.to_bettertransformer.assert_not_called()
+    assert warnings
+    assert "não atende ao requisito mínimo" in warnings[0]
