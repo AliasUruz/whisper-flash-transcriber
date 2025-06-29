@@ -1,6 +1,6 @@
 import customtkinter as ctk
-import tkinter.messagebox as messagebox
-from tkinter import simpledialog # Adicionado para askstring
+from tkinter import messagebox
+from tkinter import simpledialog  # Adicionado para askstring
 import logging
 import threading
 import pystray
@@ -751,3 +751,12 @@ class UIManager:
                     messagebox.showerror("Erro de Entrada", "O Batch Size deve ser um número inteiro positivo.", parent=self.settings_window_instance)
             except ValueError:
                 messagebox.showerror("Erro de Entrada", "Entrada inválida. Por favor, insira um número inteiro.", parent=self.settings_window_instance)
+
+    def show_info_message(self, title: str, message: str):
+        """Exibe uma caixa de diálogo de informação de forma segura no thread da UI."""
+        if not self.main_tk_root:
+            logging.warning("UIManager: Tentativa de exibir mensagem, mas a UI não está pronta.")
+            return
+
+        parent_window = self.settings_window_instance if self.settings_window_instance else self.main_tk_root
+        self.main_tk_root.after(0, lambda: messagebox.showinfo(title, message, parent=parent_window))
