@@ -3,11 +3,12 @@ import threading
 import concurrent.futures
 import torch
 from transformers import pipeline
-import importlib.util
 
-BETTERTRANSFORMER_AVAILABLE = importlib.util.find_spec(
-    "optimum.bettertransformer"
-) is not None
+try:
+    from optimum.bettertransformer import BetterTransformer  # noqa: F401
+    BETTERTRANSFORMER_AVAILABLE = True
+except Exception:
+    BETTERTRANSFORMER_AVAILABLE = False
 from .openrouter_api import (
     OpenRouterAPI,
 )  # Assumindo que está na raiz ou em path acessível
@@ -231,7 +232,11 @@ class TranscriptionHandler:
             if torch.cuda.is_available() and self.gpu_index >= 0
             else "cpu"
         )
-        torch_dtype = torch.float16 if device.startswith("cuda") else torch.float32
+        torch_dtype = (
+            torch.float16
+            if device.startswith("cuda")
+            else getattr(torch, "float32", torch.float16)
+        )
         self.device_in_use = device
         return device, torch_dtype
 
@@ -416,28 +421,26 @@ class TranscriptionHandler:
                         logging.info(
                             "Tentando aplicar Flash Attention 2 via BetterTransformer..."
                         )
-                        cap = torch.cuda.get_device_capability(self.gpu_index)
-                        if cap[0] < 8:
-                            warn_msg = (
-                                f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: GPU com compute capability {cap} não atende ao requisito mínimo (8.0)."
-                            )
-                            logging.warning(warn_msg)
-                            if self.on_optimization_fallback_callback:
-                                self.on_optimization_fallback_callback(warn_msg)
-                        else:
-                            try:
-                                self.transcription_pipeline.model = (
-                                    self.transcription_pipeline.model.to_bettertransformer()
-                                )
-                            except Exception as exc:
+                        try:
+                            cap = torch.cuda.get_device_capability(self.gpu_index)
+                            if cap[0] < 8:
                                 warn_msg = (
                                     f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
                                 )
                                 logging.warning(warn_msg)
                                 if self.on_optimization_fallback_callback:
                                     self.on_optimization_fallback_callback(warn_msg)
-                            else:
-                                logging.info("Flash Attention 2 aplicada com sucesso.")
+                            self.transcription_pipeline.model = (
+                                self.transcription_pipeline.model.to_bettertransformer()
+                            )
+                            logging.info("Flash Attention 2 aplicada com sucesso.")
+                        except Exception as exc:
+                            warn_msg = (
+                                f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
+                            )
+                            logging.warning(warn_msg)
+                            if self.on_optimization_fallback_callback:
+                                self.on_optimization_fallback_callback(warn_msg)
                 else:
                     warn_msg = (
                         f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: nenhum GPU foi detectado. Desative ou ajuste as configurações."
