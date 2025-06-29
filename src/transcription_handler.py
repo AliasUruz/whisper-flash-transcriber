@@ -422,10 +422,11 @@ class TranscriptionHandler:
                             logging.warning(warn_msg)
                             if self.on_optimization_fallback_callback:
                                 self.on_optimization_fallback_callback(warn_msg)
-                        self.transcription_pipeline.model = (
-                            self.transcription_pipeline.model.to_bettertransformer()
-                        )
-                        logging.info("Flash Attention 2 aplicada com sucesso.")
+                        else:
+                            self.transcription_pipeline.model = (
+                                self.transcription_pipeline.model.to_bettertransformer()
+                            )
+                            logging.info("Flash Attention 2 aplicada com sucesso.")
                     except Exception as exc:
                         warn_msg = f"Falha ao aplicar a otimização 'Turbo': {exc}"
                         logging.warning(warn_msg)
