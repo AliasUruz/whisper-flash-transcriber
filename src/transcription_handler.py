@@ -5,20 +5,14 @@ import torch
 from transformers import pipeline
 
 try:
-    from optimum.bettertransformer import BetterTransformer  # noqa: F401
+    from transformers.integrations import BetterTransformer
     BETTERTRANSFORMER_AVAILABLE = True
-except Exception:
+except ImportError:
     BETTERTRANSFORMER_AVAILABLE = False
 from .openrouter_api import (
     OpenRouterAPI,
 )  # Assumindo que está na raiz ou em path acessível
 import numpy as np  # Necessário para o audio_input
-
-try:
-    from optimum.bettertransformer import BetterTransformer
-    BETTERTRANSFORMER_AVAILABLE = True
-except Exception:
-    BETTERTRANSFORMER_AVAILABLE = True
 
 # Importar constantes de configuração
 from utils import select_batch_size
@@ -46,12 +40,6 @@ from .config_manager import (
     USE_FLASH_ATTENTION_2_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
 )
-
-try:
-    from optimum.bettertransformer import BetterTransformer  # noqa: F401
-    BETTERTRANSFORMER_AVAILABLE = True
-except Exception:
-    BETTERTRANSFORMER_AVAILABLE = False
 
 # Mensagem padronizada para falhas na otimização Turbo/Flash Attention 2
 OPTIMIZATION_TURBO_FALLBACK_MSG = (
