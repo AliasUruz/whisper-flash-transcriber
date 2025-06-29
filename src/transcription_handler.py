@@ -14,11 +14,6 @@ from .openrouter_api import (
 )  # Assumindo que está na raiz ou em path acessível
 import numpy as np  # Necessário para o audio_input
 
-try:
-    from transformers.integrations import BetterTransformer
-    BETTERTRANSFORMER_AVAILABLE = True
-except Exception:
-    BETTERTRANSFORMER_AVAILABLE = True
 
 # Importar constantes de configuração
 from utils import select_batch_size
@@ -47,11 +42,6 @@ from .config_manager import (
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
 )
 
-try:
-    from transformers.integrations import BetterTransformer  # noqa: F401
-    BETTERTRANSFORMER_AVAILABLE = True
-except Exception:
-    BETTERTRANSFORMER_AVAILABLE = False
 
 # Mensagem padronizada para falhas na otimização Turbo/Flash Attention 2
 OPTIMIZATION_TURBO_FALLBACK_MSG = (
@@ -410,9 +400,7 @@ class TranscriptionHandler:
                 if device.startswith("cuda"):
                     if not BETTERTRANSFORMER_AVAILABLE:
                         warn_msg = (
-                            "Pacote 'transformers' sem suporte ao BetterTransformer."
-                            " Instale manualmente com `pip install \"transformers\"`."
-                            " Modo Turbo desativado."
+                            f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: BetterTransformer indisponível."
                         )
                         logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
