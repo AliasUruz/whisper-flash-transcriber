@@ -202,7 +202,7 @@ class OpenRouterAPI:
                 {"role": "user", "content": user_message},
             ],
             "temperature": 0.0,
-            "max_tokens": 10000,
+            "max_tokens": self.max_tokens,
         }
 
         for attempt in range(3):

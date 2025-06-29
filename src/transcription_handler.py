@@ -189,6 +189,24 @@ class TranscriptionHandler:
         self.use_flash_attention_2 = self.config_manager.get("use_flash_attention_2")
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
+        if (
+            self.text_correction_enabled
+            and self.text_correction_service == SERVICE_OPENROUTER
+            and self.openrouter_api_key
+            and self.openrouter_client is None
+            and OpenRouterAPI
+        ):
+            try:
+                self.openrouter_client = OpenRouterAPI(
+                    api_key=self.openrouter_api_key, model_id=self.openrouter_model
+                )
+                self.openrouter_api = self.openrouter_client
+                logging.info(
+                    "OpenRouter API client initialized via update_config."
+                )
+            except Exception as e:
+                logging.error(f"Error initializing OpenRouter API client: {e}")
+
     def _get_device_and_dtype(self):
         """Define o dispositivo e o dtype ideais para o modelo."""
         device = (
@@ -236,6 +254,8 @@ class TranscriptionHandler:
             active_provider = self._get_text_correction_service()
             if active_provider == SERVICE_NONE:
                 logging.info("Correção de texto desativada ou provedor indisponível.")
+                self.correction_in_progress = False
+                self.on_transcription_result_callback(text, text)
                 return
 
             api_key = self.config_manager.get_api_key(active_provider)
@@ -244,6 +264,8 @@ class TranscriptionHandler:
                 logging.warning(
                     f"Nenhuma chave de API encontrada para o provedor {active_provider}. Pulando correção de texto."
                 )
+                self.correction_in_progress = False
+                self.on_transcription_result_callback(text, text)
                 return
 
             if active_provider == "gemini":
@@ -361,26 +383,45 @@ class TranscriptionHandler:
                 torch_dtype=torch_dtype,
                 device=device,
             )
-            if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
+            flash_enabled = self.use_turbo and self.use_flash_attention_2
+            if flash_enabled:
                 if device.startswith("cuda"):
-                    logging.info(
-                        "Tentando aplicar Flash Attention 2 via BetterTransformer..."
-                    )
-                    try:
-                        cap = torch.cuda.get_device_capability(
-                            int(device.split(":")[1])
+                    if not BETTERTRANSFORMER_AVAILABLE:
+                        warn_msg = (
+                            "Pacote 'optimum[bettertransformer]' nao encontrado. Modo Turbo desativado."
+                        )
+                        logging.warning(warn_msg)
+                        if self.on_optimization_fallback_callback:
+                            self.on_optimization_fallback_callback(warn_msg)
+                    else:
+                        logging.info(
+                            "Tentando aplicar Flash Attention 2 via BetterTransformer..."
                         )
                         if cap[0] < 8:
                             warn_msg = (
                                 f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: GPU com compute capability {cap} não atende ao requisito mínimo (8.0)."
                             )
+                            if cap[0] < 8:
+                                warn_msg = (
+                                    f"GPU com compute capability {cap} não atende ao requisito mínimo (8.0) para Flash Attention 2."
+                                )
+                                logging.warning(warn_msg)
+                                if self.on_optimization_fallback_callback:
+                                    self.on_optimization_fallback_callback(warn_msg)
+                            self.transcription_pipeline.model = (
+                                self.transcription_pipeline.model.to_bettertransformer()
+                            )
+                            logging.info("Flash Attention 2 aplicada com sucesso.")
+                        except Exception as exc:
+                            warn_msg = f"Falha ao aplicar otimização 'Turbo': {exc}"
                             logging.warning(warn_msg)
                             if self.on_optimization_fallback_callback:
                                 self.on_optimization_fallback_callback(warn_msg)
-                        self.transcription_pipeline.model = (
-                            self.transcription_pipeline.model.to_bettertransformer()
-                        )
-                        logging.info("Flash Attention 2 aplicada com sucesso.")
+                        else:
+                            self.transcription_pipeline.model = (
+                                self.transcription_pipeline.model.to_bettertransformer()
+                            )
+                            logging.info("Flash Attention 2 aplicada com sucesso.")
                     except Exception as exc:
                         warn_msg = (
                             f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
@@ -395,6 +436,10 @@ class TranscriptionHandler:
                     logging.warning(warn_msg)
                     if self.on_optimization_fallback_callback:
                         self.on_optimization_fallback_callback(warn_msg)
+            elif self.use_flash_attention_2 and not self.use_turbo:
+                logging.info(
+                    "Turbo Mode desativado; ignorando otimização Flash Attention 2."
+                )
             self.model_loaded_event.set()
             if self.on_model_ready_callback:
                 self.on_model_ready_callback()
@@ -535,7 +580,7 @@ class TranscriptionHandler:
                 else:
                     self.on_transcription_result_callback(text_result, text_result)
 
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and hasattr(torch.cuda, "empty_cache"):
                 torch.cuda.empty_cache()
                 logging.debug("Cache da GPU limpo após tarefa de transcrição.")
 

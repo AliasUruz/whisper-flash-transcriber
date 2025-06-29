@@ -21,7 +21,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 *   **High-Quality Transcription:** Powered by the `openai/whisper-large-v3` model for state-of-the-art speech recognition.
 *   **GPU Acceleration:** Automatically utilizes your NVIDIA GPU (if available) for significantly faster transcriptions, with fallback to CPU.
 *   **Turbo Mode:** Applies Flash Attention 2 through `BetterTransformer` for faster processing. Requires an NVIDIA Ampere or newer GPU.
-*   **Flash Attention 2:** Disabled by default. Provides optional acceleration with optimized kernels. Toggle the setting in the GUI or set `use_flash_attention_2` in `config.json`.
+*   **Flash Attention 2:** Enabled by default. Provides optional acceleration with optimized kernels. Toggle the setting in the GUI or set `use_flash_attention_2` in `config.json`.
 *   **Dynamic Performance:** Intelligently adjusts batch sizes based on available VRAM for optimal performance.
 *   **Customizable Hotkeys:**
     *   Activate recording with a global hotkey that works anywhere in Windows.
@@ -181,7 +181,7 @@ With your virtual environment activated, you can now install the libraries the a
     ```
 The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
 
-These dependencies now include `optimum[bettertransformer]` and `accelerate`. **Turbo Mode** uses Flash Attention 2 through `BetterTransformer` to speed up inference. The feature is disabled by default; enable it by setting `use_flash_attention_2` to `true` in the settings.
+These dependencies now include `optimum[bettertransformer]` and `accelerate`. **Turbo Mode** uses Flash Attention 2 through `BetterTransformer` to speed up inference. The feature is enabled by default; disable it by setting `use_flash_attention_2` to `false` in the settings.
 
 2.  **Optional: Install PyTorch with CUDA (For GPU Acceleration):**
     The `requirements.txt` includes a basic installation of PyTorch. However, if you have a compatible NVIDIA graphics card, you can significantly speed up the transcription process by installing a version of PyTorch that uses your GPU (CUDA).
@@ -243,7 +243,7 @@ To access and change settings:
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Turbo Mode:** Uses Flash Attention 2 via `BetterTransformer` when you have an Ampere or newer NVIDIA GPU.
-*   **Flash Attention 2:** Disabled by default; speeds up inference with optimized kernels. Equivalent to setting `use_flash_attention_2` to `true` in `config.json`.
+*   **Flash Attention 2:** Enabled by default; speeds up inference with optimized kernels. Equivalent to setting `use_flash_attention_2` to `true` in `config.json`.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Temporary Recordings:** When enabled, the captured audio is stored as `temp_recording_<timestamp>.wav` in the application folder. This temporary file is automatically deleted once transcription completes.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
