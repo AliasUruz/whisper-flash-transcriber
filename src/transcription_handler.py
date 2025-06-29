@@ -35,6 +35,16 @@ from .config_manager import (
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
 )
 
+# Tentativa de importação opcional do BetterTransformer
+try:
+    from optimum.bettertransformer import BetterTransformer
+    BETTERTRANSFORMER_AVAILABLE = True
+except Exception:  # pragma: no cover - fallback quando o pacote não existe
+    logging.warning(
+        "Pacote 'optimum[bettertransformer]' nao encontrado. Modo Turbo desativado."
+    )
+    BETTERTRANSFORMER_AVAILABLE = False
+
 
 class TranscriptionHandler:
     def __init__(
@@ -358,29 +368,37 @@ class TranscriptionHandler:
             )
             if self.config_manager.get(USE_FLASH_ATTENTION_2_CONFIG_KEY):
                 if device.startswith("cuda"):
-                    logging.info(
-                        "Tentando aplicar Flash Attention 2 via BetterTransformer..."
-                    )
-                    try:
-                        cap = torch.cuda.get_device_capability(
-                            int(device.split(":")[1])
+                    if not BETTERTRANSFORMER_AVAILABLE:
+                        warn_msg = (
+                            "Pacote 'optimum[bettertransformer]' nao encontrado. Modo Turbo desativado."
                         )
-                        if cap[0] < 8:
-                            warn_msg = (
-                                f"GPU com compute capability {cap} não atende ao requisito mínimo (8.0) para Flash Attention 2."
-                            )
-                            logging.warning(warn_msg)
-                            if self.on_optimization_fallback_callback:
-                                self.on_optimization_fallback_callback(warn_msg)
-                        self.transcription_pipeline.model = (
-                            self.transcription_pipeline.model.to_bettertransformer()
-                        )
-                        logging.info("Flash Attention 2 aplicada com sucesso.")
-                    except Exception as exc:
-                        warn_msg = f"Falha ao aplicar Flash Attention 2: {exc}"
                         logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
                             self.on_optimization_fallback_callback(warn_msg)
+                    else:
+                        logging.info(
+                            "Tentando aplicar Flash Attention 2 via BetterTransformer..."
+                        )
+                        try:
+                            cap = torch.cuda.get_device_capability(
+                                int(device.split(":")[1])
+                            )
+                            if cap[0] < 8:
+                                warn_msg = (
+                                    f"GPU com compute capability {cap} não atende ao requisito mínimo (8.0) para Flash Attention 2."
+                                )
+                                logging.warning(warn_msg)
+                                if self.on_optimization_fallback_callback:
+                                    self.on_optimization_fallback_callback(warn_msg)
+                            self.transcription_pipeline.model = (
+                                self.transcription_pipeline.model.to_bettertransformer()
+                            )
+                            logging.info("Flash Attention 2 aplicada com sucesso.")
+                        except Exception as exc:
+                            warn_msg = f"Falha ao aplicar otimização 'Turbo': {exc}"
+                            logging.warning(warn_msg)
+                            if self.on_optimization_fallback_callback:
+                                self.on_optimization_fallback_callback(warn_msg)
                 else:
                     warn_msg = (
                         "Flash Attention 2 solicitada, mas nenhum GPU foi detectado. Desative ou ajuste as configurações."
