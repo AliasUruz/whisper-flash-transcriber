@@ -5,7 +5,7 @@ import torch
 from transformers import pipeline
 
 try:
-    from optimum.bettertransformer import BetterTransformer  # noqa: F401
+    from transformers.integrations import BetterTransformer  # noqa: F401
     BETTERTRANSFORMER_AVAILABLE = True
 except Exception:
     BETTERTRANSFORMER_AVAILABLE = False
@@ -15,7 +15,7 @@ from .openrouter_api import (
 import numpy as np  # Necessário para o audio_input
 
 try:
-    from optimum.bettertransformer import BetterTransformer
+    from transformers.integrations import BetterTransformer
     BETTERTRANSFORMER_AVAILABLE = True
 except Exception:
     BETTERTRANSFORMER_AVAILABLE = True
@@ -48,7 +48,7 @@ from .config_manager import (
 )
 
 try:
-    from optimum.bettertransformer import BetterTransformer  # noqa: F401
+    from transformers.integrations import BetterTransformer  # noqa: F401
     BETTERTRANSFORMER_AVAILABLE = True
 except Exception:
     BETTERTRANSFORMER_AVAILABLE = False
@@ -410,8 +410,8 @@ class TranscriptionHandler:
                 if device.startswith("cuda"):
                     if not BETTERTRANSFORMER_AVAILABLE:
                         warn_msg = (
-                            "Pacote 'optimum[bettertransformer]' nao encontrado."
-                            " Instale manualmente com `pip install \"optimum[bettertransformer]\"`."
+                            "Pacote 'transformers' sem suporte ao BetterTransformer."
+                            " Instale manualmente com `pip install \"transformers\"`."
                             " Modo Turbo desativado."
                         )
                         logging.warning(warn_msg)

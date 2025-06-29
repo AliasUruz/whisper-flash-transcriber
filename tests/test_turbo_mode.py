@@ -27,12 +27,10 @@ fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
 
-# Stub para optimum.bettertransformer
-fake_optimum = types.ModuleType("optimum")
-fake_bt = types.ModuleType("optimum.bettertransformer")
-fake_bt.BetterTransformer = object
-sys.modules["optimum"] = fake_optimum
-sys.modules["optimum.bettertransformer"] = fake_bt
+# Stub para transformers.integrations.BetterTransformer
+fake_integrations = types.ModuleType("transformers.integrations")
+fake_integrations.BetterTransformer = object
+sys.modules["transformers.integrations"] = fake_integrations
 
 if "src.transcription_handler" in sys.modules:
     importlib.reload(sys.modules["src.transcription_handler"])
@@ -161,8 +159,8 @@ def test_bettertransformer_indisponivel(monkeypatch):
     cfg = DummyConfig()
     cfg.data[USE_TURBO_CONFIG_KEY] = True
 
-    if "optimum.bettertransformer" in sys.modules:
-        del sys.modules["optimum.bettertransformer"]
+    if "transformers.integrations" in sys.modules:
+        del sys.modules["transformers.integrations"]
 
     import importlib
     import src.transcription_handler as th_module
