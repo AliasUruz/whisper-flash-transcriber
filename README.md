@@ -20,7 +20,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 
 *   **High-Quality Transcription:** Powered by the `openai/whisper-large-v3` model for state-of-the-art speech recognition.
 *   **GPU Acceleration:** Automatically utilizes your NVIDIA GPU (if available) for significantly faster transcriptions, with fallback to CPU.
-*   **Turbo Mode (disabled by default):** Applies Flash Attention 2 through `BetterTransformer` for faster processing when `use_turbo` is set to `true`. Requires an NVIDIA Ampere or newer GPU.
+*   **Turbo Mode (disabled by default):** Usa o Flash Attention 2 via `BetterTransformer` para agilizar a inferência quando `use_turbo` está em `true`. O `BetterTransformer` já vem incluso no pacote `optimum`, então nenhum extra do `pip` é necessário. Requer GPU NVIDIA Ampere ou mais recente.
 *   **Flash Attention 2:** Enabled by default. Provides optional acceleration with optimized kernels. Toggle the setting in the GUI or set `use_flash_attention_2` in `config.json`.
 *   **Dynamic Performance:** Intelligently adjusts batch sizes based on available VRAM for optimal performance.
 *   **Customizable Hotkeys:**
@@ -173,18 +173,18 @@ Setting up a virtual environment is highly recommended. It creates an isolated s
 
 ### Step 4: Install Application Dependencies
 
-With your virtual environment activated, you can now install the libraries the application needs to run. These are listed in the `requirements.txt` file.
+Com o ambiente virtual ativo, instale as bibliotecas necessárias diretamente com `pip`.
 
-1.  **Install dependencies:** Run the following command in your activated terminal:
+1.  **Instalar dependências:** Execute:
     ```bash
-    pip install -r requirements.txt
+    pip install --upgrade torch transformers optimum
     ```
-The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
+Essas bibliotecas já trazem o `BetterTransformer` embutido em `optimum`, portanto não há extras adicionais a instalar. O processo pode demorar alguns minutos por conta do tamanho do `torch` e do `transformers`.
 
-These dependencies now include `transformers` and `optimum`. **Turbo Mode** uses Flash Attention 2 through `BetterTransformer` to speed up inference. The feature is disabled by default; enable it by setting `use_turbo` to `true` (and keeping `use_flash_attention_2` enabled) in the settings.
+**Turbo Mode** usa o Flash Attention 2 por meio do `BetterTransformer` e vem desativado por padrão. Ative-o definindo `use_turbo` como `true` (mantendo `use_flash_attention_2` ligado) nas configurações.
 
-2.  **Optional: Install PyTorch with CUDA (For GPU Acceleration):**
-    The `requirements.txt` includes a basic installation of PyTorch. However, if you have a compatible NVIDIA graphics card, you can significantly speed up the transcription process by installing a version of PyTorch that uses your GPU (CUDA).
+2.  **Opcional: instalar PyTorch com suporte a CUDA (para aceleração por GPU):**
+    O comando acima instala a versão CPU do PyTorch. Caso possua uma placa NVIDIA compatível, você pode ganhar desempenho instalando a variante para CUDA.
     *   **How to check if you have CUDA:** Open Command Prompt and type `nvcc --version`. If you see version information, CUDA is installed. Note the version number (e.g., CUDA 11.8, CUDA 12.1). If the command is not found, you likely don't have CUDA installed or it's not in your PATH.
     *   **Get the correct command:** Go to the official PyTorch website's installation section: [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/)
     *   Select your operating system (Windows), Package (Pip), Language (Python), and importantly, your CUDA version (or select "CPU" if you don't have a compatible GPU).
@@ -193,27 +193,27 @@ These dependencies now include `transformers` and `optimum`. **Turbo Mode** uses
         ```bash
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
         ```
-    *   This command will download and install the GPU-accelerated version of PyTorch. It's a large download. If you already installed the CPU version via `requirements.txt`, this command will upgrade it.
-    *   If you do *not* have a compatible GPU or prefer not to use it, you can skip this step. The application will still work using your CPU, just slower.
+    *   Esse comando instala a versão do PyTorch otimizada para GPU. É um download grande. Se você já instalou a versão CPU antes, ele será atualizado automaticamente.
+    *   Caso não possua uma GPU compatível ou prefira não utilizá-la, ignore este passo. A aplicação continuará funcionando apenas com o CPU, porém mais lenta.
 
-3.  **Optional: Install onnxruntime-gpu (for VAD acceleration):**
-    The VAD relies on **ONNX Runtime**. While `requirements.txt` installs the CPU version (`onnxruntime`), you can install `onnxruntime-gpu` if you own a compatible GPU to speed up voice detection. The application automatically selects `CUDAExecutionProvider` when available or falls back to `CPUExecutionProvider`.
+3.  **Opcional: instalar onnxruntime-gpu (para acelerar o VAD):**
+    O VAD usa o **ONNX Runtime**. Instala-se por padrão a versão para CPU (`onnxruntime`), mas você pode instalar `onnxruntime-gpu` caso possua hardware compatível. O aplicativo seleciona `CUDAExecutionProvider` automaticamente quando disponível, voltando para `CPUExecutionProvider` caso contrário.
 
 ### Step 5: Run the Application
 
 You are now ready to run the Whisper Transcription App!
 
-**Important:** make sure you ran `pip install -r requirements.txt` before executing the command below.
+**Importante:** garanta que executou `pip install --upgrade torch transformers optimum` antes de rodar o comando abaixo.
 
-1.  **Start the main script:** In your **activated virtual environment** within the `whisper-flash-transcriber` directory, run one of the commands below:
+1.  **Inicie o script principal:** Com o ambiente virtual ativo no diretório `whisper-flash-transcriber`, execute um dos comandos abaixo:
     ```bash
     python src/main.py
     # or
     python -m src.main
     ```
-    Both commands run the application's main file.
-2.  **Application Window:** A graphical window should appear. This is the application's main interface.
-3.  **System Tray Icon:** The application will likely minimize to your Windows system tray (near the clock). You can usually interact with it by right-clicking the icon.
+    Ambos iniciam o arquivo principal da aplicação.
+2.  **Janela da aplicação:** Uma interface gráfica deverá aparecer.
+3.  **Ícone na bandeja:** O programa provavelmente ficará minimizado próximo ao relógio do Windows; interaja com ele clicando com o botão direito.
 
 ## Configuration
 
@@ -242,7 +242,7 @@ To access and change settings:
 *   **Agent Mode Prompt:** Customize the prompt sent to Gemini when using "Agent Mode".
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
-*   **Turbo Mode:** Uses Flash Attention 2 via `BetterTransformer` when you set `use_turbo` to `true` and have an Ampere or newer NVIDIA GPU.
+*   **Turbo Mode:** Usa o Flash Attention 2 com o `BetterTransformer` (já incluso no `optimum`) quando `use_turbo` está em `true` e você possui uma GPU NVIDIA Ampere ou mais recente.
 *   **Flash Attention 2:** Enabled by default; speeds up inference with optimized kernels. Equivalent to setting `use_flash_attention_2` to `true` in `config.json`.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Temporary Recordings:** When enabled, the captured audio is stored as `temp_recording_<timestamp>.wav` in the application folder. This temporary file is automatically deleted once transcription completes.
@@ -296,31 +296,31 @@ The application terminates immediately and safely when closed. Even if a transcr
 
 ## Troubleshooting
 
-### Hotkeys Stop Working on Windows 11
+### Atalhos param de funcionar no Windows 11
 
-This is a known issue related to the underlying libraries. If your main hotkey (default F3) stops working after the first use, try these solutions:
+Esse é um problema conhecido das bibliotecas utilizadas. Se o atalho principal (padrão F3) parar de funcionar após o primeiro uso, tente:
 
-*   **Press the Agent Hotkey (Default: F4):** The application includes a secondary hotkey specifically to try and fix this. Press F4.
-*   **Use the System Tray Menu:** Right-click the application's icon in the system tray and look for an option like "Force Hotkey Re-registration".
-*   **Automatic Reload:** The app attempts to automatically handle this in the background, but manual intervention might sometimes be needed.
+*   **Pressionar o atalho de agente (F4 por padrão):** existe um atalho secundário justamente para tentar resolver esse travamento.
+*   **Usar o menu da bandeja:** clique com o botão direito no ícone da aplicação e procure por algo como "Re-registrar atalho".
+*   **Recarregamento automático:** o programa tenta resolver sozinho em segundo plano, mas às vezes é preciso fazer isso manualmente.
 
 ### PyTorch Installation Problems
 
-If `pip install -r requirements.txt` fails or the application doesn't run due to PyTorch errors:
+Se o comando `pip install --upgrade torch transformers optimum` falhar ou o aplicativo não iniciar devido a erros relacionados ao PyTorch:
 
-*   **Verify Python and Pip:** Ensure Python is correctly installed and added to your PATH (check with `python --version` and `pip --version` in Command Prompt).
-*   **Virtual Environment:** Make sure your virtual environment is activated (`(venv)` in your terminal prompt).
-*   **CUDA Compatibility:** If you are trying to install the CUDA version, double-check that your NVIDIA driver and CUDA toolkit versions are compatible with the PyTorch version you are trying to install, according to the PyTorch website.
-*   **Internet Connection:** Ensure you have a stable internet connection, as PyTorch and other libraries are large downloads.
+*   **Verifique Python e pip:** confirme que o Python está instalado e no PATH (`python --version` e `pip --version`).
+*   **Ambiente virtual:** certifique-se de que o ambiente está ativo (`(venv)` no prompt).
+*   **Compatibilidade de CUDA:** caso instale a versão com GPU, verifique se driver NVIDIA e toolkit CUDA são compatíveis com a versão do PyTorch indicada no site oficial.
+*   **Conexão com a internet:** garanta uma conexão estável, pois as bibliotecas são grandes.
 
-### "state_check_callback" Error
+### Erro "state_check_callback"
 
-If you encounter the message `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
-update to the latest version. The attribute is now properly initialized in `TranscriptionHandler.__init__`.
+Ao receber a mensagem `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
+atualize para a versão mais recente. O atributo passou a ser inicializado corretamente em `TranscriptionHandler.__init__`.
 
-### Stop Signal Replaces Cancellation
+### Sinal de parada substitui cancelamento
 
-Transcription can now be halted at any moment by sending a **stop signal** to `TranscriptionHandler`. The previous cancellation method and its related callback have been removed to simplify the API and improve reliability.
+A transcrição pode ser interrompida a qualquer momento enviando um **sinal de parada** ao `TranscriptionHandler`. O método antigo de cancelamento e o callback associado foram removidos para simplificar a API e aumentar a confiabilidade.
 
 ## Contributing
 
