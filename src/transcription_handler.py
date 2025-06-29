@@ -425,15 +425,16 @@ class TranscriptionHandler:
                             cap = torch.cuda.get_device_capability(self.gpu_index)
                             if cap[0] < 8:
                                 warn_msg = (
-                                    f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
+                                    f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: GPU com compute capability {cap} não atende ao requisito mínimo (8.0)."
                                 )
                                 logging.warning(warn_msg)
                                 if self.on_optimization_fallback_callback:
                                     self.on_optimization_fallback_callback(warn_msg)
-                            self.transcription_pipeline.model = (
-                                self.transcription_pipeline.model.to_bettertransformer()
-                            )
-                            logging.info("Flash Attention 2 aplicada com sucesso.")
+                            else:
+                                self.transcription_pipeline.model = (
+                                    self.transcription_pipeline.model.to_bettertransformer()
+                                )
+                                logging.info("Flash Attention 2 aplicada com sucesso.")
                         except Exception as exc:
                             warn_msg = (
                                 f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
