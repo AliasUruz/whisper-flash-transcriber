@@ -410,9 +410,7 @@ class TranscriptionHandler:
                 if device.startswith("cuda"):
                     if not BETTERTRANSFORMER_AVAILABLE:
                         warn_msg = (
-                            "Pacote 'optimum[bettertransformer]' nao encontrado."
-                            " Instale manualmente com `pip install \"optimum[bettertransformer]\"`."
-                            " Modo Turbo desativado."
+                            "BetterTransformer indisponível. Turbo Mode desativado."
                         )
                         logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
