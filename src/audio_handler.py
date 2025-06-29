@@ -49,7 +49,7 @@ class AudioHandler:
         if status:
             logging.warning(f"Audio callback status: {status}")
         if self.is_recording:
-            if self.use_vad:
+            if self.use_vad and self.vad_manager and self.vad_manager.enabled:
                 is_speech = self.vad_manager.is_speech(indata[:, 0])
                 if is_speech:
                     self._vad_silence_counter = 0.0
@@ -139,14 +139,14 @@ class AudioHandler:
         self.start_time = time.time()
         self.recording_data.clear()
 
-        if self.use_vad and self.vad_manager:
+        if self.use_vad and self.vad_manager and self.vad_manager.enabled:
             self.vad_manager.reset_states()
         self._vad_silence_counter = 0.0
         logging.debug("VAD reiniciado e contador de silêncio zerado para nova gravação.")
 
         self.on_recording_state_change_callback("RECORDING")
 
-        if self.use_vad and self.vad_manager:
+        if self.use_vad and self.vad_manager and self.vad_manager.enabled:
             self.vad_manager.reset_states()
             logging.debug("Estados do VAD reiniciados.")
 
@@ -169,7 +169,7 @@ class AudioHandler:
         if self._record_thread and self._record_thread.is_alive():
             self._record_thread.join(timeout=2.0)
 
-        if self.use_vad and self.vad_manager:
+        if self.use_vad and self.vad_manager and self.vad_manager.enabled:
             self.vad_manager.reset_states()
         self._vad_silence_counter = 0.0
         logging.debug("VAD reiniciado e contador de silêncio zerado ao parar a gravação.")
