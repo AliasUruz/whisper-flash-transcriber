@@ -3,6 +3,12 @@ import threading
 import concurrent.futures
 import torch
 from transformers import pipeline
+
+try:
+    from optimum.bettertransformer import BetterTransformer  # noqa: F401
+    BETTERTRANSFORMER_AVAILABLE = True
+except Exception:  # pragma: no cover - otimização opcional
+    BETTERTRANSFORMER_AVAILABLE = False
 from .openrouter_api import (
     OpenRouterAPI,
 )  # Assumindo que está na raiz ou em path acessível
@@ -397,38 +403,27 @@ class TranscriptionHandler:
                         logging.info(
                             "Tentando aplicar Flash Attention 2 via BetterTransformer..."
                         )
-                        if cap[0] < 8:
-                            warn_msg = (
-                                f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: GPU com compute capability {cap} não atende ao requisito mínimo (8.0)."
-                            )
-                            if cap[0] < 8:
+                        cap = torch.cuda.get_device_capability(self.gpu_index)
+                        if cap[0] >= 8:
+                            try:
+                                self.transcription_pipeline.model = (
+                                    self.transcription_pipeline.model.to_bettertransformer()
+                                )
+                                logging.info("Flash Attention 2 aplicada com sucesso.")
+                            except Exception as exc:
                                 warn_msg = (
-                                    f"GPU com compute capability {cap} não atende ao requisito mínimo (8.0) para Flash Attention 2."
+                                    f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
                                 )
                                 logging.warning(warn_msg)
                                 if self.on_optimization_fallback_callback:
                                     self.on_optimization_fallback_callback(warn_msg)
-                            self.transcription_pipeline.model = (
-                                self.transcription_pipeline.model.to_bettertransformer()
+                        else:
+                            warn_msg = (
+                                f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: GPU com compute capability {cap} não atende ao requisito mínimo (8.0)."
                             )
-                            logging.info("Flash Attention 2 aplicada com sucesso.")
-                        except Exception as exc:
-                            warn_msg = f"Falha ao aplicar otimização 'Turbo': {exc}"
                             logging.warning(warn_msg)
                             if self.on_optimization_fallback_callback:
                                 self.on_optimization_fallback_callback(warn_msg)
-                        else:
-                            self.transcription_pipeline.model = (
-                                self.transcription_pipeline.model.to_bettertransformer()
-                            )
-                            logging.info("Flash Attention 2 aplicada com sucesso.")
-                    except Exception as exc:
-                        warn_msg = (
-                            f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
-                        )
-                        logging.warning(warn_msg)
-                        if self.on_optimization_fallback_callback:
-                            self.on_optimization_fallback_callback(warn_msg)
                 else:
                     warn_msg = (
                         f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: nenhum GPU foi detectado. Desative ou ajuste as configurações."
@@ -440,7 +435,6 @@ class TranscriptionHandler:
                 logging.info(
                     "Turbo Mode desativado; ignorando otimização Flash Attention 2."
                 )
-            self.model_loaded_event.set()
             if self.on_model_ready_callback:
                 self.on_model_ready_callback()
         except Exception as exc:
@@ -448,6 +442,7 @@ class TranscriptionHandler:
             if self.on_model_error_callback:
                 self.on_model_error_callback(str(exc))
         finally:
+            self.model_loaded_event.set()
             self.is_model_loading = False
 
     def transcribe_audio_segment(

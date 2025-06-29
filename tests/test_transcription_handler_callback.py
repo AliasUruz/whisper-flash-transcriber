@@ -251,6 +251,8 @@ def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
     )
 
     import src.transcription_handler as th_module
+    th_module.BETTERTRANSFORMER_AVAILABLE = True
+    th_module.BETTERTRANSFORMER_AVAILABLE = True
     monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: True)
     assert handler._get_dynamic_batch_size() == 8
     monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: False)
