@@ -1,6 +1,6 @@
 import customtkinter as ctk
-import tkinter.messagebox as messagebox
-from tkinter import simpledialog # Adicionado para askstring
+from tkinter import messagebox
+from tkinter import simpledialog  # Adicionado para askstring
 import logging
 import threading
 import pystray

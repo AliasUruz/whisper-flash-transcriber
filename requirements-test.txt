@@ -14,4 +14,4 @@ keyboard
 setuptools
 soundfile>=0.13.1
 onnxruntime
-optimum
+optimum[bettertransformer]==1.26.1
