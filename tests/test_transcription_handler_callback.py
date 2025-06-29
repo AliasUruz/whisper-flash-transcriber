@@ -39,6 +39,7 @@ from src.config_manager import (  # noqa: E402
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
+    USE_FLASH_ATTENTION_2_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
@@ -66,6 +67,7 @@ class DummyConfig:
             MIN_TRANSCRIPTION_DURATION_CONFIG_KEY: 1.0,
             DISPLAY_TRANSCRIPTS_KEY: False,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
+            USE_FLASH_ATTENTION_2_CONFIG_KEY: False,
             TEXT_CORRECTION_TIMEOUT_CONFIG_KEY: 30,
         }
 
@@ -130,7 +132,7 @@ def test_transcribe_audio_chunk_handles_missing_callback(monkeypatch):
 
     handler._transcribe_audio_chunk(None, agent_mode=False)
 
-    mock_on_model_error.assert_not_called()  # Callback não deve ser acionado quando o modelo ainda não foi carregado
+    mock_on_model_error.assert_not_called()  # Callback should not trigger when model was never loaded
     assert not results  # No transcription result should be added
 
 
@@ -358,3 +360,50 @@ def test_transcribe_audio_chunk_uses_audio_input(monkeypatch):
 
     pipeline_mock.assert_called_once()
     np.testing.assert_array_equal(pipeline_mock.call_args[0][0], audio)
+
+
+def test_optimization_fallback_callback(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[USE_FLASH_ATTENTION_2_CONFIG_KEY] = True
+    cfg.data[GPU_INDEX_CONFIG_KEY] = 0
+
+    messages = []
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_optimization_fallback_callback=lambda msg: messages.append(msg),
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: False,
+    )
+
+    import src.transcription_handler as th_module
+
+    monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        th_module.torch.cuda,
+        "get_device_capability",
+        lambda _=0: (8, 0),
+        raising=False,
+    )
+    monkeypatch.setattr(th_module.torch, "float16", 1, raising=False)
+    monkeypatch.setattr(th_module.torch, "float32", 2, raising=False)
+
+    class DummyModel:
+        def to_bettertransformer(self):
+            raise RuntimeError("fail")
+
+    class DummyPipeline:
+        def __init__(self):
+            self.model = DummyModel()
+
+    monkeypatch.setattr(th_module, "pipeline", lambda *a, **k: DummyPipeline())
+
+    handler._load_model_task()
+
+    assert messages
+    assert "otimização 'Turbo'" in messages[0]
