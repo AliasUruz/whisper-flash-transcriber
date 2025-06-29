@@ -2,7 +2,12 @@ import importlib.machinery
 import importlib
 import types
 import sys
+import os
 from unittest.mock import MagicMock
+import numpy as np
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 # Stubs básicos para torch e transformers
 fake_torch = types.ModuleType("torch")
@@ -22,10 +27,19 @@ fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
 
+# Stub para optimum.bettertransformer
+fake_optimum = types.ModuleType("optimum")
+fake_bt = types.ModuleType("optimum.bettertransformer")
+fake_bt.BetterTransformer = object
+sys.modules["optimum"] = fake_optimum
+sys.modules["optimum.bettertransformer"] = fake_bt
+
 if "src.transcription_handler" in sys.modules:
     importlib.reload(sys.modules["src.transcription_handler"])
 
 from src.transcription_handler import TranscriptionHandler  # noqa: E402
+import src.transcription_handler as th_module  # noqa: E402
+th_module.BETTERTRANSFORMER_AVAILABLE = True
 from src.config_manager import (  # noqa: E402
     BATCH_SIZE_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY,
@@ -97,6 +111,7 @@ def test_bettertransformer_aplicado_quando_turbo(monkeypatch):
     cfg.data[USE_TURBO_CONFIG_KEY] = True
 
     import src.transcription_handler as th_module
+    monkeypatch.setattr(th_module, "BETTERTRANSFORMER_AVAILABLE", True, raising=False)
 
     called = {"count": 0}
 
@@ -122,6 +137,36 @@ def test_bettertransformer_ignorado_sem_turbo(monkeypatch):
     cfg.data[USE_TURBO_CONFIG_KEY] = False
 
     import src.transcription_handler as th_module
+
+    called = {"flag": 0}
+
+    class DummyModel:
+        def to_bettertransformer(self):
+            called["flag"] += 1
+            return self
+
+    class DummyPipeline:
+        def __init__(self):
+            self.model = DummyModel()
+
+    monkeypatch.setattr(th_module, "pipeline", lambda *a, **k: DummyPipeline())
+
+    handler = _create_handler(cfg)
+    handler._load_model_task()
+
+    assert called["flag"] == 0
+
+
+def test_bettertransformer_indisponivel(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[USE_TURBO_CONFIG_KEY] = True
+
+    if "optimum.bettertransformer" in sys.modules:
+        del sys.modules["optimum.bettertransformer"]
+
+    import importlib
+    import src.transcription_handler as th_module
+    importlib.reload(th_module)
 
     called = {"flag": 0}
 
