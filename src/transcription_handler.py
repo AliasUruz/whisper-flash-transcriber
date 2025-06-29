@@ -386,42 +386,19 @@ class TranscriptionHandler:
             flash_enabled = self.use_turbo and self.use_flash_attention_2
             if flash_enabled:
                 if device.startswith("cuda"):
-                    if not BETTERTRANSFORMER_AVAILABLE:
-                        warn_msg = (
-                            "Pacote 'optimum[bettertransformer]' nao encontrado. Modo Turbo desativado."
-                        )
-                        logging.warning(warn_msg)
-                        if self.on_optimization_fallback_callback:
-                            self.on_optimization_fallback_callback(warn_msg)
-                    else:
-                        logging.info(
-                            "Tentando aplicar Flash Attention 2 via BetterTransformer..."
-                        )
+                    try:
+                        cap = torch.cuda.get_device_capability(0)
                         if cap[0] < 8:
                             warn_msg = (
                                 f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: GPU com compute capability {cap} não atende ao requisito mínimo (8.0)."
                             )
-                            if cap[0] < 8:
-                                warn_msg = (
-                                    f"GPU com compute capability {cap} não atende ao requisito mínimo (8.0) para Flash Attention 2."
-                                )
-                                logging.warning(warn_msg)
-                                if self.on_optimization_fallback_callback:
-                                    self.on_optimization_fallback_callback(warn_msg)
-                            self.transcription_pipeline.model = (
-                                self.transcription_pipeline.model.to_bettertransformer()
-                            )
-                            logging.info("Flash Attention 2 aplicada com sucesso.")
-                        except Exception as exc:
-                            warn_msg = f"Falha ao aplicar otimização 'Turbo': {exc}"
                             logging.warning(warn_msg)
                             if self.on_optimization_fallback_callback:
                                 self.on_optimization_fallback_callback(warn_msg)
-                        else:
-                            self.transcription_pipeline.model = (
-                                self.transcription_pipeline.model.to_bettertransformer()
-                            )
-                            logging.info("Flash Attention 2 aplicada com sucesso.")
+                        self.transcription_pipeline.model = (
+                            self.transcription_pipeline.model.to_bettertransformer()
+                        )
+                        logging.info("Flash Attention 2 aplicada com sucesso.")
                     except Exception as exc:
                         warn_msg = (
                             f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
