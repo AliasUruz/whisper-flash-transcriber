@@ -181,7 +181,7 @@ With your virtual environment activated, you can now install the libraries the a
     ```
 The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
 
-These dependencies now include `optimum[bettertransformer]` and `accelerate`. **Turbo Mode** uses Flash Attention 2 through `BetterTransformer` to speed up inference. The feature is disabled by default; enable it by setting `use_turbo` to `true` (and keeping `use_flash_attention_2` enabled) in the settings.
+These dependencies now include `transformers` and `optimum`. **Turbo Mode** uses Flash Attention 2 through `BetterTransformer` to speed up inference. The feature is disabled by default; enable it by setting `use_turbo` to `true` (and keeping `use_flash_attention_2` enabled) in the settings.
 
 2.  **Optional: Install PyTorch with CUDA (For GPU Acceleration):**
     The `requirements.txt` includes a basic installation of PyTorch. However, if you have a compatible NVIDIA graphics card, you can significantly speed up the transcription process by installing a version of PyTorch that uses your GPU (CUDA).
@@ -336,7 +336,7 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
     ```bash
     pip install -r requirements-test.txt
     ```
-    The `requirements-test.txt` file also specifies `optimum[bettertransformer]==1.26.1` to match the application dependencies.
+    The `requirements-test.txt` file also specifies `optimum==1.26.1` to match the application dependencies.
 8.  Optionally, run `flake8 src/gemini_api.py src/openrouter_api.py` to check code style.
 
 
@@ -347,7 +347,7 @@ Before running the tests, install the dependencies:
 ```bash
 pip install -r requirements-test.txt
 ```
-The testing requirements file also lists `optimum[bettertransformer]==1.26.1`.
+The testing requirements file also lists `optimum==1.26.1`.
 
 Run the suite with:
 
