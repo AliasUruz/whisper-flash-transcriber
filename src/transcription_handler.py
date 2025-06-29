@@ -35,6 +35,11 @@ from .config_manager import (
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
 )
 
+# Mensagem padronizada para falhas na otimização Turbo/Flash Attention 2
+OPTIMIZATION_TURBO_FALLBACK_MSG = (
+    "Falha ao aplicar otimização 'Turbo Mode' (Flash Attention 2)."
+)
+
 
 class TranscriptionHandler:
     def __init__(
@@ -367,7 +372,7 @@ class TranscriptionHandler:
                         )
                         if cap[0] < 8:
                             warn_msg = (
-                                f"GPU com compute capability {cap} não atende ao requisito mínimo (8.0) para Flash Attention 2."
+                                f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: GPU com compute capability {cap} não atende ao requisito mínimo (8.0)."
                             )
                             logging.warning(warn_msg)
                             if self.on_optimization_fallback_callback:
@@ -377,13 +382,15 @@ class TranscriptionHandler:
                         )
                         logging.info("Flash Attention 2 aplicada com sucesso.")
                     except Exception as exc:
-                        warn_msg = f"Falha ao aplicar Flash Attention 2: {exc}"
+                        warn_msg = (
+                            f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
+                        )
                         logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
                             self.on_optimization_fallback_callback(warn_msg)
                 else:
                     warn_msg = (
-                        "Flash Attention 2 solicitada, mas nenhum GPU foi detectado. Desative ou ajuste as configurações."
+                        f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: nenhum GPU foi detectado. Desative ou ajuste as configurações."
                     )
                     logging.warning(warn_msg)
                     if self.on_optimization_fallback_callback:
