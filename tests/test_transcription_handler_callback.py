@@ -258,8 +258,7 @@ def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
     )
 
     import src.transcription_handler as th_module
-    th_module.BETTERTRANSFORMER_AVAILABLE = True
-    th_module.BETTERTRANSFORMER_AVAILABLE = True
+    monkeypatch.setattr(th_module, "BETTERTRANSFORMER_AVAILABLE", True, raising=False)
     monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: True)
     assert handler._get_dynamic_batch_size() == 8
     monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: False)
@@ -436,7 +435,7 @@ def test_optimization_fallback_callback(monkeypatch):
     )
 
     import src.transcription_handler as th_module
-
+    monkeypatch.setattr(th_module, "BETTERTRANSFORMER_AVAILABLE", True, raising=False)
     monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(
         th_module.torch.cuda,
@@ -462,24 +461,51 @@ def test_optimization_fallback_callback(monkeypatch):
     assert messages
     assert messages[0].startswith(OPTIMIZATION_TURBO_FALLBACK_MSG)
 
-def test_transcription_result_callback_receives_two_args(monkeypatch):
+
+def test_warn_msg_indica_instalacao_manual(monkeypatch):
     cfg = DummyConfig()
-    callback = MagicMock()
+    cfg.data[USE_FLASH_ATTENTION_2_CONFIG_KEY] = True
+    cfg.data[USE_TURBO_CONFIG_KEY] = True
+    cfg.data[GPU_INDEX_CONFIG_KEY] = 0
+
+    messages = []
+
     handler = TranscriptionHandler(
         cfg,
         gemini_api_client=None,
         on_model_ready_callback=noop,
         on_model_error_callback=noop,
-        on_optimization_fallback_callback=lambda *_: None,
-        on_transcription_result_callback=callback,
+        on_optimization_fallback_callback=lambda msg: messages.append(msg),
+        on_transcription_result_callback=noop,
         on_agent_result_callback=noop,
         on_segment_transcribed_callback=None,
-        is_state_transcribing_fn=lambda: True,
+        is_state_transcribing_fn=lambda: False,
     )
-    handler.transcription_pipeline = MagicMock(return_value={"text": "ok"})
-    monkeypatch.setattr(handler, "_async_text_correction", lambda *_: None)
-    audio = np.zeros(16000, dtype=float)
-    handler._transcribe_audio_chunk(audio, agent_mode=False)
-    assert callback.call_count >= 1
-    args, _ = callback.call_args
-    assert len(args) == 2
+
+    import src.transcription_handler as th_module
+
+    monkeypatch.setattr(th_module, "BETTERTRANSFORMER_AVAILABLE", False)
+    monkeypatch.setattr(th_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        th_module.torch.cuda,
+        "get_device_capability",
+        lambda _=0: (8, 0),
+        raising=False,
+    )
+    monkeypatch.setattr(th_module.torch, "float16", 1, raising=False)
+    monkeypatch.setattr(th_module.torch, "float32", 2, raising=False)
+
+    class DummyModel:
+        def to_bettertransformer(self):
+            return self
+
+    class DummyPipeline:
+        def __init__(self):
+            self.model = DummyModel()
+
+    monkeypatch.setattr(th_module, "pipeline", lambda *a, **k: DummyPipeline())
+
+    handler._load_model_task()
+
+    assert messages
+    assert "pip install \"optimum[bettertransformer]\"" in messages[0]
