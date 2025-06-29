@@ -231,6 +231,8 @@ class TranscriptionHandler:
             active_provider = self._get_text_correction_service()
             if active_provider == SERVICE_NONE:
                 logging.info("Correção de texto desativada ou provedor indisponível.")
+                self.correction_in_progress = False
+                self.on_transcription_result_callback(text, text)
                 return
 
             api_key = self.config_manager.get_api_key(active_provider)
@@ -239,6 +241,8 @@ class TranscriptionHandler:
                 logging.warning(
                     f"Nenhuma chave de API encontrada para o provedor {active_provider}. Pulando correção de texto."
                 )
+                self.correction_in_progress = False
+                self.on_transcription_result_callback(text, text)
                 return
 
             if active_provider == "gemini":
