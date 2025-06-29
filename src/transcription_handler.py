@@ -366,26 +366,28 @@ class TranscriptionHandler:
                             int(device.split(":")[1])
                         )
                         if cap[0] < 8:
-                            logging.warning(
-                                "GPU com compute capability %s não atende ao requisito mínimo (8.0) para Flash Attention 2.",
-                                cap,
+                            warn_msg = (
+                                f"GPU com compute capability {cap} não atende ao requisito mínimo (8.0) para Flash Attention 2."
                             )
+                            logging.warning(warn_msg)
+                            if self.on_optimization_fallback_callback:
+                                self.on_optimization_fallback_callback(warn_msg)
                         self.transcription_pipeline.model = (
                             self.transcription_pipeline.model.to_bettertransformer()
                         )
                         logging.info("Flash Attention 2 aplicada com sucesso.")
                     except Exception as exc:
-                        logging.warning(f"Falha ao aplicar Flash Attention 2: {exc}")
+                        warn_msg = f"Falha ao aplicar Flash Attention 2: {exc}"
+                        logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
-                            error_message = (
-                                "Não foi possível aplicar a otimização 'Turbo' (Flash Attention 2). "
-                                "O sistema usará o modo padrão.\n\nDetalhe técnico: {exc}"
-                            ).format(exc=exc)
-                            self.on_optimization_fallback_callback(error_message)
+                            self.on_optimization_fallback_callback(warn_msg)
                 else:
-                    logging.warning(
+                    warn_msg = (
                         "Flash Attention 2 solicitada, mas nenhum GPU foi detectado. Desative ou ajuste as configurações."
                     )
+                    logging.warning(warn_msg)
+                    if self.on_optimization_fallback_callback:
+                        self.on_optimization_fallback_callback(warn_msg)
             self.model_loaded_event.set()
             if self.on_model_ready_callback:
                 self.on_model_ready_callback()
@@ -425,9 +427,10 @@ class TranscriptionHandler:
         text_result = None
         try:
             if self.transcription_pipeline is None:
-                logging.error(
-                    "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
-                )
+                error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
+                logging.error(error_message)
+                if self.on_model_error_callback and not self.model_loaded_event.is_set():
+                    self.on_model_error_callback(error_message)
                 return
             audio_data = audio_input
             logging.debug(

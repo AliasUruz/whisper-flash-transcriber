@@ -68,6 +68,7 @@ class AppCore:
             gemini_api_client=self.gemini_api,  # Injeta a instância da API
             on_model_ready_callback=self._on_model_loaded,
             on_model_error_callback=self._on_model_load_failed,
+            on_optimization_fallback_callback=self._handle_optimization_fallback,
             on_transcription_result_callback=self._handle_transcription_result,
             on_agent_result_callback=self._handle_agent_result_final, # Usa o novo callback
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
@@ -185,6 +186,17 @@ class AppCore:
         # Exibir messagebox via UI Manager se disponível
         if self.ui_manager:
             self.main_tk_root.after(0, lambda: messagebox.showerror("Erro de Carregamento do Modelo", f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\nPor favor, verifique sua conexão com a internet, o nome do modelo nas configurações ou a memória da sua GPU."))
+
+    def _handle_optimization_fallback(self, error_message: str):
+        """Lida com a falha na aplicação da otimização, notificando o usuário."""
+        logging.warning(
+            f"AppCore: Recebido fallback de otimização. Notificando UI. Mensagem: {error_message}"
+        )
+        if self.ui_manager:
+            self.ui_manager.show_info_message(
+                "Otimização Indisponível",
+                error_message,
+            )
 
     def _on_segment_transcribed_for_ui(self, text):
         """Callback para enviar texto de segmento para a UI ao vivo."""

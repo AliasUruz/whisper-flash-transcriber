@@ -97,7 +97,8 @@ class DummyAudioHandler:
 
 class DummyTranscriptionHandler:
     def __init__(self, config_manager, gemini_api_client, on_model_ready_callback,
-                 on_model_error_callback, on_transcription_result_callback,
+                 on_model_error_callback, on_optimization_fallback_callback,
+                 on_transcription_result_callback,
                  on_agent_result_callback, on_segment_transcribed_callback,
                  is_state_transcribing_fn):
         self.pipe = True
