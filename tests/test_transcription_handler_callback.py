@@ -25,6 +25,13 @@ fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
 
+# Stub para optimum.bettertransformer
+fake_optimum = types.ModuleType("optimum")
+fake_bt = types.ModuleType("optimum.bettertransformer")
+fake_bt.BetterTransformer = object
+sys.modules["optimum"] = fake_optimum
+sys.modules["optimum.bettertransformer"] = fake_bt
+
 if "src.transcription_handler" in sys.modules:
     importlib.reload(sys.modules["src.transcription_handler"])
 

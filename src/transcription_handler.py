@@ -7,7 +7,7 @@ from transformers import pipeline
 try:
     from optimum.bettertransformer import BetterTransformer  # noqa: F401
     BETTERTRANSFORMER_AVAILABLE = True
-except Exception:  # pragma: no cover - otimização opcional
+except Exception:
     BETTERTRANSFORMER_AVAILABLE = False
 from .openrouter_api import (
     OpenRouterAPI,
@@ -403,24 +403,14 @@ class TranscriptionHandler:
                         logging.info(
                             "Tentando aplicar Flash Attention 2 via BetterTransformer..."
                         )
-                        cap = torch.cuda.get_device_capability(self.gpu_index)
-                        if cap[0] >= 8:
-                            try:
+                        try:
+                            if BETTERTRANSFORMER_AVAILABLE:
                                 self.transcription_pipeline.model = (
                                     self.transcription_pipeline.model.to_bettertransformer()
                                 )
                                 logging.info("Flash Attention 2 aplicada com sucesso.")
-                            except Exception as exc:
-                                warn_msg = (
-                                    f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
-                                )
-                                logging.warning(warn_msg)
-                                if self.on_optimization_fallback_callback:
-                                    self.on_optimization_fallback_callback(warn_msg)
-                        else:
-                            warn_msg = (
-                                f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: GPU com compute capability {cap} não atende ao requisito mínimo (8.0)."
-                            )
+                        except Exception as exc:
+                            warn_msg = f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
                             logging.warning(warn_msg)
                             if self.on_optimization_fallback_callback:
                                 self.on_optimization_fallback_callback(warn_msg)

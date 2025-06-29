@@ -27,6 +27,13 @@ fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
 sys.modules["transformers"] = fake_transformers
 
+# Stub para optimum.bettertransformer
+fake_optimum = types.ModuleType("optimum")
+fake_bt = types.ModuleType("optimum.bettertransformer")
+fake_bt.BetterTransformer = object
+sys.modules["optimum"] = fake_optimum
+sys.modules["optimum.bettertransformer"] = fake_bt
+
 if "src.transcription_handler" in sys.modules:
     importlib.reload(sys.modules["src.transcription_handler"])
 
@@ -149,49 +156,31 @@ def test_bettertransformer_ignorado_sem_turbo(monkeypatch):
     assert called["flag"] == 0
 
 
-def test_fallback_quando_compute_capability_baixo(monkeypatch):
+def test_bettertransformer_indisponivel(monkeypatch):
     cfg = DummyConfig()
     cfg.data[USE_TURBO_CONFIG_KEY] = True
 
-    import src.transcription_handler as th_module
+    if "optimum.bettertransformer" in sys.modules:
+        del sys.modules["optimum.bettertransformer"]
 
-    chamado = {"bt": False}
-    mensagens = []
+    import importlib
+    import src.transcription_handler as th_module
+    importlib.reload(th_module)
+
+    called = {"flag": 0}
 
     class DummyModel:
         def to_bettertransformer(self):
-            chamado["bt"] = True
+            called["flag"] += 1
             return self
 
     class DummyPipeline:
         def __init__(self):
             self.model = DummyModel()
 
-        def __call__(self, *_a, **_k):
-            return {"text": "ok"}
-
-    monkeypatch.setattr(
-        th_module.torch.cuda,
-        "get_device_capability",
-        lambda _=0: (7, 5),
-        raising=False,
-    )
     monkeypatch.setattr(th_module, "pipeline", lambda *a, **k: DummyPipeline())
 
-    handler = TranscriptionHandler(
-        cfg,
-        gemini_api_client=None,
-        on_model_ready_callback=noop,
-        on_model_error_callback=noop,
-        on_optimization_fallback_callback=lambda msg: mensagens.append(msg),
-        on_transcription_result_callback=noop,
-        on_agent_result_callback=noop,
-        on_segment_transcribed_callback=None,
-        is_state_transcribing_fn=lambda: False,
-    )
-
+    handler = _create_handler(cfg)
     handler._load_model_task()
-    handler._transcribe_audio_chunk(np.zeros(16000, dtype=float), False)
 
-    assert not chamado["bt"]
-    assert mensagens
+    assert called["flag"] == 0
