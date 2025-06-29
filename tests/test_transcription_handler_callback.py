@@ -510,4 +510,7 @@ def test_warn_msg_indica_instalacao_manual(monkeypatch):
     handler._load_model_task()
 
     assert messages
-    assert "BetterTransformer indisponível" in messages[0]
+    assert (
+        "BetterTransformer indisponível. Verifique se as versões de Transformers e Optimum são compatíveis"
+        in messages[0]
+    )
