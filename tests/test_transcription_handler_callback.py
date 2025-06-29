@@ -452,3 +452,25 @@ def test_optimization_fallback_callback(monkeypatch):
 
     assert messages
     assert messages[0].startswith(OPTIMIZATION_TURBO_FALLBACK_MSG)
+
+def test_transcription_result_callback_receives_two_args(monkeypatch):
+    cfg = DummyConfig()
+    callback = MagicMock()
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_optimization_fallback_callback=lambda *_: None,
+        on_transcription_result_callback=callback,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: True,
+    )
+    handler.transcription_pipeline = MagicMock(return_value={"text": "ok"})
+    monkeypatch.setattr(handler, "_async_text_correction", lambda *_: None)
+    audio = np.zeros(16000, dtype=float)
+    handler._transcribe_audio_chunk(audio, agent_mode=False)
+    assert callback.call_count >= 1
+    args, _ = callback.call_args
+    assert len(args) == 2
