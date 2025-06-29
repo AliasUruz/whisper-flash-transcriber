@@ -12,7 +12,10 @@ from unittest.mock import MagicMock
 fake_torch = types.ModuleType("torch")
 fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", loader=None)
 fake_torch.__version__ = "0.0"
-fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+fake_torch.cuda = types.SimpleNamespace(
+    is_available=lambda: False,
+    empty_cache=lambda: None,
+)
 
 sys.modules["torch"] = fake_torch
 
@@ -40,6 +43,7 @@ from src.config_manager import (  # noqa: E402
     OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     USE_FLASH_ATTENTION_2_CONFIG_KEY,
+    USE_TURBO_CONFIG_KEY,
     TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
@@ -58,7 +62,7 @@ class DummyConfig:
             "gpu_index_specified": False,
             TEXT_CORRECTION_ENABLED_CONFIG_KEY: False,
             TEXT_CORRECTION_SERVICE_CONFIG_KEY: SERVICE_NONE,
-            "use_turbo": False,
+            USE_TURBO_CONFIG_KEY: False,
             OPENROUTER_API_KEY_CONFIG_KEY: "dummy",
             OPENROUTER_MODEL_CONFIG_KEY: "",
             GEMINI_API_KEY_CONFIG_KEY: "dummy",
@@ -193,6 +197,36 @@ def test_async_text_correction_service_selection(monkeypatch):
         else:
             assert not handler.gemini_api.correct_text_async.called
             assert not handler.openrouter_api.correct_text.called
+
+
+def test_update_config_initializes_openrouter_client():
+    cfg = DummyConfig()
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_optimization_fallback_callback=lambda *_: None,
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: False,
+    )
+
+    assert handler.openrouter_client is None
+
+    cfg.data[TEXT_CORRECTION_ENABLED_CONFIG_KEY] = True
+    cfg.data[TEXT_CORRECTION_SERVICE_CONFIG_KEY] = SERVICE_OPENROUTER
+    cfg.data[OPENROUTER_API_KEY_CONFIG_KEY] = "newkey"
+    cfg.data[OPENROUTER_MODEL_CONFIG_KEY] = "model1"
+
+    handler.update_config()
+
+    from src.openrouter_api import OpenRouterAPI
+
+    assert isinstance(handler.openrouter_client, OpenRouterAPI)
+    assert handler.openrouter_client.api_key == "newkey"
+    assert handler.openrouter_client.model_id == "model1"
 
 
 def test_get_dynamic_batch_size_for_cpu_and_gpu(monkeypatch):
@@ -372,6 +406,7 @@ def test_transcribe_audio_chunk_uses_audio_input(monkeypatch):
 def test_optimization_fallback_callback(monkeypatch):
     cfg = DummyConfig()
     cfg.data[USE_FLASH_ATTENTION_2_CONFIG_KEY] = True
+    cfg.data[USE_TURBO_CONFIG_KEY] = True
     cfg.data[GPU_INDEX_CONFIG_KEY] = 0
 
     messages = []
