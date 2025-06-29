@@ -2,7 +2,12 @@ import importlib.machinery
 import importlib
 import types
 import sys
+import os
 from unittest.mock import MagicMock
+import numpy as np
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 # Stubs básicos para torch e transformers
 fake_torch = types.ModuleType("torch")
@@ -142,3 +147,51 @@ def test_bettertransformer_ignorado_sem_turbo(monkeypatch):
     handler._load_model_task()
 
     assert called["flag"] == 0
+
+
+def test_fallback_quando_compute_capability_baixo(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[USE_TURBO_CONFIG_KEY] = True
+
+    import src.transcription_handler as th_module
+
+    chamado = {"bt": False}
+    mensagens = []
+
+    class DummyModel:
+        def to_bettertransformer(self):
+            chamado["bt"] = True
+            return self
+
+    class DummyPipeline:
+        def __init__(self):
+            self.model = DummyModel()
+
+        def __call__(self, *_a, **_k):
+            return {"text": "ok"}
+
+    monkeypatch.setattr(
+        th_module.torch.cuda,
+        "get_device_capability",
+        lambda _=0: (7, 5),
+        raising=False,
+    )
+    monkeypatch.setattr(th_module, "pipeline", lambda *a, **k: DummyPipeline())
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_optimization_fallback_callback=lambda msg: mensagens.append(msg),
+        on_transcription_result_callback=noop,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: False,
+    )
+
+    handler._load_model_task()
+    handler._transcribe_audio_chunk(np.zeros(16000, dtype=float), False)
+
+    assert not chamado["bt"]
+    assert mensagens
