@@ -425,7 +425,6 @@ class TranscriptionHandler:
                 logging.info(
                     "Turbo Mode desativado; ignorando otimização Flash Attention 2."
                 )
-            self.model_loaded_event.set()
             if self.on_model_ready_callback:
                 self.on_model_ready_callback()
         except Exception as exc:
@@ -433,6 +432,7 @@ class TranscriptionHandler:
             if self.on_model_error_callback:
                 self.on_model_error_callback(str(exc))
         finally:
+            self.model_loaded_event.set()
             self.is_model_loading = False
 
     def transcribe_audio_segment(

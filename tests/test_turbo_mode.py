@@ -2,7 +2,12 @@ import importlib.machinery
 import importlib
 import types
 import sys
+import os
 from unittest.mock import MagicMock
+import numpy as np
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 # Stubs básicos para torch e transformers
 fake_torch = types.ModuleType("torch")
@@ -33,6 +38,8 @@ if "src.transcription_handler" in sys.modules:
     importlib.reload(sys.modules["src.transcription_handler"])
 
 from src.transcription_handler import TranscriptionHandler  # noqa: E402
+import src.transcription_handler as th_module  # noqa: E402
+th_module.BETTERTRANSFORMER_AVAILABLE = True
 from src.config_manager import (  # noqa: E402
     BATCH_SIZE_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY,
