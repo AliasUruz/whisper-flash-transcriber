@@ -413,4 +413,4 @@ def test_optimization_fallback_callback(monkeypatch):
     handler._load_model_task()
 
     assert messages
-    assert "otimização 'Turbo'" in messages[0]
+    assert "Flash Attention 2" in messages[0]
