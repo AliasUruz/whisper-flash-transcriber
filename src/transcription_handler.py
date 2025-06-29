@@ -428,7 +428,11 @@ class TranscriptionHandler:
                             )
                             logging.info("Flash Attention 2 aplicada com sucesso.")
                     except Exception as exc:
-                        warn_msg = f"Falha ao aplicar a otimização 'Turbo': {exc}"
+                        warn_msg = (
+                            "Não foi possível aplicar a otimização 'Turbo' "
+                            "(Flash Attention 2). O sistema usará o modo padrão.\n\n"
+                            f"Detalhe técnico: {exc}"
+                        )
                         logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
                             self.on_optimization_fallback_callback(warn_msg)
