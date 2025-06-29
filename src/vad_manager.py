@@ -33,6 +33,7 @@ class VADManager:
         if onnxruntime is None:
             logging.warning("onnxruntime indispon\u00edvel. VAD desativado.")
             self.session = None
+            self.enabled = False
             return
 
         if not MODEL_PATH.exists():
@@ -41,6 +42,7 @@ class VADManager:
                 MODEL_PATH,
             )
             self.session = None
+            self.enabled = False
             return
 
         try:
