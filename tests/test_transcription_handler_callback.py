@@ -25,7 +25,10 @@ sys.modules["transformers"] = fake_transformers
 if "src.transcription_handler" in sys.modules:
     importlib.reload(sys.modules["src.transcription_handler"])
 
-from src.transcription_handler import TranscriptionHandler  # noqa: E402
+from src.transcription_handler import (
+    TranscriptionHandler,
+    OPTIMIZATION_TURBO_FALLBACK_MSG,
+)
 from src.config_manager import (  # noqa: E402
     BATCH_SIZE_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY,
@@ -413,4 +416,4 @@ def test_optimization_fallback_callback(monkeypatch):
     handler._load_model_task()
 
     assert messages
-    assert "otimização 'Turbo'" in messages[0]
+    assert messages[0].startswith(OPTIMIZATION_TURBO_FALLBACK_MSG)
