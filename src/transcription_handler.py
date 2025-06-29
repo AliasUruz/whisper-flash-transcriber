@@ -3,6 +3,12 @@ import threading
 import concurrent.futures
 import torch
 from transformers import pipeline
+
+try:
+    from optimum.bettertransformer import BetterTransformer  # noqa: F401
+    BETTERTRANSFORMER_AVAILABLE = True
+except Exception:
+    BETTERTRANSFORMER_AVAILABLE = False
 from .openrouter_api import (
     OpenRouterAPI,
 )  # Assumindo que está na raiz ou em path acessível
@@ -436,7 +442,6 @@ class TranscriptionHandler:
                 logging.info(
                     "Turbo Mode desativado; ignorando otimização Flash Attention 2."
                 )
-            self.model_loaded_event.set()
             if self.on_model_ready_callback:
                 self.on_model_ready_callback()
         except Exception as exc:
@@ -444,6 +449,7 @@ class TranscriptionHandler:
             if self.on_model_error_callback:
                 self.on_model_error_callback(str(exc))
         finally:
+            self.model_loaded_event.set()
             self.is_model_loading = False
 
     def transcribe_audio_segment(
