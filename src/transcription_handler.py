@@ -184,6 +184,24 @@ class TranscriptionHandler:
         self.use_flash_attention_2 = self.config_manager.get("use_flash_attention_2")
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
+        if (
+            self.text_correction_enabled
+            and self.text_correction_service == SERVICE_OPENROUTER
+            and self.openrouter_api_key
+            and self.openrouter_client is None
+            and OpenRouterAPI
+        ):
+            try:
+                self.openrouter_client = OpenRouterAPI(
+                    api_key=self.openrouter_api_key, model_id=self.openrouter_model
+                )
+                self.openrouter_api = self.openrouter_client
+                logging.info(
+                    "OpenRouter API client initialized via update_config."
+                )
+            except Exception as e:
+                logging.error(f"Error initializing OpenRouter API client: {e}")
+
     def _get_device_and_dtype(self):
         """Define o dispositivo e o dtype ideais para o modelo."""
         device = (
@@ -383,7 +401,7 @@ class TranscriptionHandler:
                             )
                             logging.info("Flash Attention 2 aplicada com sucesso.")
                     except Exception as exc:
-                        warn_msg = f"Falha ao aplicar Flash Attention 2: {exc}"
+                        warn_msg = f"Falha na otimização 'Turbo': {exc}"
                         logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
                             self.on_optimization_fallback_callback(warn_msg)
