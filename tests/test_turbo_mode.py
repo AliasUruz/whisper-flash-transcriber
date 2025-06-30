@@ -213,7 +213,10 @@ def test_mensagem_quando_bettertransformer_indisponivel(monkeypatch):
 
     assert messages
     assert messages[0].startswith(th_module.OPTIMIZATION_TURBO_FALLBACK_MSG)
-    assert "BetterTransformer indisponível" in messages[0]
+    assert (
+        "BetterTransformer indisponível. Verifique se as versões de Transformers e Optimum são compatíveis"
+        in messages[0]
+    )
 
 
 def test_model_transformado_com_bettertransformer(monkeypatch):
