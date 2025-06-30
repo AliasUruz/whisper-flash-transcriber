@@ -413,7 +413,7 @@ class TranscriptionHandler:
                 if device.startswith("cuda"):
                     if not BETTERTRANSFORMER_AVAILABLE:
                         warn_msg = (
-                            f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: BetterTransformer indisponível."
+                            f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: BetterTransformer indisponível. Verifique se as versões de Transformers e Optimum são compatíveis"
                         )
                         logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
