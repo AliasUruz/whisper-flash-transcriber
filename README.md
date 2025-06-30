@@ -106,10 +106,10 @@ Follow these steps carefully to get the app running on your Windows computer.
 
 You need to install two essential tools before setting up the application:
 
-1.  **Install Python 3.9 or higher:**
+1.  **Install Python 3.12 (recommended) or higher:**
     *   Python is the programming language the application is built with.
     *   Go to the official Python website: [https://www.python.org/downloads/](https://www.python.org/downloads/)
-    *   Download the latest version of Python 3.9 or newer for Windows.
+    *   Download Python 3.12 for Windows (preferred) or another version newer than 3.9.
     *   Run the downloaded installer.
     *   **VERY IMPORTANT:** On the first screen of the installer, make sure to check the box that says **"Add Python to PATH"**. This step is crucial! If you miss this, you won't be able to run Python commands easily from your terminal. If you forget, you might need to uninstall and reinstall Python.
     *   Follow the rest of the installer prompts (usually clicking "Next" or "Install").
