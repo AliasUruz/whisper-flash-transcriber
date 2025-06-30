@@ -4,11 +4,19 @@ import concurrent.futures
 import torch
 from transformers import pipeline
 
-try:
-    from transformers.integrations import BetterTransformer  # noqa: F401
-    BETTERTRANSFORMER_AVAILABLE = True
-except ImportError:
-    BETTERTRANSFORMER_AVAILABLE = False
+
+BETTERTRANSFORMER_AVAILABLE = None
+
+
+def is_bettertransformer_available(model=None) -> bool:
+    """Verifica se o BetterTransformer e o método de conversão estão disponíveis."""
+    try:
+        from transformers.integrations import BetterTransformer  # noqa: F401
+    except ImportError:
+        return False
+    if model is not None:
+        return hasattr(model, "to_bettertransformer")
+    return True
 from .openrouter_api import (
     OpenRouterAPI,
 )  # Assumindo que está na raiz ou em path acessível
@@ -395,6 +403,11 @@ class TranscriptionHandler:
                 torch_dtype=torch_dtype,
                 device=device,
             )
+            global BETTERTRANSFORMER_AVAILABLE
+            if BETTERTRANSFORMER_AVAILABLE is None:
+                BETTERTRANSFORMER_AVAILABLE = is_bettertransformer_available(
+                    self.transcription_pipeline.model
+                )
             flash_enabled = self.use_turbo and self.use_flash_attention_2
             if flash_enabled:
                 if device.startswith("cuda"):
