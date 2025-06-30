@@ -333,7 +333,7 @@ Before running the tests, install the dependencies:
 ```bash
 pip install -r requirements-test.txt
 ```
-The testing requirements file also lists `optimum==1.26.1`.
+This step must be run before invoking `pytest` to avoid missing packages.
 
 Run the suite with:
 
