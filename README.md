@@ -173,15 +173,27 @@ Setting up a virtual environment is highly recommended. It creates an isolated s
 
 ### Step 4: Install Application Dependencies
 
-Com o ambiente virtual ativo, instale as bibliotecas necessárias diretamente com `pip`.
 
-1.  **Instalar dependências:** Execute:
+With the virtual environment active, install the required libraries using `pip`.
+
+1.  **Install dependencies:** Run:
     ```bash
     pip install --upgrade torch transformers optimum
     ```
-Essas bibliotecas já trazem o `BetterTransformer` embutido em `optimum`, portanto não há extras adicionais a instalar. O processo pode demorar alguns minutos por conta do tamanho do `torch` e do `transformers`.
+    These packages already include the `BetterTransformer` via `optimum`, so no additional extras are needed. Installation may take a few minutes because `torch` and `transformers` are large packages.
 
-**Turbo Mode** usa o Flash Attention 2 por meio do `BetterTransformer` e vem desativado por padrão. Ative-o definindo `use_turbo` como `true` (mantendo `use_flash_attention_2` ligado) nas configurações.
+    **Turbo Mode** uses Flash Attention 2 through the `BetterTransformer` and is disabled by default. Enable it by setting `use_turbo` to `true` (keep `use_flash_attention_2` enabled) in the configuration.
+
+    | Feature | Required package versions |
+    | ------- | ------------------------- |
+    | Turbo Mode | `transformers < 4.49` and `optimum >= 1.7.0, < 2.0` |
+
+    Install these compatible versions if you plan to use Turbo Mode:
+    ```bash
+    pip install "transformers<4.49" "optimum>=1.7,<2.0"
+    ```
+
+    If you prefer newer versions of `transformers`, disable Turbo Mode (`use_turbo: false`) or wait for an update to this project.
 
 2.  **Opcional: instalar PyTorch com suporte a CUDA (para aceleração por GPU):**
     O comando acima instala a versão CPU do PyTorch. Caso possua uma placa NVIDIA compatível, você pode ganhar desempenho instalando a variante para CUDA.
