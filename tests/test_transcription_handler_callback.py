@@ -515,6 +515,6 @@ def test_warn_msg_indica_instalacao_manual(monkeypatch):
 
     assert messages
     assert (
-        "BetterTransformer indisponível. Verifique se as versões de Transformers e Optimum são compatíveis"
+        "BetterTransformer indisponível. Certifique-se de usar transformers>=4.49 e optimum>=1.14."
         in messages[0]
     )
