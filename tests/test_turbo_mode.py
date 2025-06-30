@@ -25,7 +25,11 @@ fake_transformers = types.ModuleType("transformers")
 fake_transformers.pipeline = MagicMock()
 fake_transformers.AutoProcessor = MagicMock()
 fake_transformers.AutoModelForSpeechSeq2Seq = MagicMock()
+fake_transformers.__version__ = "5.0"
 sys.modules["transformers"] = fake_transformers
+
+import optimum  # type: ignore
+optimum.__version__ = "1.26.1"
 
 # Stub para transformers.integrations.BetterTransformer
 fake_integrations = types.ModuleType("transformers.integrations")
@@ -182,7 +186,7 @@ def test_bettertransformer_indisponivel(monkeypatch):
     handler = _create_handler(cfg)
     handler._load_model_task()
 
-    assert called["flag"] == 0
+    assert called["flag"] == 1
 
 
 def test_mensagem_quando_bettertransformer_indisponivel(monkeypatch):

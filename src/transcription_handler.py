@@ -3,20 +3,20 @@ import threading
 import concurrent.futures
 import torch
 from transformers import pipeline
+from packaging import version
+import transformers
+import optimum
 
 
 BETTERTRANSFORMER_AVAILABLE = None
 
 
 def is_bettertransformer_available(model=None) -> bool:
-    """Verifica se o BetterTransformer e o método de conversão estão disponíveis."""
-    try:
-        from transformers.integrations import BetterTransformer  # noqa: F401
-    except ImportError:
-        return False
-    if model is not None:
-        return hasattr(model, "to_bettertransformer")
-    return True
+    """Verifica se o BetterTransformer pode ser utilizado."""
+    if version.parse(transformers.__version__) >= version.parse("4.49.0") \
+       and version.parse(optimum.__version__) >= version.parse("1.14.0"):
+        return hasattr(model, "to_bettertransformer") if model else True
+    return False
 from .openrouter_api import (
     OpenRouterAPI,
 )  # Assumindo que está na raiz ou em path acessível
@@ -413,7 +413,7 @@ class TranscriptionHandler:
                 if device.startswith("cuda"):
                     if not BETTERTRANSFORMER_AVAILABLE:
                         warn_msg = (
-                            f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: BetterTransformer indisponível. Verifique se as versões de Transformers e Optimum são compatíveis"
+                            f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: BetterTransformer indisponível. Certifique-se de usar transformers>=4.49 e optimum>=1.14."
                         )
                         logging.warning(warn_msg)
                         if self.on_optimization_fallback_callback:
