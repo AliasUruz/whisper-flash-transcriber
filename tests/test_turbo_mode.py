@@ -90,13 +90,13 @@ def noop(*_a, **_k):
     return None
 
 
-def _create_handler(cfg):
+def _create_handler(cfg, on_opt_fallback=None):
     return TranscriptionHandler(
         cfg,
         gemini_api_client=None,
         on_model_ready_callback=noop,
         on_model_error_callback=noop,
-        on_optimization_fallback_callback=lambda *_: None,
+        on_optimization_fallback_callback=on_opt_fallback or (lambda *_: None),
         on_transcription_result_callback=noop,
         on_agent_result_callback=noop,
         on_segment_transcribed_callback=None,
@@ -183,3 +183,59 @@ def test_bettertransformer_indisponivel(monkeypatch):
     handler._load_model_task()
 
     assert called["flag"] == 0
+
+
+def test_mensagem_quando_bettertransformer_indisponivel(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[USE_TURBO_CONFIG_KEY] = True
+
+    if "transformers.integrations" in sys.modules:
+        del sys.modules["transformers.integrations"]
+
+    import importlib
+    import src.transcription_handler as th_module
+    importlib.reload(th_module)
+
+    messages = []
+
+    class DummyModel:
+        def to_bettertransformer(self):
+            raise AssertionError("Should not be called")
+
+    class DummyPipeline:
+        def __init__(self):
+            self.model = DummyModel()
+
+    monkeypatch.setattr(th_module, "pipeline", lambda *a, **k: DummyPipeline())
+
+    handler = _create_handler(cfg, on_opt_fallback=lambda msg: messages.append(msg))
+    handler._load_model_task()
+
+    assert messages
+    assert messages[0].startswith(th_module.OPTIMIZATION_TURBO_FALLBACK_MSG)
+    assert "BetterTransformer indisponível" in messages[0]
+
+
+def test_model_transformado_com_bettertransformer(monkeypatch):
+    cfg = DummyConfig()
+    cfg.data[USE_TURBO_CONFIG_KEY] = True
+
+    import src.transcription_handler as th_module
+    monkeypatch.setattr(th_module, "BETTERTRANSFORMER_AVAILABLE", True)
+
+    better_model = object()
+
+    class DummyModel:
+        def to_bettertransformer(self):
+            return better_model
+
+    class DummyPipeline:
+        def __init__(self):
+            self.model = DummyModel()
+
+    monkeypatch.setattr(th_module, "pipeline", lambda *a, **k: DummyPipeline())
+
+    handler = _create_handler(cfg)
+    handler._load_model_task()
+
+    assert handler.transcription_pipeline.model is better_model

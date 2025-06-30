@@ -187,15 +187,15 @@ You are now ready to run the Whisper Transcription App!
 
 **Important:** ensure you ran `pip install --upgrade torch transformers optimum` before executing the command below.
 
-1.  **Start the main script:** In your **activated virtual environment** within the `whisper-flash-transcriber` directory, run one of the commands below:
+1.  **Inicie o script principal:** Com o ambiente virtual ativo no diretório `whisper-flash-transcriber`, execute um dos comandos abaixo:
     ```bash
     python src/main.py
     # or
     python -m src.main
     ```
-    Both commands run the application's main file.
-2.  **Application Window:** A graphical window should appear. This is the application's main interface.
-3.  **System Tray Icon:** The application will likely minimize to your Windows system tray (near the clock). You can usually interact with it by right-clicking the icon.
+    Ambos iniciam o arquivo principal da aplicação.
+2.  **Janela da aplicação:** Uma interface gráfica deverá aparecer.
+3.  **Ícone na bandeja:** O programa provavelmente ficará minimizado próximo ao relógio do Windows; interaja com ele clicando com o botão direito.
 
 ## Configuration
 
@@ -282,31 +282,31 @@ The application terminates immediately and safely when closed. Even if a transcr
 
 ## Troubleshooting
 
-### Hotkeys Stop Working on Windows 11
+### Atalhos param de funcionar no Windows 11
 
-This is a known issue related to the underlying libraries. If your main hotkey (default F3) stops working after the first use, try these solutions:
+Esse é um problema conhecido das bibliotecas utilizadas. Se o atalho principal (padrão F3) parar de funcionar após o primeiro uso, tente:
 
-*   **Press the Agent Hotkey (Default: F4):** The application includes a secondary hotkey specifically to try and fix this. Press F4.
-*   **Use the System Tray Menu:** Right-click the application's icon in the system tray and look for an option like "Force Hotkey Re-registration".
-*   **Automatic Reload:** The app attempts to automatically handle this in the background, but manual intervention might sometimes be needed.
+*   **Pressionar o atalho de agente (F4 por padrão):** existe um atalho secundário justamente para tentar resolver esse travamento.
+*   **Usar o menu da bandeja:** clique com o botão direito no ícone da aplicação e procure por algo como "Re-registrar atalho".
+*   **Recarregamento automático:** o programa tenta resolver sozinho em segundo plano, mas às vezes é preciso fazer isso manualmente.
 
 ### PyTorch Installation Problems
 
 If `pip install --upgrade torch transformers optimum` fails or the application doesn't run due to PyTorch errors:
 
-*   **Verify Python and Pip:** Ensure Python is correctly installed and added to your PATH (check with `python --version` and `pip --version` in Command Prompt).
-*   **Virtual Environment:** Make sure your virtual environment is activated (`(venv)` in your terminal prompt).
-*   **CUDA Compatibility:** If you are trying to install the CUDA version, double-check that your NVIDIA driver and CUDA toolkit versions are compatible with the PyTorch version you are trying to install, according to the PyTorch website.
-*   **Internet Connection:** Ensure you have a stable internet connection, as PyTorch and other libraries are large downloads.
+*   **Verifique Python e pip:** confirme que o Python está instalado e no PATH (`python --version` e `pip --version`).
+*   **Ambiente virtual:** certifique-se de que o ambiente está ativo (`(venv)` no prompt).
+*   **Compatibilidade de CUDA:** caso instale a versão com GPU, verifique se driver NVIDIA e toolkit CUDA são compatíveis com a versão do PyTorch indicada no site oficial.
+*   **Conexão com a internet:** garanta uma conexão estável, pois as bibliotecas são grandes.
 
-### "state_check_callback" Error
+### Erro "state_check_callback"
 
-If you encounter the message `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
-update to the latest version. The attribute is now properly initialized in `TranscriptionHandler.__init__`.
+Ao receber a mensagem `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
+atualize para a versão mais recente. O atributo passou a ser inicializado corretamente em `TranscriptionHandler.__init__`.
 
-### Stop Signal Replaces Cancellation
+### Sinal de parada substitui cancelamento
 
-Transcription can now be halted at any moment by sending a **stop signal** to `TranscriptionHandler`. The previous cancellation method and its related callback have been removed to simplify the API and improve reliability.
+A transcrição pode ser interrompida a qualquer momento enviando um **sinal de parada** ao `TranscriptionHandler`. O método antigo de cancelamento e o callback associado foram removidos para simplificar a API e aumentar a confiabilidade.
 
 ## Contributing
 
