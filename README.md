@@ -20,7 +20,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 
 *   **High-Quality Transcription:** Powered by the `openai/whisper-large-v3` model for state-of-the-art speech recognition.
 *   **GPU Acceleration:** Automatically utilizes your NVIDIA GPU (if available) for significantly faster transcriptions, with fallback to CPU.
-*   **Turbo Mode (disabled by default):** Usa o Flash Attention 2 via `BetterTransformer` para agilizar a inferência quando `use_turbo` está em `true`. O `BetterTransformer` já vem incluso no pacote `optimum`, então nenhum extra do `pip` é necessário. Requer GPU NVIDIA Ampere ou mais recente.
+*   **Turbo Mode (disabled by default):** Applies Flash Attention 2 through `BetterTransformer` for faster processing when `use_turbo` is set to `true`. Requires an NVIDIA Ampere or newer GPU. `BetterTransformer` is bundled with the dependencies—no extra installation needed.
 *   **Flash Attention 2:** Enabled by default. Provides optional acceleration with optimized kernels. Toggle the setting in the GUI or set `use_flash_attention_2` in `config.json`.
 *   **Dynamic Performance:** Intelligently adjusts batch sizes based on available VRAM for optimal performance.
 *   **Customizable Hotkeys:**
@@ -173,49 +173,19 @@ Setting up a virtual environment is highly recommended. It creates an isolated s
 
 ### Step 4: Install Application Dependencies
 
+With your virtual environment activated, install the main dependencies with:
 
-With the virtual environment active, install the required libraries using `pip`.
+```bash
+pip install --upgrade torch transformers optimum
+```
 
-1.  **Install dependencies:** Run:
-    ```bash
-    pip install --upgrade torch transformers optimum
-    ```
-    These packages already include the `BetterTransformer` via `optimum`, so no additional extras are needed. Installation may take a few minutes because `torch` and `transformers` are large packages.
-
-    **Turbo Mode** uses Flash Attention 2 through the `BetterTransformer` and is disabled by default. Enable it by setting `use_turbo` to `true` (keep `use_flash_attention_2` enabled) in the configuration.
-
-    | Feature | Required package versions |
-    | ------- | ------------------------- |
-    | Turbo Mode | `transformers < 4.49` and `optimum >= 1.7.0, < 2.0` |
-
-    Install these compatible versions if you plan to use Turbo Mode:
-    ```bash
-    pip install "transformers<4.49" "optimum>=1.7,<2.0"
-    ```
-
-    If you prefer newer versions of `transformers`, disable Turbo Mode (`use_turbo: false`) or wait for an update to this project.
-
-2.  **Opcional: instalar PyTorch com suporte a CUDA (para aceleração por GPU):**
-    O comando acima instala a versão CPU do PyTorch. Caso possua uma placa NVIDIA compatível, você pode ganhar desempenho instalando a variante para CUDA.
-    *   **How to check if you have CUDA:** Open Command Prompt and type `nvcc --version`. If you see version information, CUDA is installed. Note the version number (e.g., CUDA 11.8, CUDA 12.1). If the command is not found, you likely don't have CUDA installed or it's not in your PATH.
-    *   **Get the correct command:** Go to the official PyTorch website's installation section: [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/)
-    *   Select your operating system (Windows), Package (Pip), Language (Python), and importantly, your CUDA version (or select "CPU" if you don't have a compatible GPU).
-    *   Copy the provided installation command and run it in your **activated virtual environment**.
-    *   **Example (for Windows, Pip, Python, CUDA 11.8):**
-        ```bash
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-        ```
-    *   Esse comando instala a versão do PyTorch otimizada para GPU. É um download grande. Se você já instalou a versão CPU antes, ele será atualizado automaticamente.
-    *   Caso não possua uma GPU compatível ou prefira não utilizá-la, ignore este passo. A aplicação continuará funcionando apenas com o CPU, porém mais lenta.
-
-3.  **Opcional: instalar onnxruntime-gpu (para acelerar o VAD):**
-    O VAD usa o **ONNX Runtime**. Instala-se por padrão a versão para CPU (`onnxruntime`), mas você pode instalar `onnxruntime-gpu` caso possua hardware compatível. O aplicativo seleciona `CUDAExecutionProvider` automaticamente quando disponível, voltando para `CPUExecutionProvider` caso contrário.
+These packages provide everything required to run the application. **Turbo Mode** leverages `BetterTransformer`, which is already included and does not require any additional pip extras. Enable Turbo Mode by setting `use_turbo` to `true` (and keeping `use_flash_attention_2` enabled) in the settings.
 
 ### Step 5: Run the Application
 
 You are now ready to run the Whisper Transcription App!
 
-**Importante:** garanta que executou `pip install --upgrade torch transformers optimum` antes de rodar o comando abaixo.
+**Important:** ensure you ran `pip install --upgrade torch transformers optimum` before executing the command below.
 
 1.  **Inicie o script principal:** Com o ambiente virtual ativo no diretório `whisper-flash-transcriber`, execute um dos comandos abaixo:
     ```bash
@@ -254,7 +224,7 @@ To access and change settings:
 *   **Agent Mode Prompt:** Customize the prompt sent to Gemini when using "Agent Mode".
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
-*   **Turbo Mode:** Usa o Flash Attention 2 com o `BetterTransformer` (já incluso no `optimum`) quando `use_turbo` está em `true` e você possui uma GPU NVIDIA Ampere ou mais recente.
+*   **Turbo Mode:** Uses Flash Attention 2 via `BetterTransformer` when you set `use_turbo` to `true` and have an Ampere or newer NVIDIA GPU. `BetterTransformer` ships with the installed packages and needs no extra pip options.
 *   **Flash Attention 2:** Enabled by default; speeds up inference with optimized kernels. Equivalent to setting `use_flash_attention_2` to `true` in `config.json`.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Temporary Recordings:** When enabled, the captured audio is stored as `temp_recording_<timestamp>.wav` in the application folder. This temporary file is automatically deleted once transcription completes.
@@ -263,6 +233,10 @@ To access and change settings:
 *   **VAD Threshold:** sensitivity of voice detection.
 *   **VAD Silence Duration (s):** maximum pause length to keep; longer silences are trimmed.
 
+
+### Turbo Mode
+
+When `use_turbo` is set to `true`, the model is converted using `BetterTransformer` for extra speed. This optimization is ready out of the box—no pip extras required. An NVIDIA Ampere or newer GPU is still needed for effective acceleration.
 
 ### Flash Attention 2
 
@@ -318,7 +292,7 @@ Esse é um problema conhecido das bibliotecas utilizadas. Se o atalho principal 
 
 ### PyTorch Installation Problems
 
-Se o comando `pip install --upgrade torch transformers optimum` falhar ou o aplicativo não iniciar devido a erros relacionados ao PyTorch:
+If `pip install --upgrade torch transformers optimum` fails or the application doesn't run due to PyTorch errors:
 
 *   **Verifique Python e pip:** confirme que o Python está instalado e no PATH (`python --version` e `pip --version`).
 *   **Ambiente virtual:** certifique-se de que o ambiente está ativo (`(venv)` no prompt).
