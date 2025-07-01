@@ -181,21 +181,23 @@ pip install --upgrade torch transformers optimum
 
 These packages provide everything required to run the application. **Turbo Mode** needs at least `torch>=1.13`, `transformers>=4.49` and `optimum>=1.14`, which already bundle `BetterTransformer`, so no extra pip options are necessary. Enable Turbo Mode by setting `use_turbo` to `true` (and keeping `use_flash_attention_2` enabled) in the settings.
 
+`ensure_dependencies()` will check these packages when the application starts. If any are missing or outdated, you will be asked for permission to install or upgrade them automatically.
+
 ### Step 5: Run the Application
 
 You are now ready to run the Whisper Transcription App!
 
 **Important:** ensure you ran `pip install --upgrade torch transformers optimum` before executing the command below.
 
-1.  **Inicie o script principal:** Com o ambiente virtual ativo no diretório `whisper-flash-transcriber`, execute um dos comandos abaixo:
+1.  **Launch the main script:** With the virtual environment active in the `whisper-flash-transcriber` directory, run one of the commands below:
     ```bash
     python src/main.py
     # or
     python -m src.main
     ```
-    Ambos iniciam o arquivo principal da aplicação.
-2.  **Janela da aplicação:** Uma interface gráfica deverá aparecer.
-3.  **Ícone na bandeja:** O programa provavelmente ficará minimizado próximo ao relógio do Windows; interaja com ele clicando com o botão direito.
+    Both commands start the application's entry point.
+2.  **Application window:** A graphical interface should appear.
+3.  **Tray icon:** The program will likely minimize near the Windows clock; right-click the icon to interact with it.
 
 ## Configuration
 
@@ -282,31 +284,30 @@ The application terminates immediately and safely when closed. Even if a transcr
 
 ## Troubleshooting
 
-### Atalhos param de funcionar no Windows 11
+### Hotkeys stop working on Windows 11
 
-Esse é um problema conhecido das bibliotecas utilizadas. Se o atalho principal (padrão F3) parar de funcionar após o primeiro uso, tente:
+This is a known issue with the libraries used. If the main hotkey (default F3) stops working after the first use, try:
 
-*   **Pressionar o atalho de agente (F4 por padrão):** existe um atalho secundário justamente para tentar resolver esse travamento.
-*   **Usar o menu da bandeja:** clique com o botão direito no ícone da aplicação e procure por algo como "Re-registrar atalho".
-*   **Recarregamento automático:** o programa tenta resolver sozinho em segundo plano, mas às vezes é preciso fazer isso manualmente.
+*   **Press the agent hotkey (F4 by default):** there is a secondary hotkey precisely for unfreezing the main one.
+*   **Use the tray menu:** right-click the application icon and look for an option like "Re-register hotkey".
+*   **Automatic reload:** the program attempts to fix the issue in the background, but manual action may still be needed.
 
 ### PyTorch Installation Problems
 
 If `pip install --upgrade torch transformers optimum` fails or the application doesn't run due to PyTorch errors:
 
-*   **Verifique Python e pip:** confirme que o Python está instalado e no PATH (`python --version` e `pip --version`).
-*   **Ambiente virtual:** certifique-se de que o ambiente está ativo (`(venv)` no prompt).
-*   **Compatibilidade de CUDA:** caso instale a versão com GPU, verifique se driver NVIDIA e toolkit CUDA são compatíveis com a versão do PyTorch indicada no site oficial.
-*   **Conexão com a internet:** garanta uma conexão estável, pois as bibliotecas são grandes.
+*   **Check Python and pip:** confirm that Python is installed and in your PATH (`python --version` and `pip --version`).
+*   **Virtual environment:** make sure the environment is active (`(venv)` on the prompt).
+*   **CUDA compatibility:** if you install the GPU version, verify that the NVIDIA driver and CUDA toolkit are compatible with the PyTorch version listed on the official site.
+*   **Internet connection:** ensure a stable connection because the packages are large.
 
-### Erro "state_check_callback"
+### "state_check_callback" error
 
-Ao receber a mensagem `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
-atualize para a versão mais recente. O atributo passou a ser inicializado corretamente em `TranscriptionHandler.__init__`.
+If you see `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`, update to the latest version. The attribute is correctly initialized in `TranscriptionHandler.__init__`.
 
-### Sinal de parada substitui cancelamento
+### Stop signal replaces cancel
 
-A transcrição pode ser interrompida a qualquer momento enviando um **sinal de parada** ao `TranscriptionHandler`. O método antigo de cancelamento e o callback associado foram removidos para simplificar a API e aumentar a confiabilidade.
+You can interrupt a transcription at any moment by sending a **stop signal** to `TranscriptionHandler`. The old cancel method and its callback have been removed to simplify the API and improve reliability.
 
 ## Contributing
 
