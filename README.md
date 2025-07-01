@@ -182,7 +182,7 @@ pip install --upgrade torch transformers optimum
 
 These packages provide everything required to run the application. **Turbo Mode** needs at least `torch>=1.13`, `transformers>=4.49` and `optimum>=1.14`, which already bundle `BetterTransformer`, so no extra pip options are necessary. Enable Turbo Mode by setting `use_turbo` to `true` (and keeping `use_flash_attention_2` enabled) in the settings.
 
-`ensure_dependencies()` will check these packages when the application starts. If any are missing or outdated, you will be asked for permission to install or upgrade them automatically.
+`ensure_dependencies()` will check `torch`, `transformers`, `optimum`, `numpy`, `onnxruntime` and `soundfile` when the application starts. If any of these packages are missing or outdated, you will be asked for permission to install or upgrade them automatically.
 
 ### Step 5: Run the Application
 

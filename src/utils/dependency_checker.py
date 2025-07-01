@@ -16,6 +16,7 @@ REQUIRED_VERSIONS = {
     "optimum": "1.26.1",
     "numpy": "2.3.0",
     "soundfile": "0.13.1",
+    "onnxruntime": "1.22.0",
 }
 
 
