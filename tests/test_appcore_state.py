@@ -101,9 +101,12 @@ class DummyTranscriptionHandler:
                  on_transcription_result_callback,
                  on_agent_result_callback, on_segment_transcribed_callback,
                  is_state_transcribing_fn):
-        self.pipe = True
+        self.transcription_pipeline = True
         self.on_transcription_result_callback = on_transcription_result_callback
         self.config_manager = config_manager
+
+    def is_model_loaded(self):
+        return self.transcription_pipeline is not None
 
     def start_model_loading(self):
         pass

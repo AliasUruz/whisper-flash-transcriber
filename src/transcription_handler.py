@@ -385,6 +385,10 @@ class TranscriptionHandler:
         """Indica se há correção de texto em andamento."""
         return self.correction_in_progress
 
+    def is_model_loaded(self) -> bool:
+        """Indica se o modelo Whisper já foi carregado."""
+        return self.transcription_pipeline is not None
+
     def stop_transcription(self) -> None:
         """Sinaliza que a transcrição em andamento deve ser cancelada."""
         self.transcription_cancel_event.set()

@@ -474,7 +474,7 @@ class AppCore:
                 if self.current_state == STATE_TRANSCRIBING:
                     self._log_status("Cannot record: Transcription running.", error=True)
                     return
-                if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
+                if not self.transcription_handler.is_model_loaded() or self.current_state == STATE_LOADING_MODEL:
                     self._log_status("Cannot record: Model not loaded.", error=True)
                     return
                 if self.current_state.startswith("ERROR"):
@@ -526,7 +526,7 @@ class AppCore:
             if self.current_state == STATE_TRANSCRIBING:
                 self._log_status("Cannot start command: transcription in progress.", error=True)
                 return
-            if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
+            if not self.transcription_handler.is_model_loaded() or self.current_state == STATE_LOADING_MODEL:
                 self._log_status("Model not loaded.", error=True)
                 return
             if self.current_state.startswith("ERROR"):
