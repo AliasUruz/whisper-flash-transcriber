@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata as importlib_metadata
 import subprocess
 import sys
 from packaging import version
@@ -67,7 +68,11 @@ def ensure_dependencies() -> None:
         if trans_ver >= version.parse("4.49"):
             try:
                 import optimum
-                opt_ver = version.parse(optimum.__version__)
+                try:
+                    opt_ver_str = getattr(optimum, "__version__", None) or importlib_metadata.version("optimum")
+                except Exception:
+                    opt_ver_str = "0"
+                opt_ver = version.parse(opt_ver_str)
                 if opt_ver < version.parse("1.26.1"):
                     missing_or_old.append("optimum>=1.26.1")
             except ImportError:
