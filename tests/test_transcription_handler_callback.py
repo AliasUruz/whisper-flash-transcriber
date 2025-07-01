@@ -518,3 +518,15 @@ def test_warn_msg_indica_instalacao_manual(monkeypatch):
         "BetterTransformer indisponível. Certifique-se de usar transformers>=4.49 e optimum>=1.14."
         in messages[0]
     )
+
+
+def test_is_bettertransformer_log_metodo_ausente(monkeypatch, caplog):
+    import src.transcription_handler as th_module
+
+    class Dummy:
+        pass
+
+    with caplog.at_level("INFO"):
+        assert not th_module.is_bettertransformer_available(Dummy())
+
+    assert "to_bettertransformer" in caplog.text
