@@ -96,8 +96,11 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
 
     class DummyTranscriptionHandler:
         def __init__(self, *a, **k):
-            self.pipe = True
+            self.transcription_pipeline = True
             self.transcription_future = None
+
+        def is_model_loaded(self):
+            return self.transcription_pipeline is not None
 
         def start_model_loading(self):
             pass
