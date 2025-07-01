@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import importlib
+from importlib.metadata import (
+    PackageNotFoundError,
+    version as pkg_version,
+)
 import subprocess
 import sys
 from packaging import version
@@ -67,7 +71,13 @@ def ensure_dependencies() -> None:
         if trans_ver >= version.parse("4.49"):
             try:
                 import optimum
-                opt_ver = version.parse(getattr(optimum, "__version__", "0"))
+                opt_ver_str = getattr(optimum, "__version__", None)
+                if opt_ver_str is None:
+                    try:
+                        opt_ver_str = pkg_version("optimum")
+                    except PackageNotFoundError:
+                        opt_ver_str = "0"
+                opt_ver = version.parse(opt_ver_str)
                 if opt_ver < version.parse("1.26.1"):
                     missing_or_old.append("optimum>=1.26.1")
             except (ImportError, AttributeError):
