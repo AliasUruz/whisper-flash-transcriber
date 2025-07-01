@@ -12,10 +12,13 @@ BETTERTRANSFORMER_AVAILABLE = None
 
 
 def is_bettertransformer_available(model=None) -> bool:
-    """Verifica se o BetterTransformer pode ser utilizado."""
-    if version.parse(transformers.__version__) >= version.parse("4.49.0") \
-       and version.parse(optimum.__version__) >= version.parse("1.14.0"):
-        return hasattr(model, "to_bettertransformer") if model else True
+    """Verifica se as versões de Transformers e Optimum suportam BetterTransformer."""
+    if hasattr(transformers, "__version__") and hasattr(optimum, "__version__"):
+        if (
+            version.parse(transformers.__version__) >= version.parse("4.49.0")
+            and version.parse(optimum.__version__) >= version.parse("1.14.0")
+        ):
+            return hasattr(model, "to_bettertransformer") if model else True
     return False
 from .openrouter_api import (
     OpenRouterAPI,
