@@ -182,35 +182,23 @@ pip install --upgrade torch transformers optimum
 
 These packages provide everything required to run the application. **Turbo Mode** needs at least `torch>=1.13`, `transformers>=4.49` and `optimum>=1.14`, which already bundle `BetterTransformer`, so no extra pip options are necessary. Enable Turbo Mode by setting `use_turbo` to `true` (and keeping `use_flash_attention_2` enabled) in the settings.
 
+`ensure_dependencies()` will check these packages when the application starts. If any are missing or outdated, you will be asked for permission to install or upgrade them automatically.
+
 ### Step 5: Run the Application
 
 You are now ready to run the Whisper Transcription App!
 
 **Important:** ensure you ran `pip install --upgrade torch transformers optimum` before executing the command below.
 
-1.  **Start the application:** With the virtual environment active in the `whisper-flash-transcriber` directory, run one of the commands below:
+1.  **Launch the main script:** With the virtual environment active in the `whisper-flash-transcriber` directory, run one of the commands below:
     ```bash
     python src/main.py
     # or
     python -m src.main
     ```
-    Both commands start the main application file.
+    Both commands start the application's entry point.
 2.  **Application window:** A graphical interface should appear.
-3.  **System tray icon:** The program will likely minimize to the Windows system tray; right-click the icon to interact with it.
-
-### Direct or Module Execution
-
-You can start the application by running the main script directly or by invoking it as a module:
-
-```bash
-python src/main.py
-# or
-python -m src.main
-```
-
-Both options work the same after the latest fixes.
-
- 
+3.  **Tray icon:** The program will likely minimize near the Windows clock; right-click the icon to interact with it.
 
 ## Configuration
 
@@ -299,29 +287,28 @@ The application terminates immediately and safely when closed. Even if a transcr
 
 ### Hotkeys stop working on Windows 11
 
-This is a known issue with the libraries used. If the main hotkey (F3 by default) stops working after the first use, try:
+This is a known issue with the libraries used. If the main hotkey (default F3) stops working after the first use, try:
 
-*   **Press the agent hotkey (F4 by default):** a secondary hotkey exists specifically to resolve this issue.
-*   **Use the tray menu:** right-click the application's tray icon and look for something like "Re-register hotkey."
-*   **Automatic reload:** the program attempts to fix this in the background, but you may need to do it manually.
+*   **Press the agent hotkey (F4 by default):** there is a secondary hotkey precisely for unfreezing the main one.
+*   **Use the tray menu:** right-click the application icon and look for an option like "Re-register hotkey".
+*   **Automatic reload:** the program attempts to fix the issue in the background, but manual action may still be needed.
 
 ### PyTorch Installation Problems
 
 If `pip install --upgrade torch transformers optimum` fails or the application doesn't run due to PyTorch errors:
 
-*   **Check Python and pip:** verify that Python is installed and on your PATH (`python --version` and `pip --version`).
-*   **Virtual environment:** make sure the environment is active (`(venv)` should appear in your prompt).
-*   **CUDA compatibility:** if installing the GPU version, check that your NVIDIA driver and CUDA toolkit are compatible with the PyTorch version on the official site.
-*   **Internet connection:** ensure a stable connection; these packages are large.
+*   **Check Python and pip:** confirm that Python is installed and in your PATH (`python --version` and `pip --version`).
+*   **Virtual environment:** make sure the environment is active (`(venv)` on the prompt).
+*   **CUDA compatibility:** if you install the GPU version, verify that the NVIDIA driver and CUDA toolkit are compatible with the PyTorch version listed on the official site.
+*   **Internet connection:** ensure a stable connection because the packages are large.
 
-### Error "state_check_callback"
+### "state_check_callback" error
 
-When you see the message `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
-update to the latest version. The attribute is now properly initialized in `TranscriptionHandler.__init__`.
+If you see `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`, update to the latest version. The attribute is correctly initialized in `TranscriptionHandler.__init__`.
 
-### Stop signal replaces cancellation
+### Stop signal replaces cancel
 
-You can interrupt transcription at any time by sending a **stop signal** to `TranscriptionHandler`. The old cancellation method and its callback have been removed to simplify the API and improve reliability.
+You can interrupt a transcription at any moment by sending a **stop signal** to `TranscriptionHandler`. The old cancel method and its callback have been removed to simplify the API and improve reliability.
 
 ## Contributing
 
