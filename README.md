@@ -184,6 +184,18 @@ These packages provide everything required to run the application. **Turbo Mode*
 
 `ensure_dependencies()` will check these packages when the application starts. If any are missing or outdated, you will be asked for permission to install or upgrade them automatically.
 
+### PyTorch Library Compatibility
+
+Make sure `torch`, `torchaudio` and `torchvision` use **exactly the same version and build** (for example `2.2.2+cu118`). Mixing CPU and CUDA packages or different versions often leads to runtime errors.
+
+If you are on Windows and want GPU acceleration, install the CUDA build with:
+
+```bash
+pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+```
+
+Replace `cu118` with the CUDA version that matches your graphics card drivers. Turbo Mode works only on NVIDIA GPUs with compute capability **8.0 or higher**.
+
 ### Step 5: Run the Application
 
 You are now ready to run the Whisper Transcription App!
@@ -227,7 +239,7 @@ To access and change settings:
 *   **Agent Mode Prompt:** Customize the prompt sent to Gemini when using "Agent Mode".
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
-*   **Turbo Mode:** Uses Flash Attention 2 via `BetterTransformer` when you set `use_turbo` to `true` and have an Ampere or newer NVIDIA GPU. `BetterTransformer` ships with the installed packages and needs no extra pip options.
+*   **Turbo Mode:** Uses Flash Attention 2 via `BetterTransformer` when `use_turbo` is `true`. It requires an NVIDIA GPU with compute capability **8.0 or higher** (Ampere or newer). Models that are incompatible with `BetterTransformer` must keep `use_turbo` disabled. `BetterTransformer` ships with the installed packages and needs no extra pip options.
 *   **Flash Attention 2:** Enabled by default; speeds up inference with optimized kernels. Equivalent to setting `use_flash_attention_2` to `true` in `config.json`.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Save Temporary Recordings:** When enabled, the captured audio is stored as `temp_recording_<timestamp>.wav` in the application folder. This temporary file is automatically deleted once transcription completes.
@@ -239,7 +251,7 @@ To access and change settings:
 
 ### Turbo Mode
 
-When `use_turbo` is set to `true`, the model is converted using `BetterTransformer` for extra speed. Starting from `torch` 1.13, `transformers` 4.49 and `optimum` 1.14, this transformer is integrated directly into the packages, so no pip extras are required. An NVIDIA Ampere or newer GPU is still needed for effective acceleration.
+When `use_turbo` is set to `true`, the model is converted using `BetterTransformer` for extra speed. Starting from `torch` 1.13, `transformers` 4.49 and `optimum` 1.14, this transformer is integrated directly into the packages. Your GPU must support compute capability **8.0 or higher** (Ampere or newer). If the chosen model does not support `BetterTransformer`, leave `use_turbo` disabled to avoid errors.
 
 ### Flash Attention 2
 
