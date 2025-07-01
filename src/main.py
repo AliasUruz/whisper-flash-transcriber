@@ -2,19 +2,24 @@ import sys
 import tkinter as tk
 import logging
 import atexit
-import os # Adicionado para manipulação de caminhos
+import os  # Adicionado para manipulação de caminhos
+
+# Ajuste do sys.path para permitir importações ao rodar via linha de comando
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, os.path.dirname(__file__))
 
 # Verificação de dependências antes de carregar módulos pesados
 from src.utils import ensure_dependencies
 
 # Configuração de logging (mantida aqui para o ponto de entrada)
-sys.stdout.reconfigure(encoding='utf-8')
-sys.stderr.reconfigure(encoding='utf-8')
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(threadName)s - %(message)s', encoding='utf-8')
-
-# Adicionar o diretório pai (WhisperTeste) ao sys.path para importações absolutas
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(os.path.dirname(__file__))
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(threadName)s - %(message)s",
+    encoding="utf-8",
+)
 
 # Checar dependências antes de importar módulos que as utilizam
 ensure_dependencies()
