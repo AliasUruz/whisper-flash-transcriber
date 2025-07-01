@@ -12,14 +12,32 @@ BETTERTRANSFORMER_AVAILABLE = None
 
 
 def is_bettertransformer_available(model=None) -> bool:
-    """Verifica se as versões de Transformers e Optimum suportam BetterTransformer."""
-    if hasattr(transformers, "__version__") and hasattr(optimum, "__version__"):
-        if (
-            version.parse(transformers.__version__) >= version.parse("4.49.0")
-            and version.parse(optimum.__version__) >= version.parse("1.14.0")
-        ):
-            return hasattr(model, "to_bettertransformer") if model else True
-    return False
+    """Verifica se o ambiente suporta o BetterTransformer."""
+    tf_version = getattr(transformers, "__version__", "0")
+    opt_version = getattr(optimum, "__version__", "0")
+
+    if version.parse(tf_version) < version.parse("4.49.0") or version.parse(
+        opt_version
+    ) < version.parse("1.14.0"):
+        logging.info(
+            "Vers\u00f5es incompat\u00edveis de transformers (%s) ou optimum (%s) para o BetterTransformer",
+            tf_version,
+            opt_version,
+        )
+        return False
+
+    try:
+        import importlib
+        importlib.import_module("transformers.integrations")
+    except Exception:
+        logging.info("M\u00f3dulo transformers.integrations n\u00e3o encontrado")
+        return False
+
+    if model is not None and not hasattr(model, "to_bettertransformer"):
+        logging.info("Modelo sem m\u00e9todo to_bettertransformer")
+        return False
+
+    return True
 from .openrouter_api import (
     OpenRouterAPI,
 )  # Assumindo que está na raiz ou em path acessível

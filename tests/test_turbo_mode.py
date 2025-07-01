@@ -186,7 +186,7 @@ def test_bettertransformer_indisponivel(monkeypatch):
     handler = _create_handler(cfg)
     handler._load_model_task()
 
-    assert called["flag"] == 1
+    assert called["flag"] == 0
 
 
 def test_mensagem_quando_bettertransformer_indisponivel(monkeypatch):
@@ -243,3 +243,14 @@ def test_model_transformado_com_bettertransformer(monkeypatch):
     handler._load_model_task()
 
     assert handler.transcription_pipeline.model is better_model
+
+
+def test_is_bettertransformer_log_version_inadequada(monkeypatch, caplog):
+    import src.transcription_handler as th_module
+
+    monkeypatch.setattr(th_module.transformers, "__version__", "4.0")
+    monkeypatch.setattr(th_module.optimum, "__version__", "1.0")
+
+    with caplog.at_level("INFO"):
+        assert not th_module.is_bettertransformer_available()
+    assert "incompat\u00edveis" in caplog.text
