@@ -9,12 +9,13 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 1.  [Features](#features)
 2.  [System Architecture](#system-architecture)
 3.  [Installation](#installation)
-4.  [Configuration](#configuration)
-5.  [Usage](#how-to-use-the-app)
-6.  [Troubleshooting](#troubleshooting)
-7.  [Contributing](#contributing)
-8.  [Running Tests](#running-tests)
-9.  [License](#license)
+4.  [Direct or Module Execution](#direct-or-module-execution)
+5.  [Configuration](#configuration)
+6.  [Usage](#how-to-use-the-app)
+7.  [Troubleshooting](#troubleshooting)
+8.  [Contributing](#contributing)
+9.  [Running Tests](#running-tests)
+10.  [License](#license)
 
 ## Features
 

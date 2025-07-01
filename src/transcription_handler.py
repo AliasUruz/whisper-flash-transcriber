@@ -439,9 +439,9 @@ class TranscriptionHandler:
                                     self.transcription_pipeline.model.to_bettertransformer()
                                 )
                                 logging.info("Flash Attention 2 aplicada com sucesso.")
-                        except Exception as exc:
+                        except Exception:
                             warn_msg = (
-                                f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: {exc}"
+                                f"{OPTIMIZATION_TURBO_FALLBACK_MSG} Motivo: BetterTransformer indisponível. Verifique se as versões de Transformers e Optimum são compatíveis"
                             )
                             logging.warning(warn_msg)
                             if self.on_optimization_fallback_callback:

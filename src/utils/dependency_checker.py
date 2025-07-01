@@ -67,10 +67,10 @@ def ensure_dependencies() -> None:
         if trans_ver >= version.parse("4.49"):
             try:
                 import optimum
-                opt_ver = version.parse(optimum.__version__)
+                opt_ver = version.parse(getattr(optimum, "__version__", "0"))
                 if opt_ver < version.parse("1.26.1"):
                     missing_or_old.append("optimum>=1.26.1")
-            except ImportError:
+            except (ImportError, AttributeError):
                 missing_or_old.append("optimum>=1.26.1")
     except ImportError:
         # Caso transformers nem esteja instalado, já será capturado acima
