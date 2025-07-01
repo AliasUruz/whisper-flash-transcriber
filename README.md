@@ -9,12 +9,13 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 1.  [Features](#features)
 2.  [System Architecture](#system-architecture)
 3.  [Installation](#installation)
-4.  [Configuration](#configuration)
-5.  [Usage](#how-to-use-the-app)
-6.  [Troubleshooting](#troubleshooting)
-7.  [Contributing](#contributing)
-8.  [Running Tests](#running-tests)
-9.  [License](#license)
+4.  [Direct or Module Execution](#direct-or-module-execution)
+5.  [Configuration](#configuration)
+6.  [Usage](#how-to-use-the-app)
+7.  [Troubleshooting](#troubleshooting)
+8.  [Contributing](#contributing)
+9.  [Running Tests](#running-tests)
+10.  [License](#license)
 
 ## Features
 
@@ -187,15 +188,29 @@ You are now ready to run the Whisper Transcription App!
 
 **Important:** ensure you ran `pip install --upgrade torch transformers optimum` before executing the command below.
 
-1.  **Inicie o script principal:** Com o ambiente virtual ativo no diretório `whisper-flash-transcriber`, execute um dos comandos abaixo:
+1.  **Start the application:** With the virtual environment active in the `whisper-flash-transcriber` directory, run one of the commands below:
     ```bash
     python src/main.py
     # or
     python -m src.main
     ```
-    Ambos iniciam o arquivo principal da aplicação.
-2.  **Janela da aplicação:** Uma interface gráfica deverá aparecer.
-3.  **Ícone na bandeja:** O programa provavelmente ficará minimizado próximo ao relógio do Windows; interaja com ele clicando com o botão direito.
+    Both commands start the main application file.
+2.  **Application window:** A graphical interface should appear.
+3.  **System tray icon:** The program will likely minimize to the Windows system tray; right-click the icon to interact with it.
+
+### Direct or Module Execution
+
+You can start the application by running the main script directly or by invoking it as a module:
+
+```bash
+python src/main.py
+# or
+python -m src.main
+```
+
+Both options work the same after the latest fixes.
+
+ 
 
 ## Configuration
 
@@ -282,31 +297,31 @@ The application terminates immediately and safely when closed. Even if a transcr
 
 ## Troubleshooting
 
-### Atalhos param de funcionar no Windows 11
+### Hotkeys stop working on Windows 11
 
-Esse é um problema conhecido das bibliotecas utilizadas. Se o atalho principal (padrão F3) parar de funcionar após o primeiro uso, tente:
+This is a known issue with the libraries used. If the main hotkey (F3 by default) stops working after the first use, try:
 
-*   **Pressionar o atalho de agente (F4 por padrão):** existe um atalho secundário justamente para tentar resolver esse travamento.
-*   **Usar o menu da bandeja:** clique com o botão direito no ícone da aplicação e procure por algo como "Re-registrar atalho".
-*   **Recarregamento automático:** o programa tenta resolver sozinho em segundo plano, mas às vezes é preciso fazer isso manualmente.
+*   **Press the agent hotkey (F4 by default):** a secondary hotkey exists specifically to resolve this issue.
+*   **Use the tray menu:** right-click the application's tray icon and look for something like "Re-register hotkey."
+*   **Automatic reload:** the program attempts to fix this in the background, but you may need to do it manually.
 
 ### PyTorch Installation Problems
 
 If `pip install --upgrade torch transformers optimum` fails or the application doesn't run due to PyTorch errors:
 
-*   **Verifique Python e pip:** confirme que o Python está instalado e no PATH (`python --version` e `pip --version`).
-*   **Ambiente virtual:** certifique-se de que o ambiente está ativo (`(venv)` no prompt).
-*   **Compatibilidade de CUDA:** caso instale a versão com GPU, verifique se driver NVIDIA e toolkit CUDA são compatíveis com a versão do PyTorch indicada no site oficial.
-*   **Conexão com a internet:** garanta uma conexão estável, pois as bibliotecas são grandes.
+*   **Check Python and pip:** verify that Python is installed and on your PATH (`python --version` and `pip --version`).
+*   **Virtual environment:** make sure the environment is active (`(venv)` should appear in your prompt).
+*   **CUDA compatibility:** if installing the GPU version, check that your NVIDIA driver and CUDA toolkit are compatible with the PyTorch version on the official site.
+*   **Internet connection:** ensure a stable connection; these packages are large.
 
-### Erro "state_check_callback"
+### Error "state_check_callback"
 
-Ao receber a mensagem `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
-atualize para a versão mais recente. O atributo passou a ser inicializado corretamente em `TranscriptionHandler.__init__`.
+When you see the message `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,
+update to the latest version. The attribute is now properly initialized in `TranscriptionHandler.__init__`.
 
-### Sinal de parada substitui cancelamento
+### Stop signal replaces cancellation
 
-A transcrição pode ser interrompida a qualquer momento enviando um **sinal de parada** ao `TranscriptionHandler`. O método antigo de cancelamento e o callback associado foram removidos para simplificar a API e aumentar a confiabilidade.
+You can interrupt transcription at any time by sending a **stop signal** to `TranscriptionHandler`. The old cancellation method and its callback have been removed to simplify the API and improve reliability.
 
 ## Contributing
 
