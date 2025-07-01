@@ -106,10 +106,10 @@ Follow these steps carefully to get the app running on your Windows computer.
 
 You need to install two essential tools before setting up the application:
 
-1.  **Install Python 3.9 or higher:**
+1.  **Install Python 3.12 (recommended) or higher:**
     *   Python is the programming language the application is built with.
     *   Go to the official Python website: [https://www.python.org/downloads/](https://www.python.org/downloads/)
-    *   Download the latest version of Python 3.9 or newer for Windows.
+    *   Download Python 3.12 for Windows (preferred) or another version newer than 3.9.
     *   Run the downloaded installer.
     *   **VERY IMPORTANT:** On the first screen of the installer, make sure to check the box that says **"Add Python to PATH"**. This step is crucial! If you miss this, you won't be able to run Python commands easily from your terminal. If you forget, you might need to uninstall and reinstall Python.
     *   Follow the rest of the installer prompts (usually clicking "Next" or "Install").
@@ -179,7 +179,7 @@ With your virtual environment activated, install the main dependencies with:
 pip install --upgrade torch transformers optimum
 ```
 
-These packages provide everything required to run the application. **Turbo Mode** leverages `BetterTransformer`, which is already included and does not require any additional pip extras. Enable Turbo Mode by setting `use_turbo` to `true` (and keeping `use_flash_attention_2` enabled) in the settings.
+These packages provide everything required to run the application. **Turbo Mode** needs at least `torch>=1.13`, `transformers>=4.49` and `optimum>=1.14`, which already bundle `BetterTransformer`, so no extra pip options are necessary. Enable Turbo Mode by setting `use_turbo` to `true` (and keeping `use_flash_attention_2` enabled) in the settings.
 
 ### Step 5: Run the Application
 
@@ -236,7 +236,7 @@ To access and change settings:
 
 ### Turbo Mode
 
-When `use_turbo` is set to `true`, the model is converted using `BetterTransformer` for extra speed. This optimization is ready out of the box—no pip extras required. An NVIDIA Ampere or newer GPU is still needed for effective acceleration.
+When `use_turbo` is set to `true`, the model is converted using `BetterTransformer` for extra speed. Starting from `torch` 1.13, `transformers` 4.49 and `optimum` 1.14, this transformer is integrated directly into the packages, so no pip extras are required. An NVIDIA Ampere or newer GPU is still needed for effective acceleration.
 
 ### Flash Attention 2
 
@@ -333,7 +333,7 @@ Before running the tests, install the dependencies:
 ```bash
 pip install -r requirements-test.txt
 ```
-The testing requirements file also lists `optimum==1.26.1`.
+This step must be run before invoking `pytest` to avoid missing packages.
 
 Run the suite with:
 
