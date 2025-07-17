@@ -154,10 +154,11 @@ class AudioHandler:
         self._sample_count = 0
 
         raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        self._raw_temp_file = raw_tmp
         self.temp_file_path = raw_tmp.name
+        raw_tmp.close()
+        self._raw_temp_file = None
         self._sf_writer = sf.SoundFile(
-            raw_tmp.name, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
+            self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
         )
 
         if self.use_vad and self.vad_manager:
@@ -350,6 +351,10 @@ class AudioHandler:
                 logging.error(f"Erro ao remover arquivo tempor\u00e1rio: {e}")
         self.temp_file_path = None
         if self._raw_temp_file is not None:
+            try:
+                self._raw_temp_file.close()
+            except Exception as e:
+                logging.error(f"Erro ao fechar arquivo temporário: {e}")
             self._raw_temp_file = None
 
     def cleanup(self):
