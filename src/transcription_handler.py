@@ -124,6 +124,8 @@ class TranscriptionHandler:
         # Este método será chamado para orquestrar o carregamento do modelo e a criação da pipeline
         # Ele será chamado por start_model_loading
         try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             model, processor = self._load_model_task()
             if model and processor:
                 device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
@@ -465,3 +467,6 @@ class TranscriptionHandler:
             self.transcription_executor.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
             logging.error(f"Erro ao encerrar o executor de transcrição: {e}")
+        finally:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
