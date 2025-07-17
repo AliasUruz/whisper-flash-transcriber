@@ -280,6 +280,10 @@ If `pip install -r requirements.txt` fails or the application doesn't run due to
 *   **CUDA Compatibility:** If you are trying to install the CUDA version, double-check that your NVIDIA driver and CUDA toolkit versions are compatible with the PyTorch version you are trying to install, according to the PyTorch website.
 *   **Internet Connection:** Ensure you have a stable internet connection, as PyTorch and other libraries are large downloads.
 
+### FlashAttention 2 Not Installed
+
+The model loader checks for the optional `flash-attn` library. If it is missing, the app automatically falls back to the standard attention implementation, so installation of `flash-attn` is not required.
+
 ### "state_check_callback" Error
 
 If you encounter the message `AttributeError: 'TranscriptionHandler' object has no attribute 'state_check_callback'`,

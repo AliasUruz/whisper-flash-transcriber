@@ -14,4 +14,3 @@ keyboard==0.13.5
 soundfile==0.13.1
 onnxruntime==1.22.0
 bitsandbytes
-flash-attn
