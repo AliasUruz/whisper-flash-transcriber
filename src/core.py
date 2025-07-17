@@ -751,6 +751,12 @@ class AppCore:
         except Exception as e:
             logging.error(f"Error during hotkey cleanup in shutdown: {e}")
 
+        if self.transcription_handler:
+            try:
+                self.transcription_handler.shutdown()
+            except Exception as e:
+                logging.error(f"Error shutting down TranscriptionHandler executor: {e}")
+
         if self.ui_manager and getattr(self.ui_manager, "tray_icon", None):
             try:
                 self.ui_manager.tray_icon.stop()
@@ -774,12 +780,6 @@ class AppCore:
                 except Exception as e:
                     logging.error(f"Error stopping audio stream on close: {e}")
             self.audio_handler.recording_data.clear()
-
-        if self.transcription_handler:
-            try:
-                self.transcription_handler.shutdown()
-            except Exception as e:
-                logging.error(f"Error shutting down TranscriptionHandler executor: {e}")
 
         if hasattr(self.audio_handler, "cleanup"):
             try:
