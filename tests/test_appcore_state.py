@@ -3,7 +3,6 @@ import time
 import threading
 import os
 import sys
-import numpy as np
 from unittest.mock import MagicMock
 
 # Stub external dependencies before importing core module
@@ -90,8 +89,7 @@ class DummyAudioHandler:
     def stop_recording(self):
         self.is_recording = False
         self.on_recording_state_change_callback(core_module.STATE_TRANSCRIBING)
-        audio = np.zeros(1600, dtype=np.float32)
-        self.on_audio_segment_ready_callback(audio)
+        self.on_audio_segment_ready_callback("dummy.wav")
 
 class DummyTranscriptionHandler:
     def __init__(self, config_manager, gemini_api_client, on_model_ready_callback,
@@ -105,7 +103,7 @@ class DummyTranscriptionHandler:
     def start_model_loading(self):
         pass
 
-    def transcribe_audio_segment(self, audio_data, agent_mode=False):
+    def transcribe_audio_segment(self, audio_file_path, agent_mode=False):
         if self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY):
             def _run():
                 time.sleep(0.01)

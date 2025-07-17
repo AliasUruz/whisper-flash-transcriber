@@ -90,8 +90,7 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
             path = tmp_path / "temp_recording_test.wav"
             path.write_text("data")
             self.temp_file_path = str(path)
-            audio = np.zeros(1600, dtype=np.float32)
-            self.on_audio_segment_ready_callback(audio)
+            self.on_audio_segment_ready_callback(str(path))
 
     class DummyTranscriptionHandler:
         def __init__(self, *a, **k):

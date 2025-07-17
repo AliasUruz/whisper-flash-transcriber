@@ -73,15 +73,16 @@ class AudioHandlerTest(unittest.TestCase):
     def test_start_and_stop_recording_success(self):
         results = []
 
-        def on_ready(audio):
-            results.append(audio)
+        def on_ready(path):
+            results.append(path)
 
         handler = AudioHandler(self.config, on_ready, lambda *_: None)
 
         def fake_record_audio_task(self):
             self.stream_started = True
             while not self._stop_event.is_set() and self.is_recording:
-                self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
+                self._sf_writer.write(np.zeros((2, 1), dtype=np.float32))
+                self._sample_count += 2
                 time.sleep(0.01)
             self.stream_started = False
             self._stop_event.clear()
@@ -97,6 +98,7 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertTrue(started)
         self.assertTrue(stopped)
         self.assertTrue(len(results) == 1)
+        self.assertTrue(os.path.exists(results[0]))
         mock_warn.assert_not_called()
 
     def test_temp_recording_saved_and_cleanup(self):
@@ -108,7 +110,8 @@ class AudioHandlerTest(unittest.TestCase):
         def fake_record_audio_task(self):
             self.stream_started = True
             while not self._stop_event.is_set() and self.is_recording:
-                self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
+                self._sf_writer.write(np.zeros((2, 1), dtype=np.float32))
+                self._sample_count += 2
                 time.sleep(0.01)
             self.stream_started = False
             self._stop_event.clear()
@@ -142,7 +145,8 @@ class AudioHandlerTest(unittest.TestCase):
         def fake_record_audio_task(self):
             self.stream_started = True
             while not self._stop_event.is_set() and self.is_recording:
-                self.recording_data.append(np.zeros((2, 1), dtype=np.float32))
+                self._sf_writer.write(np.zeros((2, 1), dtype=np.float32))
+                self._sample_count += 2
                 time.sleep(0.01)
             self.stream_started = False
             self._stop_event.clear()

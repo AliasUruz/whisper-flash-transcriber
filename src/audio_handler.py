@@ -1,37 +1,35 @@
-import sounddevice as sd
-import numpy as np
-import threading
 import logging
-import time
-import soundfile as sf
-from .vad_manager import VADManager # Assumindo que vad_manager.py está na raiz ou em um path acessível
-from .config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
+import threading
 import os
+import time
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
+import tempfile
+from pathlib import Path
 
-# Constantes de áudio (movidas de whisper_tkinter.py)
+from .vad_manager import VADManager
+from .config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
+
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1
 
+
 class AudioHandler:
+    """Gerencia a gravação de áudio em arquivo temporário."""
+
     def __init__(self, config_manager, on_audio_segment_ready_callback, on_recording_state_change_callback):
         self.config_manager = config_manager
-        self.on_audio_segment_ready_callback = on_audio_segment_ready_callback # Callback para enviar segmento para transcrição
-        self.on_recording_state_change_callback = on_recording_state_change_callback # Callback para atualizar estado da UI
+        self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
+        self.on_recording_state_change_callback = on_recording_state_change_callback
 
         self.is_recording = False
         self.start_time = None
-        self.recording_data = []
         self.audio_stream = None
-        self.sound_lock = threading.RLock()
         self.stream_started = False
-        self.temp_file_path = None
-
-        # Carregar configurações de som
-        self.sound_enabled = self.config_manager.get("sound_enabled")
-        self.sound_frequency = self.config_manager.get("sound_frequency")
-        self.sound_duration = self.config_manager.get("sound_duration")
-        self.sound_volume = self.config_manager.get("sound_volume")
-        self.min_record_duration = self.config_manager.get("min_record_duration")
+        self._stop_event = threading.Event()
+        self._record_thread = None
+        self.sound_lock = threading.RLock()
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_threshold = self.config_manager.get("vad_threshold")
@@ -42,24 +40,43 @@ class AudioHandler:
             self.use_vad = False
             self.vad_manager = None
         self._vad_silence_counter = 0.0
-        self._stop_event = threading.Event()
-        self._record_thread = None
 
+        self.sound_enabled = self.config_manager.get("sound_enabled")
+        self.sound_frequency = self.config_manager.get("sound_frequency")
+        self.sound_duration = self.config_manager.get("sound_duration")
+        self.sound_volume = self.config_manager.get("sound_volume")
+        self.min_record_duration = self.config_manager.get("min_record_duration")
+
+        self.temp_file_path: str | None = None
+        self._raw_temp_file: tempfile.NamedTemporaryFile | None = None
+        self._sf_writer: sf.SoundFile | None = None
+        self._sample_count = 0
+
+    # ------------------------------------------------------------------
+    # Grava\u00e7\u00e3o
+    # ------------------------------------------------------------------
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
             logging.warning(f"Audio callback status: {status}")
-        if self.is_recording:
-            if self.use_vad:
-                is_speech = self.vad_manager.is_speech(indata[:, 0])
-                if is_speech:
-                    self._vad_silence_counter = 0.0
-                    self.recording_data.append(indata.copy())
-                else:
-                    self._vad_silence_counter += len(indata) / AUDIO_SAMPLE_RATE
-                    if self._vad_silence_counter <= self.vad_silence_duration:
-                        self.recording_data.append(indata.copy())
+        if not self.is_recording or self._sf_writer is None:
+            return
+
+        write_data = None
+        if self.use_vad and self.vad_manager:
+            is_speech = self.vad_manager.is_speech(indata[:, 0])
+            if is_speech:
+                self._vad_silence_counter = 0.0
+                write_data = indata.copy()
             else:
-                self.recording_data.append(indata.copy())
+                self._vad_silence_counter += len(indata) / AUDIO_SAMPLE_RATE
+                if self._vad_silence_counter <= self.vad_silence_duration:
+                    write_data = indata.copy()
+        else:
+            write_data = indata.copy()
+
+        if write_data is not None:
+            self._sf_writer.write(write_data)
+            self._sample_count += len(write_data)
 
     def _record_audio_task(self):
         self.audio_stream = None
@@ -73,7 +90,7 @@ class AudioHandler:
                 samplerate=AUDIO_SAMPLE_RATE,
                 channels=AUDIO_CHANNELS,
                 callback=self._audio_callback,
-                dtype='float32'
+                dtype="float32",
             )
             self.audio_stream.start()
             self.stream_started = True
@@ -85,7 +102,7 @@ class AudioHandler:
         except sd.PortAudioError as e:
             logging.error(f"PortAudio error during recording: {e}", exc_info=True)
             self.is_recording = False
-            self.on_recording_state_change_callback("ERROR_AUDIO") # Notificar erro
+            self.on_recording_state_change_callback("ERROR_AUDIO")
         except Exception as e:
             logging.error(f"Error in audio recording thread: {e}", exc_info=True)
             self.is_recording = False
@@ -113,8 +130,6 @@ class AudioHandler:
             finally:
                 finished_event.set()
 
-        # A thread de fechamento é iniciada como daemon para não bloquear o encerramento
-        # da aplicação caso o fechamento demore mais que o esperado.
         t = threading.Thread(target=_closer, daemon=True)
         t.start()
         finished_event.wait(timeout)
@@ -122,14 +137,13 @@ class AudioHandler:
         if t.is_alive():
             logging.error("Thread de fechamento n\u00e3o terminou em %ss", timeout)
 
-
     def start_recording(self):
         if self.is_recording:
-            logging.warning("Gravação já está ativa.")
+            logging.warning("Grava\u00e7\u00e3o j\u00e1 est\u00e1 ativa.")
             return False
 
         if self._record_thread and self._record_thread.is_alive():
-            logging.debug("Aguardando término da thread de gravação anterior.")
+            logging.debug("Aguardando t\u00e9rmino da thread de grava\u00e7\u00e3o anterior.")
             self._stop_event.set()
             self._record_thread.join(timeout=2)
 
@@ -137,28 +151,31 @@ class AudioHandler:
 
         self.is_recording = True
         self.start_time = time.time()
-        self.recording_data.clear()
+        self._sample_count = 0
+
+        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        self._raw_temp_file = raw_tmp
+        self.temp_file_path = raw_tmp.name
+        self._sf_writer = sf.SoundFile(
+            raw_tmp.name, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
+        )
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
         self._vad_silence_counter = 0.0
-        logging.debug("VAD reiniciado e contador de silêncio zerado para nova gravação.")
+        logging.debug("VAD reiniciado e contador de sil\u00eancio zerado para nova grava\u00e7\u00e3o.")
 
         self.on_recording_state_change_callback("RECORDING")
 
-        if self.use_vad and self.vad_manager:
-            self.vad_manager.reset_states()
-            logging.debug("Estados do VAD reiniciados.")
-
         self._record_thread = threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread")
         self._record_thread.start()
-        
+
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": True}, daemon=True, name="StartSoundThread").start()
         return True
 
     def stop_recording(self):
         if not self.is_recording:
-            logging.warning("Gravação não está ativa para ser parada.")
+            logging.warning("Grava\u00e7\u00e3o n\u00e3o est\u00e1 ativa para ser parada.")
             return False
 
         self.is_recording = False
@@ -168,61 +185,58 @@ class AudioHandler:
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
         self._vad_silence_counter = 0.0
-        logging.debug("VAD reiniciado e contador de silêncio zerado ao parar a gravação.")
+        logging.debug("VAD reiniciado e contador de sil\u00eancio zerado ao parar a grava\u00e7\u00e3o.")
 
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
 
         if self._record_thread:
             self._record_thread.join(timeout=2)
 
+        if self._sf_writer is not None:
+            try:
+                self._sf_writer.close()
+            except Exception as e:
+                logging.error(f"Erro ao fechar arquivo tempor\u00e1rio: {e}")
+            self._sf_writer = None
+
         if not stream_was_started:
             logging.warning("Stop recording called but audio stream never started. Ignoring data.")
-            self.recording_data.clear()
+            self._cleanup_temp_file()
             self.on_recording_state_change_callback("IDLE")
             return False
 
         recording_duration = time.time() - self.start_time
-        if not self.recording_data:
-            logging.warning("Nenhum áudio capturado. Gravacao interrompida antes do início.")
+        if self._sample_count == 0 or recording_duration < self.min_record_duration:
+            logging.warning(
+                f"Grava\u00e7\u00e3o muito curta (< {self.min_record_duration}s) ou vazia. Descartando."
+            )
+            self._cleanup_temp_file()
             self.on_recording_state_change_callback("IDLE")
             return False
-        if recording_duration < self.min_record_duration:
-            logging.warning(f"Gravação muito curta (< {self.min_record_duration}s). Descartando.")
-            self.recording_data.clear()
-            self.on_recording_state_change_callback("IDLE")
-            return False
-
-        full_audio = np.concatenate(self.recording_data)
-        self.recording_data.clear()
-
-        # Garantir que o áudio seja mono (1 canal) e tenha a dimensão correta (1D)
-        if full_audio.ndim > 1:
-            if full_audio.shape[1] > 1:
-                logging.info(f"Áudio gravado tem {full_audio.shape[1]} canais. Convertendo para mono.")
-                full_audio = np.mean(full_audio, axis=1)
-            else:
-                # Se já for mono mas em formato 2D (n, 1), achata para 1D (n,)
-                logging.info("Áudio já é mono, achatando para formato 1D.")
-                full_audio = full_audio.flatten()
 
         if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
             try:
                 ts = int(time.time())
                 filename = f"temp_recording_{ts}.wav"
-                sf.write(filename, full_audio, AUDIO_SAMPLE_RATE)
+                data, sr = sf.read(self.temp_file_path, dtype="float32")
+                sf.write(filename, data, sr)
+                Path(self.temp_file_path).unlink(missing_ok=True)
                 self.temp_file_path = filename
                 logging.info(f"Temporary recording saved to {filename}")
             except Exception as e:
                 logging.error(f"Failed to save temporary recording: {e}")
-                self.temp_file_path = None
+                self._cleanup_temp_file()
+        else:
+            logging.debug(f"Temporary audio stored at {self.temp_file_path}")
 
         self.start_time = None
-        # Mudar o estado para TRANSCRIBING ANTES de enviar o áudio para processamento
         self.on_recording_state_change_callback("TRANSCRIBING")
-        
-        self.on_audio_segment_ready_callback(full_audio)
+        self.on_audio_segment_ready_callback(self.temp_file_path)
         return True
 
+    # ------------------------------------------------------------------
+    # Som de aviso (beep)
+    # ------------------------------------------------------------------
     def _generate_tone_data(self, frequency, duration, volume_factor):
         num_samples = int(duration * AUDIO_SAMPLE_RATE)
         t = np.linspace(0, duration, num_samples, False)
@@ -280,7 +294,7 @@ class AudioHandler:
                     samplerate=AUDIO_SAMPLE_RATE,
                     channels=AUDIO_CHANNELS,
                     callback=callback_instance,
-                    dtype='float32'
+                    dtype="float32",
                 )
                 stream.start()
                 logging.debug("OutputStream started for tone playback.")
@@ -298,8 +312,10 @@ class AudioHandler:
                 except Exception as e:
                     logging.error(f"Error stopping/closing OutputStream: {e}")
 
+    # ------------------------------------------------------------------
+    # Configura\u00e7\u00f5es e limpeza
+    # ------------------------------------------------------------------
     def update_config(self):
-        """Recarrega configurações e atualiza componentes internos."""
         self.sound_enabled = self.config_manager.get("sound_enabled")
         self.sound_frequency = self.config_manager.get("sound_frequency")
         self.sound_duration = self.config_manager.get("sound_duration")
@@ -323,11 +339,20 @@ class AudioHandler:
             self.vad_manager = None
 
         self._vad_silence_counter = 0.0
+        logging.info("AudioHandler: Configura\u00e7\u00f5es atualizadas.")
 
-        logging.info("AudioHandler: Configurações atualizadas.")
+    def _cleanup_temp_file(self):
+        if self.temp_file_path and os.path.exists(self.temp_file_path):
+            try:
+                os.remove(self.temp_file_path)
+                logging.info(f"Deleted temp audio file: {self.temp_file_path}")
+            except Exception as e:
+                logging.error(f"Erro ao remover arquivo tempor\u00e1rio: {e}")
+        self.temp_file_path = None
+        if self._raw_temp_file is not None:
+            self._raw_temp_file = None
 
     def cleanup(self):
-        """Libera recursos do stream de áudio e limpa dados temporários."""
         if self.is_recording:
             self.stop_recording()
         elif self.audio_stream is not None:
@@ -337,9 +362,15 @@ class AudioHandler:
                 self.audio_stream.close()
                 logging.info("Audio stream stopped during cleanup.")
             except Exception as e:
-                logging.error(f"Erro ao fechar stream de áudio: {e}")
+                logging.error(f"Erro ao fechar stream de \u00e1udio: {e}")
             finally:
                 self.audio_stream = None
 
-        self.recording_data.clear()
-        self.temp_file_path = None
+        if self._sf_writer is not None:
+            try:
+                self._sf_writer.close()
+            except Exception:
+                pass
+            self._sf_writer = None
+
+        self._cleanup_temp_file()
