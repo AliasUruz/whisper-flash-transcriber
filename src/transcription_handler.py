@@ -317,14 +317,24 @@ class TranscriptionHandler:
             
             quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
+            # Determina dinamicamente se o FlashAttention 2 está disponível
+            try:
+                import importlib.util
+
+                use_flash_attn = importlib.util.find_spec("flash_attn") is not None
+            except Exception:  # pragma: no cover - segurança extra
+                use_flash_attn = False
+
+            attn_impl = "flash_attention_2" if use_flash_attn else "sdpa"
+
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_id,
-                torch_dtype=torch.float16,  # Necessário para Flash Attention 2
+                torch_dtype=torch_dtype_local,
                 low_cpu_mem_usage=True,
                 use_safetensors=True,
                 device_map={'': device},
                 quantization_config=quant_config,
-                attn_implementation="flash_attention_2"  # Novo parâmetro para aceleração
+                attn_implementation=attn_impl,
             )
             
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
