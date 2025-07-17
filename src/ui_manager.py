@@ -3,6 +3,7 @@ import tkinter.messagebox as messagebox
 from tkinter import simpledialog # Adicionado para askstring
 import logging
 import threading
+import time
 import pystray
 from PIL import Image, ImageDraw
 
@@ -74,6 +75,10 @@ class UIManager:
         }
         self.DEFAULT_ICON_COLOR = ('black', 'white')
 
+        # Controle interno para atualizar a tooltip durante a gravação
+        self.recording_timer_thread = None
+        self.stop_recording_timer_event = threading.Event()
+
     # Methods for the live transcription window
     def _show_live_transcription_window(self):
         # This functionality has been disabled at the user's request.
@@ -135,6 +140,22 @@ class UIManager:
             messagebox.showerror("Valor inválido", f"Valor inválido para {field_name}.", parent=parent)
             return None
 
+    def _recording_tooltip_updater(self):
+        """Atualiza a tooltip com a duração da gravação a cada segundo."""
+        while not self.stop_recording_timer_event.is_set():
+            start_time = getattr(self.core_instance_ref.audio_handler, "start_time", None)
+            if start_time is None:
+                break
+            elapsed = time.time() - start_time
+            tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
+            self.tray_icon.title = tooltip
+            time.sleep(1)
+
+    def _format_elapsed(self, seconds: float) -> str:
+        """Formata segundos em MM:SS."""
+        m, s = divmod(int(seconds), 60)
+        return f"{m:02d}:{s:02d}"
+
     def update_tray_icon(self, state):
         # Logic moved from global, adjusted to use self.tray_icon and self.core_instance_ref
         if self.tray_icon:
@@ -142,10 +163,27 @@ class UIManager:
             icon_image = self.create_image(64, 64, color1, color2)
             self.tray_icon.icon = icon_image
             tooltip = f"Whisper Recorder ({state})"
-            if state == "IDLE" and self.core_instance_ref:
-                tooltip += f" - Record: {self.core_instance_ref.record_key.upper()} - Agent: {self.core_instance_ref.agent_key.upper()}"
-            elif state.startswith("ERROR") and self.core_instance_ref:
-                tooltip += " - Check Logs/Settings"
+            if state == "RECORDING":
+                if not self.recording_timer_thread or not self.recording_timer_thread.is_alive():
+                    self.stop_recording_timer_event.clear()
+                    self.recording_timer_thread = threading.Thread(
+                        target=self._recording_tooltip_updater,
+                        daemon=True,
+                        name="RecordingTooltipThread",
+                    )
+                    self.recording_timer_thread.start()
+                start_time = getattr(self.core_instance_ref.audio_handler, "start_time", None)
+                if start_time is not None:
+                    elapsed = time.time() - start_time
+                    tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
+            else:
+                if self.recording_timer_thread and self.recording_timer_thread.is_alive():
+                    self.stop_recording_timer_event.set()
+                    self.recording_timer_thread.join(timeout=1)
+                if state == "IDLE" and self.core_instance_ref:
+                    tooltip += f" - Record: {self.core_instance_ref.record_key.upper()} - Agent: {self.core_instance_ref.agent_key.upper()}"
+                elif state.startswith("ERROR") and self.core_instance_ref:
+                    tooltip += " - Check Logs/Settings"
             self.tray_icon.title = tooltip
             self.tray_icon.update_menu()
             logging.debug(f"Tray icon updated for state: {state}")
