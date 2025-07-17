@@ -309,10 +309,12 @@ class TranscriptionHandler:
             
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_id,
-                torch_dtype=torch_dtype_local,
-                low_cpu_mem_usage=True, # Ajuda a reduzir o uso de RAM durante o carregamento
+                torch_dtype=torch.float16, # Necessário para Flash Attention 2
+                low_cpu_mem_usage=True,
                 use_safetensors=True,
-                device_map={'': device} # Especifica que todo o modelo vai para o dispositivo alvo
+                device_map={'': device},
+                load_in_8bit=True,  # Novo parâmetro para reduzir VRAM
+                attn_implementation="flash_attention_2"  # Novo parâmetro para aceleração
             )
             
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
