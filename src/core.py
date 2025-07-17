@@ -13,6 +13,7 @@ except ImportError as exc:
     ) from exc
 import pyperclip # Ainda necessário para _handle_transcription_result
 import numpy as np # Adicionado para np.ndarray no callback
+import soundfile as sf
 from tkinter import messagebox # Adicionado para messagebox no _on_model_load_failed
 
 # Importar os novos módulos
@@ -122,12 +123,15 @@ class AppCore:
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
 
-    def _on_audio_segment_ready(self, audio_segment, duration_seconds: float | None = None):
-        """Callback do AudioHandler quando um segmento de áudio está pronto para transcrição."""
-        if isinstance(audio_segment, np.ndarray):
-            duration_seconds = len(audio_segment) / AUDIO_SAMPLE_RATE
-        else:
-            duration_seconds = duration_seconds or 0.0
+    def _on_audio_segment_ready(self, audio_file_path: str):
+        """Callback que recebe o caminho do arquivo de áudio gravado."""
+        self.temp_audio_file = audio_file_path  # Armazena o caminho para exclusão posterior
+        duration_seconds = 0.0
+        try:
+            with sf.SoundFile(audio_file_path) as f:
+                duration_seconds = len(f) / f.samplerate
+        except Exception as e:
+            logging.warning(f"Não foi possível obter duração do áudio: {e}")
 
         min_duration = self.config_manager.get('min_transcription_duration')
         
@@ -146,7 +150,7 @@ class AppCore:
         )
         
         # Passa o estado capturado para o handler de transcrição.
-        self.transcription_handler.transcribe_audio_segment(audio_segment, is_agent_mode)
+        self.transcription_handler.transcribe_audio_segment(audio_file_path, is_agent_mode)
 
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
