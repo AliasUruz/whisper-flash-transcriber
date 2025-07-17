@@ -3,6 +3,13 @@ import threading
 import concurrent.futures
 import torch
 from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
+
+try:
+    from transformers import BitsAndBytesConfig
+except Exception:  # pragma: no cover - fallback for test stubs
+    class BitsAndBytesConfig:  # type: ignore[py-class-var]
+        def __init__(self, *_, **__):
+            pass
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
 
 # Importar constantes de configuração
@@ -308,13 +315,15 @@ class TranscriptionHandler:
 
             logging.info(f"Carregando modelo {model_id}...")
             
+            quant_config = BitsAndBytesConfig(load_in_8bit=True)
+
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_id,
-                torch_dtype=torch.float16, # Necessário para Flash Attention 2
+                torch_dtype=torch.float16,  # Necessário para Flash Attention 2
                 low_cpu_mem_usage=True,
                 use_safetensors=True,
                 device_map={'': device},
-                load_in_8bit=True,  # Novo parâmetro para reduzir VRAM
+                quantization_config=quant_config,
                 attn_implementation="flash_attention_2"  # Novo parâmetro para aceleração
             )
             
