@@ -59,3 +59,9 @@ def test_safe_get_float_valid(monkeypatch):
     monkeypatch.setattr('src.ui_manager.messagebox.showerror', mock_error)
     assert manager._safe_get_float(var, "Teste", None) == 3.14
     mock_error.assert_not_called()
+
+
+def test_format_elapsed():
+    manager = _make_manager()
+    assert manager._format_elapsed(11) == "00:11"
+    assert manager._format_elapsed(73) == "01:13"
