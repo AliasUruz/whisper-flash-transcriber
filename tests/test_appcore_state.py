@@ -103,7 +103,7 @@ class DummyTranscriptionHandler:
     def start_model_loading(self):
         pass
 
-    def transcribe_audio_segment(self, audio_file_path, agent_mode=False):
+    def transcribe_audio_segment(self, audio_source, agent_mode=False):
         if self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY):
             def _run():
                 time.sleep(0.01)
