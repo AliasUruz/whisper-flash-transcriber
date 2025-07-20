@@ -69,6 +69,7 @@ Transcribed speech: {text}""",
         "gemini-2.5-pro"
     ],
     "save_temp_recordings": False,
+    "record_to_memory": False,
     "min_transcription_duration": 1.0 # Nova configuração
 }
 
@@ -86,6 +87,7 @@ BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
+RECORD_TO_MEMORY_CONFIG_KEY = "record_to_memory"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
@@ -219,6 +221,14 @@ class ConfigManager:
             self.config.get(
                 SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
+            )
+        )
+
+        # Opção para gravar diretamente na memória em vez de arquivo temporário
+        self.config[RECORD_TO_MEMORY_CONFIG_KEY] = _parse_bool(
+            self.config.get(
+                RECORD_TO_MEMORY_CONFIG_KEY,
+                self.default_config[RECORD_TO_MEMORY_CONFIG_KEY],
             )
         )
     
@@ -416,3 +426,12 @@ class ConfigManager:
 
     def set_save_temp_recordings(self, value: bool):
         self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(value)
+
+    def get_record_to_memory(self):
+        return self.config.get(
+            RECORD_TO_MEMORY_CONFIG_KEY,
+            self.default_config[RECORD_TO_MEMORY_CONFIG_KEY],
+        )
+
+    def set_record_to_memory(self, value: bool):
+        self.config[RECORD_TO_MEMORY_CONFIG_KEY] = bool(value)
