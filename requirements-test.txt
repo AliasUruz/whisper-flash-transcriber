@@ -13,3 +13,4 @@ google-generativeai
 keyboard
 soundfile>=0.13.1
 onnxruntime
+psutil
