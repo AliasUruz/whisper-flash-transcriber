@@ -4,6 +4,7 @@ import threading
 import os
 import sys
 from unittest.mock import MagicMock
+import numpy as np
 
 # Stub external dependencies before importing core module
 fake_pyautogui = types.ModuleType("pyautogui")
@@ -207,3 +208,36 @@ def test_state_idle_after_text_correction(monkeypatch):
 
     time.sleep(0.02)
     assert app.current_state == core_module.STATE_IDLE
+
+
+def test_transcription_handler_receives_path(monkeypatch):
+    app = setup_app(monkeypatch)
+    app.transcription_handler.transcribe_audio_segment = MagicMock()
+
+    app.current_state = core_module.STATE_IDLE
+
+    app.start_recording()
+    app.stop_recording()
+
+    arg = app.transcription_handler.transcribe_audio_segment.call_args[0][0]
+    assert isinstance(arg, str)
+
+
+def test_transcription_handler_receives_ndarray(monkeypatch):
+    app = setup_app(monkeypatch)
+    app.transcription_handler.transcribe_audio_segment = MagicMock()
+
+    def stop_recording_array(self):
+        self.is_recording = False
+        self.on_recording_state_change_callback(core_module.STATE_TRANSCRIBING)
+        self.on_audio_segment_ready_callback(np.zeros(10, dtype=np.float32))
+
+    app.audio_handler.stop_recording = types.MethodType(stop_recording_array, app.audio_handler)
+
+    app.current_state = core_module.STATE_IDLE
+
+    app.start_recording()
+    app.stop_recording()
+
+    arg = app.transcription_handler.transcribe_audio_segment.call_args[0][0]
+    assert isinstance(arg, np.ndarray)
