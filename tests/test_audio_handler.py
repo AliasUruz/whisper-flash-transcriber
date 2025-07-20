@@ -163,23 +163,18 @@ class AudioHandlerTest(unittest.TestCase):
 
         self.assertIsNone(handler.temp_file_path)
 
-    def test_record_to_memory_mode(self):
-        self.config.data['record_to_memory'] = True
+    def test_in_memory_recording_callback_and_path(self):
         results = []
 
         def on_ready(data):
             results.append(data)
 
-        handler = AudioHandler(self.config, on_ready, lambda *_: None)
+        handler = AudioHandler(self.config, on_ready, lambda *_: None, in_memory_mode=True)
 
         def fake_record_audio_task(self):
             self.stream_started = True
             while not self._stop_event.is_set() and self.is_recording:
-                if self.record_to_memory:
-                    self._frame_buffer.append(np.zeros((2, 1), dtype=np.float32))
-                else:
-                    self._sf_writer.write(np.zeros((2, 1), dtype=np.float32))
-                self._sample_count += 2
+                self._audio_callback(np.zeros((2, 1), dtype=np.float32), 2, None, None)
                 time.sleep(0.01)
             self.stream_started = False
             self._stop_event.clear()
@@ -195,7 +190,7 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertTrue(stopped)
         self.assertEqual(len(results), 1)
         self.assertIsInstance(results[0], np.ndarray)
-        self.assertEqual(results[0].shape[1], 1)
+        self.assertIsNone(handler.temp_file_path)
 
     def test_close_input_stream_thread_does_not_block(self):
         class SlowStream:

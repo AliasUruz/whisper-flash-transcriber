@@ -346,15 +346,15 @@ class TranscriptionHandler:
             # Removido: self.on_model_error_callback(error_message) # Notifica o erro imediatamente
             return None, None # Retorna None em caso de falha
 
-    def transcribe_audio_segment(self, audio_file_path: str, agent_mode: bool = False):
-        """Envia segmento para transcrição assíncrona."""
+    def transcribe_audio_segment(self, audio_source, agent_mode: bool = False):
+        """Envia segmento para transcrição assíncrona (arquivo ou array)."""
         self._stop_signal_event.clear()
 
         self.transcription_future = self.transcription_executor.submit(
-            self._transcription_task, audio_file_path, agent_mode
+            self._transcription_task, audio_source, agent_mode
         )
 
-    def _transcription_task(self, audio_file_path: str, agent_mode: bool) -> None:
+    def _transcription_task(self, audio_source, agent_mode: bool) -> None:
         if self.transcription_cancel_event.is_set():
             logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
             return
@@ -375,7 +375,7 @@ class TranscriptionHandler:
                 "language": None
             }
             result = self.pipe(
-                audio_file_path,
+                audio_source,
                 chunk_length_s=30,
                 batch_size=dynamic_batch_size,
                 return_timestamps=False,
