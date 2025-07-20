@@ -18,11 +18,20 @@ AUDIO_CHANNELS = 1
 class AudioHandler:
     """Gerencia a gravação de áudio em arquivo temporário."""
 
-    def __init__(self, config_manager, on_audio_segment_ready_callback, on_recording_state_change_callback, in_memory_mode: bool = False):
+    def __init__(
+        self,
+        config_manager,
+        on_audio_segment_ready_callback,
+        on_recording_state_change_callback,
+        in_memory_mode: bool = False,
+        max_in_memory_seconds: float | None = None,
+    ):
         self.config_manager = config_manager
         self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
         self.on_recording_state_change_callback = on_recording_state_change_callback
         self.in_memory_mode = in_memory_mode
+        self.max_in_memory_seconds = max_in_memory_seconds
+        self._in_memory_duration = 0.0
 
         self.is_recording = False
         self.start_time = None
@@ -84,6 +93,12 @@ class AudioHandler:
         if write_data is not None:
             if self.in_memory_mode:
                 self._audio_frames.append(write_data.copy())
+                self._in_memory_duration += len(write_data) / AUDIO_SAMPLE_RATE
+                if (
+                    self.max_in_memory_seconds is not None
+                    and self._in_memory_duration >= self.max_in_memory_seconds
+                ):
+                    self._migrate_to_file()
             else:
                 self._sf_writer.write(write_data)
             self._sample_count += len(write_data)
@@ -147,6 +162,23 @@ class AudioHandler:
         if t.is_alive():
             logging.error("Thread de fechamento n\u00e3o terminou em %ss", timeout)
 
+    def _migrate_to_file(self):
+        """Move os quadros gravados em memória para um arquivo temporário."""
+        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        self.temp_file_path = raw_tmp.name
+        raw_tmp.close()
+        self._sf_writer = sf.SoundFile(
+            self.temp_file_path,
+            mode="w",
+            samplerate=AUDIO_SAMPLE_RATE,
+            channels=AUDIO_CHANNELS,
+        )
+        if self._audio_frames:
+            data = np.concatenate(self._audio_frames, axis=0)
+            self._sf_writer.write(data)
+            self._audio_frames = []
+        self.in_memory_mode = False
+
     def start_recording(self):
         if self.is_recording:
             logging.warning("Grava\u00e7\u00e3o j\u00e1 est\u00e1 ativa.")
@@ -162,6 +194,7 @@ class AudioHandler:
         self.is_recording = True
         self.start_time = time.time()
         self._sample_count = 0
+        self._in_memory_duration = 0.0
 
         if self.in_memory_mode:
             self.temp_file_path = None
