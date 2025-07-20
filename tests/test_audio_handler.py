@@ -40,6 +40,7 @@ class DummyConfig:
             'use_vad': False,
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
+            'record_to_memory': False,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 

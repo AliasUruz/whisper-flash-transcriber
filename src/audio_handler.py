@@ -47,10 +47,13 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+        self.record_to_memory = self.config_manager.get("record_to_memory")
+        self.record_to_memory = self.config_manager.get("record_to_memory")
 
         self.temp_file_path: str | None = None
         self._raw_temp_file: tempfile.NamedTemporaryFile | None = None
         self._sf_writer: sf.SoundFile | None = None
+        self._frame_buffer: list[np.ndarray] | None = None
         self._sample_count = 0
         self._audio_frames: list[np.ndarray] = []
 
@@ -257,7 +260,11 @@ class AudioHandler:
 
         self.start_time = None
         self.on_recording_state_change_callback("TRANSCRIBING")
-        self.on_audio_segment_ready_callback(self.temp_file_path)
+        if self.record_to_memory:
+            audio_data = np.concatenate(self._frame_buffer, axis=0) if self._frame_buffer else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
+            self.on_audio_segment_ready_callback(audio_data)
+        else:
+            self.on_audio_segment_ready_callback(self.temp_file_path)
         return True
 
     # ------------------------------------------------------------------

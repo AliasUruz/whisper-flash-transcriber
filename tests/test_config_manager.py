@@ -48,6 +48,7 @@ def test_parse_bool_values(tmp_path, monkeypatch, value, expected):
         "display_transcripts_in_terminal": value,
         "save_temp_recordings": value,
         "use_vad": value,
+        "record_to_memory": value,
     }
 
     cfg_path.write_text(json.dumps(config))
@@ -61,3 +62,4 @@ def test_parse_bool_values(tmp_path, monkeypatch, value, expected):
     assert cm.get(config_manager.DISPLAY_TRANSCRIPTS_KEY) is expected
     assert cm.get(config_manager.SAVE_TEMP_RECORDINGS_CONFIG_KEY) is expected
     assert cm.get(config_manager.USE_VAD_CONFIG_KEY) is expected
+    assert cm.get_record_to_memory() is expected
