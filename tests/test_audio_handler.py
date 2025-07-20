@@ -41,6 +41,7 @@ class DummyConfig:
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
             'record_to_memory': False,
+            'max_memory_seconds': 30,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 

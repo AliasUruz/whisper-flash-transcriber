@@ -569,6 +569,8 @@ class AppCore:
                 "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
                 "new_min_transcription_duration": "min_transcription_duration",
                 "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+                "new_record_to_memory": "record_to_memory",
+                "new_max_memory_seconds": "max_memory_seconds",
                 "new_gemini_model_options": "gemini_model_options",
                 "new_use_vad": "use_vad",
                 "new_vad_threshold": "vad_threshold",
@@ -667,7 +669,7 @@ class AppCore:
         self._apply_initial_config_to_core_attributes()
 
         # Propagar para TranscriptionHandler se for uma configuração relevante
-        if key in ["batch_size_mode", "manual_batch_size", "gpu_index", "min_transcription_duration"]:
+        if key in ["batch_size_mode", "manual_batch_size", "gpu_index", "min_transcription_duration", "record_to_memory", "max_memory_seconds"]:
             self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
             self.transcription_handler.update_config()
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
