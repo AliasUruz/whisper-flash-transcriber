@@ -224,7 +224,7 @@ class ConfigManager:
             )
         )
 
-        # Opção para gravar diretamente na memória em vez de arquivo temporário
+        # Gravar áudio diretamente na memória em vez de arquivo
         self.config[RECORD_TO_MEMORY_CONFIG_KEY] = _parse_bool(
             self.config.get(
                 RECORD_TO_MEMORY_CONFIG_KEY,

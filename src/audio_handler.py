@@ -46,10 +46,13 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+        self.record_to_memory = self.config_manager.get("record_to_memory")
+        self.record_to_memory = self.config_manager.get("record_to_memory")
 
         self.temp_file_path: str | None = None
         self._raw_temp_file: tempfile.NamedTemporaryFile | None = None
         self._sf_writer: sf.SoundFile | None = None
+        self._frame_buffer: list[np.ndarray] | None = None
         self._sample_count = 0
 
     # ------------------------------------------------------------------
@@ -58,7 +61,7 @@ class AudioHandler:
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
             logging.warning(f"Audio callback status: {status}")
-        if not self.is_recording or self._sf_writer is None:
+        if not self.is_recording:
             return
 
         write_data = None
@@ -75,7 +78,12 @@ class AudioHandler:
             write_data = indata.copy()
 
         if write_data is not None:
-            self._sf_writer.write(write_data)
+            if self.record_to_memory:
+                if self._frame_buffer is not None:
+                    self._frame_buffer.append(write_data.copy())
+            else:
+                if self._sf_writer is not None:
+                    self._sf_writer.write(write_data)
             self._sample_count += len(write_data)
 
     def _record_audio_task(self):
@@ -153,13 +161,19 @@ class AudioHandler:
         self.start_time = time.time()
         self._sample_count = 0
 
-        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        self.temp_file_path = raw_tmp.name
-        raw_tmp.close()
-        self._raw_temp_file = None
-        self._sf_writer = sf.SoundFile(
-            self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
-        )
+        if self.record_to_memory:
+            self._frame_buffer = []
+            self.temp_file_path = None
+            self._raw_temp_file = None
+            self._sf_writer = None
+        else:
+            raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            self.temp_file_path = raw_tmp.name
+            raw_tmp.close()
+            self._raw_temp_file = None
+            self._sf_writer = sf.SoundFile(
+                self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
+            )
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
@@ -215,24 +229,29 @@ class AudioHandler:
             self.on_recording_state_change_callback("IDLE")
             return False
 
-        if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
-            try:
-                ts = int(time.time())
-                filename = f"temp_recording_{ts}.wav"
-                data, sr = sf.read(self.temp_file_path, dtype="float32")
-                sf.write(filename, data, sr)
-                Path(self.temp_file_path).unlink(missing_ok=True)
-                self.temp_file_path = filename
-                logging.info(f"Temporary recording saved to {filename}")
-            except Exception as e:
-                logging.error(f"Failed to save temporary recording: {e}")
-                self._cleanup_temp_file()
-        else:
-            logging.debug(f"Temporary audio stored at {self.temp_file_path}")
+        if not self.record_to_memory:
+            if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
+                try:
+                    ts = int(time.time())
+                    filename = f"temp_recording_{ts}.wav"
+                    data, sr = sf.read(self.temp_file_path, dtype="float32")
+                    sf.write(filename, data, sr)
+                    Path(self.temp_file_path).unlink(missing_ok=True)
+                    self.temp_file_path = filename
+                    logging.info(f"Temporary recording saved to {filename}")
+                except Exception as e:
+                    logging.error(f"Failed to save temporary recording: {e}")
+                    self._cleanup_temp_file()
+            else:
+                logging.debug(f"Temporary audio stored at {self.temp_file_path}")
 
         self.start_time = None
         self.on_recording_state_change_callback("TRANSCRIBING")
-        self.on_audio_segment_ready_callback(self.temp_file_path)
+        if self.record_to_memory:
+            audio_data = np.concatenate(self._frame_buffer, axis=0) if self._frame_buffer else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
+            self.on_audio_segment_ready_callback(audio_data)
+        else:
+            self.on_audio_segment_ready_callback(self.temp_file_path)
         return True
 
     # ------------------------------------------------------------------
@@ -343,19 +362,21 @@ class AudioHandler:
         logging.info("AudioHandler: Configura\u00e7\u00f5es atualizadas.")
 
     def _cleanup_temp_file(self):
-        if self.temp_file_path and os.path.exists(self.temp_file_path):
-            try:
-                os.remove(self.temp_file_path)
-                logging.info(f"Deleted temp audio file: {self.temp_file_path}")
-            except Exception as e:
-                logging.error(f"Erro ao remover arquivo tempor\u00e1rio: {e}")
-        self.temp_file_path = None
-        if self._raw_temp_file is not None:
-            try:
-                self._raw_temp_file.close()
-            except Exception as e:
-                logging.error(f"Erro ao fechar arquivo temporário: {e}")
-            self._raw_temp_file = None
+        if not self.record_to_memory:
+            if self.temp_file_path and os.path.exists(self.temp_file_path):
+                try:
+                    os.remove(self.temp_file_path)
+                    logging.info(f"Deleted temp audio file: {self.temp_file_path}")
+                except Exception as e:
+                    logging.error(f"Erro ao remover arquivo tempor\u00e1rio: {e}")
+            self.temp_file_path = None
+            if self._raw_temp_file is not None:
+                try:
+                    self._raw_temp_file.close()
+                except Exception as e:
+                    logging.error(f"Erro ao fechar arquivo tempor\u00e1rio: {e}")
+                self._raw_temp_file = None
+        self._frame_buffer = None
 
     def cleanup(self):
         if self.is_recording:
