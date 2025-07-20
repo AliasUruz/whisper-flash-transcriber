@@ -70,6 +70,9 @@ Transcribed speech: {text}""",
     ],
     "save_temp_recordings": False,
     "record_to_memory": False,
+    "record_storage_mode": "auto",
+    "max_in_memory_seconds": 60,
+    "min_free_ram_mb": 256,
     "min_transcription_duration": 1.0 # Nova configuração
 }
 
@@ -88,6 +91,9 @@ MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
 RECORD_TO_MEMORY_CONFIG_KEY = "record_to_memory"
+RECORD_STORAGE_MODE_CONFIG_KEY = "record_storage_mode"
+MAX_IN_MEMORY_SECONDS_CONFIG_KEY = "max_in_memory_seconds"
+MIN_FREE_RAM_MB_CONFIG_KEY = "min_free_ram_mb"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
@@ -144,6 +150,10 @@ class ConfigManager:
                 if "vad_enabled" in loaded_config_from_file:
                     logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
                     loaded_config_from_file["use_vad"] = loaded_config_from_file.pop("vad_enabled")
+                if "record_storage_mode" not in loaded_config_from_file and "record_to_memory" in loaded_config_from_file:
+                    logging.info("Migrating legacy 'record_to_memory' key to 'record_storage_mode'.")
+                    rec_mem = _parse_bool(loaded_config_from_file["record_to_memory"])
+                    loaded_config_from_file["record_storage_mode"] = "memory" if rec_mem else "disk"
                 cfg.update(loaded_config_from_file)
                 logging.info(f"Configuration loaded from {self.config_file}.")
 
@@ -231,6 +241,58 @@ class ConfigManager:
                 self.default_config[RECORD_TO_MEMORY_CONFIG_KEY],
             )
         )
+
+        self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = str(
+            self.config.get(
+                RECORD_STORAGE_MODE_CONFIG_KEY,
+                self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY],
+            )
+        ).lower()
+        if self.config[RECORD_STORAGE_MODE_CONFIG_KEY] not in [
+            "auto",
+            "memory",
+            "disk",
+        ]:
+            logging.warning(
+                f"Invalid record_storage_mode '{self.config[RECORD_STORAGE_MODE_CONFIG_KEY]}'. Using default ({self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY]})."
+            )
+            self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = self.default_config[
+                RECORD_STORAGE_MODE_CONFIG_KEY
+            ]
+
+        try:
+            raw_max_mem = self.config.get(
+                MAX_IN_MEMORY_SECONDS_CONFIG_KEY,
+                self.default_config[MAX_IN_MEMORY_SECONDS_CONFIG_KEY],
+            )
+            max_mem = int(raw_max_mem)
+            if max_mem <= 0:
+                raise ValueError
+            self.config[MAX_IN_MEMORY_SECONDS_CONFIG_KEY] = max_mem
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid max_in_memory_seconds value '{self.config.get(MAX_IN_MEMORY_SECONDS_CONFIG_KEY)}'. Using default ({self.default_config[MAX_IN_MEMORY_SECONDS_CONFIG_KEY]})."
+            )
+            self.config[MAX_IN_MEMORY_SECONDS_CONFIG_KEY] = self.default_config[
+                MAX_IN_MEMORY_SECONDS_CONFIG_KEY
+            ]
+
+        try:
+            raw_min_ram = self.config.get(
+                MIN_FREE_RAM_MB_CONFIG_KEY,
+                self.default_config[MIN_FREE_RAM_MB_CONFIG_KEY],
+            )
+            min_ram = int(raw_min_ram)
+            if min_ram <= 0:
+                raise ValueError
+            self.config[MIN_FREE_RAM_MB_CONFIG_KEY] = min_ram
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid min_free_ram_mb value '{self.config.get(MIN_FREE_RAM_MB_CONFIG_KEY)}'. Using default ({self.default_config[MIN_FREE_RAM_MB_CONFIG_KEY]})."
+            )
+            self.config[MIN_FREE_RAM_MB_CONFIG_KEY] = self.default_config[
+                MIN_FREE_RAM_MB_CONFIG_KEY
+            ]
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -435,3 +497,40 @@ class ConfigManager:
 
     def set_record_to_memory(self, value: bool):
         self.config[RECORD_TO_MEMORY_CONFIG_KEY] = bool(value)
+
+    def get_record_storage_mode(self):
+        return self.config.get(
+            RECORD_STORAGE_MODE_CONFIG_KEY,
+            self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY],
+        )
+
+    def set_record_storage_mode(self, value: str):
+        self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = str(value).lower()
+
+    def get_max_in_memory_seconds(self):
+        return self.config.get(
+            MAX_IN_MEMORY_SECONDS_CONFIG_KEY,
+            self.default_config[MAX_IN_MEMORY_SECONDS_CONFIG_KEY],
+        )
+
+    def set_max_in_memory_seconds(self, value: int):
+        try:
+            self.config[MAX_IN_MEMORY_SECONDS_CONFIG_KEY] = int(value)
+        except (ValueError, TypeError):
+            self.config[MAX_IN_MEMORY_SECONDS_CONFIG_KEY] = self.default_config[
+                MAX_IN_MEMORY_SECONDS_CONFIG_KEY
+            ]
+
+    def get_min_free_ram_mb(self):
+        return self.config.get(
+            MIN_FREE_RAM_MB_CONFIG_KEY,
+            self.default_config[MIN_FREE_RAM_MB_CONFIG_KEY],
+        )
+
+    def set_min_free_ram_mb(self, value: int):
+        try:
+            self.config[MIN_FREE_RAM_MB_CONFIG_KEY] = int(value)
+        except (ValueError, TypeError):
+            self.config[MIN_FREE_RAM_MB_CONFIG_KEY] = self.default_config[
+                MIN_FREE_RAM_MB_CONFIG_KEY
+            ]
