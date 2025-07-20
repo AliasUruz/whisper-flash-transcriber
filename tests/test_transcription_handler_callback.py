@@ -2,6 +2,7 @@ import importlib
 import importlib.machinery
 import types
 import concurrent.futures
+import numpy as np
 import threading
 import time
 import sys
@@ -120,7 +121,62 @@ def test_transcription_task_handles_missing_callback(monkeypatch):
 
     monkeypatch.setattr(handler, "_async_text_correction", fake_correction)
 
-    handler._transcription_task(None, agent_mode=False)
+    handler._transcription_task("dummy.wav", agent_mode=False)
+
+    assert results == ["dummy"]
+
+
+def test_transcription_task_accepts_numpy_array(monkeypatch):
+    cfg = DummyConfig()
+    results = []
+
+    def result_callback(text, original):
+        results.append(text)
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=result_callback,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: True,
+    )
+    handler.pipe = DummyPipe()
+    handler.transcription_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+    monkeypatch.setattr(handler, "_get_dynamic_batch_size", lambda: 1)
+
+    audio_array = np.zeros(16000, dtype=np.float32)
+    handler._transcription_task(audio_array, agent_mode=False)
+
+    assert results == ["dummy"]
+
+
+def test_transcription_task_accepts_file_path(monkeypatch):
+    cfg = DummyConfig()
+    results = []
+
+    def result_callback(text, original):
+        results.append(text)
+
+    handler = TranscriptionHandler(
+        cfg,
+        gemini_api_client=None,
+        on_model_ready_callback=noop,
+        on_model_error_callback=noop,
+        on_transcription_result_callback=result_callback,
+        on_agent_result_callback=noop,
+        on_segment_transcribed_callback=None,
+        is_state_transcribing_fn=lambda: True,
+    )
+    handler.pipe = DummyPipe()
+    handler.transcription_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+    monkeypatch.setattr(handler, "_get_dynamic_batch_size", lambda: 1)
+
+    handler._transcription_task("audio.wav", agent_mode=False)
 
     assert results == ["dummy"]
 

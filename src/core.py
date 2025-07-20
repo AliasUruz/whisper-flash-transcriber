@@ -123,18 +123,18 @@ class AppCore:
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
 
-    def _on_audio_segment_ready(self, audio_data):
-        """Callback que recebe o segmento de áudio gravado (arquivo ou array)."""
-        self.temp_audio_file = audio_data if isinstance(audio_data, str) else None
+    def _on_audio_segment_ready(self, audio_source: str | np.ndarray):
+        """Callback chamado ao finalizar a gravação (arquivo ou array)."""
+        self.temp_audio_file = audio_source if isinstance(audio_source, str) else None
         duration_seconds = 0.0
-        if isinstance(audio_data, str):
-            try:
-                with sf.SoundFile(audio_data) as f:
+        try:
+            if isinstance(audio_source, str):
+                with sf.SoundFile(audio_source) as f:
                     duration_seconds = len(f) / f.samplerate
-            except Exception as e:
-                logging.warning(f"Não foi possível obter duração do áudio: {e}")
-        else:
-            duration_seconds = len(audio_data) / AUDIO_SAMPLE_RATE
+            else:
+                duration_seconds = len(audio_source) / AUDIO_SAMPLE_RATE
+        except Exception as e:
+            logging.warning(f"Não foi possível obter duração do áudio: {e}")
 
         min_duration = self.config_manager.get('min_transcription_duration')
         
@@ -153,7 +153,7 @@ class AppCore:
         )
         
         # Passa o estado capturado para o handler de transcrição.
-        self.transcription_handler.transcribe_audio_segment(audio_data, is_agent_mode)
+        self.transcription_handler.transcribe_audio_segment(audio_source, is_agent_mode)
 
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
