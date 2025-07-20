@@ -40,6 +40,7 @@ class DummyConfig:
             'use_vad': False,
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
+            'record_to_memory': False,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 
@@ -160,6 +161,35 @@ class AudioHandlerTest(unittest.TestCase):
                         time.sleep(0.05)
                         handler.stop_recording()
 
+        self.assertIsNone(handler.temp_file_path)
+
+    def test_in_memory_recording_callback_and_path(self):
+        results = []
+
+        def on_ready(data):
+            results.append(data)
+
+        handler = AudioHandler(self.config, on_ready, lambda *_: None, in_memory_mode=True)
+
+        def fake_record_audio_task(self):
+            self.stream_started = True
+            while not self._stop_event.is_set() and self.is_recording:
+                self._audio_callback(np.zeros((2, 1), dtype=np.float32), 2, None, None)
+                time.sleep(0.01)
+            self.stream_started = False
+            self._stop_event.clear()
+            self._record_thread = None
+
+        with patch.object(AudioHandler, '_record_audio_task', fake_record_audio_task):
+            with patch.object(AudioHandler, '_play_generated_tone_stream', lambda *a, **k: None):
+                started = handler.start_recording()
+                time.sleep(0.05)
+                stopped = handler.stop_recording()
+
+        self.assertTrue(started)
+        self.assertTrue(stopped)
+        self.assertEqual(len(results), 1)
+        self.assertIsInstance(results[0], np.ndarray)
         self.assertIsNone(handler.temp_file_path)
 
     def test_close_input_stream_thread_does_not_block(self):

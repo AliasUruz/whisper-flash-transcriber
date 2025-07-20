@@ -18,10 +18,11 @@ AUDIO_CHANNELS = 1
 class AudioHandler:
     """Gerencia a gravação de áudio em arquivo temporário."""
 
-    def __init__(self, config_manager, on_audio_segment_ready_callback, on_recording_state_change_callback):
+    def __init__(self, config_manager, on_audio_segment_ready_callback, on_recording_state_change_callback, in_memory_mode: bool = False):
         self.config_manager = config_manager
         self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
         self.on_recording_state_change_callback = on_recording_state_change_callback
+        self.in_memory_mode = in_memory_mode
 
         self.is_recording = False
         self.start_time = None
@@ -46,11 +47,15 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+        self.record_to_memory = self.config_manager.get("record_to_memory")
+        self.record_to_memory = self.config_manager.get("record_to_memory")
 
         self.temp_file_path: str | None = None
         self._raw_temp_file: tempfile.NamedTemporaryFile | None = None
         self._sf_writer: sf.SoundFile | None = None
+        self._frame_buffer: list[np.ndarray] | None = None
         self._sample_count = 0
+        self._audio_frames: list[np.ndarray] = []
 
     # ------------------------------------------------------------------
     # Grava\u00e7\u00e3o
@@ -58,7 +63,9 @@ class AudioHandler:
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
             logging.warning(f"Audio callback status: {status}")
-        if not self.is_recording or self._sf_writer is None:
+        if not self.is_recording:
+            return
+        if not self.in_memory_mode and self._sf_writer is None:
             return
 
         write_data = None
@@ -75,7 +82,10 @@ class AudioHandler:
             write_data = indata.copy()
 
         if write_data is not None:
-            self._sf_writer.write(write_data)
+            if self.in_memory_mode:
+                self._audio_frames.append(write_data.copy())
+            else:
+                self._sf_writer.write(write_data)
             self._sample_count += len(write_data)
 
     def _record_audio_task(self):
@@ -153,13 +163,19 @@ class AudioHandler:
         self.start_time = time.time()
         self._sample_count = 0
 
-        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        self.temp_file_path = raw_tmp.name
-        raw_tmp.close()
-        self._raw_temp_file = None
-        self._sf_writer = sf.SoundFile(
-            self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
-        )
+        if self.in_memory_mode:
+            self.temp_file_path = None
+            self._raw_temp_file = None
+            self._sf_writer = None
+            self._audio_frames = []
+        else:
+            raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            self.temp_file_path = raw_tmp.name
+            raw_tmp.close()
+            self._raw_temp_file = None
+            self._sf_writer = sf.SoundFile(
+                self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
+            )
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
@@ -215,6 +231,18 @@ class AudioHandler:
             self.on_recording_state_change_callback("IDLE")
             return False
 
+        if self.in_memory_mode:
+            audio_array = (
+                np.concatenate(self._audio_frames, axis=0)
+                if self._audio_frames
+                else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
+            )
+            self._audio_frames = []
+            self.start_time = None
+            self.on_recording_state_change_callback("TRANSCRIBING")
+            self.on_audio_segment_ready_callback(audio_array.flatten())
+            return True
+
         if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
             try:
                 ts = int(time.time())
@@ -232,7 +260,11 @@ class AudioHandler:
 
         self.start_time = None
         self.on_recording_state_change_callback("TRANSCRIBING")
-        self.on_audio_segment_ready_callback(self.temp_file_path)
+        if self.record_to_memory:
+            audio_data = np.concatenate(self._frame_buffer, axis=0) if self._frame_buffer else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
+            self.on_audio_segment_ready_callback(audio_data)
+        else:
+            self.on_audio_segment_ready_callback(self.temp_file_path)
         return True
 
     # ------------------------------------------------------------------
@@ -343,7 +375,9 @@ class AudioHandler:
         logging.info("AudioHandler: Configura\u00e7\u00f5es atualizadas.")
 
     def _cleanup_temp_file(self):
-        if self.temp_file_path and os.path.exists(self.temp_file_path):
+        if self.in_memory_mode:
+            self._audio_frames = []
+        elif self.temp_file_path and os.path.exists(self.temp_file_path):
             try:
                 os.remove(self.temp_file_path)
                 logging.info(f"Deleted temp audio file: {self.temp_file_path}")
