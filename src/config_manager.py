@@ -150,6 +150,10 @@ class ConfigManager:
                 if "vad_enabled" in loaded_config_from_file:
                     logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
                     loaded_config_from_file["use_vad"] = loaded_config_from_file.pop("vad_enabled")
+                if "record_storage_mode" not in loaded_config_from_file and "record_to_memory" in loaded_config_from_file:
+                    logging.info("Migrating legacy 'record_to_memory' key to 'record_storage_mode'.")
+                    rec_mem = _parse_bool(loaded_config_from_file["record_to_memory"])
+                    loaded_config_from_file["record_storage_mode"] = "memory" if rec_mem else "disk"
                 cfg.update(loaded_config_from_file)
                 logging.info(f"Configuration loaded from {self.config_file}.")
 
