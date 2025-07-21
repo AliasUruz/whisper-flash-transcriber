@@ -61,6 +61,7 @@ class AudioHandler:
         self._stop_event = threading.Event()
         self._record_thread = None
         self.sound_lock = threading.RLock()
+        self.storage_lock = threading.Lock()
 
         self._vad_silence_counter = 0.0
 
@@ -97,20 +98,21 @@ class AudioHandler:
             write_data = indata.copy()
 
         if write_data is not None:
-            if self.in_memory_mode:
-                self._audio_frames.append(write_data.copy())
-                self._memory_samples += len(write_data)
+            with self.storage_lock:
+                if self.in_memory_mode:
+                    self._audio_frames.append(write_data.copy())
+                    self._memory_samples += len(write_data)
 
-                # Verifica se é necessário mover para o disco
-                max_samples = int(self.max_memory_seconds * AUDIO_SAMPLE_RATE)
-                if self.record_storage_mode == 'auto' and self._memory_samples > max_samples:
-                    logging.info(f"Duração da gravação excedeu {self.max_memory_seconds}s. Migrando da RAM para o disco.")
-                    self._migrate_to_file()
-            else:
-                if self._sf_writer:
-                    self._sf_writer.write(write_data)
+                    # Verifica se é necessário mover para o disco
+                    max_samples = int(self.max_memory_seconds * AUDIO_SAMPLE_RATE)
+                    if self.record_storage_mode == 'auto' and self._memory_samples > max_samples:
+                        logging.info(f"Duração da gravação excedeu {self.max_memory_seconds}s. Migrando da RAM para o disco.")
+                        self._migrate_to_file()
+                else:
+                    if self._sf_writer:
+                        self._sf_writer.write(write_data)
 
-            self._sample_count += len(write_data)
+                self._sample_count += len(write_data)
 
     def _record_audio_task(self):
         self.audio_stream = None
@@ -220,26 +222,23 @@ class AudioHandler:
             reason,
         )
 
-        self.is_recording = True
-        self.start_time = time.time()
-        self._sample_count = 0
-        self._memory_samples = 0
+        with self.storage_lock:
+            self.is_recording = True
+            self.start_time = time.time()
+            self._sample_count = 0
+            self._memory_samples = 0
 
-        if self.in_memory_mode:
-            self.temp_file_path = None
-            self._raw_temp_file = None
-            self._sf_writer = None
-            self._audio_frames = []
-            self._frame_buffer = None
-        else:
-            raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            self.temp_file_path = raw_tmp.name
-            raw_tmp.close()
-            self._raw_temp_file = None
-            self._sf_writer = sf.SoundFile(
-                self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
-            )
-            self._frame_buffer = [] if self.record_to_memory else None
+            if self.in_memory_mode:
+                self.temp_file_path = None
+                self._sf_writer = None
+                self._audio_frames = []
+            else:
+                raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                self.temp_file_path = raw_tmp.name
+                raw_tmp.close()
+                self._sf_writer = sf.SoundFile(
+                    self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
+                )
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
@@ -273,12 +272,13 @@ class AudioHandler:
         if self._record_thread:
             self._record_thread.join(timeout=2)
 
-        if self._sf_writer is not None:
-            try:
-                self._sf_writer.close()
-            except Exception as e:
-                logging.error(f"Erro ao fechar arquivo tempor\u00e1rio: {e}")
-            self._sf_writer = None
+        with self.storage_lock:
+            if self._sf_writer is not None:
+                try:
+                    self._sf_writer.close()
+                except Exception as e:
+                    logging.error(f"Erro ao fechar arquivo temporário: {e}")
+                self._sf_writer = None
 
         if not stream_was_started:
             logging.warning("Stop recording called but audio stream never started. Ignoring data.")
@@ -441,21 +441,16 @@ class AudioHandler:
         )
 
     def _cleanup_temp_file(self):
-        if self.in_memory_mode:
-            self._audio_frames = []
-        elif self.temp_file_path and os.path.exists(self.temp_file_path):
-            try:
-                os.remove(self.temp_file_path)
-                logging.info(f"Deleted temp audio file: {self.temp_file_path}")
-            except Exception as e:
-                logging.error(f"Erro ao remover arquivo tempor\u00e1rio: {e}")
-        self.temp_file_path = None
-        if self._raw_temp_file is not None:
-            try:
-                self._raw_temp_file.close()
-            except Exception as e:
-                logging.error(f"Erro ao fechar arquivo temporário: {e}")
-            self._raw_temp_file = None
+        with self.storage_lock:
+            if self.in_memory_mode:
+                self._audio_frames = []
+            elif self.temp_file_path and os.path.exists(self.temp_file_path):
+                try:
+                    os.remove(self.temp_file_path)
+                    logging.info(f"Deleted temp audio file: {self.temp_file_path}")
+                except Exception as e:
+                    logging.error(f"Erro ao remover arquivo temporário: {e}")
+            self.temp_file_path = None
 
     def cleanup(self):
         if self.is_recording:

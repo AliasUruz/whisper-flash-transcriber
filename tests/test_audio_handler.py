@@ -40,13 +40,13 @@ class DummyConfig:
             'use_vad': False,
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
-            'record_to_memory': False,
+            'record_storage_mode': 'disk', # Novo: padrão para disco nos testes
             'max_memory_seconds': 30,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 
-    def get(self, key):
-        return self.data.get(key)
+    def get(self, key, default=None):
+        return self.data.get(key, default)
 
 
 class AudioHandlerTest(unittest.TestCase):
@@ -171,7 +171,7 @@ class AudioHandlerTest(unittest.TestCase):
             results.append(data)
 
         self.config.data['record_storage_mode'] = 'memory'
-        handler = AudioHandler(self.config, on_ready, lambda *_: None, in_memory_mode=True)
+        handler = AudioHandler(self.config, on_ready, lambda *_: None)
 
         def fake_record_audio_task(self):
             self.stream_started = True
@@ -204,9 +204,8 @@ class AudioHandlerTest(unittest.TestCase):
             self.config,
             on_ready,
             lambda *_: None,
-            in_memory_mode=True,
-            max_in_memory_seconds=0.02,
         )
+        handler.max_memory_seconds = 0.02
 
         def fake_record_audio_task(self):
             self.stream_started = True
@@ -239,18 +238,17 @@ class AudioHandlerTest(unittest.TestCase):
         def on_ready(data):
             results.append(data)
 
-        self.config.data['record_to_memory'] = True
+        self.config.data['record_storage_mode'] = 'memory'
         handler = AudioHandler(self.config, on_ready, lambda *_: None)
-        handler.record_to_memory = True
 
         def fake_record_audio_task(self):
             self.stream_started = True
             while not self._stop_event.is_set() and self.is_recording:
                 frame = np.zeros((2, 1), dtype=np.float32)
-                if self._frame_buffer is not None:
-                    self._frame_buffer.append(frame)
+                with self.storage_lock:
+                    self._audio_frames.append(frame)
                     self._memory_samples += len(frame)
-                self._sample_count += len(frame)
+                    self._sample_count += len(frame)
                 time.sleep(0.01)
             self.stream_started = False
             self._stop_event.clear()
