@@ -7,12 +7,22 @@ import sounddevice as sd
 import soundfile as sf
 import tempfile
 from pathlib import Path
+import psutil
 
 from .vad_manager import VADManager
 from .config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
 
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1
+
+
+def get_available_memory_mb() -> float:
+    """Retorna a quantidade de RAM disponível em megabytes."""
+    try:
+        return psutil.virtual_memory().available / (1024 * 1024)
+    except Exception as e:
+        logging.error("Falha ao consultar memória disponível: %s", e)
+        return 0.0
 
 
 class AudioHandler:
@@ -110,9 +120,25 @@ class AudioHandler:
         if write_data is not None:
             if self.in_memory_mode:
                 self._audio_frames.append(write_data.copy())
+                self._memory_samples += len(write_data)
             else:
                 self._sf_writer.write(write_data)
+                if self.record_to_memory and self._frame_buffer is not None:
+                    self._frame_buffer.append(write_data.copy())
+                    self._memory_samples += len(write_data)
             self._sample_count += len(write_data)
+
+            max_samples = int(self.max_memory_seconds * AUDIO_SAMPLE_RATE)
+            while self._memory_samples > max_samples and (
+                self.in_memory_mode or (self.record_to_memory and self._frame_buffer)
+            ):
+                if self.in_memory_mode and self._audio_frames:
+                    removed = self._audio_frames.pop(0)
+                elif self._frame_buffer:
+                    removed = self._frame_buffer.pop(0)
+                else:
+                    break
+                self._memory_samples -= len(removed)
 
     def _record_audio_task(self):
         self.audio_stream = None
@@ -173,6 +199,23 @@ class AudioHandler:
         if t.is_alive():
             logging.error("Thread de fechamento n\u00e3o terminou em %ss", timeout)
 
+    def _migrate_to_file(self):
+        """Move os quadros gravados em memória para um arquivo temporário."""
+        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        self.temp_file_path = raw_tmp.name
+        raw_tmp.close()
+        self._sf_writer = sf.SoundFile(
+            self.temp_file_path,
+            mode="w",
+            samplerate=AUDIO_SAMPLE_RATE,
+            channels=AUDIO_CHANNELS,
+        )
+        if self._audio_frames:
+            data = np.concatenate(self._audio_frames, axis=0)
+            self._sf_writer.write(data)
+            self._audio_frames = []
+        self.in_memory_mode = False
+
     def start_recording(self):
         if self.is_recording:
             logging.warning("Grava\u00e7\u00e3o j\u00e1 est\u00e1 ativa.")
@@ -185,15 +228,45 @@ class AudioHandler:
 
         self._stop_event.clear()
 
+        available_mb = get_available_memory_mb()
+        reason = ""
+        if self.record_storage_mode == "memory":
+            self.in_memory_mode = True
+            reason = "configurado para memory"
+        elif self.record_storage_mode == "disk":
+            self.in_memory_mode = False
+            reason = "configurado para disk"
+        else:
+            if (
+                available_mb >= self.min_free_ram_mb
+                and self.max_in_memory_seconds > 0
+            ):
+                self.in_memory_mode = True
+                reason = (
+                    f"auto: RAM livre {available_mb:.0f}MB >= {self.min_free_ram_mb}MB"
+                )
+            else:
+                self.in_memory_mode = False
+                reason = (
+                    f"auto: RAM livre {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
+                )
+        logging.info(
+            "Decis\u00e3o de armazenamento: in_memory=%s (%s)",
+            self.in_memory_mode,
+            reason,
+        )
+
         self.is_recording = True
         self.start_time = time.time()
         self._sample_count = 0
+        self._memory_samples = 0
 
         if self.in_memory_mode:
             self.temp_file_path = None
             self._raw_temp_file = None
             self._sf_writer = None
             self._audio_frames = []
+            self._frame_buffer = None
         else:
             raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
             self.temp_file_path = raw_tmp.name
@@ -202,6 +275,7 @@ class AudioHandler:
             self._sf_writer = sf.SoundFile(
                 self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
             )
+            self._frame_buffer = [] if self.record_to_memory else None
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
@@ -264,6 +338,7 @@ class AudioHandler:
                 else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
             )
             self._audio_frames = []
+            self._memory_samples = 0
             self.start_time = None
             self.on_recording_state_change_callback("TRANSCRIBING")
             self.on_audio_segment_ready_callback(audio_array.flatten())
@@ -289,8 +364,10 @@ class AudioHandler:
         if self.record_to_memory:
             audio_data = np.concatenate(self._frame_buffer, axis=0) if self._frame_buffer else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
             self.on_audio_segment_ready_callback(audio_data)
+            self._frame_buffer = []
         else:
             self.on_audio_segment_ready_callback(self.temp_file_path)
+        self._memory_samples = 0
         return True
 
     # ------------------------------------------------------------------
@@ -380,6 +457,9 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+
+        self.record_to_memory = self.config_manager.get("record_to_memory")
+        self.max_memory_seconds = self.config_manager.get("max_memory_seconds")
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_threshold = self.config_manager.get("vad_threshold")

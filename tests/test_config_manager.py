@@ -49,6 +49,7 @@ def test_parse_bool_values(tmp_path, monkeypatch, value, expected):
         "save_temp_recordings": value,
         "use_vad": value,
         "record_to_memory": value,
+        "max_memory_seconds": 5,
     }
 
     cfg_path.write_text(json.dumps(config))
@@ -63,3 +64,4 @@ def test_parse_bool_values(tmp_path, monkeypatch, value, expected):
     assert cm.get(config_manager.SAVE_TEMP_RECORDINGS_CONFIG_KEY) is expected
     assert cm.get(config_manager.USE_VAD_CONFIG_KEY) is expected
     assert cm.get_record_to_memory() is expected
+    assert cm.get_max_memory_seconds() == 5

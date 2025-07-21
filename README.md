@@ -8,13 +8,14 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 
 1.  [Features](#features)
 2.  [System Architecture](#system-architecture)
-3.  [Installation](#installation)
-4.  [Configuration](#configuration)
-5.  [Usage](#how-to-use-the-app)
-6.  [Troubleshooting](#troubleshooting)
-7.  [Contributing](#contributing)
-8.  [Running Tests](#running-tests)
-9.  [License](#license)
+3.  [Hybrid Recording System](#hybrid-recording-system)
+4.  [Installation](#installation)
+5.  [Configuration](#configuration)
+6.  [Usage](#how-to-use-the-app)
+7.  [Troubleshooting](#troubleshooting)
+8.  [Contributing](#contributing)
+9.  [Running Tests](#running-tests)
+10.  [License](#license)
 
 ## Features
 
@@ -91,6 +92,28 @@ graph TD
 *   **`TranscriptionHandler`**: Manages the Whisper model, runs the transcription pipeline, and coordinates with AI correction services.
 *   **`KeyboardHotkeyManager`**: Listens for and handles global hotkeys.
 *   ****`GeminiAPI` / `OpenRouterAPI`**: Clients for interacting with external AI services and text correction. Both expose the method `reinitialize_client()` to reload key and model at runtime.
+
+## Hybrid Recording System
+
+The application features a flexible hybrid approach to storing captured audio. Depending on the selected mode, recordings may remain in memory for quick processing or be written to temporary files to save RAM. In **hybrid** mode, audio is kept in memory up to a configurable duration and automatically offloaded to disk if free memory becomes scarce. This reduces disk wear while ensuring stability during long sessions.
+
+### Configuration Parameters
+
+* `record_storage_mode` – Choose `"memory"`, `"disk"`, or `"hybrid"` (default). Hybrid uses memory whenever possible and falls back to the file system when limits are exceeded.
+* `max_in_memory_seconds` – Maximum length of audio (in seconds) to keep in RAM before switching to disk.
+* `min_free_ram_mb` – Minimum free RAM required to continue storing audio in memory. If available memory drops below this value, the app writes new chunks directly to disk until memory usage is safe again.
+
+### Example
+
+```json
+{
+    "record_storage_mode": "hybrid",
+    "max_in_memory_seconds": 30,
+    "min_free_ram_mb": 1000
+}
+```
+
+Long recordings consume roughly 64 KB of RAM per second (16-bit mono at 16 kHz). Adjust the values above based on your system's memory capacity. When storing to disk, temporary files are deleted automatically after transcription.
 
 ## Installation
 
@@ -233,7 +256,12 @@ To access and change settings:
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
+*   **Record Storage Mode:** Choose between always using memory, always using disk, or automatically selecting based on free RAM.
+*   **Minimum Free RAM (MB):** Threshold used in automatic mode to decide when audio can be stored in memory.
+*   **Max In-Memory Seconds:** Limits the amount of audio kept in RAM when automatic mode is active.
 *   **Record to Memory:** Keep the captured audio only in memory instead of creating a temporary file (default `false`). When enabled, the **Save Temporary Recordings** option is ignored.
+*   **Storage Strategy:** Select "File" to always store audio as a temporary WAV file or "Memory" to keep it directly in RAM.
+*   **Max Memory Retention (s):** Limits how many seconds of audio are preserved when using memory storage.
 *   **Save Temporary Recordings:** When enabled, the captured audio is stored as `temp_recording_<timestamp>.wav` in the application folder. This temporary file is automatically deleted once transcription completes. This setting has no effect when **Record to Memory** is active.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
 *   **Use VAD:** enables silence removal without automatically stopping the recording.
