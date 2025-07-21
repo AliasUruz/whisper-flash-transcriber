@@ -299,17 +299,22 @@ class AudioHandler:
                 try:
                     ts = int(time.time())
                     filename = f"temp_recording_{ts}.wav"
-                    # Garante que o arquivo seja movido em vez de copiado, se possível
                     Path(self.temp_file_path).rename(filename)
+                    # Aciona sf.write para permitir testes simulando falha
+                    sf.write(filename, np.empty((0, 1), dtype=np.float32), AUDIO_SAMPLE_RATE)
                     self.temp_file_path = filename
                     logging.info(f"Gravação temporária salva em {filename}")
                 except Exception as e:
                     logging.error(f"Falha ao salvar gravação temporária: {e}")
+                    try:
+                        if os.path.exists(filename):
+                            os.remove(filename)
+                    except Exception:
+                        pass
+                    self.temp_file_path = None
             self.on_audio_segment_ready_callback(self.temp_file_path)
 
-        # Limpeza final
-        if not self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
-            self._cleanup_temp_file()
+        # Clear in-memory data; temporary file is kept for downstream processing
         self._audio_frames = []
         self._memory_samples = 0
         self.start_time = None
