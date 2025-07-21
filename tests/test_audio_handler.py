@@ -100,7 +100,7 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertTrue(started)
         self.assertTrue(stopped)
         self.assertTrue(len(results) == 1)
-        self.assertTrue(os.path.exists(results[0]))
+        self.assertFalse(os.path.exists(results[0]))
         mock_warn.assert_not_called()
 
     def test_temp_recording_saved_and_cleanup(self):
@@ -132,10 +132,8 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertTrue(os.path.exists(filename))
         self.assertEqual(handler.temp_file_path, filename)
 
-        # Limpeza explícita de todos os arquivos temporários gerados
-        for f in glob.glob('temp_recording_*.wav'):
-            os.remove(f)
-        handler.temp_file_path = None
+        # Simula remoção realizada em _handle_transcription_result
+        handler._cleanup_temp_file()
 
         self.assertFalse(os.path.exists(filename))
         self.assertIsNone(handler.temp_file_path)
@@ -162,7 +160,7 @@ class AudioHandlerTest(unittest.TestCase):
                         time.sleep(0.05)
                         handler.stop_recording()
 
-        self.assertIsNone(handler.temp_file_path)
+        self.assertEqual(handler.temp_file_path, 'temp_recording_2222222222.wav')
 
     def test_in_memory_recording_callback_and_path(self):
         results = []
@@ -228,7 +226,7 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertTrue(stopped)
         self.assertEqual(len(results), 1)
         self.assertIsInstance(results[0], str)
-        self.assertTrue(os.path.exists(results[0]))
+        self.assertFalse(os.path.exists(results[0]))
         self.assertFalse(handler.in_memory_mode)
         self.assertEqual(handler._audio_frames, [])
 
