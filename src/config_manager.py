@@ -248,7 +248,10 @@ class ConfigManager:
                 self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY],
             )
         ).lower()
-        allowed_storage_modes = ["disk", "memory", "auto"]
+        if self.config[RECORD_STORAGE_MODE_CONFIG_KEY] == "hybrid":
+            logging.info("record_storage_mode 'hybrid' mapeado para 'auto'.")
+            self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = "auto"
+        allowed_storage_modes = ["disk", "memory", "auto", "hybrid"]
         if self.config[RECORD_STORAGE_MODE_CONFIG_KEY] not in allowed_storage_modes:
             logging.warning(
                 f"Invalid record_storage_mode '{self.config[RECORD_STORAGE_MODE_CONFIG_KEY]}'. "

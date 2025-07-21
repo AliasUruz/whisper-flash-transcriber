@@ -65,3 +65,18 @@ def test_parse_bool_values(tmp_path, monkeypatch, value, expected):
     assert cm.get(config_manager.USE_VAD_CONFIG_KEY) is expected
     assert cm.get_record_to_memory() is expected
     assert cm.get_max_memory_seconds() == 5
+
+
+def test_hybrid_storage_mode_maps_to_auto(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.json"
+    secrets_path = tmp_path / "secrets.json"
+
+    cfg_path.write_text(json.dumps({"record_storage_mode": "hybrid"}))
+    monkeypatch.setattr(config_manager, "SECRETS_FILE", str(secrets_path))
+
+    cm = config_manager.ConfigManager(
+        config_file=str(cfg_path),
+        default_config=config_manager.DEFAULT_CONFIG,
+    )
+
+    assert cm.get_record_storage_mode() == "auto"
