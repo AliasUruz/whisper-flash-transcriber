@@ -41,6 +41,9 @@ class DummyConfig:
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
             'record_to_memory': False,
+            'record_storage_mode': 'disk',
+            'min_free_ram_mb': 512,
+            'max_in_memory_seconds': 30,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 
@@ -169,6 +172,7 @@ class AudioHandlerTest(unittest.TestCase):
         def on_ready(data):
             results.append(data)
 
+        self.config.data['record_storage_mode'] = 'memory'
         handler = AudioHandler(self.config, on_ready, lambda *_: None, in_memory_mode=True)
 
         def fake_record_audio_task(self):
