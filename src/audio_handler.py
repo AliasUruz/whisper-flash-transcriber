@@ -7,22 +7,13 @@ import sounddevice as sd
 import soundfile as sf
 import tempfile
 from pathlib import Path
-import psutil
+from .utils.memory import get_available_memory_mb
 
 from .vad_manager import VADManager
 from .config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
 
 AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1
-
-
-def get_available_memory_mb() -> float:
-    """Retorna a quantidade de RAM disponível em megabytes."""
-    try:
-        return psutil.virtual_memory().available / (1024 * 1024)
-    except Exception as e:
-        logging.error("Falha ao consultar memória disponível: %s", e)
-        return 0.0
 
 
 class AudioHandler:
