@@ -317,7 +317,8 @@ class AudioHandler:
             self.on_audio_segment_ready_callback(self.temp_file_path)
 
         # Limpeza final
-        self._cleanup_temp_file()
+        if not self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
+            self._cleanup_temp_file()
         self._audio_frames = []
         self._memory_samples = 0
         self.start_time = None
