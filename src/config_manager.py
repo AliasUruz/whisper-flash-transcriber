@@ -70,7 +70,7 @@ Transcribed speech: {text}""",
     ],
     "save_temp_recordings": False,
     "record_to_memory": False,
-    "record_storage_mode": "file",
+    "record_storage_mode": "auto",
     "record_storage_limit": 0,
     "max_memory_seconds": 30,
     "min_free_ram_mb": 1000,
@@ -248,6 +248,15 @@ class ConfigManager:
                 self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY],
             )
         ).lower()
+        allowed_storage_modes = ["disk", "memory", "auto"]
+        if self.config[RECORD_STORAGE_MODE_CONFIG_KEY] not in allowed_storage_modes:
+            logging.warning(
+                f"Invalid record_storage_mode '{self.config[RECORD_STORAGE_MODE_CONFIG_KEY]}'. "
+                f"Falling back to '{self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY]}'."
+            )
+            self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = self.default_config[
+                RECORD_STORAGE_MODE_CONFIG_KEY
+            ]
         try:
             self.config[RECORD_STORAGE_LIMIT_CONFIG_KEY] = int(
                 self.config.get(
