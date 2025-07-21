@@ -233,6 +233,9 @@ To access and change settings:
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
+*   **Record Storage Mode:** Determines where recordings are kept. Use `auto` (default) to keep audio in memory while there are at least `min_free_ram_mb` megabytes free and the duration is below `max_in_memory_seconds`. Choose `memory` to always keep data in RAM or `disk` to always save a temporary file.
+*   **Max In-Memory Seconds:** Maximum duration stored in RAM when using `auto`.
+*   **Min Free RAM (MB):** Minimum available memory required for in-memory storage when `record_storage_mode` is `auto`.
 *   **Record to Memory:** Keep the captured audio only in memory instead of creating a temporary file (default `false`). When enabled, the **Save Temporary Recordings** option is ignored.
 *   **Save Temporary Recordings:** When enabled, the captured audio is stored as `temp_recording_<timestamp>.wav` in the application folder. This temporary file is automatically deleted once transcription completes. This setting has no effect when **Record to Memory** is active.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
