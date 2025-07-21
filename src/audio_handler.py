@@ -392,8 +392,12 @@ class AudioHandler:
         self.start_time = None
         self.on_recording_state_change_callback("TRANSCRIBING")
         if self.record_to_memory:
-            audio_data = np.concatenate(self._frame_buffer, axis=0) if self._frame_buffer else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
-            self.on_audio_segment_ready_callback(audio_data)
+            audio_data = (
+                np.concatenate(self._frame_buffer, axis=0)
+                if self._frame_buffer
+                else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
+            )
+            self.on_audio_segment_ready_callback(audio_data.flatten())
             self._frame_buffer = []
         else:
             self.on_audio_segment_ready_callback(self.temp_file_path)

@@ -375,6 +375,9 @@ class TranscriptionHandler:
                 "task": "transcribe",
                 "language": None
             }
+            if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
+                audio_source = audio_source.flatten()
+
             result = self.pipe(
                 audio_source,
                 chunk_length_s=30,
