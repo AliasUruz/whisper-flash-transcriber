@@ -70,7 +70,8 @@ Transcribed speech: {text}""",
     ],
     "save_temp_recordings": False,
     "record_to_memory": False,
-    "max_memory_seconds": 30.0,
+    "record_storage_mode": "file",
+    "record_storage_limit": 0,
     "min_transcription_duration": 1.0 # Nova configuração
 }
 
@@ -89,7 +90,8 @@ MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
 RECORD_TO_MEMORY_CONFIG_KEY = "record_to_memory"
-MAX_MEMORY_SECONDS_CONFIG_KEY = "max_memory_seconds"
+RECORD_STORAGE_MODE_CONFIG_KEY = "record_storage_mode"
+RECORD_STORAGE_LIMIT_CONFIG_KEY = "record_storage_limit"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
@@ -238,24 +240,23 @@ class ConfigManager:
             )
         )
 
-        # Validação para max_memory_seconds
+        self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = str(
+            self.config.get(
+                RECORD_STORAGE_MODE_CONFIG_KEY,
+                self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY],
+            )
+        ).lower()
         try:
-            raw_max_memory = loaded_config.get(
-                MAX_MEMORY_SECONDS_CONFIG_KEY,
-                self.default_config[MAX_MEMORY_SECONDS_CONFIG_KEY],
-            )
-            max_mem_val = float(raw_max_memory)
-            if max_mem_val <= 0:
-                logging.warning(
-                    f"Invalid max_memory_seconds '{max_mem_val}'. Using default ({self.default_config[MAX_MEMORY_SECONDS_CONFIG_KEY]})."
+            self.config[RECORD_STORAGE_LIMIT_CONFIG_KEY] = int(
+                self.config.get(
+                    RECORD_STORAGE_LIMIT_CONFIG_KEY,
+                    self.default_config[RECORD_STORAGE_LIMIT_CONFIG_KEY],
                 )
-                max_mem_val = self.default_config[MAX_MEMORY_SECONDS_CONFIG_KEY]
-            self.config[MAX_MEMORY_SECONDS_CONFIG_KEY] = max_mem_val
-        except (ValueError, TypeError):
-            logging.warning(
-                f"Invalid max_memory_seconds value '{self.config.get(MAX_MEMORY_SECONDS_CONFIG_KEY)}' in config. Using default ({self.default_config[MAX_MEMORY_SECONDS_CONFIG_KEY]})."
             )
-            self.config[MAX_MEMORY_SECONDS_CONFIG_KEY] = self.default_config[MAX_MEMORY_SECONDS_CONFIG_KEY]
+        except (ValueError, TypeError):
+            self.config[RECORD_STORAGE_LIMIT_CONFIG_KEY] = self.default_config[
+                RECORD_STORAGE_LIMIT_CONFIG_KEY
+            ]
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -461,14 +462,25 @@ class ConfigManager:
     def set_record_to_memory(self, value: bool):
         self.config[RECORD_TO_MEMORY_CONFIG_KEY] = bool(value)
 
-    def get_max_memory_seconds(self):
+    def get_record_storage_mode(self):
         return self.config.get(
-            MAX_MEMORY_SECONDS_CONFIG_KEY,
-            self.default_config[MAX_MEMORY_SECONDS_CONFIG_KEY],
+            RECORD_STORAGE_MODE_CONFIG_KEY,
+            self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY],
         )
 
-    def set_max_memory_seconds(self, value: float):
+    def set_record_storage_mode(self, value: str):
+        self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = str(value)
+
+    def get_record_storage_limit(self):
+        return self.config.get(
+            RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            self.default_config[RECORD_STORAGE_LIMIT_CONFIG_KEY],
+        )
+
+    def set_record_storage_limit(self, value: int):
         try:
-            self.config[MAX_MEMORY_SECONDS_CONFIG_KEY] = float(value)
+            self.config[RECORD_STORAGE_LIMIT_CONFIG_KEY] = int(value)
         except (ValueError, TypeError):
-            self.config[MAX_MEMORY_SECONDS_CONFIG_KEY] = self.default_config[MAX_MEMORY_SECONDS_CONFIG_KEY]
+            self.config[RECORD_STORAGE_LIMIT_CONFIG_KEY] = self.default_config[
+                RECORD_STORAGE_LIMIT_CONFIG_KEY
+            ]

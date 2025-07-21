@@ -26,7 +26,7 @@ def get_available_memory_mb() -> float:
 
 
 class AudioHandler:
-    """Gerencia a gravação de áudio em arquivo temporário."""
+    """Gerencia a gravação de áudio em arquivo temporário ou memória."""
 
     def __init__(
         self,
@@ -34,14 +34,23 @@ class AudioHandler:
         on_audio_segment_ready_callback,
         on_recording_state_change_callback,
         in_memory_mode: bool = False,
-        max_in_memory_seconds: float | None = None,
+        record_storage_mode: str | None = None,
+        record_storage_limit: int | None = None,
     ):
         self.config_manager = config_manager
         self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
         self.on_recording_state_change_callback = on_recording_state_change_callback
-        self.in_memory_mode = in_memory_mode
-        self.max_in_memory_seconds = max_in_memory_seconds
-        self._in_memory_duration = 0.0
+        if record_storage_mode is None:
+            record_storage_mode = self.config_manager.get("record_storage_mode")
+        if record_storage_limit is None:
+            record_storage_limit = self.config_manager.get("record_storage_limit")
+
+        self.record_storage_mode = str(record_storage_mode).lower() if record_storage_mode is not None else "file"
+        try:
+            self.record_storage_limit = int(record_storage_limit) if record_storage_limit is not None else 0
+        except (ValueError, TypeError):
+            self.record_storage_limit = 0
+        self.in_memory_mode = in_memory_mode or self.record_storage_mode == "memory"
 
         self.is_recording = False
         self.start_time = None
@@ -66,13 +75,16 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
-        self.record_storage_mode = self.config_manager.get("record_storage_mode")
-        self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb")
-        self.max_in_memory_seconds = self.config_manager.get("max_in_memory_seconds")
-        self.record_to_memory = self.config_manager.get("record_to_memory")
-        self.max_memory_seconds = self.config_manager.get("max_memory_seconds")
-
-        self._memory_samples = 0
+        # Sobrepõe configurações conforme parâmetros fornecidos
+        self.record_storage_mode = (
+            str(record_storage_mode).lower() if record_storage_mode is not None else "file"
+        )
+        try:
+            self.record_storage_limit = int(record_storage_limit) if record_storage_limit is not None else 0
+        except (ValueError, TypeError):
+            self.record_storage_limit = 0
+        self.in_memory_mode = in_memory_mode or self.record_storage_mode == "memory"
+        self.record_to_memory = self.record_storage_mode == "memory"
 
         self.temp_file_path: str | None = None
         self._raw_temp_file: tempfile.NamedTemporaryFile | None = None
@@ -466,7 +478,11 @@ class AudioHandler:
             self.vad_manager = None
 
         self._vad_silence_counter = 0.0
-        logging.info("AudioHandler: Configura\u00e7\u00f5es atualizadas.")
+        logging.info(
+            "AudioHandler: Configura\u00e7\u00f5es atualizadas (modo=%s, limite=%s)",
+            self.record_storage_mode,
+            self.record_storage_limit,
+        )
 
     def _cleanup_temp_file(self):
         if self.in_memory_mode:
