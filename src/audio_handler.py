@@ -36,6 +36,8 @@ class AudioHandler:
         in_memory_mode: bool = False,
         record_storage_mode: str | None = None,
         record_storage_limit: int | None = None,
+        max_in_memory_seconds: float | None = None,
+        min_free_ram_mb: int | None = None,
     ):
         self.config_manager = config_manager
         self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
@@ -51,6 +53,34 @@ class AudioHandler:
         except (ValueError, TypeError):
             self.record_storage_limit = 0
         self.in_memory_mode = in_memory_mode or self.record_storage_mode == "memory"
+
+        if max_in_memory_seconds is None:
+            getter = getattr(self.config_manager, "get_max_memory_seconds", None)
+            if callable(getter):
+                max_in_memory_seconds = getter()
+            else:
+                max_in_memory_seconds = self.config_manager.get("max_memory_seconds")
+        if max_in_memory_seconds is None:
+            max_in_memory_seconds = 30
+
+        if min_free_ram_mb is None:
+            getter = getattr(self.config_manager, "get_min_free_ram_mb", None)
+            if callable(getter):
+                min_free_ram_mb = getter()
+            else:
+                min_free_ram_mb = self.config_manager.get("min_free_ram_mb")
+        if min_free_ram_mb is None:
+            min_free_ram_mb = 1000
+
+        try:
+            self.max_memory_seconds = float(max_in_memory_seconds)
+        except (ValueError, TypeError):
+            self.max_memory_seconds = float(self.config_manager.get("max_memory_seconds"))
+
+        try:
+            self.min_free_ram_mb = int(min_free_ram_mb)
+        except (ValueError, TypeError):
+            self.min_free_ram_mb = int(self.config_manager.get("min_free_ram_mb"))
 
         self.is_recording = False
         self.start_time = None
@@ -233,13 +263,13 @@ class AudioHandler:
         if self.record_storage_mode == "memory":
             self.in_memory_mode = True
             reason = "configurado para memory"
-        elif self.record_storage_mode == "disk":
+        elif self.record_storage_mode in ["disk", "file"]:
             self.in_memory_mode = False
             reason = "configurado para disk"
         else:
             if (
                 available_mb >= self.min_free_ram_mb
-                and self.max_in_memory_seconds > 0
+                and self.max_memory_seconds > 0
             ):
                 self.in_memory_mode = True
                 reason = (
@@ -460,6 +490,7 @@ class AudioHandler:
 
         self.record_to_memory = self.config_manager.get("record_to_memory")
         self.max_memory_seconds = self.config_manager.get("max_memory_seconds")
+        self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb")
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_threshold = self.config_manager.get("vad_threshold")

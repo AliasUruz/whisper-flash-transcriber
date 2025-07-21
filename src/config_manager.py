@@ -72,6 +72,8 @@ Transcribed speech: {text}""",
     "record_to_memory": False,
     "record_storage_mode": "file",
     "record_storage_limit": 0,
+    "max_memory_seconds": 30,
+    "min_free_ram_mb": 1000,
     "min_transcription_duration": 1.0 # Nova configuração
 }
 
@@ -257,6 +259,26 @@ class ConfigManager:
             self.config[RECORD_STORAGE_LIMIT_CONFIG_KEY] = self.default_config[
                 RECORD_STORAGE_LIMIT_CONFIG_KEY
             ]
+
+        try:
+            self.config["max_memory_seconds"] = float(
+                self.config.get(
+                    "max_memory_seconds",
+                    self.default_config["max_memory_seconds"],
+                )
+            )
+        except (ValueError, TypeError):
+            self.config["max_memory_seconds"] = self.default_config["max_memory_seconds"]
+
+        try:
+            self.config["min_free_ram_mb"] = int(
+                self.config.get(
+                    "min_free_ram_mb",
+                    self.default_config["min_free_ram_mb"],
+                )
+            )
+        except (ValueError, TypeError):
+            self.config["min_free_ram_mb"] = self.default_config["min_free_ram_mb"]
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -484,3 +506,27 @@ class ConfigManager:
             self.config[RECORD_STORAGE_LIMIT_CONFIG_KEY] = self.default_config[
                 RECORD_STORAGE_LIMIT_CONFIG_KEY
             ]
+
+    def get_max_memory_seconds(self):
+        return self.config.get(
+            "max_memory_seconds",
+            self.default_config["max_memory_seconds"],
+        )
+
+    def set_max_memory_seconds(self, value: float | int):
+        try:
+            self.config["max_memory_seconds"] = float(value)
+        except (ValueError, TypeError):
+            self.config["max_memory_seconds"] = self.default_config["max_memory_seconds"]
+
+    def get_min_free_ram_mb(self):
+        return self.config.get(
+            "min_free_ram_mb",
+            self.default_config["min_free_ram_mb"],
+        )
+
+    def set_min_free_ram_mb(self, value: int):
+        try:
+            self.config["min_free_ram_mb"] = int(value)
+        except (ValueError, TypeError):
+            self.config["min_free_ram_mb"] = self.default_config["min_free_ram_mb"]
