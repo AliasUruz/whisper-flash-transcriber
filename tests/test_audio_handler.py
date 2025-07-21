@@ -41,9 +41,7 @@ class DummyConfig:
             'vad_threshold': 0.5,
             'vad_silence_duration': 0.5,
             'record_to_memory': False,
-            'record_storage_mode': 'disk',
-            'min_free_ram_mb': 512,
-            'max_in_memory_seconds': 30,
+            'max_memory_seconds': 30,
             SAVE_TEMP_RECORDINGS_CONFIG_KEY: False,
         }
 

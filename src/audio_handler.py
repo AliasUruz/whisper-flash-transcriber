@@ -70,10 +70,9 @@ class AudioHandler:
         self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb")
         self.max_in_memory_seconds = self.config_manager.get("max_in_memory_seconds")
         self.record_to_memory = self.config_manager.get("record_to_memory")
-        self.record_to_memory = self.config_manager.get("record_to_memory")
-        self.record_storage_mode = self.config_manager.get("record_storage_mode")
-        self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb")
-        self.max_in_memory_seconds = self.config_manager.get("max_in_memory_seconds")
+        self.max_memory_seconds = self.config_manager.get("max_memory_seconds")
+
+        self._memory_samples = 0
 
         self.temp_file_path: str | None = None
         self._raw_temp_file: tempfile.NamedTemporaryFile | None = None
@@ -109,15 +108,25 @@ class AudioHandler:
         if write_data is not None:
             if self.in_memory_mode:
                 self._audio_frames.append(write_data.copy())
-                self._in_memory_duration += len(write_data) / AUDIO_SAMPLE_RATE
-                if (
-                    self.max_in_memory_seconds is not None
-                    and self._in_memory_duration >= self.max_in_memory_seconds
-                ):
-                    self._migrate_to_file()
+                self._memory_samples += len(write_data)
             else:
                 self._sf_writer.write(write_data)
+                if self.record_to_memory and self._frame_buffer is not None:
+                    self._frame_buffer.append(write_data.copy())
+                    self._memory_samples += len(write_data)
             self._sample_count += len(write_data)
+
+            max_samples = int(self.max_memory_seconds * AUDIO_SAMPLE_RATE)
+            while self._memory_samples > max_samples and (
+                self.in_memory_mode or (self.record_to_memory and self._frame_buffer)
+            ):
+                if self.in_memory_mode and self._audio_frames:
+                    removed = self._audio_frames.pop(0)
+                elif self._frame_buffer:
+                    removed = self._frame_buffer.pop(0)
+                else:
+                    break
+                self._memory_samples -= len(removed)
 
     def _record_audio_task(self):
         self.audio_stream = None
@@ -238,13 +247,14 @@ class AudioHandler:
         self.is_recording = True
         self.start_time = time.time()
         self._sample_count = 0
-        self._in_memory_duration = 0.0
+        self._memory_samples = 0
 
         if self.in_memory_mode:
             self.temp_file_path = None
             self._raw_temp_file = None
             self._sf_writer = None
             self._audio_frames = []
+            self._frame_buffer = None
         else:
             raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
             self.temp_file_path = raw_tmp.name
@@ -253,6 +263,7 @@ class AudioHandler:
             self._sf_writer = sf.SoundFile(
                 self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
             )
+            self._frame_buffer = [] if self.record_to_memory else None
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
@@ -315,6 +326,7 @@ class AudioHandler:
                 else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
             )
             self._audio_frames = []
+            self._memory_samples = 0
             self.start_time = None
             self.on_recording_state_change_callback("TRANSCRIBING")
             self.on_audio_segment_ready_callback(audio_array.flatten())
@@ -340,8 +352,10 @@ class AudioHandler:
         if self.record_to_memory:
             audio_data = np.concatenate(self._frame_buffer, axis=0) if self._frame_buffer else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
             self.on_audio_segment_ready_callback(audio_data)
+            self._frame_buffer = []
         else:
             self.on_audio_segment_ready_callback(self.temp_file_path)
+        self._memory_samples = 0
         return True
 
     # ------------------------------------------------------------------
@@ -431,6 +445,9 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+
+        self.record_to_memory = self.config_manager.get("record_to_memory")
+        self.max_memory_seconds = self.config_manager.get("max_memory_seconds")
 
         self.use_vad = self.config_manager.get("use_vad")
         self.vad_threshold = self.config_manager.get("vad_threshold")

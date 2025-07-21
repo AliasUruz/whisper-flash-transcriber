@@ -260,6 +260,8 @@ To access and change settings:
 *   **Minimum Free RAM (MB):** Threshold used in automatic mode to decide when audio can be stored in memory.
 *   **Max In-Memory Seconds:** Limits the amount of audio kept in RAM when automatic mode is active.
 *   **Record to Memory:** Keep the captured audio only in memory instead of creating a temporary file (default `false`). When enabled, the **Save Temporary Recordings** option is ignored.
+*   **Storage Strategy:** Select "File" to always store audio as a temporary WAV file or "Memory" to keep it directly in RAM.
+*   **Max Memory Retention (s):** Limits how many seconds of audio are preserved when using memory storage.
 *   **Save Temporary Recordings:** When enabled, the captured audio is stored as `temp_recording_<timestamp>.wav` in the application folder. This temporary file is automatically deleted once transcription completes. This setting has no effect when **Record to Memory** is active.
 *   **Display Transcript in Terminal:** Show the final text in the terminal window after each recording.
 *   **Use VAD:** enables silence removal without automatically stopping the recording.

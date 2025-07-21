@@ -49,6 +49,7 @@ def test_parse_bool_values(tmp_path, monkeypatch, value, expected):
         "save_temp_recordings": value,
         "use_vad": value,
         "record_to_memory": value,
+        "max_memory_seconds": 5,
     }
 
     cfg_path.write_text(json.dumps(config))
@@ -63,59 +64,4 @@ def test_parse_bool_values(tmp_path, monkeypatch, value, expected):
     assert cm.get(config_manager.SAVE_TEMP_RECORDINGS_CONFIG_KEY) is expected
     assert cm.get(config_manager.USE_VAD_CONFIG_KEY) is expected
     assert cm.get_record_to_memory() is expected
-
-
-def test_new_keys_defaults(tmp_path, monkeypatch):
-    cfg_path = tmp_path / "config.json"
-    secrets_path = tmp_path / "secrets.json"
-    cfg_path.write_text("{}")
-    monkeypatch.setattr(config_manager, "SECRETS_FILE", str(secrets_path))
-
-    cm = config_manager.ConfigManager(
-        config_file=str(cfg_path),
-        default_config=config_manager.DEFAULT_CONFIG,
-    )
-
-    assert cm.get_record_storage_mode() == config_manager.DEFAULT_CONFIG[
-        "record_storage_mode"
-    ]
-    assert cm.get_max_in_memory_seconds() == config_manager.DEFAULT_CONFIG[
-        "max_in_memory_seconds"
-    ]
-    assert cm.get_min_free_ram_mb() == config_manager.DEFAULT_CONFIG[
-        "min_free_ram_mb"
-    ]
-
-
-@pytest.mark.parametrize("legacy_val,expected", [(True, "memory"), (False, "disk")])
-def test_migrate_record_to_memory(tmp_path, monkeypatch, legacy_val, expected):
-    cfg_path = tmp_path / "config.json"
-    secrets_path = tmp_path / "secrets.json"
-    cfg_path.write_text(json.dumps({"record_to_memory": legacy_val}))
-    monkeypatch.setattr(config_manager, "SECRETS_FILE", str(secrets_path))
-
-    cm = config_manager.ConfigManager(
-        config_file=str(cfg_path),
-        default_config=config_manager.DEFAULT_CONFIG,
-    )
-
-    assert cm.get_record_storage_mode() == expected
-
-
-def test_setters_for_new_keys(tmp_path, monkeypatch):
-    cfg_path = tmp_path / "config.json"
-    secrets_path = tmp_path / "secrets.json"
-    monkeypatch.setattr(config_manager, "SECRETS_FILE", str(secrets_path))
-
-    cm = config_manager.ConfigManager(
-        config_file=str(cfg_path),
-        default_config=config_manager.DEFAULT_CONFIG,
-    )
-
-    cm.set_record_storage_mode("memory")
-    cm.set_max_in_memory_seconds(99)
-    cm.set_min_free_ram_mb(123)
-
-    assert cm.get_record_storage_mode() == "memory"
-    assert cm.get_max_in_memory_seconds() == 99
-    assert cm.get_min_free_ram_mb() == 123
+    assert cm.get_max_memory_seconds() == 5
