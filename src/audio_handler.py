@@ -7,6 +7,7 @@ import sounddevice as sd
 import soundfile as sf
 import tempfile
 from pathlib import Path
+import psutil
 
 from .vad_manager import VADManager
 from .config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
@@ -15,14 +16,32 @@ AUDIO_SAMPLE_RATE = 16000
 AUDIO_CHANNELS = 1
 
 
+def get_available_memory_mb() -> float:
+    """Retorna a quantidade de RAM disponível em megabytes."""
+    try:
+        return psutil.virtual_memory().available / (1024 * 1024)
+    except Exception as e:
+        logging.error("Falha ao consultar memória disponível: %s", e)
+        return 0.0
+
+
 class AudioHandler:
     """Gerencia a gravação de áudio em arquivo temporário."""
 
-    def __init__(self, config_manager, on_audio_segment_ready_callback, on_recording_state_change_callback, in_memory_mode: bool = False):
+    def __init__(
+        self,
+        config_manager,
+        on_audio_segment_ready_callback,
+        on_recording_state_change_callback,
+        in_memory_mode: bool = False,
+        max_in_memory_seconds: float | None = None,
+    ):
         self.config_manager = config_manager
         self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
         self.on_recording_state_change_callback = on_recording_state_change_callback
         self.in_memory_mode = in_memory_mode
+        self.max_in_memory_seconds = max_in_memory_seconds
+        self._in_memory_duration = 0.0
 
         self.is_recording = False
         self.start_time = None
@@ -47,6 +66,9 @@ class AudioHandler:
         self.sound_duration = self.config_manager.get("sound_duration")
         self.sound_volume = self.config_manager.get("sound_volume")
         self.min_record_duration = self.config_manager.get("min_record_duration")
+        self.record_storage_mode = self.config_manager.get("record_storage_mode")
+        self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb")
+        self.max_in_memory_seconds = self.config_manager.get("max_in_memory_seconds")
         self.record_to_memory = self.config_manager.get("record_to_memory")
         self.max_memory_seconds = self.config_manager.get("max_memory_seconds")
 
@@ -165,6 +187,23 @@ class AudioHandler:
         if t.is_alive():
             logging.error("Thread de fechamento n\u00e3o terminou em %ss", timeout)
 
+    def _migrate_to_file(self):
+        """Move os quadros gravados em memória para um arquivo temporário."""
+        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        self.temp_file_path = raw_tmp.name
+        raw_tmp.close()
+        self._sf_writer = sf.SoundFile(
+            self.temp_file_path,
+            mode="w",
+            samplerate=AUDIO_SAMPLE_RATE,
+            channels=AUDIO_CHANNELS,
+        )
+        if self._audio_frames:
+            data = np.concatenate(self._audio_frames, axis=0)
+            self._sf_writer.write(data)
+            self._audio_frames = []
+        self.in_memory_mode = False
+
     def start_recording(self):
         if self.is_recording:
             logging.warning("Grava\u00e7\u00e3o j\u00e1 est\u00e1 ativa.")
@@ -176,6 +215,34 @@ class AudioHandler:
             self._record_thread.join(timeout=2)
 
         self._stop_event.clear()
+
+        available_mb = get_available_memory_mb()
+        reason = ""
+        if self.record_storage_mode == "memory":
+            self.in_memory_mode = True
+            reason = "configurado para memory"
+        elif self.record_storage_mode == "disk":
+            self.in_memory_mode = False
+            reason = "configurado para disk"
+        else:
+            if (
+                available_mb >= self.min_free_ram_mb
+                and self.max_in_memory_seconds > 0
+            ):
+                self.in_memory_mode = True
+                reason = (
+                    f"auto: RAM livre {available_mb:.0f}MB >= {self.min_free_ram_mb}MB"
+                )
+            else:
+                self.in_memory_mode = False
+                reason = (
+                    f"auto: RAM livre {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
+                )
+        logging.info(
+            "Decis\u00e3o de armazenamento: in_memory=%s (%s)",
+            self.in_memory_mode,
+            reason,
+        )
 
         self.is_recording = True
         self.start_time = time.time()
