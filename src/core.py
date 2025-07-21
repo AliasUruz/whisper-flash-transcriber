@@ -61,7 +61,10 @@ class AppCore:
         self.audio_handler = AudioHandler(
             self.config_manager,
             on_audio_segment_ready_callback=self._on_audio_segment_ready,
-            on_recording_state_change_callback=self._set_state
+            on_recording_state_change_callback=self._set_state,
+            record_storage_mode=self.config_manager.get("record_storage_mode"),
+            record_storage_limit=self.config_manager.get("record_storage_limit"),
+            in_memory_mode=self.config_manager.get("record_to_memory")
         )
         self.gemini_api = GeminiAPI(self.config_manager) # Instancia o GeminiAPI
         self.transcription_handler = TranscriptionHandler(
@@ -95,6 +98,7 @@ class AppCore:
 
         # Carregar configurações iniciais e iniciar carregamento do modelo
         self._apply_initial_config_to_core_attributes()
+
         self.transcription_handler.start_model_loading()
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
@@ -573,7 +577,9 @@ class AppCore:
                 "new_use_vad": "use_vad",
                 "new_vad_threshold": "vad_threshold",
                 "new_vad_silence_duration": "vad_silence_duration",
-                "new_display_transcripts_in_terminal": "display_transcripts_in_terminal"
+                "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
+                "new_record_storage_mode": "record_storage_mode",
+                "new_record_storage_limit": "record_storage_limit",
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
@@ -601,7 +607,16 @@ class AppCore:
             self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
             self.audio_handler.config_manager = self.config_manager # Atualizar referência
             self.transcription_handler.config_manager = self.config_manager # Atualizar referência
-            if any(key in kwargs for key in ["new_use_vad", "new_vad_threshold", "new_vad_silence_duration"]):
+            if any(
+                key in kwargs
+                for key in [
+                    "new_use_vad",
+                    "new_vad_threshold",
+                    "new_vad_silence_duration",
+                    "new_record_storage_mode",
+                    "new_record_storage_limit",
+                ]
+            ):
                 self.audio_handler.update_config()
             self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
             # Re-inicializar clientes API existentes em vez de recriá-los

@@ -77,7 +77,13 @@ class DummyConfig:
         return self.data.get(key, default)
 
 class DummyAudioHandler:
-    def __init__(self, config, on_audio_segment_ready_callback, on_recording_state_change_callback):
+    def __init__(
+        self,
+        config,
+        on_audio_segment_ready_callback,
+        on_recording_state_change_callback,
+        **kwargs,
+    ):
         self.config_manager = config
         self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
         self.on_recording_state_change_callback = on_recording_state_change_callback

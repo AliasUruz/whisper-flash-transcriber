@@ -71,14 +71,11 @@ def test_temp_recording_cleanup(tmp_path, monkeypatch):
             config,
             on_audio_segment_ready_callback,
             on_recording_state_change_callback,
+            **kwargs,
         ):
             self.config_manager = config
-            self.on_audio_segment_ready_callback = (
-                on_audio_segment_ready_callback
-            )
-            self.on_recording_state_change_callback = (
-                on_recording_state_change_callback
-            )
+            self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
+            self.on_recording_state_change_callback = on_recording_state_change_callback
             self.is_recording = False
             self.temp_file_path = None
 
