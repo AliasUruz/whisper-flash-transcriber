@@ -80,3 +80,18 @@ def test_hybrid_storage_mode_maps_to_auto(tmp_path, monkeypatch):
     )
 
     assert cm.get_record_storage_mode() == "auto"
+
+
+def test_max_memory_seconds_mode(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.json"
+    secrets_path = tmp_path / "secrets.json"
+
+    cfg_path.write_text(json.dumps({"max_memory_seconds_mode": "auto"}))
+    monkeypatch.setattr(config_manager, "SECRETS_FILE", str(secrets_path))
+
+    cm = config_manager.ConfigManager(
+        config_file=str(cfg_path),
+        default_config=config_manager.DEFAULT_CONFIG,
+    )
+
+    assert cm.get_max_memory_seconds_mode() == "auto"
