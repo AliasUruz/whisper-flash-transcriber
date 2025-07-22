@@ -229,6 +229,7 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertFalse(os.path.exists(results[0]))
         self.assertFalse(handler.in_memory_mode)
         self.assertEqual(handler._audio_frames, [])
+        self.assertEqual(handler._memory_samples, 0)
 
     def test_record_to_memory_returns_flat_array(self):
         results = []
@@ -297,6 +298,28 @@ class AudioHandlerTest(unittest.TestCase):
         alive_after = t.is_alive()
         t.join()
         self.assertTrue(alive_after)
+
+    def test_calculate_auto_memory_seconds(self):
+        self.config.data["max_memory_seconds_mode"] = "auto"
+        self.config.data["min_free_ram_mb"] = 100
+        handler = AudioHandler(self.config, lambda *_: None, lambda *_: None)
+        with patch("src.audio_handler.get_available_memory_mb", return_value=160):
+            secs = handler._calculate_auto_memory_seconds()
+        expected = (160 - 100) / (64 / 1024)
+        self.assertAlmostEqual(secs, expected)
+
+    def test_auto_mode_migrates_when_ram_low(self):
+        self.config.data["record_storage_mode"] = "auto"
+        handler = AudioHandler(self.config, lambda *_: None, lambda *_: None)
+        handler.is_recording = True
+        handler.in_memory_mode = True
+        handler._memory_limit_samples = 1000000
+        with patch("src.audio_handler.get_total_memory_mb", return_value=1000), \
+             patch("src.audio_handler.get_available_memory_mb", return_value=50):
+            handler._audio_callback(np.zeros((160, 1), dtype=np.float32), 160, None, None)
+        self.assertFalse(handler.in_memory_mode)
+        self.assertIsNotNone(handler.temp_file_path)
+        handler._cleanup_temp_file()
 
 
 if __name__ == '__main__':

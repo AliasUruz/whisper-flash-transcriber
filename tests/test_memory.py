@@ -10,13 +10,25 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 
 def _run_with_available_bytes(num_bytes):
-    fake_mem = SimpleNamespace(available=num_bytes)
+    fake_mem = SimpleNamespace(available=num_bytes, total=0)
     with mock.patch("psutil.virtual_memory", return_value=fake_mem):
         module = importlib.reload(importlib.import_module("utils.memory"))
         return module.get_available_memory_mb()
 
 
+def _run_with_total_bytes(total_bytes):
+    fake_mem = SimpleNamespace(available=0, total=total_bytes)
+    with mock.patch("psutil.virtual_memory", return_value=fake_mem):
+        module = importlib.reload(importlib.import_module("utils.memory"))
+        return module.get_total_memory_mb()
+
+
 def test_get_available_memory_mb():
     assert _run_with_available_bytes(1_048_576) == 1
     assert _run_with_available_bytes(5_000_000_000) == 4768
+
+
+def test_get_total_memory_mb():
+    assert _run_with_total_bytes(1_048_576) == 1
+    assert _run_with_total_bytes(5_000_000_000) == 4768
 
