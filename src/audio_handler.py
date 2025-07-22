@@ -184,6 +184,7 @@ class AudioHandler:
             data = np.concatenate(self._audio_frames, axis=0)
             self._sf_writer.write(data)
             self._audio_frames = []
+        self._memory_samples = 0
         self.in_memory_mode = False
 
     def start_recording(self):

@@ -229,6 +229,7 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertFalse(os.path.exists(results[0]))
         self.assertFalse(handler.in_memory_mode)
         self.assertEqual(handler._audio_frames, [])
+        self.assertEqual(handler._memory_samples, 0)
 
     def test_record_to_memory_returns_flat_array(self):
         results = []
