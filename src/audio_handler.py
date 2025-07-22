@@ -7,7 +7,7 @@ import sounddevice as sd
 import soundfile as sf
 import tempfile
 from pathlib import Path
-from .utils.memory import get_available_memory_mb
+from .utils.memory import get_available_memory_mb, get_total_memory_mb
 
 from .vad_manager import VADManager
 from .config_manager import SAVE_TEMP_RECORDINGS_CONFIG_KEY
@@ -104,6 +104,14 @@ class AudioHandler:
                             f"Duração da gravação excedeu {self.current_max_memory_seconds}s. Migrando da RAM para o disco."
                         )
                         self._migrate_to_file()
+                    elif self.record_storage_mode == 'auto':
+                        total_mb = get_total_memory_mb()
+                        avail_mb = get_available_memory_mb()
+                        if total_mb and avail_mb / total_mb < 0.1:
+                            logging.info(
+                                "RAM livre abaixo de 10% do total. Migrando da RAM para o disco."
+                            )
+                            self._migrate_to_file()
                 else:
                     if self._sf_writer:
                         self._sf_writer.write(write_data)

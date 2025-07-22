@@ -103,6 +103,7 @@ The application features a flexible automatic approach to storing captured audio
 * `max_memory_seconds_mode` – `"manual"` (default) uses the value of `max_memory_seconds`. Set to `"auto"` to compute a limit based on free RAM at the start of each recording.
 * `max_memory_seconds` – Maximum length of audio (in seconds) to keep in RAM before switching to disk.
 * `min_free_ram_mb` – Minimum free RAM required to continue storing audio in memory. If available memory drops below this value, the app writes new chunks directly to disk until memory usage is safe again.
+* **Automatic RAM safeguard:** while recording, if free RAM falls below 10% of total system memory, new audio is redirected to disk even in memory mode.
 * `record_storage_limit` – Maximum number of temporary recordings to keep. Older recordings are deleted when this limit is exceeded.
 
 ### Example

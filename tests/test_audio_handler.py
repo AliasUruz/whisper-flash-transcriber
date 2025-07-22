@@ -308,6 +308,19 @@ class AudioHandlerTest(unittest.TestCase):
         expected = (160 - 100) / (64 / 1024)
         self.assertAlmostEqual(secs, expected)
 
+    def test_auto_mode_migrates_when_ram_low(self):
+        self.config.data["record_storage_mode"] = "auto"
+        handler = AudioHandler(self.config, lambda *_: None, lambda *_: None)
+        handler.is_recording = True
+        handler.in_memory_mode = True
+        handler._memory_limit_samples = 1000000
+        with patch("src.audio_handler.get_total_memory_mb", return_value=1000), \
+             patch("src.audio_handler.get_available_memory_mb", return_value=50):
+            handler._audio_callback(np.zeros((160, 1), dtype=np.float32), 160, None, None)
+        self.assertFalse(handler.in_memory_mode)
+        self.assertIsNotNone(handler.temp_file_path)
+        handler._cleanup_temp_file()
+
 
 if __name__ == '__main__':
     unittest.main()
