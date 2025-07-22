@@ -33,7 +33,10 @@ class AudioHandler:
         self.record_storage_mode = "auto"
         self.record_storage_limit = 0
         self.in_memory_mode = False
+        self.max_memory_seconds_mode = "manual"
         self.max_memory_seconds = 30
+        self.current_max_memory_seconds = 30
+        self._memory_limit_samples = int(AUDIO_SAMPLE_RATE * self.current_max_memory_seconds)
         self.min_free_ram_mb = 1000
         self.sound_enabled = True
         self.sound_frequency = 400
@@ -95,9 +98,11 @@ class AudioHandler:
                     self._memory_samples += len(write_data)
 
                     # Verifica se é necessário mover para o disco
-                    max_samples = int(self.max_memory_seconds * AUDIO_SAMPLE_RATE)
+                    max_samples = self._memory_limit_samples
                     if self.record_storage_mode == 'auto' and self._memory_samples > max_samples:
-                        logging.info(f"Duração da gravação excedeu {self.max_memory_seconds}s. Migrando da RAM para o disco.")
+                        logging.info(
+                            f"Duração da gravação excedeu {self.current_max_memory_seconds}s. Migrando da RAM para o disco."
+                        )
                         self._migrate_to_file()
                 else:
                     if self._sf_writer:
@@ -213,6 +218,12 @@ class AudioHandler:
             reason,
         )
 
+        if self.max_memory_seconds_mode == "auto":
+            self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
+        else:
+            self.current_max_memory_seconds = self.max_memory_seconds
+        self._memory_limit_samples = int(self.current_max_memory_seconds * AUDIO_SAMPLE_RATE)
+
         with self.storage_lock:
             self.is_recording = True
             self.start_time = time.time()
@@ -311,8 +322,11 @@ class AudioHandler:
                             os.remove(filename)
                     except Exception:
                         pass
-                    self.temp_file_path = None
+                    self.temp_file_path = filename
             self.on_audio_segment_ready_callback(self.temp_file_path)
+
+        if not self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
+            self._cleanup_temp_file()
 
         # Clear in-memory data; temporary file is kept for downstream processing
         self._audio_frames = []
@@ -406,6 +420,7 @@ class AudioHandler:
         """Carrega ou atualiza as configurações a partir do ConfigManager."""
         self.record_storage_mode = self.config_manager.get("record_storage_mode", "auto")
         self.record_storage_limit = self.config_manager.get("record_storage_limit", 0)
+        self.max_memory_seconds_mode = self.config_manager.get("max_memory_seconds_mode", "manual")
         self.max_memory_seconds = self.config_manager.get("max_memory_seconds", 30)
         self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb", 1000)
 
@@ -436,6 +451,19 @@ class AudioHandler:
             self.record_storage_mode,
             self.record_storage_limit,
         )
+
+    def _calculate_auto_memory_seconds(self) -> float:
+        """Calcula o tempo máximo em memória baseado na RAM livre."""
+        available_mb = get_available_memory_mb()
+        usable_mb = max(0, available_mb - self.min_free_ram_mb)
+        bytes_per_sec_mb = 64 / 1024  # 64 KB em MB
+        seconds = usable_mb / bytes_per_sec_mb if bytes_per_sec_mb else 0
+        logging.debug(
+            "Limite automático calculado: %.1fs (RAM livre %.0fMB)",
+            seconds,
+            available_mb,
+        )
+        return max(0.0, seconds)
 
     def _cleanup_temp_file(self):
         with self.storage_lock:

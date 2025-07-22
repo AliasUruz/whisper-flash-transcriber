@@ -245,6 +245,9 @@ class UIManager:
                 storage_strategy_var = ctk.StringVar(
                     value="Memory" if self.config_manager.get_record_to_memory() else "File"
                 )
+                max_memory_seconds_mode_var = ctk.StringVar(
+                    value=self.config_manager.get("max_memory_seconds_mode", "manual")
+                )
                 max_memory_seconds_var = ctk.DoubleVar(
                     value=self.config_manager.get("max_memory_seconds")
                 )
@@ -324,6 +327,7 @@ class UIManager:
                         return
                     save_temp_recordings_to_apply = save_temp_recordings_var.get()
                     display_transcripts_to_apply = display_transcripts_var.get()
+                    max_memory_seconds_mode_to_apply = max_memory_seconds_mode_var.get()
                     max_memory_seconds_to_apply = self._safe_get_float(max_memory_seconds_var, "Max Memory Retention", settings_win)
                     if max_memory_seconds_to_apply is None:
                         return
@@ -372,6 +376,7 @@ class UIManager:
                         new_min_transcription_duration=min_transcription_duration_to_apply,
                         new_save_temp_recordings=save_temp_recordings_to_apply,
                         new_record_to_memory=(storage_strategy_var.get() == "Memory"),
+                        new_max_memory_seconds_mode=max_memory_seconds_mode_to_apply,
                         new_max_memory_seconds=max_memory_seconds_to_apply,
                         new_use_vad=use_vad_to_apply,
                         new_vad_threshold=vad_threshold_to_apply,
@@ -439,6 +444,7 @@ class UIManager:
                     display_transcripts_var.set(DEFAULT_CONFIG["display_transcripts_in_terminal"])
                     storage_strategy_var.set("Memory" if DEFAULT_CONFIG["record_to_memory"] else "File")
                     max_memory_seconds_var.set(DEFAULT_CONFIG["max_memory_seconds"])
+                    max_memory_seconds_mode_var.set(DEFAULT_CONFIG["max_memory_seconds_mode"])
 
                     self.config_manager.save_config()
 
@@ -660,6 +666,14 @@ class UIManager:
                 mem_time_entry = ctk.CTkEntry(mem_time_frame, textvariable=max_memory_seconds_var, width=60)
                 mem_time_entry.pack(side="left", padx=5)
                 Tooltip(mem_time_entry, "Limit for in-memory recordings.")
+                mem_mode_menu = ctk.CTkOptionMenu(
+                    mem_time_frame,
+                    variable=max_memory_seconds_mode_var,
+                    values=["manual", "auto"],
+                    width=80,
+                )
+                mem_mode_menu.pack(side="left", padx=5)
+                Tooltip(mem_mode_menu, "Choose manual or auto calculation.")
 
                 display_transcripts_frame = ctk.CTkFrame(transcription_frame)
                 display_transcripts_frame.pack(fill="x", pady=5)
