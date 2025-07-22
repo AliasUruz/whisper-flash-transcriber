@@ -304,6 +304,9 @@ class KeyboardHotkeyManager:
 
             # Função para capturar a tecla
             def on_key_event(e):
+                # Ignorar eventos que não sejam do teclado (ex.: cliques do mouse)
+                if getattr(e, 'device', 'keyboard') != 'keyboard':
+                    return
                 # Ignorar teclas especiais como shift, ctrl, alt
                 if e.name in ['shift', 'ctrl', 'alt', 'left shift', 'right shift', 'left ctrl', 'right ctrl', 'left alt', 'right alt']:
                     return
