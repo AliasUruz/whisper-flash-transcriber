@@ -242,8 +242,11 @@ class UIManager:
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
                 save_temp_recordings_var = ctk.BooleanVar(value=self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY))
                 display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
-                storage_strategy_var = ctk.StringVar(
-                    value="Memory" if self.config_manager.get_record_to_memory() else "File"
+                record_storage_mode_var = ctk.StringVar(
+                    value=self.config_manager.get("record_storage_mode", "auto")
+                )
+                max_memory_seconds_mode_var = ctk.StringVar(
+                    value=self.config_manager.get("max_memory_seconds_mode", "manual")
                 )
                 max_memory_seconds_var = ctk.DoubleVar(
                     value=self.config_manager.get("max_memory_seconds")
@@ -324,6 +327,7 @@ class UIManager:
                         return
                     save_temp_recordings_to_apply = save_temp_recordings_var.get()
                     display_transcripts_to_apply = display_transcripts_var.get()
+                    max_memory_seconds_mode_to_apply = max_memory_seconds_mode_var.get()
                     max_memory_seconds_to_apply = self._safe_get_float(max_memory_seconds_var, "Max Memory Retention", settings_win)
                     if max_memory_seconds_to_apply is None:
                         return
@@ -371,7 +375,8 @@ class UIManager:
                         new_hotkey_stability_service_enabled=hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
                         new_min_transcription_duration=min_transcription_duration_to_apply,
                         new_save_temp_recordings=save_temp_recordings_to_apply,
-                        new_record_to_memory=(storage_strategy_var.get() == "Memory"),
+                        new_record_storage_mode=record_storage_mode_var.get(),
+                        new_max_memory_seconds_mode=max_memory_seconds_mode_to_apply,
                         new_max_memory_seconds=max_memory_seconds_to_apply,
                         new_use_vad=use_vad_to_apply,
                         new_vad_threshold=vad_threshold_to_apply,
@@ -437,8 +442,9 @@ class UIManager:
                     vad_silence_duration_var.set(DEFAULT_CONFIG["vad_silence_duration"])
                     save_temp_recordings_var.set(DEFAULT_CONFIG[SAVE_TEMP_RECORDINGS_CONFIG_KEY])
                     display_transcripts_var.set(DEFAULT_CONFIG["display_transcripts_in_terminal"])
-                    storage_strategy_var.set("Memory" if DEFAULT_CONFIG["record_to_memory"] else "File")
+                    record_storage_mode_var.set(DEFAULT_CONFIG["record_storage_mode"])
                     max_memory_seconds_var.set(DEFAULT_CONFIG["max_memory_seconds"])
+                    max_memory_seconds_mode_var.set(DEFAULT_CONFIG["max_memory_seconds_mode"])
 
                     self.config_manager.save_config()
 
@@ -647,12 +653,16 @@ class UIManager:
                 temp_recordings_switch.pack(side="left", padx=5)
                 Tooltip(temp_recordings_switch, "Keep temporary audio files after processing.")
 
-                storage_frame = ctk.CTkFrame(transcription_frame)
-                storage_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(storage_frame, text="Storage Strategy:").pack(side="left", padx=(5, 10))
-                storage_menu = ctk.CTkOptionMenu(storage_frame, variable=storage_strategy_var, values=["File", "Memory"])
-                storage_menu.pack(side="left", padx=5)
-                Tooltip(storage_menu, "Choose where recordings are stored.")
+                storage_mode_frame = ctk.CTkFrame(transcription_frame)
+                storage_mode_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(storage_mode_frame, text="Record Storage Mode:").pack(side="left", padx=(5, 10))
+                storage_mode_menu = ctk.CTkOptionMenu(
+                    storage_mode_frame,
+                    variable=record_storage_mode_var,
+                    values=["auto", "memory", "disk"],
+                )
+                storage_mode_menu.pack(side="left", padx=5)
+                Tooltip(storage_mode_menu, "Where recordings are kept during capture.")
 
                 mem_time_frame = ctk.CTkFrame(transcription_frame)
                 mem_time_frame.pack(fill="x", pady=5)
@@ -660,6 +670,14 @@ class UIManager:
                 mem_time_entry = ctk.CTkEntry(mem_time_frame, textvariable=max_memory_seconds_var, width=60)
                 mem_time_entry.pack(side="left", padx=5)
                 Tooltip(mem_time_entry, "Limit for in-memory recordings.")
+                mem_mode_menu = ctk.CTkOptionMenu(
+                    mem_time_frame,
+                    variable=max_memory_seconds_mode_var,
+                    values=["manual", "auto"],
+                    width=80,
+                )
+                mem_mode_menu.pack(side="left", padx=5)
+                Tooltip(mem_mode_menu, "Choose manual or auto calculation.")
 
                 display_transcripts_frame = ctk.CTkFrame(transcription_frame)
                 display_transcripts_frame.pack(fill="x", pady=5)
