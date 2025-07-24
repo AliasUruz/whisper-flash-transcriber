@@ -13,7 +13,7 @@ else:
 
 # Construir o caminho absoluto para o modelo ONNX
 MODEL_PATH = base_dir / "models" / "silero_vad.onnx"
-logging.info("Caminho do modelo VAD definido como '%s'", MODEL_PATH)
+logging.info("VAD model path set to '%s'", MODEL_PATH)
 
 class VADManager:
     """Gerencia a detecção de voz usando o modelo Silero."""
@@ -28,7 +28,7 @@ class VADManager:
 
         if not MODEL_PATH.exists():
             logging.error(
-                "Arquivo do modelo VAD ausente em '%s'. Recurso VAD desabilitado.",
+                "VAD model file missing at '%s'. VAD feature disabled.",
                 MODEL_PATH,
             )
             self.session = None
@@ -36,14 +36,14 @@ class VADManager:
 
         try:
             model_path_str = str(MODEL_PATH)
-            # Seleciona automaticamente o provider, priorizando CUDA se disponível
+            # Automatically select the provider, prioritizing CUDA when available
             available_providers = onnxruntime.get_available_providers()
             if "CUDAExecutionProvider" in available_providers:
                 providers = ["CUDAExecutionProvider"]
-                logging.info("CUDAExecutionProvider detectado para o VAD.")
+                logging.info("CUDAExecutionProvider detected for VAD.")
             else:
                 providers = ["CPUExecutionProvider"]
-                logging.info("CUDAExecutionProvider indisponível; usando CPUExecutionProvider.")
+                logging.info("CUDAExecutionProvider unavailable; using CPUExecutionProvider.")
 
             self.session = onnxruntime.InferenceSession(
                 model_path_str,
@@ -55,11 +55,11 @@ class VADManager:
             self.sr = sampling_rate
             self.reset_states()
             logging.info(
-                "Modelo VAD carregado com sucesso de '%s'.", model_path_str
+                "VAD model loaded successfully from '%s'.", model_path_str
             )
         except Exception as exc:
             logging.error(
-                "Erro ao carregar o modelo VAD de '%s': %s", MODEL_PATH, exc, exc_info=True
+                "Error loading VAD model from '%s': %s", MODEL_PATH, exc, exc_info=True
             )
             self.session = None
 

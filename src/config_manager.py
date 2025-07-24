@@ -164,7 +164,7 @@ class ConfigManager:
                 current_agent_prompt = cfg.get("prompt_agentico", "")
                 if current_agent_prompt == old_agent_prompt:
                     cfg["prompt_agentico"] = self.default_config["prompt_agentico"]
-                    logging.info("Prompt agêntico antigo detectado e migrado para o novo padrão.")
+                    logging.info("Old agent prompt detected and migrated to the new standard.")
                 # --- Fim da Migração ---
             else:
                 logging.info(f"{self.config_file} not found. Using defaults.")
@@ -377,7 +377,7 @@ class ConfigManager:
         safe_config = self.config.copy()
         safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
         safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
-        logging.info(f"Configurações aplicadas: {safe_config}")
+        logging.info(f"Settings applied: {safe_config}")
 
 
     def save_config(self):
@@ -413,7 +413,7 @@ class ConfigManager:
                 if os.path.exists(temp_file_config):
                     os.remove(temp_file_config)
         else:
-            logging.info(f"Nenhuma alteração detectada em {self.config_file}.")
+            logging.info(f"No changes detected in {self.config_file}.")
 
         # Salvar secrets.json somente se houver mudanças
         temp_file_secrets = SECRETS_FILE + ".tmp"
@@ -447,7 +447,7 @@ class ConfigManager:
                 # Não há arquivo nem segredos a salvar
                 self._secrets_hash = new_secrets_hash
         else:
-            logging.info(f"Nenhuma alteração detectada em {SECRETS_FILE}.")
+            logging.info(f"No changes detected in {SECRETS_FILE}.")
 
     def get(self, key, default=None):
         return self.config.get(key, default)
