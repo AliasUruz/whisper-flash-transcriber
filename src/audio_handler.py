@@ -456,7 +456,7 @@ class AudioHandler:
             self.vad_manager = None
 
         logging.info(
-            "AudioHandler: Configurações atualizadas (modo=%s, limite=%s)",
+            "AudioHandler: Settings updated (mode=%s, limit=%s)",
             self.record_storage_mode,
             self.record_storage_limit,
         )

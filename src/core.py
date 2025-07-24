@@ -160,7 +160,7 @@ class AppCore:
 
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
-        logging.info("AppCore: Modelo carregado com sucesso.")
+        logging.info("AppCore: Model loaded successfully.")
         self._set_state(STATE_IDLE)
         self._start_autohotkey()
         
@@ -203,7 +203,7 @@ class AppCore:
 
     def _handle_transcription_result(self, corrected_text, raw_text):
         """Lida com o texto final de transcrição, priorizando a versão corrigida."""
-        logging.info("AppCore: Lidando com o resultado final da transcrição.")
+        logging.info("AppCore: Handling final transcription result.")
         # O texto corrigido tem prioridade; se vazio, usa o acumulado durante a gravação
         text_to_display = corrected_text
         final_text = text_to_display.strip() if text_to_display else self.full_transcription.strip()
@@ -214,7 +214,7 @@ class AppCore:
         if pyperclip:
             try:
                 pyperclip.copy(final_text)
-                logging.info("Transcrição copiada para o clipboard.")
+                logging.info("Transcription copied to clipboard.")
             except Exception as e:
                 logging.error(f"Erro ao copiar para o clipboard: {e}")
         
@@ -226,7 +226,7 @@ class AppCore:
         self._set_state(STATE_IDLE)
         if self.ui_manager:
             self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
-        logging.info(f"Texto final corrigido para copiar/colar: {final_text}")
+        logging.info(f"Corrected text ready for copy/paste: {final_text}")
         self.full_transcription = ""  # Reset para a próxima gravação
         self._delete_temp_audio_file()
 
@@ -243,7 +243,7 @@ class AppCore:
 
             if pyperclip:
                 pyperclip.copy(agent_response_text)
-                logging.info("Resposta do agente copiada para a área de transferência.")
+                logging.info("Agent response copied to clipboard.")
 
             if self.config_manager.get("agent_auto_paste", True): # Usa agent_auto_paste
                 self._do_paste()
@@ -264,8 +264,8 @@ class AppCore:
         # Lógica movida de WhisperCore._do_paste
         try:
             pyautogui.hotkey('ctrl', 'v')
-            logging.info("Texto colado.")
-            self._log_status("Texto colado.")
+            logging.info("Text pasted.")
+            self._log_status("Text pasted.")
         except Exception as e:
             logging.error(f"Erro ao colar: {e}")
             self._log_status("Erro ao colar.", error=True)
@@ -273,11 +273,11 @@ class AppCore:
     def start_key_detection_thread(self):
         """Inicia uma thread para detectar uma única tecla e atualizar a UI."""
         if self.key_detection_active:
-            logging.info("Detecção de tecla já está ativa.")
+            logging.info("Key detection is already active.")
             return
 
         self.key_detection_active = True
-        logging.info("Iniciando detecção de tecla...")
+        logging.info("Starting key detection...")
         
         def detect_key_task():
             try:
@@ -291,18 +291,18 @@ class AppCore:
                     if self.key_detection_callback:
                         self.main_tk_root.after(0, lambda: self.key_detection_callback(detected_key.upper()))
                 else:
-                    logging.warning("Nenhuma tecla detectada ou stop signal recebido.")
+                    logging.warning("No key detected or stop signal received.")
                     if self.key_detection_callback:
                         self.main_tk_root.after(0, lambda: self.key_detection_callback("N/A")) # Ou algum valor padrão
             except Exception as e:
-                logging.error(f"Erro durante a detecção de tecla: {e}", exc_info=True)
+                logging.error(f"Error during key detection: {e}", exc_info=True)
                 if self.key_detection_callback:
                     self.main_tk_root.after(0, lambda: self.key_detection_callback("ERRO"))
             finally:
                 self.key_detection_active = False
                 # Re-registrar hotkeys após a detecção
                 self.register_hotkeys()
-                logging.info("Detecção de tecla finalizada. Hotkeys re-registradas.")
+                logging.info("Key detection finished. Hotkeys re-registered.")
 
         threading.Thread(target=detect_key_task, daemon=True, name="KeyDetectionThread").start()
 
@@ -345,7 +345,7 @@ class AppCore:
             success = self.ahk_manager.start()
             if success:
                 self.ahk_running = True
-                self._log_status(f"Hotkey registrada: {self.record_key.upper()} (modo: {self.record_mode})")
+                self._log_status(f"Hotkey registered: {self.record_key.upper()} (mode: {self.record_mode})")
             else:
                 self._set_state(STATE_ERROR_SETTINGS)
                 self._log_status("Erro: Falha ao iniciar KeyboardHotkeyManager.", error=True)
@@ -389,7 +389,7 @@ class AppCore:
                 try:
                     if self.ahk_running: self.ahk_manager.stop(); self.ahk_running = False; time.sleep(0.2)
                     self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
-                    logging.info("Recarregamento do KeyboardHotkeyManager concluído com sucesso.")
+                    logging.info("KeyboardHotkeyManager reload completed successfully.")
                     break
                 except Exception as e: last_error = e; logging.error(f"Erro na tentativa {attempt} de recarregamento: {e}"); time.sleep(1)
             if attempt >= max_attempts and last_error is not None:
@@ -432,7 +432,7 @@ class AppCore:
                     if success:
                         self.ahk_running = True
                         if current_state.startswith("ERROR"): self._set_state(STATE_IDLE)
-                        self._log_status("Recarregamento do KeyboardHotkeyManager concluído.", error=False)
+                        self._log_status("KeyboardHotkeyManager reload completed.", error=False)
                         return True
                     else:
                         self._log_status("Falha ao recarregar KeyboardHotkeyManager.", error=True)
@@ -446,7 +446,7 @@ class AppCore:
                     return False
         else:
             logging.warning(f"Manual trigger: Cannot re-register hotkeys. Current state is {current_state}.")
-            self._log_status(f"Não é possível recarregar agora (Estado: {current_state}).", error=True)
+            self._log_status(f"Cannot reload now (State: {current_state}).", error=True)
             return False
 
     def _hotkey_health_check_task(self):
@@ -456,7 +456,7 @@ class AppCore:
                 if not self.ahk_running:
                     logging.warning("Hotkey health check: KeyboardHotkeyManager not running while IDLE. Attempting restart.")
                     self.force_reregister_hotkeys()
-                    self._log_status("Tentativa de reiniciar KeyboardHotkeyManager.", error=False)
+                    self._log_status("Attempting to restart KeyboardHotkeyManager.", error=False)
                 else:
                     logging.debug("Hotkey health check: KeyboardHotkeyManager is running correctly while IDLE.")
             # Se o serviço de estabilidade estiver desativado, esta thread não deveria estar rodando.

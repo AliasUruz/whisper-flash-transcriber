@@ -51,7 +51,7 @@ app_core_instance = None
 ui_manager_instance = None
 
 def on_exit_app_enhanced(*_):
-    logging.info("Saída solicitada pelo ícone da bandeja.")
+    logging.info("Exit requested from tray icon.")
     if app_core_instance:
         app_core_instance.shutdown()
     if ui_manager_instance and ui_manager_instance.tray_icon:
@@ -60,7 +60,7 @@ def on_exit_app_enhanced(*_):
     main_tk_root.after(0, main_tk_root.quit)
 
 if __name__ == "__main__":
-    atexit.register(lambda: logging.info("Aplicação encerrada."))
+    atexit.register(lambda: logging.info("Application terminated."))
 
     main_tk_root = tk.Tk()
     main_tk_root.withdraw()
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     # Sobrescrever a função on_exit_app original (para o menu do pystray)
     ui_manager_instance.on_exit_app = on_exit_app_enhanced
 
-    logging.info("Iniciando o mainloop do Tkinter na thread principal.")
+    logging.info("Starting the Tkinter mainloop on the main thread.")
     main_tk_root.mainloop()
-    logging.info("Mainloop do Tkinter finalizado. A aplicação será encerrada.")
+    logging.info("Tkinter mainloop finished. The application will exit.")
     sys.exit(0)

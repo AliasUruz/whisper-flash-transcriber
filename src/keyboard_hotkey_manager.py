@@ -42,7 +42,12 @@ class KeyboardHotkeyManager:
                     self.record_key = config.get('record_key', self.record_key)
                     self.agent_key = config.get('agent_key', self.agent_key)
                     self.record_mode = config.get('record_mode', self.record_mode)
-                    logging.info(f"Configuração carregada: record_key={self.record_key}, agent_key={self.agent_key}, record_mode={self.record_mode}")
+                    logging.info(
+                        "Configuration loaded: record_key=%s, agent_key=%s, record_mode=%s",
+                        self.record_key,
+                        self.agent_key,
+                        self.record_mode,
+                    )
         except Exception as e:
             logging.error(f"Erro ao carregar configuração: {e}")
 
@@ -56,7 +61,7 @@ class KeyboardHotkeyManager:
             }
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
-            logging.info(f"Configuração salva: {config}")
+            logging.info("Configuration saved: %s", config)
         except Exception as e:
             logging.error(f"Erro ao salvar configuração: {e}")
 
@@ -75,7 +80,7 @@ class KeyboardHotkeyManager:
                 return False
 
             self.is_running = True
-            logging.info("KeyboardHotkeyManager iniciado com sucesso.")
+            logging.info("KeyboardHotkeyManager started successfully.")
             return True
         except Exception as e:
             logging.error(f"Erro ao iniciar KeyboardHotkeyManager: {e}", exc_info=True)
@@ -87,7 +92,7 @@ class KeyboardHotkeyManager:
         # Sempre tente remover as hotkeys, mesmo que o estado esteja incorreto
         self._unregister_hotkeys()
         self.is_running = False
-        logging.info("KeyboardHotkeyManager encerrado.")
+        logging.info("KeyboardHotkeyManager stopped.")
 
     def update_config(self, record_key=None, agent_key=None, record_mode=None):
         """
@@ -169,7 +174,7 @@ class KeyboardHotkeyManager:
             time.sleep(0.2)  # Pequeno delay para garantir que os hooks foram removidos
 
             # Registrar a tecla de gravação
-            logging.info(f"Registrando hotkey de gravação: {self.record_key}")
+            logging.info("Registering recording hotkey: %s", self.record_key)
 
             # Definir o handler para a tecla de gravação
             if self.record_mode == "toggle":
@@ -180,20 +185,20 @@ class KeyboardHotkeyManager:
                 # Registrar handler para soltar a tecla no modo press
                 if self.record_mode == "press":
                     keyboard.on_release_key(self.record_key, lambda _: self._on_release_key(), suppress=True)
-                    logging.info(f"Handler de release registrado para: {self.record_key}")
+                    logging.info("Release handler registered for: %s", self.record_key)
 
             # Usar on_press_key em vez de add_hotkey para maior confiabilidade
             keyboard.on_press_key(self.record_key, lambda _: handler(), suppress=True)
             self.hotkey_handlers[self.record_key] = handler
-            logging.info(f"Hotkey de gravação registrada com sucesso (on_press_key): {self.record_key}")
+            logging.info("Recording hotkey registered successfully (on_press_key): %s", self.record_key)
 
             # Registrar a tecla de recarga
-            logging.info(f"Registrando hotkey de comando: {self.agent_key}")
+            logging.info("Registering command hotkey: %s", self.agent_key)
             keyboard.on_press_key(self.agent_key, lambda _: self._on_agent_key(), suppress=True)
             self.hotkey_handlers[self.agent_key] = self._on_agent_key
-            logging.info(f"Hotkey de comando registrada com sucesso (on_press_key): {self.agent_key}")
+            logging.info("Command hotkey registered successfully (on_press_key): %s", self.agent_key)
 
-            logging.info(f"Hotkeys registradas com sucesso: gravação={self.record_key}, comando={self.agent_key}")
+            logging.info("Hotkeys registered successfully: record=%s, command=%s", self.record_key, self.agent_key)
             return True
 
         except Exception as e:
@@ -213,12 +218,12 @@ class KeyboardHotkeyManager:
             # Remover todos os hooks de uma vez
             try:
                 keyboard.unhook_all()
-                logging.info("Todos os hooks do keyboard foram removidos.")
+                logging.info("All keyboard hooks have been removed.")
             except Exception as e:
                 logging.error(f"Erro ao remover todos os hooks: {e}")
                 # Mesmo com erro, continuamos para garantir que o estado seja consistente
 
-            logging.info("Hotkeys desregistradas com sucesso.")
+            logging.info("Hotkeys unregistered successfully.")
             # Garantir que o estado reflita a ausência de hotkeys registradas
             self.is_running = False
 
@@ -263,14 +268,14 @@ class KeyboardHotkeyManager:
 
     def restart(self):
         """Reinicia o gerenciador de hotkeys."""
-        logging.info("Reiniciando KeyboardHotkeyManager...")
+        logging.info("Restarting KeyboardHotkeyManager...")
         self.stop()
         time.sleep(0.5)  # Pequeno delay para garantir que tudo foi encerrado
 
         # Garantir que todos os hooks foram removidos
         try:
             keyboard.unhook_all()
-            logging.info("Todos os hooks do keyboard foram removidos durante o restart.")
+            logging.info("All keyboard hooks have been removed during restart.")
         except Exception as e:
             logging.error(f"Erro ao remover todos os hooks durante restart: {e}")
 
@@ -279,7 +284,7 @@ class KeyboardHotkeyManager:
         # Iniciar novamente
         result = self.start()
         if result:
-            logging.info("KeyboardHotkeyManager reiniciado com sucesso.")
+            logging.info("KeyboardHotkeyManager restarted successfully.")
         else:
             logging.error("Falha ao reiniciar KeyboardHotkeyManager.")
 
