@@ -382,7 +382,8 @@ class UIManager:
                         new_hotkey_stability_service_enabled=hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
                         new_min_transcription_duration=min_transcription_duration_to_apply,
                         new_save_temp_recordings=save_temp_recordings_to_apply,
-                        new_record_to_memory=(storage_strategy_var.get() == "Memory"),
+                        new_record_storage_mode=record_storage_mode_var.get(),
+                        new_record_to_memory=(record_storage_mode_var.get() == "memory"),
                         new_max_memory_seconds_mode=max_memory_seconds_mode_to_apply,
                         new_max_memory_seconds=max_memory_seconds_to_apply,
                         new_use_vad=use_vad_to_apply,
