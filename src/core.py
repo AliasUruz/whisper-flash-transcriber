@@ -554,6 +554,7 @@ class AppCore:
         config_changed = False
 
         # Atualizar ConfigManager e verificar se houve mudanças
+        launch_changed = False
         for key, value in kwargs.items():
             # Mapear nomes de kwargs para chaves de config_manager se necessário
             config_key_map = {
@@ -579,6 +580,7 @@ class AppCore:
                 "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
                 "new_record_storage_mode": "record_storage_mode",
                 "new_record_storage_limit": "record_storage_limit",
+                "new_launch_at_startup": "launch_at_startup",
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
@@ -586,6 +588,8 @@ class AppCore:
             if current_value != value:
                 self.config_manager.set(mapped_key, value)
                 config_changed = True
+                if mapped_key == "launch_at_startup":
+                    launch_changed = True
                 logging.info(f"Configuração '{mapped_key}' alterada para: {value}")
         
         # Lógica para unificar auto_paste: se new_auto_paste foi passado, ele se aplica a ambos
@@ -618,6 +622,9 @@ class AppCore:
             ):
                 self.audio_handler.update_config()
             self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
+            if launch_changed:
+                from .utils.autostart import set_launch_at_startup
+                set_launch_at_startup(self.config_manager.get("launch_at_startup"))
             # Re-inicializar clientes API existentes em vez de recriá-los
             self.gemini_api.reinitialize_client() # Re-inicializar cliente principal
             if self.transcription_handler.gemini_client:
@@ -679,6 +686,10 @@ class AppCore:
 
         # Re-aplicar configurações aos atributos do AppCore
         self._apply_initial_config_to_core_attributes()
+
+        if key == "launch_at_startup":
+            from .utils.autostart import set_launch_at_startup
+            set_launch_at_startup(bool(value))
 
         # Propagar para TranscriptionHandler se for uma configuração relevante
         if key in ["batch_size_mode", "manual_batch_size", "gpu_index", "min_transcription_duration", "max_memory_seconds", "max_memory_seconds_mode"]:

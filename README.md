@@ -37,6 +37,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
 *   **Automatically remove silent sections** using the Silero VAD. Initialization uses `onnxruntime` with automatic selection of `CUDAExecutionProvider` when available, falling back to `CPUExecutionProvider`.
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
+*   **Launch at Startup Option:** Start the application automatically when Windows boots.
 *   **Unified `TRANSCRIBING` State:** recording, Whisper processing, and optional AI correction all occur while the application remains in this state. Once the final text is ready, the state returns to `IDLE`.
 
 ## System Architecture
@@ -248,6 +249,7 @@ To access and change settings:
 *   **Recording Mode:** Choose between "Toggle" (press to start, press to stop) or "Hold" (record while key is pressed).
 *   **Auto-Paste:** If enabled, transcribed text is automatically pasted into the last active window.
 *   **Enable Hotkey Stability Service:** Activates a background service to improve hotkey responsiveness on Windows 11.
+*   **Launch at Startup:** Automatically runs the application when you log into Windows.
 *   **Sound Settings:** Configure sound feedback for recording start/stop (enable/disable, frequency, duration, volume).
 *   **Enable Text Correction:** Check this box if you want to use an external AI model (OpenRouter or Gemini) to improve the transcribed text.
 *   **Text Correction Service:** If text correction is enabled, select whether you want to use "OpenRouter" or "Google Gemini".
