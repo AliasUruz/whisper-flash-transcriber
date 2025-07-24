@@ -140,9 +140,11 @@ class AppCore:
         min_duration = self.config_manager.get('min_transcription_duration')
         
         if duration_seconds < min_duration:
-            logging.info(f"Segmento de áudio ({duration_seconds:.2f}s) é mais curto que o mínimo configurado ({min_duration}s). Ignorando.")
-            self._set_state(STATE_IDLE) # Volta para o estado IDLE
-            return # Interrompe o processamento
+            logging.info(
+                f"Segmento de áudio ({duration_seconds:.2f}s) é mais curto que o mínimo configurado ({min_duration}s). Ignorando."
+            )
+            self._set_state(STATE_IDLE)  # Volta para o estado IDLE
+            return  # Interrompe o processamento
 
         with self.agent_mode_lock:
             is_agent_mode = self.agent_mode_active
@@ -491,7 +493,13 @@ class AppCore:
             if not self.audio_handler.is_recording:
                 return
 
-        self.audio_handler.stop_recording()
+        was_valid = self.audio_handler.stop_recording()
+        if was_valid is False:
+            # Se a gravação foi descartada por ser muito curta, garanta que
+            # nenhum processo de transcrição fique pendente.
+            if hasattr(self.transcription_handler, "stop_transcription"):
+                self.transcription_handler.stop_transcription()
+            self._set_state(STATE_IDLE)
 
         # A janela de UI ao vivo será fechada pelo _handle_transcription_result
 
