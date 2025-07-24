@@ -69,7 +69,6 @@ Transcribed speech: {text}""",
         "gemini-2.5-pro"
     ],
     "save_temp_recordings": False,
-    "record_to_memory": False,
     "record_storage_mode": "auto",
     "record_storage_limit": 0,
     "max_memory_seconds_mode": "manual",
@@ -92,7 +91,6 @@ BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
 GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
-RECORD_TO_MEMORY_CONFIG_KEY = "record_to_memory"
 RECORD_STORAGE_MODE_CONFIG_KEY = "record_storage_mode"
 RECORD_STORAGE_LIMIT_CONFIG_KEY = "record_storage_limit"
 MAX_MEMORY_SECONDS_MODE_CONFIG_KEY = "max_memory_seconds_mode"
@@ -236,13 +234,6 @@ class ConfigManager:
             )
         )
 
-        # Gravar áudio diretamente na memória em vez de arquivo
-        self.config[RECORD_TO_MEMORY_CONFIG_KEY] = _parse_bool(
-            self.config.get(
-                RECORD_TO_MEMORY_CONFIG_KEY,
-                self.default_config[RECORD_TO_MEMORY_CONFIG_KEY],
-            )
-        )
 
         self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = str(
             self.config.get(
@@ -504,14 +495,6 @@ class ConfigManager:
     def set_save_temp_recordings(self, value: bool):
         self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(value)
 
-    def get_record_to_memory(self):
-        return self.config.get(
-            RECORD_TO_MEMORY_CONFIG_KEY,
-            self.default_config[RECORD_TO_MEMORY_CONFIG_KEY],
-        )
-
-    def set_record_to_memory(self, value: bool):
-        self.config[RECORD_TO_MEMORY_CONFIG_KEY] = bool(value)
 
     def get_record_storage_mode(self):
         return self.config.get(
