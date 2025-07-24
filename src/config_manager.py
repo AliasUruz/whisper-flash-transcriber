@@ -74,7 +74,8 @@ Transcribed speech: {text}""",
     "max_memory_seconds_mode": "manual",
     "max_memory_seconds": 30,
     "min_free_ram_mb": 1000,
-    "min_transcription_duration": 1.0 # Nova configuração
+    "min_transcription_duration": 1.0, # Nova configuração
+    "launch_at_startup": False
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -98,6 +99,7 @@ DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
 VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
+LAUNCH_AT_STARTUP_CONFIG_KEY = "launch_at_startup"
 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY = DISPLAY_TRANSCRIPTS_KEY
 KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
@@ -231,6 +233,13 @@ class ConfigManager:
             self.config.get(
                 SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
+            )
+        )
+
+        self.config[LAUNCH_AT_STARTUP_CONFIG_KEY] = _parse_bool(
+            self.config.get(
+                LAUNCH_AT_STARTUP_CONFIG_KEY,
+                self.default_config[LAUNCH_AT_STARTUP_CONFIG_KEY],
             )
         )
 
@@ -556,3 +565,12 @@ class ConfigManager:
             self.config["min_free_ram_mb"] = int(value)
         except (ValueError, TypeError):
             self.config["min_free_ram_mb"] = self.default_config["min_free_ram_mb"]
+
+    def get_launch_at_startup(self):
+        return self.config.get(
+            LAUNCH_AT_STARTUP_CONFIG_KEY,
+            self.default_config[LAUNCH_AT_STARTUP_CONFIG_KEY],
+        )
+
+    def set_launch_at_startup(self, value: bool):
+        self.config[LAUNCH_AT_STARTUP_CONFIG_KEY] = bool(value)

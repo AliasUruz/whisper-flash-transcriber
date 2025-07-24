@@ -238,6 +238,7 @@ class UIManager:
                 gemini_model_var = ctk.StringVar(value=self.config_manager.get("gemini_model"))
                 batch_size_var = ctk.StringVar(value=str(self.config_manager.get("batch_size")))
                 use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
+                launch_at_startup_var = ctk.BooleanVar(value=self.config_manager.get("launch_at_startup"))
                 vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
                 vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
                 save_temp_recordings_var = ctk.BooleanVar(value=self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY))
@@ -387,7 +388,8 @@ class UIManager:
                         new_use_vad=use_vad_to_apply,
                         new_vad_threshold=vad_threshold_to_apply,
                         new_vad_silence_duration=vad_silence_duration_to_apply,
-                        new_display_transcripts_in_terminal=display_transcripts_to_apply
+                        new_display_transcripts_in_terminal=display_transcripts_to_apply,
+                        new_launch_at_startup=launch_at_startup_var.get()
                     )
                     self._close_settings_window() # Call class method
 
@@ -451,6 +453,7 @@ class UIManager:
                     record_storage_mode_var.set(DEFAULT_CONFIG["record_storage_mode"])
                     max_memory_seconds_var.set(DEFAULT_CONFIG["max_memory_seconds"])
                     max_memory_seconds_mode_var.set(DEFAULT_CONFIG["max_memory_seconds_mode"])
+                    launch_at_startup_var.set(DEFAULT_CONFIG["launch_at_startup"])
 
                     self.config_manager.save_config()
 
@@ -519,6 +522,12 @@ class UIManager:
                 stability_switch = ctk.CTkSwitch(stability_service_frame, text="Enable Hotkey Stability Service", variable=hotkey_stability_service_enabled_var)
                 stability_switch.pack(side="left", padx=5)
                 Tooltip(stability_switch, "Keep hotkeys active when focus changes.")
+
+                startup_frame = ctk.CTkFrame(general_frame)
+                startup_frame.pack(fill="x", pady=5)
+                startup_switch = ctk.CTkSwitch(startup_frame, text="Launch at Startup", variable=launch_at_startup_var)
+                startup_switch.pack(side="left", padx=5)
+                Tooltip(startup_switch, "Start the app automatically with Windows.")
 
                 # --- Sound Settings Section ---
                 sound_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
