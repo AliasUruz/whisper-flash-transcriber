@@ -34,17 +34,17 @@ class TranscriptionHandler:
         self,
         config_manager,
         gemini_api_client,
-        openrouter_api_client, # Adicionado
         on_model_ready_callback,
         on_model_error_callback,
         on_transcription_result_callback,
         on_agent_result_callback,
         on_segment_transcribed_callback,
         is_state_transcribing_fn,
+        openrouter_api_client=None,
     ):
         self.config_manager = config_manager
         self.gemini_client = gemini_api_client # Instância da API Gemini injetada
-        self.openrouter_client = openrouter_api_client # Instância da API OpenRouter injetada
+        self.openrouter_client = openrouter_api_client
         self.gemini_api = gemini_api_client
         self.on_model_ready_callback = on_model_ready_callback
         self.on_model_error_callback = on_model_error_callback
@@ -96,10 +96,14 @@ class TranscriptionHandler:
         # ...
         if self.text_correction_enabled and self.text_correction_service == SERVICE_OPENROUTER and self.openrouter_api_key and OpenRouterAPI:
             try:
-                self.openrouter_client.reinitialize_client(api_key=self.openrouter_api_key, model_id=self.openrouter_model)
-                logging.info("OpenRouter API client reinitialized.")
+                if self.openrouter_client is None:
+                    self.openrouter_client = OpenRouterAPI(api_key=self.openrouter_api_key, model_id=self.openrouter_model)
+                    logging.info("OpenRouter API client initialized.")
+                else:
+                    self.openrouter_client.reinitialize_client(api_key=self.openrouter_api_key, model_id=self.openrouter_model)
+                    logging.info("OpenRouter API client reinitialized.")
             except Exception as e:
-                logging.error(f"Error reinitializing OpenRouter API client: {e}")
+                logging.error(f"Error initializing OpenRouter API client: {e}")
 
         # O cliente Gemini agora é injetado, então sua inicialização foi removida daqui.
         # A inicialização do OpenRouter é mantida.

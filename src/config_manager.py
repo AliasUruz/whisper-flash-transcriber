@@ -31,6 +31,8 @@ DEFAULT_CONFIG = {
     "sound_duration": 0.3,
     "sound_volume": 0.5,
     "agent_key": "F4",
+    "appearance_mode": "System",
+    "color_theme": "blue",
     "text_correction_enabled": False,
     "text_correction_service": "none",
     "openrouter_api_key": "",
@@ -116,6 +118,8 @@ GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
 OPENROUTER_AGENT_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
+APPEARANCE_MODE_CONFIG_KEY = "appearance_mode"
+COLOR_THEME_CONFIG_KEY = "color_theme"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
@@ -238,6 +242,25 @@ class ConfigManager:
                 self.default_config[LAUNCH_AT_STARTUP_CONFIG_KEY],
             )
         )
+
+        # Aparência e tema de cores
+        allowed_appearances = ["System", "Light", "Dark"]
+        app_mode = self.config.get(APPEARANCE_MODE_CONFIG_KEY, self.default_config[APPEARANCE_MODE_CONFIG_KEY])
+        if app_mode not in allowed_appearances:
+            logging.warning(
+                f"Invalid appearance_mode '{app_mode}'. Falling back to '{self.default_config[APPEARANCE_MODE_CONFIG_KEY]}'."
+            )
+            app_mode = self.default_config[APPEARANCE_MODE_CONFIG_KEY]
+        self.config[APPEARANCE_MODE_CONFIG_KEY] = app_mode
+
+        allowed_themes = ["blue", "dark-blue", "green"]
+        theme = self.config.get(COLOR_THEME_CONFIG_KEY, self.default_config[COLOR_THEME_CONFIG_KEY])
+        if theme not in allowed_themes:
+            logging.warning(
+                f"Invalid color_theme '{theme}'. Falling back to '{self.default_config[COLOR_THEME_CONFIG_KEY]}'."
+            )
+            theme = self.default_config[COLOR_THEME_CONFIG_KEY]
+        self.config[COLOR_THEME_CONFIG_KEY] = theme
 
 
         self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = str(
@@ -570,3 +593,21 @@ class ConfigManager:
 
     def set_launch_at_startup(self, value: bool):
         self.config[LAUNCH_AT_STARTUP_CONFIG_KEY] = bool(value)
+
+    def get_appearance_mode(self):
+        return self.config.get(
+            APPEARANCE_MODE_CONFIG_KEY,
+            self.default_config[APPEARANCE_MODE_CONFIG_KEY],
+        )
+
+    def set_appearance_mode(self, value: str):
+        self.config[APPEARANCE_MODE_CONFIG_KEY] = value
+
+    def get_color_theme(self):
+        return self.config.get(
+            COLOR_THEME_CONFIG_KEY,
+            self.default_config[COLOR_THEME_CONFIG_KEY],
+        )
+
+    def set_color_theme(self, value: str):
+        self.config[COLOR_THEME_CONFIG_KEY] = value

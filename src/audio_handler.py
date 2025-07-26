@@ -230,6 +230,7 @@ class AudioHandler:
         self._memory_limit_samples = int(self.current_max_memory_seconds * AUDIO_SAMPLE_RATE)
 
         with self.storage_lock:
+            self.is_recording = True
             self.start_time = time.time()
             self._sample_count = 0
             self._memory_samples = 0
@@ -264,6 +265,7 @@ class AudioHandler:
             logging.warning("Grava\u00e7\u00e3o n\u00e3o est\u00e1 ativa para ser parada.")
             return False
 
+        self.is_recording = False
         stream_was_started = self.stream_started
         self._stop_event.set()
 

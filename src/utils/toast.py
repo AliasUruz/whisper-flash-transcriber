@@ -1,6 +1,10 @@
 import customtkinter as ctk
+import tkinter as tk
 
-class ToastNotification(ctk.CTkToplevel):
+
+BaseToplevel = getattr(ctk, "CTkToplevel", tk.Toplevel)
+
+class ToastNotification(BaseToplevel):
     def __init__(self, master, message, duration=2000):
         super().__init__(master)
 

@@ -35,6 +35,8 @@ class UIManager:
         self.main_tk_root = main_tk_root
         self.config_manager = config_manager
         self.core_instance_ref = core_instance_ref
+        ctk.set_appearance_mode(self.config_manager.get("appearance_mode"))
+        ctk.set_default_color_theme(self.config_manager.get("color_theme"))
         self.tray_icon = None
         self.settings_window_instance = None
         self.settings_thread_running = False
@@ -86,6 +88,22 @@ class UIManager:
             dc.rectangle((width // 4, height // 4, width * 3 // 4, height * 3 // 4), fill=color2)
         return image
 
+    def _safe_get_int(self, var, field_name, parent):
+        """Converte o valor de uma StringVar para ``int`` com validação."""
+        try:
+            return int(var.get())
+        except (TypeError, ValueError):
+            messagebox.showerror("Valor inválido", f"Valor inválido para {field_name}.", parent=parent)
+            return None
+
+    def _safe_get_float(self, var, field_name, parent):
+        """Converte o valor de uma StringVar para ``float`` com validação."""
+        try:
+            return float(var.get())
+        except (TypeError, ValueError):
+            messagebox.showerror("Valor inválido", f"Valor inválido para {field_name}.", parent=parent)
+            return None
+
     def _recording_tooltip_updater(self):
         while not self.stop_recording_timer_event.is_set():
             start_time = getattr(self.core_instance_ref.audio_handler, "start_time", None)
@@ -128,6 +146,8 @@ class UIManager:
         self.mode_var = ctk.StringVar(value=self.config_manager.get("record_mode"))
         self.detected_key_var = ctk.StringVar(value=self.config_manager.get("record_key").upper())
         self.agent_key_var = ctk.StringVar(value=self.config_manager.get("agent_key").upper())
+        self.appearance_mode_var = ctk.StringVar(value=self.config_manager.get("appearance_mode"))
+        self.color_theme_var = ctk.StringVar(value=self.config_manager.get("color_theme"))
         self.hotkey_stability_service_enabled_var = ctk.BooleanVar(value=self.config_manager.get("hotkey_stability_service_enabled"))
         self.sound_enabled_var = ctk.BooleanVar(value=self.config_manager.get("sound_enabled"))
         self.sound_frequency_var = ctk.StringVar(value=str(self.config_manager.get("sound_frequency")))
@@ -202,6 +222,8 @@ class UIManager:
                 "new_max_memory_seconds_mode": self.max_memory_seconds_mode_var.get(),
                 "new_max_memory_seconds": float(self.max_memory_seconds_var.get()),
                 "new_live_transcription_enabled": self.live_transcription_enabled_var.get(),
+                "new_appearance_mode": self.appearance_mode_var.get(),
+                "new_color_theme": self.color_theme_var.get(),
             }
             selected_device_str = self.gpu_selection_var.get()
             if "Force CPU" in selected_device_str: settings_to_apply["new_gpu_index"] = -1
@@ -214,6 +236,8 @@ class UIManager:
             messagebox.showerror("Invalid Value", f"Please check your input values. Error: {e}", parent=self.settings_window_instance)
             return
         self.core_instance_ref.apply_settings_from_external(**settings_to_apply)
+        ctk.set_appearance_mode(self.appearance_mode_var.get())
+        ctk.set_default_color_theme(self.color_theme_var.get())
         self._close_settings_window()
         ToastNotification(self.main_tk_root, "Settings saved successfully!").show()
 
@@ -265,6 +289,13 @@ class UIManager:
         live_transcription_switch = ctk.CTkSwitch(switches_frame, text="Enable Live Transcription", variable=self.live_transcription_enabled_var)
         live_transcription_switch.pack(side="left", padx=5)
         Tooltip(live_transcription_switch, "Show a window with the live transcription.")
+
+        appearance_frame = ctk.CTkFrame(general_frame)
+        appearance_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(appearance_frame, text="Appearance:").pack(side="left", padx=(5, 10))
+        ctk.CTkOptionMenu(appearance_frame, variable=self.appearance_mode_var, values=["System", "Light", "Dark"]).pack(side="left", padx=5)
+        ctk.CTkLabel(appearance_frame, text="Theme:").pack(side="left", padx=(15, 10))
+        ctk.CTkOptionMenu(appearance_frame, variable=self.color_theme_var, values=["blue", "dark-blue", "green"]).pack(side="left", padx=5)
         ctk.CTkLabel(general_frame, text="Audio Feedback", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 10), anchor="w")
         sound_enabled_frame = ctk.CTkFrame(general_frame)
         sound_enabled_frame.pack(fill="x", pady=5)
@@ -411,8 +442,8 @@ class UIManager:
                 return
             self.settings_thread_running = True
         try:
-            ctk.set_appearance_mode("dark")
-            ctk.set_default_color_theme("blue")
+            ctk.set_appearance_mode(self.config_manager.get("appearance_mode"))
+            ctk.set_default_color_theme(self.config_manager.get("color_theme"))
             settings_win = ctk.CTkToplevel(self.main_tk_root)
             self.settings_window_instance = settings_win
             settings_win.title("Whisper Recorder Settings")

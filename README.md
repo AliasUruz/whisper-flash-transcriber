@@ -34,6 +34,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   Runs discreetly in the system tray, showing the current status via icon colors.
     *   An intuitive GUI for managing all settings without editing files.
     *   Quickly switch between Gemini models directly from the tray menu.
+    *   Choose between **Light**, **Dark**, or **System** appearance modes and select from multiple color themes.
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
 *   **Automatically remove silent sections** using the Silero VAD. Initialization uses `onnxruntime` with automatic selection of `CUDAExecutionProvider` when available, falling back to `CPUExecutionProvider`.
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.

@@ -70,11 +70,10 @@ class AppCore:
         self.transcription_handler = TranscriptionHandler(
             config_manager=self.config_manager,
             gemini_api_client=self.gemini_api,  # Injeta a instância da API
-            openrouter_api_client=self.openrouter_api, # Injeta a instância da API
             on_model_ready_callback=self._on_model_loaded,
             on_model_error_callback=self._on_model_load_failed,
             on_transcription_result_callback=self._handle_transcription_result,
-            on_agent_result_callback=self._handle_agent_result_final, # Usa o novo callback
+            on_agent_result_callback=self._handle_agent_result_final,  # Usa o novo callback
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
             is_state_transcribing_fn=self.is_state_transcribing,
         )
@@ -597,6 +596,8 @@ class AppCore:
                 "new_record_storage_mode": "record_storage_mode",
                 "new_record_storage_limit": "record_storage_limit",
                 "new_launch_at_startup": "launch_at_startup",
+                "new_appearance_mode": "appearance_mode",
+                "new_color_theme": "color_theme",
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
