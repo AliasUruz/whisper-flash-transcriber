@@ -122,10 +122,6 @@ class AudioHandler:
         self.audio_stream = None
         try:
             logging.info("Audio recording thread started.")
-            if not self.is_recording:
-                logging.warning("Recording flag turned off before stream start.")
-                return
-
             self.audio_stream = sd.InputStream(
                 samplerate=AUDIO_SAMPLE_RATE,
                 channels=AUDIO_CHANNELS,
@@ -134,20 +130,20 @@ class AudioHandler:
             )
             self.audio_stream.start()
             self.stream_started = True
+            self.is_recording = True # Set is_recording to True only when stream starts
             logging.info("Audio stream started.")
 
-            while not self._stop_event.is_set() and self.is_recording:
+            while not self._stop_event.is_set():
                 sd.sleep(100)
-            logging.info("Recording flag is off. Stopping audio stream.")
+            logging.info("Stop event set. Stopping audio stream.")
         except sd.PortAudioError as e:
             logging.error(f"PortAudio error during recording: {e}", exc_info=True)
-            self.is_recording = False
             self.on_recording_state_change_callback("ERROR_AUDIO")
         except Exception as e:
             logging.error(f"Error in audio recording thread: {e}", exc_info=True)
-            self.is_recording = False
             self.on_recording_state_change_callback("ERROR_AUDIO")
         finally:
+            self.is_recording = False # Set is_recording to False when thread finishes
             if self.audio_stream is not None:
                 self._close_input_stream()
                 self.audio_stream = None
@@ -234,7 +230,6 @@ class AudioHandler:
         self._memory_limit_samples = int(self.current_max_memory_seconds * AUDIO_SAMPLE_RATE)
 
         with self.storage_lock:
-            self.is_recording = True
             self.start_time = time.time()
             self._sample_count = 0
             self._memory_samples = 0
@@ -269,7 +264,6 @@ class AudioHandler:
             logging.warning("Grava\u00e7\u00e3o n\u00e3o est\u00e1 ativa para ser parada.")
             return False
 
-        self.is_recording = False
         stream_was_started = self.stream_started
         self._stop_event.set()
 

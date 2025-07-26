@@ -25,7 +25,6 @@ from .config_manager import (
     GEMINI_AGENT_PROMPT_CONFIG_KEY,
     OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
-    OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY, # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
 )
@@ -35,6 +34,7 @@ class TranscriptionHandler:
         self,
         config_manager,
         gemini_api_client,
+        openrouter_api_client, # Adicionado
         on_model_ready_callback,
         on_model_error_callback,
         on_transcription_result_callback,
@@ -44,6 +44,7 @@ class TranscriptionHandler:
     ):
         self.config_manager = config_manager
         self.gemini_client = gemini_api_client # Instância da API Gemini injetada
+        self.openrouter_client = openrouter_api_client # Instância da API OpenRouter injetada
         self.gemini_api = gemini_api_client
         self.on_model_ready_callback = on_model_ready_callback
         self.on_model_error_callback = on_model_error_callback
@@ -80,33 +81,25 @@ class TranscriptionHandler:
 
         self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
         self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
-        self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
-        self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-        self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
 
-        self.openrouter_client = None
         # self.gemini_client é injetado
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
 
-        self._init_api_clients()
         # Removido: self._initialize_model_and_processor() # Chamada para inicializar o modelo e o processador
 
     def _init_api_clients(self):
         # Lógica de inicialização de OpenRouterAPI e GeminiAPI
         # (movida de WhisperCore._init_openrouter_client e _init_gemini_client)
         # ...
-        self.openrouter_client = None
-        self.openrouter_api = None
         if self.text_correction_enabled and self.text_correction_service == SERVICE_OPENROUTER and self.openrouter_api_key and OpenRouterAPI:
             try:
-                self.openrouter_client = OpenRouterAPI(api_key=self.openrouter_api_key, model_id=self.openrouter_model)
-                self.openrouter_api = self.openrouter_client
-                logging.info("OpenRouter API client initialized.")
+                self.openrouter_client.reinitialize_client(api_key=self.openrouter_api_key, model_id=self.openrouter_model)
+                logging.info("OpenRouter API client reinitialized.")
             except Exception as e:
-                logging.error(f"Error initializing OpenRouter API client: {e}")
+                logging.error(f"Error reinitializing OpenRouter API client: {e}")
 
         # O cliente Gemini agora é injetado, então sua inicialização foi removida daqui.
         # A inicialização do OpenRouter é mantida.
@@ -119,9 +112,6 @@ class TranscriptionHandler:
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
         self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
         self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
-        self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
-        self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-        self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
@@ -166,7 +156,7 @@ class TranscriptionHandler:
         if not self.text_correction_enabled: return SERVICE_NONE
         if self.text_correction_service == SERVICE_OPENROUTER and self.openrouter_client: return SERVICE_OPENROUTER
         # Verifica se o cliente Gemini existe E se a chave é válida
-        if self.text_correction_service == SERVICE_GEMINI and self.gemini_client and self.gemini_client.is_valid: return SERVICE_GEMINI
+        if self.text_correction_service == SERVICE_GEMINI and self.gemini_client: return SERVICE_GEMINI
         return SERVICE_NONE
 
     def _correct_text_with_openrouter(self, text):
@@ -218,14 +208,17 @@ class TranscriptionHandler:
                 future = self.executor.submit(self.gemini_api.correct_text_async, corrected, prompt, api_key)
                 corrected = future.result()
             elif active_provider == "openrouter":
+                if not self.openrouter_client:
+                    logging.warning("OpenRouter client not initialized. Skipping text correction.")
+                    return
                 if not is_agent_mode:
                     prompt = openrouter_prompt
                 else:
                     logging.info("Modo Agente ativado. Usando prompt do Agente para o OpenRouter.")
-                    prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                    prompt = self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
 
                 model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-                future = self.executor.submit(self.openrouter_api.correct_text_async, corrected, prompt, api_key, model)
+                future = self.executor.submit(self.openrouter_client.correct_text_async, corrected, prompt, api_key, model)
                 corrected = future.result()
             else:
                 logging.error(f"Provedor de IA desconhecido: {active_provider}")

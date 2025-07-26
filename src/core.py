@@ -29,6 +29,7 @@ from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE a
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
+from .openrouter_api import OpenRouterAPI
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -51,6 +52,7 @@ class AppCore:
         self.state_lock = RLock()
         self.keyboard_lock = RLock()
         self.agent_mode_lock = RLock() # Adicionado para o modo agente
+        self.config_lock = RLock() # Adicionado para proteger as configurações
 
         # --- Callbacks para UI (definidos externamente pelo UIManager) ---
         self.state_update_callback = None
@@ -64,9 +66,11 @@ class AppCore:
             on_recording_state_change_callback=self._set_state,
         )
         self.gemini_api = GeminiAPI(self.config_manager) # Instancia o GeminiAPI
+        self.openrouter_api = OpenRouterAPI(api_key=self.config_manager.get("openrouter_api_key"), model_id=self.config_manager.get("openrouter_model"))
         self.transcription_handler = TranscriptionHandler(
             config_manager=self.config_manager,
             gemini_api_client=self.gemini_api,  # Injeta a instância da API
+            openrouter_api_client=self.openrouter_api, # Injeta a instância da API
             on_model_ready_callback=self._on_model_loaded,
             on_model_error_callback=self._on_model_load_failed,
             on_transcription_result_callback=self._handle_transcription_result,
@@ -108,7 +112,6 @@ class AppCore:
         self.auto_paste = self.config_manager.get("auto_paste")
         self.agent_key = self.config_manager.get("agent_key")
         self.hotkey_stability_service_enabled = self.config_manager.get("hotkey_stability_service_enabled") # Nova configuração unificada
-        self.keyboard_library = self.config_manager.get("keyboard_library")
         self.min_record_duration = self.config_manager.get("min_record_duration")
         self.display_transcripts_in_terminal = self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY)
         # ... e outras configurações que AppCore precisa diretamente
@@ -389,6 +392,10 @@ class AppCore:
                 try:
                     if self.ahk_running: self.ahk_manager.stop(); self.ahk_running = False; time.sleep(0.2)
                     self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
+                    self.ahk_manager.set_callbacks(
+                        toggle=self.toggle_recording, start=self.start_recording,
+                        stop=self.stop_recording_if_needed, agent=self.start_agent_command
+                    )
                     logging.info("KeyboardHotkeyManager reload completed successfully.")
                     break
                 except Exception as e: last_error = e; logging.error(f"Erro na tentativa {attempt} de recarregamento: {e}"); time.sleep(1)
@@ -558,8 +565,9 @@ class AppCore:
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
     def apply_settings_from_external(self, **kwargs):
-        logging.info("AppCore: Applying new configuration from external source.")
-        config_changed = False
+        with self.config_lock:
+            logging.info("AppCore: Applying new configuration from external source.")
+            config_changed = False
 
         # Atualizar ConfigManager e verificar se houve mudanças
         launch_changed = False
@@ -579,7 +587,6 @@ class AppCore:
                 "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
                 "new_min_transcription_duration": "min_transcription_duration",
                 "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
-                "new_record_to_memory": "record_to_memory",
                 "new_max_memory_seconds_mode": "max_memory_seconds_mode",
                 "new_max_memory_seconds": "max_memory_seconds",
                 "new_gemini_model_options": "gemini_model_options",
@@ -684,10 +691,11 @@ class AppCore:
         Atualiza uma única configuração e propaga a mudança para os módulos relevantes.
         Usado para atualizações de configuração individuais, como do menu da bandeja.
         """
-        old_value = self.config_manager.get(key)
-        if old_value == value:
-            logging.info(f"Configuração '{key}' já possui o valor '{value}'. Nenhuma alteração necessária.")
-            return
+        with self.config_lock:
+            old_value = self.config_manager.get(key)
+            if old_value == value:
+                logging.info(f"Configuração '{key}' já possui o valor '{value}'. Nenhuma alteração necessária.")
+                return
 
         self.config_manager.set(key, value)
         self.config_manager.save_config()
@@ -701,7 +709,7 @@ class AppCore:
             set_launch_at_startup(bool(value))
 
         # Propagar para TranscriptionHandler se for uma configuração relevante
-        if key in ["batch_size_mode", "manual_batch_size", "gpu_index", "min_transcription_duration", "record_to_memory", "max_memory_seconds", "max_memory_seconds_mode"]:
+        if key in ["batch_size_mode", "manual_batch_size", "gpu_index", "min_transcription_duration", "max_memory_seconds", "max_memory_seconds_mode"]:
             self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
             self.transcription_handler.update_config()
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")

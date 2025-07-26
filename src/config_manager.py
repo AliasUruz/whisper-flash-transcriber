@@ -31,7 +31,6 @@ DEFAULT_CONFIG = {
     "sound_duration": 0.3,
     "sound_volume": 0.5,
     "agent_key": "F4",
-    "keyboard_library": "win32",
     "text_correction_enabled": False,
     "text_correction_service": "none",
     "openrouter_api_key": "",
@@ -39,9 +38,7 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite",
     "gemini_agent_model": "gemini-2.5-flash-lite",
-    "ai_provider": "gemini",
     "openrouter_agent_prompt": "",
-    "openrouter_prompt": "",
     "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
     "gemini_prompt": """You are a meticulous speech-to-text correction AI. Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below while preserving the original content and structure as closely as possible.
 Key instructions:
@@ -75,12 +72,14 @@ Transcribed speech: {text}""",
     "max_memory_seconds": 30,
     "min_free_ram_mb": 1000,
     "min_transcription_duration": 1.0, # Nova configuração
-    "launch_at_startup": False
+    "launch_at_startup": False,
+    "live_transcription_enabled": False
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
 MIN_RECORDING_DURATION_CONFIG_KEY = "min_record_duration"
 MIN_TRANSCRIPTION_DURATION_CONFIG_KEY = "min_transcription_duration"
+LIVE_TRANSCRIPTION_ENABLED_CONFIG_KEY = "live_transcription_enabled"
 AGENT_KEY_CONFIG_KEY = "agent_key"
 SOUND_ENABLED_CONFIG_KEY = "sound_enabled"
 SOUND_FREQUENCY_CONFIG_KEY = "sound_frequency"
@@ -101,8 +100,6 @@ VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
 VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
 LAUNCH_AT_STARTUP_CONFIG_KEY = "launch_at_startup"
 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY = DISPLAY_TRANSCRIPTS_KEY
-KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
-KEYBOARD_LIB_WIN32 = "win32"
 TEXT_CORRECTION_ENABLED_CONFIG_KEY = "text_correction_enabled"
 TEXT_CORRECTION_SERVICE_CONFIG_KEY = "text_correction_service"
 ENABLE_AI_CORRECTION_CONFIG_KEY = TEXT_CORRECTION_ENABLED_CONFIG_KEY
@@ -115,10 +112,9 @@ GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
 GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
-AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
-OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
-OPENROUTER_AGENT_PROMPT_CONFIG_KEY = OPENROUTER_PROMPT_CONFIG_KEY
+OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
+OPENROUTER_AGENT_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
