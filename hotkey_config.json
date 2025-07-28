@@ -1,6 +1,5 @@
 {
     "record_key": "f3",
     "agent_key": "f4",
-    "record_mode": "toggle",
-    "storage_mode": "auto"
+    "record_mode": "toggle"
 }

@@ -277,6 +277,19 @@ To access and change settings:
 
 Set `display_transcripts_in_terminal` to `true` in `config.json` or toggle the option in the settings window to print the full transcript in the terminal after each recording.
 
+
+### Hotkey Config File
+
+Hotkey settings are stored in `hotkey_config.json`. Only the following keys are recognized:
+
+```json
+{
+    "record_key": "f3",
+    "agent_key": "f4",
+    "record_mode": "toggle"
+}
+```
+
 Remember to save your changes in the settings window.
 
 ## How to Use the App
