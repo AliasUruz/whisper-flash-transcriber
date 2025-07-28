@@ -70,5 +70,17 @@ class KeyboardHotkeyManagerFailureTests(unittest.TestCase):
         self.assertTrue(self.mock_save.called)
         self.assertFalse(mock_register.called)
 
+    def test_register_hotkeys_oserror(self):
+        fake_keyboard.on_press_key = MagicMock(side_effect=OSError("boom"))
+        fake_keyboard.on_release_key = MagicMock()
+        result = self.manager._register_hotkeys()
+        self.assertFalse(result)
+
+    def test_register_hotkeys_generic_exception(self):
+        fake_keyboard.on_press_key = MagicMock(side_effect=RuntimeError("fail"))
+        fake_keyboard.on_release_key = MagicMock()
+        result = self.manager._register_hotkeys()
+        self.assertFalse(result)
+
 if __name__ == "__main__":
     unittest.main()
