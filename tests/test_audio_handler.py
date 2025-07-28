@@ -321,6 +321,52 @@ class AudioHandlerTest(unittest.TestCase):
         self.assertIsNotNone(handler.temp_file_path)
         handler._cleanup_temp_file()
 
+    def test_play_generated_tone_stream_thread_cleanup(self):
+        self.config.data['sound_enabled'] = True
+        handler = AudioHandler(self.config, lambda *_: None, lambda *_: None)
+
+        DummyCallbackStop = type('DummyCallbackStop', (Exception,), {})
+
+        class DummyOutputStream:
+            def __init__(self, *a, callback=None, start=False, **k):
+                self.callback = callback
+                self.active = False
+                self.thread = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self.close()
+
+            def start(self):
+                self.active = True
+                def run():
+                    data = np.zeros((80, 1), dtype=np.float32)
+                    while True:
+                        try:
+                            self.callback(data, len(data), None, None)
+                        except DummyCallbackStop:
+                            break
+                    self.active = False
+
+                self.thread = threading.Thread(target=run, name='DummyToneThread', daemon=True)
+                self.thread.start()
+
+            def stop(self):
+                self.active = False
+
+            def close(self):
+                self.stop()
+                if self.thread:
+                    self.thread.join()
+
+        with patch('src.audio_handler.sd.OutputStream', DummyOutputStream, create=True), \
+             patch('src.audio_handler.sd.CallbackStop', DummyCallbackStop, create=True):
+            handler._play_generated_tone_stream()
+            names = [t.name for t in threading.enumerate()]
+            self.assertNotIn('DummyToneThread', names)
+
 
 if __name__ == '__main__':
     unittest.main()

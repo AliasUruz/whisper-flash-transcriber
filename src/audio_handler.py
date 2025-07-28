@@ -395,32 +395,29 @@ class AudioHandler:
 
         logging.debug(f"Attempting to play tone via OutputStream: {freq}Hz, {dur}s, vol={vol}")
         finished_event = threading.Event()
-        stream = None
         try:
             with self.sound_lock:
                 tone_data = self._generate_tone_data(freq, dur, vol)
                 callback_instance = self._TonePlaybackCallback(tone_data, finished_event)
-                stream = sd.OutputStream(
+                with sd.OutputStream(
                     samplerate=AUDIO_SAMPLE_RATE,
                     channels=AUDIO_CHANNELS,
                     callback=callback_instance,
                     dtype="float32",
-                )
-                stream.start()
-                logging.debug("OutputStream started for tone playback.")
-            finished_event.wait()
-            logging.debug("Tone playback finished (OutputStream).")
-        except Exception as e:
-            logging.error(f"Error playing tone via OutputStream: {e}", exc_info=True)
-        finally:
-            if stream is not None:
-                try:
+                    start=False,
+                ) as stream:
+                    stream.start()
+                    logging.debug("OutputStream started for tone playback.")
+                    finished_event.wait()
+                    for _ in range(10):
+                        if not stream.active:
+                            break
+                        time.sleep(0.01)
                     if stream.active:
                         stream.stop()
-                    stream.close()
-                    logging.debug("OutputStream stopped and closed.")
-                except Exception as e:
-                    logging.error(f"Error stopping/closing OutputStream: {e}")
+                    logging.debug("Tone playback finished (OutputStream).")
+        except Exception as e:
+            logging.error(f"Error playing tone via OutputStream: {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # Configura\u00e7\u00f5es e limpeza
