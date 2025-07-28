@@ -130,7 +130,6 @@ class GeminiAPI:
         Executa uma requisição para a API Gemini com lógica de retry.
         Este é o método central para todas as chamadas da API.
         """
-        self._load_model_from_config()
         if not prompt or not self.is_valid or not self.model:
             logging.warning(
                 "Não é possível executar a requisição: prompt vazio, "
