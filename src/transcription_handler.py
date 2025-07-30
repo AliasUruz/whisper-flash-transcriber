@@ -315,8 +315,11 @@ class TranscriptionHandler:
                 logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
 
             logging.info(f"Carregando modelo {model_id}...")
-            
-            quant_config = BitsAndBytesConfig(load_in_8bit=True)
+
+            # Define configuração de quantização apenas se uma GPU válida estiver disponível
+            quant_config = None
+            if torch.cuda.is_available() and self.gpu_index >= 0:
+                quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
             # Determina dinamicamente se o FlashAttention 2 está disponível
             try:
@@ -328,14 +331,20 @@ class TranscriptionHandler:
 
             attn_impl = "flash_attention_2" if use_flash_attn else "sdpa"
 
+            model_kwargs = {
+                "torch_dtype": torch_dtype_local,
+                "low_cpu_mem_usage": True,
+                "use_safetensors": True,
+                "device_map": {'': device},
+                "attn_implementation": attn_impl,
+            }
+            # Adiciona a configuração de quantização somente quando aplicável
+            if quant_config is not None:
+                model_kwargs["quantization_config"] = quant_config
+
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_id,
-                torch_dtype=torch_dtype_local,
-                low_cpu_mem_usage=True,
-                use_safetensors=True,
-                device_map={'': device},
-                quantization_config=quant_config,
-                attn_implementation=attn_impl,
+                **model_kwargs,
             )
             
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
