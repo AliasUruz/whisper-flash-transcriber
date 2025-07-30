@@ -578,6 +578,7 @@ class AppCore:
                 "new_batch_size": "batch_size", "new_gpu_index": "gpu_index",
                 "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
                 "new_min_transcription_duration": "min_transcription_duration",
+                "new_min_record_duration": "min_record_duration",
                 "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
                 "new_record_to_memory": "record_to_memory",
                 "new_max_memory_seconds_mode": "max_memory_seconds_mode",
@@ -627,6 +628,7 @@ class AppCore:
                     "new_vad_silence_duration",
                     "new_record_storage_mode",
                     "new_record_storage_limit",
+                    "new_min_record_duration",
                 ]
             ):
                 self.audio_handler.update_config()
@@ -675,6 +677,11 @@ class AppCore:
                     self.config_manager.set('min_transcription_duration', kwargs['new_min_transcription_duration'])
                     logging.info(f"Configuração 'min_transcription_duration' alterada para: {kwargs['new_min_transcription_duration']}")
 
+            if kwargs.get('new_min_record_duration') is not None:
+                if self.config_manager.get('min_record_duration') != kwargs['new_min_record_duration']:
+                    self.config_manager.set('min_record_duration', kwargs['new_min_record_duration'])
+                    logging.info(f"Configuração 'min_record_duration' alterada para: {kwargs['new_min_record_duration']}")
+
             self._log_status("Configurações atualizadas.")
         else:
             logging.info("Nenhuma configuração alterada.")
@@ -705,6 +712,11 @@ class AppCore:
             self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
             self.transcription_handler.update_config()
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
+
+        if key in ["min_record_duration", "use_vad", "vad_threshold", "vad_silence_duration", "record_storage_mode", "record_storage_limit"]:
+            self.audio_handler.config_manager = self.config_manager
+            self.audio_handler.update_config()
+            logging.info(f"AudioHandler: Configurações atualizadas via update_setting para '{key}'.")
 
         # Re-inicializar clientes API se a chave ou modelo mudou
         if key in ["gemini_api_key", "gemini_model", "gemini_agent_model", "openrouter_api_key", "openrouter_model"]:

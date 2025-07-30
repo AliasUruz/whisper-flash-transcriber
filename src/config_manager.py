@@ -354,6 +354,23 @@ class ConfigManager:
             logging.warning(f"Invalid min_transcription_duration value '{self.config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]}).")
             self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
 
+        # Validação para min_record_duration
+        try:
+            raw_min_rec_val = loaded_config.get(MIN_RECORDING_DURATION_CONFIG_KEY, self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY])
+            min_rec_val = float(raw_min_rec_val)
+            if not (0.1 <= min_rec_val <= 10.0):
+                logging.warning(
+                    f"Invalid min_record_duration '{min_rec_val}'. Must be between 0.1 and 10.0. Using default ({self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]})."
+                )
+                self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]
+            else:
+                self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = min_rec_val
+        except (ValueError, TypeError):
+            logging.warning(
+                f"Invalid min_record_duration value '{self.config.get(MIN_RECORDING_DURATION_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]})."
+            )
+            self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]
+
         # Lógica para uso do VAD
         self.config[USE_VAD_CONFIG_KEY] = _parse_bool(
             self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])
@@ -601,4 +618,18 @@ class ConfigManager:
         except (ValueError, TypeError):
             self.config[CHUNK_LENGTH_SEC_CONFIG_KEY] = self.default_config[
                 CHUNK_LENGTH_SEC_CONFIG_KEY
+            ]
+
+    def get_min_record_duration(self):
+        return self.config.get(
+            MIN_RECORDING_DURATION_CONFIG_KEY,
+            self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY],
+        )
+
+    def set_min_record_duration(self, value: float | int):
+        try:
+            self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = float(value)
+        except (ValueError, TypeError):
+            self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = self.default_config[
+                MIN_RECORDING_DURATION_CONFIG_KEY
             ]

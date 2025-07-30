@@ -67,9 +67,8 @@ class GeminiAPI:
         critério de reinicialização.
         """
         # Prioriza a chave da API passada no construtor, depois a do config
-        self.current_api_key = (
-            self.last_api_key
-            or self.config_manager.get("gemini_api_key")
+        self.current_api_key = self.last_api_key or self.config_manager.get(
+            "gemini_api_key"
         )
         self.current_model_id = self.config_manager.get('gemini_model')
         self.current_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
@@ -77,8 +76,7 @@ class GeminiAPI:
         # A reinicialização considera apenas chave e modelo. O prompt é lido a
         # cada chamada pública, portanto não dispara reload.
         config_changed = (
-            self.current_api_key != self.last_api_key
-            or self.current_model_id != self.last_model_id
+            self.current_api_key != self.last_api_key or self.current_model_id != self.last_model_id
         )
 
         if self.model is None or config_changed:
