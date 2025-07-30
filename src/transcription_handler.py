@@ -471,9 +471,12 @@ class TranscriptionHandler:
                 else:
                     self.on_transcription_result_callback(text_result, text_result)
 
+            # Mantemos a VRAM em cache para acelerar transcrições consecutivas.
+            # A limpeza completa ocorre somente no shutdown.
             if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logging.debug("Cache da GPU limpo após tarefa de transcrição.")
+                logging.debug(
+                    "Cache da GPU preservado para transcrições consecutivas."
+                )
 
     def shutdown(self) -> None:
         """Encerra o executor de transcrição."""
@@ -492,3 +495,6 @@ class TranscriptionHandler:
         finally:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+                logging.debug(
+                    "Cache da GPU liberado no encerramento do aplicativo."
+                )
