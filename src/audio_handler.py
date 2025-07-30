@@ -377,7 +377,7 @@ class AudioHandler:
                 self.finished_event.set()
                 raise sd.CallbackStop()
             chunk_size = min(frames, remaining_samples)
-            outdata[:chunk_size] = self.tone_data[self.read_offset : self.read_offset + chunk_size].reshape(-1, 1)
+            outdata[:chunk_size] = self.tone_data[self.read_offset:self.read_offset + chunk_size].reshape(-1, 1)
             if chunk_size < frames:
                 outdata[chunk_size:].fill(0)
                 self.finished_event.set()
@@ -407,7 +407,6 @@ class AudioHandler:
                     channels=AUDIO_CHANNELS,
                     callback=callback_instance,
                     dtype="float32",
-                    start=False,
                 ) as stream:
                     stream.start()
                     logging.debug("OutputStream started for tone playback.")
