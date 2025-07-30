@@ -170,7 +170,14 @@ class KeyboardHotkeyManager:
             self._unregister_hotkeys()
 
             # Limpar todos os hooks do keyboard para garantir um estado limpo
-            keyboard.unhook_all()
+            try:
+                keyboard.unhook_all()
+            except OSError as e:
+                logging.error(f"Falha específica ao limpar hooks do teclado: {e}")
+                return False
+            except Exception as e:
+                logging.error(f"Erro ao limpar hooks do teclado: {e}", exc_info=True)
+                return False
             time.sleep(0.2)  # Pequeno delay para garantir que os hooks foram removidos
 
             # Registrar a tecla de gravação
@@ -184,19 +191,66 @@ class KeyboardHotkeyManager:
                 handler = self._on_press_key
                 # Registrar handler para soltar a tecla no modo press
                 if self.record_mode == "press":
-                    keyboard.on_release_key(self.record_key, lambda _: self._on_release_key(), suppress=True)
+                    try:
+                        keyboard.on_release_key(
+                            self.record_key,
+                            lambda _: self._on_release_key(),
+                            suppress=True,
+                        )
+                    except OSError as e:
+                        logging.error(
+                            f"Falha específica ao registrar hotkey release: {e}"
+                        )
+                        return False
+                    except Exception as e:
+                        logging.error(
+                            f"Erro ao registrar hotkey release: {e}", exc_info=True
+                        )
+                        return False
                     logging.info("Release handler registered for: %s", self.record_key)
 
             # Usar on_press_key em vez de add_hotkey para maior confiabilidade
-            keyboard.on_press_key(self.record_key, lambda _: handler(), suppress=True)
+            try:
+                keyboard.on_press_key(self.record_key, lambda _: handler(), suppress=True)
+            except OSError as e:
+                logging.error(
+                    f"Falha específica ao registrar hotkey de gravação: {e}"
+                )
+                return False
+            except Exception as e:
+                logging.error(
+                    f"Erro ao registrar hotkey de gravação: {e}", exc_info=True
+                )
+                return False
             self.hotkey_handlers[self.record_key] = handler
-            logging.info("Recording hotkey registered successfully (on_press_key): %s", self.record_key)
+            logging.info(
+                "Recording hotkey registered successfully (on_press_key): %s",
+                self.record_key,
+            )
 
             # Registrar a tecla de recarga
             logging.info("Registering command hotkey: %s", self.agent_key)
-            keyboard.on_press_key(self.agent_key, lambda _: self._on_agent_key(), suppress=True)
+            try:
+                keyboard.on_press_key(
+                    self.agent_key,
+                    lambda _: self._on_agent_key(),
+                    suppress=True,
+                )
+            except OSError as e:
+                logging.error(
+                    f"Falha específica ao registrar hotkey de comando: {e}"
+                )
+                return False
+            except Exception as e:
+                logging.error(
+                    f"Erro ao registrar hotkey de comando: {e}", exc_info=True
+                )
+                return False
             self.hotkey_handlers[self.agent_key] = self._on_agent_key
-            logging.info("Command hotkey registered successfully (on_press_key): %s", self.agent_key)
+            logging.info(
+                "Command hotkey registered successfully (on_press_key): %s",
+                self.agent_key,
+            )
 
             logging.info("Hotkeys registered successfully: record=%s, command=%s", self.record_key, self.agent_key)
             return True

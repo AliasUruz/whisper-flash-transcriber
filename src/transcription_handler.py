@@ -28,6 +28,7 @@ from .config_manager import (
     OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY, # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    CHUNK_LENGTH_SEC_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -86,6 +87,7 @@ class TranscriptionHandler:
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -125,6 +127,7 @@ class TranscriptionHandler:
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
@@ -146,7 +149,7 @@ class TranscriptionHandler:
                     model=model,
                     tokenizer=processor.tokenizer,
                     feature_extractor=processor.feature_extractor,
-                    chunk_length_s=30,
+                    chunk_length_s=self.chunk_length_sec,
                     batch_size=self.batch_size, # Usar o batch_size configurado
                     torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
                     generate_kwargs=generate_kwargs_init
@@ -315,8 +318,11 @@ class TranscriptionHandler:
                 logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
 
             logging.info(f"Carregando modelo {model_id}...")
-            
-            quant_config = BitsAndBytesConfig(load_in_8bit=True)
+
+            # Define configuração de quantização apenas se uma GPU válida estiver disponível
+            quant_config = None
+            if torch.cuda.is_available() and self.gpu_index >= 0:
+                quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
             # Determina dinamicamente se o FlashAttention 2 está disponível
             try:
@@ -328,14 +334,20 @@ class TranscriptionHandler:
 
             attn_impl = "flash_attention_2" if use_flash_attn else "sdpa"
 
+            model_kwargs = {
+                "torch_dtype": torch_dtype_local,
+                "low_cpu_mem_usage": True,
+                "use_safetensors": True,
+                "device_map": {'': device},
+                "attn_implementation": attn_impl,
+            }
+            # Adiciona a configuração de quantização somente quando aplicável
+            if quant_config is not None:
+                model_kwargs["quantization_config"] = quant_config
+
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_id,
-                torch_dtype=torch_dtype_local,
-                low_cpu_mem_usage=True,
-                use_safetensors=True,
-                device_map={'': device},
-                quantization_config=quant_config,
-                attn_implementation=attn_impl,
+                **model_kwargs,
             )
             
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
@@ -380,7 +392,7 @@ class TranscriptionHandler:
 
             result = self.pipe(
                 audio_source,
-                chunk_length_s=30,
+                chunk_length_s=self.chunk_length_sec,
                 batch_size=dynamic_batch_size,
                 return_timestamps=False,
                 generate_kwargs=generate_kwargs
@@ -471,9 +483,12 @@ class TranscriptionHandler:
                 else:
                     self.on_transcription_result_callback(text_result, text_result)
 
+            # Mantemos a VRAM em cache para acelerar transcrições consecutivas.
+            # A limpeza completa ocorre somente no shutdown.
             if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logging.debug("Cache da GPU limpo após tarefa de transcrição.")
+                logging.debug(
+                    "Cache da GPU preservado para transcrições consecutivas."
+                )
 
     def shutdown(self) -> None:
         """Encerra o executor de transcrição."""
@@ -492,3 +507,6 @@ class TranscriptionHandler:
         finally:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+                logging.debug(
+                    "Cache da GPU liberado no encerramento do aplicativo."
+                )

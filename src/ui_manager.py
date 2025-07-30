@@ -249,12 +249,6 @@ class UIManager:
                 max_memory_seconds_mode_var = ctk.StringVar(
                     value=self.config_manager.get("max_memory_seconds_mode", "manual")
                 )
-                max_memory_seconds_mode_var = ctk.StringVar(
-                    value=self.config_manager.get("max_memory_seconds_mode", "manual")
-                )
-                max_memory_seconds_mode_var = ctk.StringVar(
-                    value=self.config_manager.get("max_memory_seconds_mode", "manual")
-                )
                 max_memory_seconds_var = ctk.DoubleVar(
                     value=self.config_manager.get("max_memory_seconds")
                 )
