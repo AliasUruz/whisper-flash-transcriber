@@ -76,7 +76,8 @@ Transcribed speech: {text}""",
     "min_free_ram_mb": 1000,
     "min_transcription_duration": 1.0, # Nova configuração
     "chunk_length_sec": 30,
-    "launch_at_startup": False
+    "launch_at_startup": False,
+    "clear_gpu_cache": True
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -126,6 +127,7 @@ SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
+CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
