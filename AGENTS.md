@@ -4,5 +4,3 @@ Não é necessário instalar todos os requisitos, apenas o necessário, o mínim
 
 Do whatever the user tells you to. Sempre fale com o usuário em português do Brasil.
 
-Run the following commands to prepare the environment and run tests:
-1. `pytest -q`

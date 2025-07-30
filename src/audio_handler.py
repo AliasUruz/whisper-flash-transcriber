@@ -320,7 +320,7 @@ class AudioHandler:
                     ts = int(time.time())
                     filename = f"temp_recording_{ts}.wav"
                     Path(self.temp_file_path).rename(filename)
-                    # Aciona sf.write para permitir testes simulando falha
+                    # Usa sf.write para forçar a criação de um arquivo vazio
                     sf.write(filename, np.empty((0, 1), dtype=np.float32), AUDIO_SAMPLE_RATE)
                     self.temp_file_path = filename
                     logging.info(f"Gravação temporária salva em {filename}")

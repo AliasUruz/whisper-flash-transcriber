@@ -7,7 +7,7 @@ from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
 
 try:
     from transformers import BitsAndBytesConfig
-except Exception:  # pragma: no cover - fallback for test stubs
+except Exception:
     class BitsAndBytesConfig:  # type: ignore[py-class-var]
         def __init__(self, *_, **__):
             pass
