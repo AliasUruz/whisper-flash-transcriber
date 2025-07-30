@@ -5,14 +5,13 @@ import onnxruntime
 import torch
 from pathlib import Path
 
-# Detecta se o aplicativo está rodando em um diretório temporário (PyInstaller)
-if hasattr(sys, "_MEIPASS"):
-    base_dir = Path(sys._MEIPASS)
-else:
-    base_dir = Path(__file__).resolve().parent
+# Caminho para o modelo ONNX do Silero VAD
+MODEL_PATH = Path(__file__).resolve().parent / "models" / "silero_vad.onnx"
 
-# Construir o caminho absoluto para o modelo ONNX
-MODEL_PATH = base_dir / "models" / "silero_vad.onnx"
+# Ajuste para execução via PyInstaller
+if hasattr(sys, "_MEIPASS"):
+    MODEL_PATH = Path(sys._MEIPASS) / "models" / "silero_vad.onnx"
+
 logging.info("VAD model path set to '%s'", MODEL_PATH)
 
 class VADManager:

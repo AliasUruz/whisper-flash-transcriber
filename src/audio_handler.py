@@ -299,6 +299,9 @@ class AudioHandler:
 
         recording_duration = time.time() - self.start_time
         if self._sample_count == 0 or recording_duration < self.min_record_duration:
+            logging.info(
+                f"Dura\u00e7\u00e3o gravada {recording_duration:.2f}s abaixo do m\u00ednimo configurado {self.min_record_duration}s. Descartando."
+            )
             logging.warning(
                 f"Grava\u00e7\u00e3o muito curta (< {self.min_record_duration}s) ou vazia. Descartando."
             )
