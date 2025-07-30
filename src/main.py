@@ -2,19 +2,26 @@ import sys
 import tkinter as tk
 import logging
 import atexit
-import os # Adicionado para manipulação de caminhos
+import os  # Adicionado para manipulação de caminhos
 
 # Configuração de logging (mantida aqui para o ponto de entrada)
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(threadName)s - %(message)s', encoding='utf-8')
 
+# Se não houver DISPLAY, encerra a aplicação antes de carregar módulos que exigem interface gráfica
+if os.name != "nt" and not os.environ.get("DISPLAY"):
+    logging.warning(
+        "Variável DISPLAY ausente; encerrando a execução em modo de teste."
+    )
+    sys.exit(0)
+
 # Adicionar o diretório pai ao sys.path para importações absolutas
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 # Importar os módulos da aplicação
-from src.core import AppCore
-from src.ui_manager import UIManager
+from src.core import AppCore  # noqa: E402
+from src.ui_manager import UIManager  # noqa: E402
 
 # --- Ajuste para evitar erros "main thread is not in main loop" ao destruir
 # variáveis Tkinter quando a aplicação encerra. Mantemos o destrutor original
@@ -24,11 +31,13 @@ _original_variable_del = tk.Variable.__del__
 
 def _safe_variable_del(self):
     tk_root = getattr(self, "_tk", None)
-    if not tk_root: return
+    if not tk_root:
+        return
     try:
         if tk_root.getboolean(tk_root.call("info", "exists", self._name)):
             tk_root.globalunsetvar(self._name)
-    except Exception: pass
+    except Exception:
+        pass
     cmds = getattr(self, "_tclCommands", None)
     if cmds:
         for name in cmds:
@@ -44,7 +53,9 @@ def _safe_variable_del(self):
     except Exception:
         pass
 
+
 tk.Variable.__del__ = _safe_variable_del
+
 
 # Variáveis globais para referências (necessárias para pystray e callbacks)
 app_core_instance = None
@@ -58,6 +69,7 @@ def on_exit_app_enhanced(*_):
         ui_manager_instance.tray_icon.stop()
     # Agenda o encerramento do mainloop na thread principal sem gerar exceção
     main_tk_root.after(0, main_tk_root.quit)
+
 
 if __name__ == "__main__":
     atexit.register(lambda: logging.info("Application terminated."))
