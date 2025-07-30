@@ -75,6 +75,7 @@ Transcribed speech: {text}""",
     "max_memory_seconds": 30,
     "min_free_ram_mb": 1000,
     "min_transcription_duration": 1.0, # Nova configuração
+    "chunk_length_sec": 30,
     "launch_at_startup": False
 }
 
@@ -99,6 +100,7 @@ DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
 VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
+CHUNK_LENGTH_SEC_CONFIG_KEY = "chunk_length_sec"
 LAUNCH_AT_STARTUP_CONFIG_KEY = "launch_at_startup"
 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY = DISPLAY_TRANSCRIPTS_KEY
 KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
@@ -308,6 +310,18 @@ class ConfigManager:
             )
         except (ValueError, TypeError):
             self.config["min_free_ram_mb"] = self.default_config["min_free_ram_mb"]
+
+        try:
+            self.config[CHUNK_LENGTH_SEC_CONFIG_KEY] = float(
+                self.config.get(
+                    CHUNK_LENGTH_SEC_CONFIG_KEY,
+                    self.default_config[CHUNK_LENGTH_SEC_CONFIG_KEY],
+                )
+            )
+        except (ValueError, TypeError):
+            self.config[CHUNK_LENGTH_SEC_CONFIG_KEY] = self.default_config[
+                CHUNK_LENGTH_SEC_CONFIG_KEY
+            ]
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -574,3 +588,17 @@ class ConfigManager:
 
     def set_launch_at_startup(self, value: bool):
         self.config[LAUNCH_AT_STARTUP_CONFIG_KEY] = bool(value)
+
+    def get_chunk_length_sec(self):
+        return self.config.get(
+            CHUNK_LENGTH_SEC_CONFIG_KEY,
+            self.default_config[CHUNK_LENGTH_SEC_CONFIG_KEY],
+        )
+
+    def set_chunk_length_sec(self, value: float | int):
+        try:
+            self.config[CHUNK_LENGTH_SEC_CONFIG_KEY] = float(value)
+        except (ValueError, TypeError):
+            self.config[CHUNK_LENGTH_SEC_CONFIG_KEY] = self.default_config[
+                CHUNK_LENGTH_SEC_CONFIG_KEY
+            ]
