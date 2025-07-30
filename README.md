@@ -14,8 +14,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 6.  [Usage](#how-to-use-the-app)
 7.  [Troubleshooting](#troubleshooting)
 8.  [Contributing](#contributing)
-9.  [Running Tests](#running-tests)
-10.  [License](#license)
+9.  [License](#license)
 
 ## Features
 
@@ -352,26 +351,7 @@ Contributions are welcome! If you have ideas for improvements, bug fixes, or new
 4.  Push your changes to your fork.
 5.  Open a Pull Request from your fork to the original repository's `master` branch.
 6.  Describe your changes and why they should be included.
-7.  Install the development dependencies with:
-    ```bash
-    pip install -r requirements-test.txt
-    ```
-8.  Optionally, run `flake8 src/gemini_api.py src/openrouter_api.py` to check code style.
-
-
-## Running Tests
-
-Before running the tests, install the dependencies:
-
-```bash
-pip install -r requirements-test.txt
-```
-
-Run the suite with:
-
-```bash
-pytest -q
-```
+7.  Optionally, run `flake8 src/gemini_api.py src/openrouter_api.py` to check code style.
 
 ## License
 

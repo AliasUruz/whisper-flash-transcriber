@@ -9,7 +9,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(threadName)s - %(message)s', encoding='utf-8')
 
-# Adicionar o diretório pai (WhisperTeste) ao sys.path para importações absolutas
+# Adicionar o diretório pai ao sys.path para importações absolutas
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 # Importar os módulos da aplicação
