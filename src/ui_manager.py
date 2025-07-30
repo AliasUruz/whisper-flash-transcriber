@@ -226,6 +226,7 @@ class UIManager:
                 agent_model_var = ctk.StringVar(value=self.config_manager.get("gemini_agent_model"))
                 hotkey_stability_service_enabled_var = ctk.BooleanVar(value=self.config_manager.get("hotkey_stability_service_enabled")) # Nova variável unificada
                 min_transcription_duration_var = ctk.DoubleVar(value=self.config_manager.get("min_transcription_duration")) # Nova variável
+                min_record_duration_var = ctk.DoubleVar(value=self.config_manager.get("min_record_duration"))
                 sound_enabled_var = ctk.BooleanVar(value=self.config_manager.get("sound_enabled"))
                 sound_frequency_var = ctk.StringVar(value=str(self.config_manager.get("sound_frequency")))
                 sound_duration_var = ctk.StringVar(value=str(self.config_manager.get("sound_duration")))
@@ -319,6 +320,9 @@ class UIManager:
                     min_transcription_duration_to_apply = self._safe_get_float(min_transcription_duration_var, "Duração Mínima", settings_win)
                     if min_transcription_duration_to_apply is None:
                         return
+                    min_record_duration_to_apply = self._safe_get_float(min_record_duration_var, "Duração Mínima da Gravação", settings_win)
+                    if min_record_duration_to_apply is None:
+                        return
                     use_vad_to_apply = use_vad_var.get()
                     vad_threshold_to_apply = self._safe_get_float(vad_threshold_var, "Limiar do VAD", settings_win)
                     if vad_threshold_to_apply is None:
@@ -375,6 +379,7 @@ class UIManager:
                         new_gpu_index=gpu_index_to_apply,
                         new_hotkey_stability_service_enabled=hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
                         new_min_transcription_duration=min_transcription_duration_to_apply,
+                        new_min_record_duration=min_record_duration_to_apply,
                         new_save_temp_recordings=save_temp_recordings_to_apply,
                         new_record_storage_mode=record_storage_mode_var.get(),
                         new_record_to_memory=(record_storage_mode_var.get() == "memory"),
@@ -405,6 +410,7 @@ class UIManager:
                     agent_model_var.set(DEFAULT_CONFIG["gemini_agent_model"])
                     hotkey_stability_service_enabled_var.set(DEFAULT_CONFIG["hotkey_stability_service_enabled"])
                     min_transcription_duration_var.set(DEFAULT_CONFIG["min_transcription_duration"])
+                    min_record_duration_var.set(DEFAULT_CONFIG["min_record_duration"])
                     sound_enabled_var.set(DEFAULT_CONFIG["sound_enabled"])
                     sound_frequency_var.set(str(DEFAULT_CONFIG["sound_frequency"]))
                     sound_duration_var.set(str(DEFAULT_CONFIG["sound_duration"]))
@@ -639,6 +645,13 @@ class UIManager:
                 min_transcription_duration_entry = ctk.CTkEntry(min_transcription_duration_frame, textvariable=min_transcription_duration_var, width=80)
                 min_transcription_duration_entry.pack(side="left", padx=5)
                 Tooltip(min_transcription_duration_entry, "Discard segments shorter than this.")
+
+                min_record_duration_frame = ctk.CTkFrame(transcription_frame)
+                min_record_duration_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(min_record_duration_frame, text="Minimum Record Duration (sec):").pack(side="left", padx=(5, 10))
+                min_record_duration_entry = ctk.CTkEntry(min_record_duration_frame, textvariable=min_record_duration_var, width=80)
+                min_record_duration_entry.pack(side="left", padx=5)
+                Tooltip(min_record_duration_entry, "Discard recordings shorter than this.")
 
                 vad_enable_frame = ctk.CTkFrame(transcription_frame)
                 vad_enable_frame.pack(fill="x", pady=5)
