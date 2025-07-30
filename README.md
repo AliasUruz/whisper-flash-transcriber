@@ -262,6 +262,7 @@ To access and change settings:
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
+*   **Chunk Length (s):** Controls how long each audio segment sent to Whisper is. Smaller values reduce memory use but may slow processing.
 *   **Record Storage Mode:** Choose between always using memory, always using disk, or automatically selecting based on free RAM.
 *   **Minimum Free RAM (MB):** Threshold used in auto mode to decide when audio can be stored in memory.
 *   **Max Memory Seconds Mode:** Set to "auto" to adjust the retention limit dynamically or "manual" to use a fixed value.
@@ -271,6 +272,8 @@ To access and change settings:
 *   **Use VAD:** enables silence removal without automatically stopping the recording.
 *   **VAD Threshold:** sensitivity of voice detection.
 *   **VAD Silence Duration (s):** maximum pause length to keep; longer silences are trimmed.
+
+Using a shorter **Chunk Length** lowers GPU memory usage but increases overhead because more segments need to be processed. Longer chunks speed up transcription at the cost of higher memory consumption.
 
 
 ### Displaying Transcripts in the Terminal

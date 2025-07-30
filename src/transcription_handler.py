@@ -28,6 +28,7 @@ from .config_manager import (
     OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY, # Nova constante
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    CHUNK_LENGTH_SEC_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -86,6 +87,7 @@ class TranscriptionHandler:
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -125,6 +127,7 @@ class TranscriptionHandler:
         self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
@@ -146,7 +149,7 @@ class TranscriptionHandler:
                     model=model,
                     tokenizer=processor.tokenizer,
                     feature_extractor=processor.feature_extractor,
-                    chunk_length_s=30,
+                    chunk_length_s=self.chunk_length_sec,
                     batch_size=self.batch_size, # Usar o batch_size configurado
                     torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
                     generate_kwargs=generate_kwargs_init
@@ -380,7 +383,7 @@ class TranscriptionHandler:
 
             result = self.pipe(
                 audio_source,
-                chunk_length_s=30,
+                chunk_length_s=self.chunk_length_sec,
                 batch_size=dynamic_batch_size,
                 return_timestamps=False,
                 generate_kwargs=generate_kwargs
