@@ -49,7 +49,6 @@ DEFAULT_CONFIG = {
     "gemini_model": "gemini-2.5-flash-lite",
     "gemini_agent_model": "gemini-2.5-flash-lite",
     "ai_provider": "gemini",
-    "openrouter_agent_prompt": "",
     "openrouter_prompt": "",
     "chatgpt_selectors": CHATGPT_DEFAULT_SELECTORS,
     "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
@@ -90,7 +89,14 @@ Transcribed speech: {text}""",
     "chunk_length_mode": "manual",
     "enable_torch_compile": False,
     "launch_at_startup": False,
-    "clear_gpu_cache": True
+    "clear_gpu_cache": True,
+    # Configurações específicas para automação do ChatGPT
+    "chatgpt_url": "https://chatgpt.com/",
+    "chatgpt_selectors": {
+        "textarea": "textarea[data-id='root']",
+        "file_input": "input[type=file]",
+        "response_block": "div[data-message-author-role='assistant']"
+    }
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -137,14 +143,16 @@ CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
 ENABLE_TORCH_COMPILE_CONFIG_KEY = "enable_torch_compile"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
-OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
-OPENROUTER_AGENT_PROMPT_CONFIG_KEY = OPENROUTER_PROMPT_CONFIG_KEY
+OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
+OPENROUTER_AGENT_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
+CHATGPT_URL_CONFIG_KEY = "chatgpt_url"
+CHATGPT_SELECTORS_CONFIG_KEY = "chatgpt_selectors"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):

@@ -1,6 +1,7 @@
 import logging
 import threading
 import concurrent.futures
+import time
 import numpy as np
 import torch
 from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
@@ -88,8 +89,6 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
-        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
-        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
 
@@ -292,7 +291,7 @@ class TranscriptionHandler:
                     prompt = openrouter_prompt
                 else:
                     logging.info("Modo Agente ativado. Usando prompt do Agente para o OpenRouter.")
-                    prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                    prompt = self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
 
                 model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
                 future = self.executor.submit(self.openrouter_api.correct_text_async, corrected, prompt, api_key, model)
