@@ -91,8 +91,6 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
-        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
-        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
 
         self.openrouter_client = None
         # self.gemini_client é injetado
