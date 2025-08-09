@@ -293,7 +293,7 @@ class TranscriptionHandler:
                     prompt = openrouter_prompt
                 else:
                     logging.info("Modo Agente ativado. Usando prompt do Agente para o OpenRouter.")
-                    prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                    prompt = self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
 
                 model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
                 future = self.executor.submit(self.openrouter_api.correct_text_async, corrected, prompt, api_key, model)
