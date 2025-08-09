@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 # Importar constantes de configuração
 from .config_manager import (
     SETTINGS_WINDOW_GEOMETRY,
-    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
+    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI, SERVICE_CHATGPT_WEB,
     GEMINI_MODEL_OPTIONS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
     DEFAULT_CONFIG,
@@ -336,6 +336,16 @@ class UIManager:
                 sound_volume_var = ctk.DoubleVar(value=self.config_manager.get("sound_volume"))
                 text_correction_enabled_var = ctk.BooleanVar(value=self.config_manager.get("text_correction_enabled"))
                 text_correction_service_var = ctk.StringVar(value=self.config_manager.get("text_correction_service"))
+                service_display_map = {
+                    "None": SERVICE_NONE,
+                    "OpenRouter": SERVICE_OPENROUTER,
+                    "Gemini": SERVICE_GEMINI,
+                    "ChatGPT (Web)": SERVICE_CHATGPT_WEB,
+                }
+                text_correction_service_label_var = ctk.StringVar(
+                    value=next((label for label, val in service_display_map.items()
+                                if val == text_correction_service_var.get()), "None")
+                )
                 openrouter_api_key_var = ctk.StringVar(value=self.config_manager.get("openrouter_api_key"))
                 openrouter_model_var = ctk.StringVar(value=self.config_manager.get("openrouter_model"))
                 gemini_api_key_var = ctk.StringVar(value=self.config_manager.get("gemini_api_key"))
@@ -530,12 +540,23 @@ class UIManager:
                     sound_volume_var.set(DEFAULT_CONFIG["sound_volume"])
                     text_correction_enabled_var.set(DEFAULT_CONFIG["text_correction_enabled"])
                     text_correction_service_var.set(DEFAULT_CONFIG["text_correction_service"])
+                    text_correction_service_label_var.set(
+                        next(
+                            (
+                                label
+                                for label, val in service_display_map.items()
+                                if val == DEFAULT_CONFIG["text_correction_service"]
+                            ),
+                            "None",
+                        )
+                    )
                     # Sincroniza os campos de correção de texto caso os widgets existam
                     try:
                         service_menu  # Verifica se os widgets foram criados
                     except NameError:
                         pass
                     else:
+                        service_menu.set(text_correction_service_label_var.get())
                         update_text_correction_fields()
                     openrouter_api_key_var.set(DEFAULT_CONFIG["openrouter_api_key"])
                     openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
@@ -683,7 +704,12 @@ class UIManager:
                 service_frame = ctk.CTkFrame(ai_frame)
                 service_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(service_frame, text="Service:").pack(side="left", padx=(5, 10))
-                service_menu = ctk.CTkOptionMenu(service_frame, variable=text_correction_service_var, values=[SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI])
+                service_menu = ctk.CTkOptionMenu(
+                    service_frame,
+                    variable=text_correction_service_label_var,
+                    values=list(service_display_map.keys()),
+                    command=lambda choice: text_correction_service_var.set(service_display_map[choice]),
+                )
                 service_menu.pack(side="left", padx=5)
                 Tooltip(service_menu, "Select the service for text correction.")
 
