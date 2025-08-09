@@ -44,3 +44,5 @@ Whisper.bat
 start_whisper.bat
 Whisper ADMIN.lnk
 .gitignore
+# Diretório de dados de sessão do navegador para automação web
+/user_data/
