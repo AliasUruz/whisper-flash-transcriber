@@ -80,7 +80,14 @@ Transcribed speech: {text}""",
     "chunk_length_mode": "manual",
     "enable_torch_compile": False,
     "launch_at_startup": False,
-    "clear_gpu_cache": True
+    "clear_gpu_cache": True,
+    # Configurações específicas para automação do ChatGPT
+    "chatgpt_url": "https://chatgpt.com/",
+    "chatgpt_selectors": {
+        "textarea": "textarea[data-id='root']",
+        "file_input": "input[type=file]",
+        "response_block": "div[data-message-author-role='assistant']"
+    }
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -134,6 +141,8 @@ REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
+CHATGPT_URL_CONFIG_KEY = "chatgpt_url"
+CHATGPT_SELECTORS_CONFIG_KEY = "chatgpt_selectors"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
