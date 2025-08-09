@@ -3,6 +3,7 @@ import threading
 import time
 import os
 from threading import RLock
+from pathlib import Path
 import atexit
 try:
     import pyautogui  # Ainda necessário para _do_paste
@@ -24,11 +25,14 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
+    TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+    SERVICE_CHATGPT_WEB,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
+from .chatgpt_automator import ChatGPTAutomator
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -74,6 +78,22 @@ class AppCore:
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
             is_state_transcribing_fn=self.is_state_transcribing,
         )
+        self.transcription_handler.core_instance_ref = self
+
+        self.chatgpt_automator = None
+        text_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
+        if text_service == SERVICE_CHATGPT_WEB:
+            user_data_dir = str(Path.home() / ".chatgpt_automator")
+            self.chatgpt_automator = ChatGPTAutomator(
+                self.config_manager,
+                user_data_dir=user_data_dir,
+            )
+            threading.Thread(
+                target=self.chatgpt_automator.start,
+                daemon=True,
+                name="ChatGPTAutomator",
+            ).start()
+
         self.ui_manager = None # Será setado externamente pelo main.py
 
         # --- Estado da Aplicação ---
@@ -855,6 +875,12 @@ class AppCore:
                 self.audio_handler.cleanup()
             except Exception as e:
                 logging.error(f"Erro no cleanup do AudioHandler: {e}")
+
+        if getattr(self, "chatgpt_automator", None):
+            try:
+                self.chatgpt_automator.close()
+            except Exception as e:
+                logging.error(f"Erro ao encerrar ChatGPTAutomator: {e}")
 
         if self.reregister_timer_thread and self.reregister_timer_thread.is_alive():
             self.reregister_timer_thread.join(timeout=1.5)
