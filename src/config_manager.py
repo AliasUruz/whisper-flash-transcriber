@@ -21,6 +21,15 @@ def _parse_bool(value):
 # --- Constantes de Configuração (movidas de whisper_tkinter.py) ---
 CONFIG_FILE = "config.json"
 SECRETS_FILE = "secrets.json" # Nova constante para o arquivo de segredos
+
+CHATGPT_DEFAULT_SELECTORS = {
+    "prompt_textarea": "",
+    "response_container": "",
+    "attach_button": "",
+    "send_button": "",
+}
+"""Seletores CSS que identificam elementos principais da interface web do ChatGPT."""
+
 DEFAULT_CONFIG = {
     "record_key": "F3",
     "record_mode": "toggle",
@@ -41,7 +50,7 @@ DEFAULT_CONFIG = {
     "gemini_agent_model": "gemini-2.5-flash-lite",
     "ai_provider": "gemini",
     "openrouter_prompt": "",
-    "openrouter_agent_prompt": "",
+    "chatgpt_selectors": CHATGPT_DEFAULT_SELECTORS,
     "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
     "gemini_prompt": """You are a meticulous speech-to-text correction AI. Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below while preserving the original content and structure as closely as possible.
 Key instructions:
@@ -122,6 +131,7 @@ ENABLE_AI_CORRECTION_CONFIG_KEY = TEXT_CORRECTION_ENABLED_CONFIG_KEY
 SERVICE_NONE = "none"
 SERVICE_OPENROUTER = "openrouter"
 SERVICE_GEMINI = "gemini"
+SERVICE_CHATGPT_WEB = "chatgpt_web"
 OPENROUTER_API_KEY_CONFIG_KEY = "openrouter_api_key"
 OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
@@ -521,6 +531,21 @@ class ConfigManager:
             logging.info(f"No changes detected in {SECRETS_FILE}.")
 
     def get(self, key, default=None):
+        """Recupera valores da configuração permitindo acesso aninhado.
+
+        Chaves separadas por pontos indicam níveis dentro de dicionários,
+        possibilitando obter dinamicamente seletores como
+        ``chatgpt_selectors.prompt_textarea``.
+        """
+        if isinstance(key, str) and "." in key:
+            current = self.config
+            for part in key.split("."):
+                if not isinstance(current, dict):
+                    return default
+                current = current.get(part)
+                if current is None:
+                    return default
+            return current
         return self.config.get(key, default)
 
     def set(self, key, value):
