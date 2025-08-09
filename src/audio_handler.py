@@ -94,6 +94,11 @@ class AudioHandler:
         if write_data is not None:
             with self.storage_lock:
                 if self.in_memory_mode:
+                    # Evitar cópia redundante: sd.InputStream reutiliza buffers,
+                    # mas armazenamos referência somente enquanto write_data está
+                    # vivo dentro do callback; para persistência entre callbacks,
+                    # uma cópia ainda é necessária. Se no futuro houver um
+                    # ring-buffer/concat direto, podemos remover esta cópia.
                     self._audio_frames.append(write_data.copy())
                     self._memory_samples += len(write_data)
 
@@ -103,14 +108,30 @@ class AudioHandler:
                         logging.info(
                             f"Duração da gravação excedeu {self.current_max_memory_seconds}s. Migrando da RAM para o disco."
                         )
+                        try:
+                            total_mb = get_total_memory_mb()
+                            avail_mb = get_available_memory_mb()
+                            percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
+                            logging.info(f"[METRIC] stage=ram_to_disk_migration reason=time_exceeded percent_free={percent_free:.1f}")
+                        except Exception:
+                            pass
                         self._migrate_to_file()
                     elif self.record_storage_mode == 'auto':
                         total_mb = get_total_memory_mb()
                         avail_mb = get_available_memory_mb()
-                        if total_mb and avail_mb / total_mb < 0.1:
+                        try:
+                            thr_percent = max(1, min(50, int(self.config_manager.get("auto_ram_threshold_percent"))))
+                        except Exception:
+                            thr_percent = 10
+                        percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
+                        if total_mb and percent_free < thr_percent:
                             logging.info(
-                                "RAM livre abaixo de 10% do total. Migrando da RAM para o disco."
+                                f"RAM livre abaixo de {thr_percent}% do total ({percent_free:.1f}%). Migrando da RAM para o disco."
                             )
+                            try:
+                                logging.info(f"[METRIC] stage=ram_to_disk_migration reason=low_free_ram percent_free={percent_free:.1f} threshold={thr_percent}")
+                            except Exception:
+                                pass
                             self._migrate_to_file()
                 else:
                     if self._sf_writer:
@@ -155,6 +176,11 @@ class AudioHandler:
             self._stop_event.clear()
             self._record_thread = None
             logging.info("Audio recording thread finished.")
+            # Métrica de overhead do stop no thread de gravação (aproximação por evento)
+            try:
+                logging.info("[METRIC] stage=record_thread_finalize value_ms=0")
+            except Exception:
+                pass
 
     def _close_input_stream(self, timeout: float = 2.0):
         finished_event = threading.Event()

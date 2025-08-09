@@ -309,6 +309,51 @@ Once the application is running and configured:
 
 The application terminates immediately and safely when closed. Even if a transcription is still running, the executor shuts down to prevent zombie processes.
 
+## Performance Flags e Métricas
+
+Esta versão adiciona sinalizadores de performance e logs de métricas para apoiar otimizações e diagnóstico.
+
+Sinalizadores de Configuração
+- enable_torch_compile: ativa otimizações do PyTorch (quando aplicável). Padrão: falso.
+- chunk_length_mode: "manual" ou "auto". No modo auto, o chunk_length_sec é recalculado com base na VRAM livre.
+- chunk_length_sec: duração do chunk em segundos. Impacta memória/throughput.
+- batch_size: valor base para cálculo do batch dinâmico (pode variar conforme VRAM).
+- auto_ram_threshold_percent: quando em modo memória, migra para disco se RAM livre ficar abaixo deste percentual (1–50). Padrão: 10.
+- display_transcripts_in_terminal: imprime a transcrição final no terminal.
+
+Métricas [METRIC]
+Todas as métricas são emitidas via logging com o prefixo [METRIC] para fácil filtragem.
+
+- t_pre, t_infer, t_post, segment_total
+  Exemplo: [METRIC] stage=t_infer value_ms=123.45 device=cuda:0 chunk=30.0 batch=16 dtype=fp16 attn=flash_attn2
+  Campos padrão: stage, value_ms, device (cpu/cuda:N), chunk (s), batch, dtype (fp16/fp32), attn (flash_attn2/sdpa).
+
+- warmup_infer
+  Exemplo: [METRIC] stage=warmup_infer value_ms=85.2
+
+- gpu_autoselect
+  Exemplo: [METRIC] stage=gpu_autoselect gpu=0 free_gb=9.75 total_gb=12.00
+
+- attn_impl, attn_impl_effective
+  Ex.: [METRIC] stage=attn_impl value=flash_attn2
+
+- record_thread_finalize, record_stop_overhead
+  Ex.: [METRIC] stage=record_stop_overhead value_ms=3.1
+
+- ram_to_disk_migration
+  Ex.: [METRIC] stage=ram_to_disk_migration reason=low_free_ram percent_free=8.5 threshold=10
+
+- empty_cache
+  Ex.: [METRIC] stage=empty_cache value_ms=4.2 freed_estimate_mb=128.0
+
+- oom_recovery
+  Ex.: [METRIC] stage=oom_recovery action=reduce_batch from=16 to=8
+
+Boas Práticas
+- Chunk maior acelera a transcrição, mas consome mais memória. Em máquinas com 8–12GB de VRAM, 30–45s tende a ser eficiente com FP16.
+- Se ocorrer OOM, o sistema tenta reduzir batch e, se necessário, o chunk para as próximas submissões.
+- Em CPU, prefira chunk menor (15–20s) e batch reduzido.
+
 ## Troubleshooting
 
 ### Hotkeys Stop Working on Windows 11

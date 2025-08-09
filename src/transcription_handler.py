@@ -88,6 +88,10 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
+        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -128,6 +132,8 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
+        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
@@ -139,22 +145,83 @@ class TranscriptionHandler:
             model, processor = self._load_model_task()
             if model and processor:
                 device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
+
+                # Definir o modelo para modo de avaliação (evita cálculos de gradiente)
+                try:
+                    if hasattr(model, "eval"):
+                        model.eval()
+                        logging.info("[METRIC] stage=model_eval_applied value_ms=0")
+                        try:
+                            # Sanidade: se possível, confirmar flag de treino
+                            training_flag = getattr(model, "training", None)
+                            if training_flag is not None:
+                                logging.debug(f"Model.training={training_flag} (esperado False)")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logging.warning(f"Falha ao aplicar model.eval(): {e}")
+
+                # torch.compile opcional
+                try:
+                    if self.enable_torch_compile and hasattr(torch, "compile") and device.startswith("cuda"):
+                        model = torch.compile(model)  # type: ignore[attr-defined]
+                        logging.info("torch.compile aplicado ao modelo (experimental).")
+                    else:
+                        logging.info("torch.compile desativado ou indisponível; seguindo sem compile.")
+                except Exception as e:
+                    logging.warning(f"Falha ao aplicar torch.compile: {e}. Seguindo sem compile.", exc_info=True)
+
                 # Forçar a detecção de idioma na inicialização da pipeline
                 generate_kwargs_init = {
                     "task": "transcribe",
                     "language": None
                 }
+
+                # Ajuste de chunk_length_sec quando em modo 'auto' (antes de criar a pipeline)
+                if self.chunk_length_mode == "auto":
+                    try:
+                        eff_chunk = float(self._effective_chunk_length())
+                        if eff_chunk != self.chunk_length_sec:
+                            logging.info(f"Chunk length ajustado automaticamente: {self.chunk_length_sec:.1f}s -> {eff_chunk:.1f}s")
+                        self.chunk_length_sec = eff_chunk
+                    except Exception as e:
+                        logging.warning(f"Falha ao calcular chunk_length auto: {e}. Mantendo valor atual {self.chunk_length_sec}.")
+
+                # Criar pipeline
                 self.pipe = pipeline(
                     "automatic-speech-recognition",
                     model=model,
                     tokenizer=processor.tokenizer,
                     feature_extractor=processor.feature_extractor,
                     chunk_length_s=self.chunk_length_sec,
-                    batch_size=self.batch_size, # Usar o batch_size configurado
+                    batch_size=self.batch_size,  # Usar o batch_size configurado
                     torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
                     generate_kwargs=generate_kwargs_init
                 )
                 logging.info("Pipeline de transcrição inicializada com sucesso.")
+
+                # Warmup da pipeline para reduzir first-hit latency
+                try:
+                    import numpy as _np
+                    warmup_dur = max(0.1, min(0.25, float(self.chunk_length_sec) * 0.01))
+                    sr = 16000
+                    n = int(sr * warmup_dur)
+                    t = _np.linspace(0, warmup_dur, n, False, dtype=_np.float32)
+                    tone = (_np.sin(2 * _np.pi * 440.0 * t)).astype(_np.float32)
+                    t0 = time.perf_counter()
+                    with torch.no_grad():
+                        _ = self.pipe(
+                            tone,
+                            chunk_length_s=self.chunk_length_sec,
+                            batch_size=max(1, int(self.batch_size)),
+                            return_timestamps=False,
+                            generate_kwargs={"task": "transcribe", "language": None}
+                        )
+                    t1 = time.perf_counter()
+                    logging.info(f"[METRIC] stage=warmup_infer value_ms={(t1 - t0) * 1000:.2f} device={device} chunk={self.chunk_length_sec} batch={self.batch_size}")
+                except Exception as e:
+                    logging.warning(f"Warmup da pipeline falhou: {e}")
+
                 self.on_model_ready_callback()
             else:
                 error_message = "Falha ao carregar modelo ou processador."
@@ -257,7 +324,11 @@ class TranscriptionHandler:
             return self.manual_batch_size
 
         # Lógica para modo "auto" (dinâmico)
-        return select_batch_size(self.gpu_index, fallback=self.batch_size)
+        return select_batch_size(
+            self.gpu_index,
+            fallback=self.batch_size,
+            chunk_length_sec=self.chunk_length_sec
+        )
 
     def start_model_loading(self):
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
@@ -296,7 +367,7 @@ class TranscriptionHandler:
                                 max_vram = props.total_memory
                                 best_gpu_index = i
                         self.gpu_index = best_gpu_index
-                        logging.info(f"Auto-seleção de GPU: {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})")
+                        logging.info(f"Auto-seleção de GPU (maior VRAM total): {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})")
                     else:
                         logging.info("Nenhuma GPU disponível, usando CPU.")
                         self.gpu_index = -1 # Garante que o índice seja -1 se não houver GPU
@@ -316,6 +387,26 @@ class TranscriptionHandler:
             else:
                 torch_dtype_local = torch.float32
                 logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
+            # Seleção automática de GPU por memória livre quando gpu_index == -1
+            try:
+                if torch.cuda.is_available() and self.gpu_index == -1:
+                    best_idx = None
+                    best_free = -1
+                    for i in range(torch.cuda.device_count()):
+                        try:
+                            free_b, total_b = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
+                            if free_b > best_free:
+                                best_free = free_b
+                                best_idx = i
+                        except Exception as _e:
+                            logging.debug(f"Falha ao consultar mem_get_info para GPU {i}: {_e}")
+                    if best_idx is not None:
+                        self.gpu_index = best_idx
+                        free_gb = best_free / (1024 ** 3) if best_free > 0 else 0.0
+                        total_gb = torch.cuda.get_device_properties(self.gpu_index).total_memory / (1024 ** 3)
+                        logging.info(f"[METRIC] stage=gpu_autoselect gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}")
+            except Exception as _gpu_sel_e:
+                logging.warning(f"Falha ao escolher GPU por memória livre: {_gpu_sel_e}")
 
             logging.info(f"Carregando modelo {model_id}...")
 
@@ -349,6 +440,14 @@ class TranscriptionHandler:
                 model_id,
                 **model_kwargs,
             )
+
+            # Log do attn_implementation efetivo
+            try:
+                eff_attn = getattr(model, "config", None)
+                if eff_attn and hasattr(eff_attn, "attn_implementation"):
+                    logging.info(f"[METRIC] stage=attn_impl_effective value={getattr(eff_attn, 'attn_implementation', 'unknown')}")
+            except Exception:
+                pass
             
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
             return model, processor
@@ -390,13 +489,54 @@ class TranscriptionHandler:
             if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
                 audio_source = audio_source.flatten()
 
-            result = self.pipe(
-                audio_source,
-                chunk_length_s=self.chunk_length_sec,
-                batch_size=dynamic_batch_size,
-                return_timestamps=False,
-                generate_kwargs=generate_kwargs
-            )
+            # Revalidar chunk em runtime se modo auto (segurança extra)
+            if self.chunk_length_mode == "auto":
+                try:
+                    self.chunk_length_sec = float(self._effective_chunk_length())
+                except Exception:
+                    pass
+
+            # Métricas detalhadas de tempos: t_pre, t_infer, t_post e t_total_segment
+            # Campos técnicos
+            try:
+                device = f"cuda:{self.gpu_index}" if torch.cuda.is_available() and self.gpu_index >= 0 else "cpu"
+            except Exception:
+                device = "cpu"
+            dtype = "fp16" if (torch.cuda.is_available() and self.gpu_index >= 0) else "fp32"
+            try:
+                import importlib.util as _spec_util
+                attn_impl = "flash_attn2" if _spec_util.find_spec("flash_attn") is not None else "sdpa"
+            except Exception:
+                attn_impl = "sdpa"
+
+            t_total_start = time.perf_counter()
+            # t_pre: placeholder para etapas leves de pré-processamento (flatten já foi aplicado)
+            t_pre_start = time.perf_counter()
+            t_pre_end = time.perf_counter()
+            t_pre_ms = (t_pre_end - t_pre_start) * 1000.0
+
+            # Inferência (t_infer) sob no_grad
+            with torch.no_grad():
+                t_infer_start = time.perf_counter()
+                result = self.pipe(
+                    audio_source,
+                    chunk_length_s=self.chunk_length_sec,
+                    batch_size=dynamic_batch_size,
+                    return_timestamps=False,
+                    generate_kwargs=generate_kwargs
+                )
+                t_infer_end = time.perf_counter()
+            t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
+
+            # Expor último batch dinâmico para UI/tooltip
+            try:
+                self.last_dynamic_batch_size = int(dynamic_batch_size)
+            except Exception:
+                self.last_dynamic_batch_size = None
+
+            # t_post: montagem/validação do texto
+            t_post_start = time.perf_counter()
+            # o processamento de result segue abaixo (text_result, etc.)
 
             if result and "text" in result:
                 text_result = result["text"].strip()
@@ -408,7 +548,62 @@ class TranscriptionHandler:
                 text_result = "[Transcription failed: Bad format]"
                 logging.error(f"Formato de resultado inesperado: {result}")
 
+            # concluir t_post e t_total
+            t_post_end = time.perf_counter()
+            t_post_ms = (t_post_end - t_post_start) * 1000.0
+            t_total_ms = (t_post_end - t_total_start) * 1000.0
+
+            # Logs [METRIC]
+            try:
+                logging.info(f"[METRIC] stage=t_pre value_ms={t_pre_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
+                logging.info(f"[METRIC] stage=t_infer value_ms={t_infer_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
+                logging.info(f"[METRIC] stage=t_post value_ms={t_post_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
+                logging.info(f"[METRIC] stage=segment_total value_ms={t_total_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
+            except Exception:
+                pass
+
+            # Fim do bloco de processamento principal do segmento
+
         except Exception as e:
+            # Tratamento de OOM e fallback automático (reduz batch, depois chunk) – não recria a pipeline
+            try:
+                err_txt = str(e).lower()
+                is_oom = any(tok in err_txt for tok in ["out of memory", "cuda oom", "cublas", "cudnn", "hip out of memory", "alloc"])
+                if is_oom:
+                    try:
+                        old_bs = int(dynamic_batch_size)
+                    except Exception:
+                        old_bs = None
+                    did_change = False
+                    if old_bs and old_bs > 1:
+                        new_bs = max(1, old_bs // 2)
+                        try:
+                            self.last_dynamic_batch_size = new_bs
+                        except Exception:
+                            pass
+                        did_change = True
+                        logging.warning(f"OOM detectado. Reduzindo batch_size de {old_bs} para {new_bs} para próximas submissões.")
+                        try:
+                            logging.info(f"[METRIC] stage=oom_recovery action=reduce_batch from={old_bs} to={new_bs}")
+                        except Exception:
+                            pass
+                    if not did_change:
+                        # Reduz chunk_length_sec moderadamente
+                        try:
+                            old_chunk = float(self.chunk_length_sec)
+                        except Exception:
+                            old_chunk = 30.0
+                        new_chunk = max(10.0, old_chunk * 0.66)
+                        if new_chunk < old_chunk:
+                            self.chunk_length_sec = new_chunk
+                            logging.warning(f"OOM persistente. Reduzindo chunk_length_sec de {old_chunk:.1f}s para {new_chunk:.1f}s para próximas submissões.")
+                            try:
+                                logging.info(f"[METRIC] stage=oom_recovery action=reduce_chunk from={old_chunk:.1f} to={new_chunk:.1f}")
+                            except Exception:
+                                pass
+                # Continua fluxo normal de erro
+            except Exception as _oom_adj_e:
+                logging.debug(f"Falha ao ajustar parâmetros após OOM: {_oom_adj_e}")
             logging.error(f"Erro durante a transcrição de segmento: {e}", exc_info=True)
             text_result = f"[Transcription Error: {e}]"
 
@@ -442,6 +637,24 @@ class TranscriptionHandler:
 
             if self.on_segment_transcribed_callback:
                 self.on_segment_transcribed_callback(text_result)
+
+            # empty_cache opcional após segmentos longos (heurística simples) quando em GPU
+            try:
+                import torch
+                from .config_manager import CLEAR_GPU_CACHE_CONFIG_KEY
+                enable_clear = bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY))
+                is_gpu = torch.cuda.is_available() and getattr(self, "gpu_index", -1) >= 0
+                long_audio = float(getattr(self, "chunk_length_sec", 30.0)) >= 45.0
+                if enable_clear and is_gpu and long_audio:
+                    t_ec_start = time.perf_counter()
+                    before_b = torch.cuda.memory_allocated() if hasattr(torch.cuda, "memory_allocated") else 0
+                    torch.cuda.empty_cache()
+                    after_b = torch.cuda.memory_allocated() if hasattr(torch.cuda, "memory_allocated") else 0
+                    t_ec_ms = (time.perf_counter() - t_ec_start) * 1000.0
+                    freed_mb = max(0.0, (before_b - after_b) / (1024 ** 2))
+                    logging.info(f"[METRIC] stage=empty_cache value_ms={t_ec_ms:.2f} freed_estimate_mb={freed_mb:.1f}")
+            except Exception as _ec_e:
+                logging.debug(f"Falha ao executar empty_cache opcional: {_ec_e}")
 
             if agent_mode:
                 try:
@@ -489,6 +702,34 @@ class TranscriptionHandler:
                 logging.debug(
                     "Cache da GPU preservado para transcrições consecutivas."
                 )
+
+    def _effective_chunk_length(self) -> float:
+        """
+        Heurística simples para chunk_length_sec quando em modo 'auto'.
+        Baseada na VRAM livre estimada da GPU alvo.
+        """
+        try:
+            if not torch.cuda.is_available() or self.gpu_index < 0:
+                return float(self.chunk_length_sec)  # manter o manual atual em CPU
+            free_bytes, total_bytes = torch.cuda.mem_get_info(torch.device(f"cuda:{self.gpu_index}"))
+            free_gb = free_bytes / (1024 ** 3)
+            # Heurística: mais VRAM livre -> chunks maiores
+            if free_gb >= 12:
+                return 60.0
+            elif free_gb >= 8:
+                return 45.0
+            elif free_gb >= 6:
+                return 30.0
+            elif free_gb >= 4:
+                return 20.0
+            else:
+                return 15.0
+        except Exception:
+            # fallback seguro
+            try:
+                return float(self.chunk_length_sec)
+            except Exception:
+                return 30.0
 
     def shutdown(self) -> None:
         """Encerra o executor de transcrição."""

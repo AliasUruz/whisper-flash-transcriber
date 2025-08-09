@@ -210,6 +210,12 @@ class AppCore:
 
         if self.display_transcripts_in_terminal:
             print("\n=== COMPLETE TRANSCRIPTION ===\n" + final_text + "\n==============================\n")
+        # Métricas de correção e paste
+        try:
+            # t_corr: medido indiretamente aqui usando logs de início/fim se disponíveis; como fallback, apenas marca etapa
+            logging.info("[METRIC] stage=correction_done value_ms=0")
+        except Exception:
+            pass
 
         if pyperclip:
             try:
@@ -218,10 +224,16 @@ class AppCore:
             except Exception as e:
                 logging.error(f"Erro ao copiar para o clipboard: {e}")
         
+        t_clip_copy_start = time.perf_counter()
         if self.auto_paste:
             self._do_paste()
         else:
             self._log_status("Transcription complete. Auto-paste disabled.")
+        t_clip_copy_end = time.perf_counter()
+        try:
+            logging.info(f"[METRIC] stage=clipboard_paste_block value_ms={(t_clip_copy_end - t_clip_copy_start) * 1000:.2f}")
+        except Exception:
+            pass
         
         self._set_state(STATE_IDLE)
         if self.ui_manager:
@@ -591,6 +603,10 @@ class AppCore:
                 "new_record_storage_mode": "record_storage_mode",
                 "new_record_storage_limit": "record_storage_limit",
                 "new_launch_at_startup": "launch_at_startup",
+                # Novas chaves para opções de chunk e recurso experimental
+                "new_chunk_length_mode": "chunk_length_mode",
+                "new_chunk_length_sec": "chunk_length_sec",
+                "new_enable_torch_compile": "enable_torch_compile",
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
