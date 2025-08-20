@@ -29,7 +29,7 @@ CHATGPT_DEFAULT_SELECTORS = {
     "attach_button": 'button[data-testid="composer-plus-btn"]',
     "send_button": 'button[data-testid="send-button"]',
 }
-"""Seletores CSS que identificam elementos principais da interface web do ChatGPT."""
+"""Lista de seletores CSS para os principais elementos da interface web do ChatGPT."""
 
 DEFAULT_CONFIG = {
     "record_key": "F3",
@@ -51,6 +51,7 @@ DEFAULT_CONFIG = {
     "gemini_agent_model": "gemini-2.5-flash-lite",
     "ai_provider": "gemini",
     "openrouter_prompt": "",
+    "chatgpt_url": "https://chatgpt.com/",
     "chatgpt_selectors": CHATGPT_DEFAULT_SELECTORS,
     "prompt_agentico": (
         "You are an AI assistant that executes text commands. "
@@ -161,6 +162,7 @@ HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
 CHATGPT_URL_CONFIG_KEY = "chatgpt_url"
 CHATGPT_SELECTORS_CONFIG_KEY = "chatgpt_selectors"
+CHATGPT_HEADLESS_CONFIG_KEY = "chatgpt_headless"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -597,7 +599,7 @@ class ConfigManager:
 
         Chaves separadas por pontos indicam níveis dentro de dicionários,
         possibilitando obter dinamicamente seletores como
-        ``chatgpt_selectors.prompt_textarea``.
+        ``chatgpt_selectors.prompt``.
         """
         if isinstance(key, str) and "." in key:
             current = self.config
