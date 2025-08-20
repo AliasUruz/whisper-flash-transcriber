@@ -58,10 +58,26 @@ class ChatGPTAutomator:
 
             initial_response_count = self.page.locator(response_selector).count()
 
-            with self.page.expect_file_chooser() as fc_info:
-                self.page.click(attach_button_selector)
-            file_chooser = fc_info.value
-            file_chooser.set_files(audio_file_path)
+            # Abre o menu de anexos e garante o envio do arquivo sem depender de diálogos.
+            self.page.click(attach_button_selector)
+
+            upload_option_selector = selectors.get(
+                "upload_menu_item", "button[role='menuitem']:has-text('Upload files')"
+            )
+            file_input_selector = selectors.get("file_input", "input[type='file']")
+
+            try:
+                # Tenta encontrar o input de arquivo diretamente.
+                self.page.wait_for_selector(file_input_selector, timeout=2000)
+            except Exception:
+                # Se não estiver disponível, clica explicitamente na opção de upload.
+                try:
+                    self.page.click(upload_option_selector)
+                except Exception:
+                    logging.debug("Opção 'Upload files' não encontrada no menu.")
+                self.page.wait_for_selector(file_input_selector, timeout=10000)
+
+            self.page.set_input_files(file_input_selector, audio_file_path)
 
             self.page.wait_for_selector(f"{send_button_selector}:not([disabled])", timeout=20000)
             self.page.click(send_button_selector)
