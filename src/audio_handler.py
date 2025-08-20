@@ -1,5 +1,6 @@
 import logging
 import threading
+import queue
 import os
 import time
 import numpy as np
@@ -65,6 +66,11 @@ class AudioHandler:
         self._sample_count = 0
         self._memory_samples = 0
 
+        # Fila e thread dedicadas ao processamento do áudio
+        self.audio_queue = queue.Queue()
+        self._processing_thread = threading.Thread(target=self._process_audio_queue, daemon=True)
+        self._processing_thread.start()
+
         self.update_config()  # Carrega a configuração inicial
 
     # ------------------------------------------------------------------
@@ -73,71 +79,76 @@ class AudioHandler:
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
             logging.warning(f"Audio callback status: {status}")
-        if not self.is_recording:
-            return
-        if not self.in_memory_mode and self._sf_writer is None:
-            return
+        if self.is_recording:
+            # A cópia evita referências a buffers reutilizados pelo SoundDevice
+            self.audio_queue.put(indata.copy())
 
-        write_data = None
-        if self.use_vad and self.vad_manager:
-            is_speech = self.vad_manager.is_speech(indata[:, 0])
-            if is_speech:
-                self._vad_silence_counter = 0.0
-                write_data = indata.copy()
-            else:
-                self._vad_silence_counter += len(indata) / AUDIO_SAMPLE_RATE
-                if self._vad_silence_counter <= self.vad_silence_duration:
-                    write_data = indata.copy()
-        else:
-            write_data = indata.copy()
+    def _process_audio_queue(self):
+        while True:
+            try:
+                indata = self.audio_queue.get()
+                if indata is None:  # Sinal de parada
+                    break
 
-        if write_data is not None:
-            with self.storage_lock:
-                if self.in_memory_mode:
-                    # Evitar cópia redundante: sd.InputStream reutiliza buffers,
-                    # mas armazenamos referência somente enquanto write_data está
-                    # vivo dentro do callback; para persistência entre callbacks,
-                    # uma cópia ainda é necessária. Se no futuro houver um
-                    # ring-buffer/concat direto, podemos remover esta cópia.
-                    self._audio_frames.append(write_data.copy())
-                    self._memory_samples += len(write_data)
+                if not self.in_memory_mode and self._sf_writer is None:
+                    continue
 
-                    # Verifica se é necessário mover para o disco
-                    max_samples = self._memory_limit_samples
-                    if self.record_storage_mode == 'auto' and self._memory_samples > max_samples:
-                        logging.info(
-                            f"Duração da gravação excedeu {self.current_max_memory_seconds}s. Migrando da RAM para o disco."
-                        )
-                        try:
-                            total_mb = get_total_memory_mb()
-                            avail_mb = get_available_memory_mb()
-                            percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
-                            logging.info(f"[METRIC] stage=ram_to_disk_migration reason=time_exceeded percent_free={percent_free:.1f}")
-                        except Exception:
-                            pass
-                        self._migrate_to_file()
-                    elif self.record_storage_mode == 'auto':
-                        total_mb = get_total_memory_mb()
-                        avail_mb = get_available_memory_mb()
-                        try:
-                            thr_percent = max(1, min(50, int(self.config_manager.get("auto_ram_threshold_percent"))))
-                        except Exception:
-                            thr_percent = 10
-                        percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
-                        if total_mb and percent_free < thr_percent:
-                            logging.info(
-                                f"RAM livre abaixo de {thr_percent}% do total ({percent_free:.1f}%). Migrando da RAM para o disco."
-                            )
-                            try:
-                                logging.info(f"[METRIC] stage=ram_to_disk_migration reason=low_free_ram percent_free={percent_free:.1f} threshold={thr_percent}")
-                            except Exception:
-                                pass
-                            self._migrate_to_file()
+                write_data = None
+                if self.use_vad and self.vad_manager:
+                    is_speech = self.vad_manager.is_speech(indata[:, 0])
+                    if is_speech:
+                        self._vad_silence_counter = 0.0
+                        write_data = indata
+                    else:
+                        self._vad_silence_counter += len(indata) / AUDIO_SAMPLE_RATE
+                        if self._vad_silence_counter <= self.vad_silence_duration:
+                            write_data = indata
                 else:
-                    if self._sf_writer:
-                        self._sf_writer.write(write_data)
+                    write_data = indata
 
-                self._sample_count += len(write_data)
+                if write_data is not None:
+                    with self.storage_lock:
+                        if self.in_memory_mode:
+                            self._audio_frames.append(write_data.copy())
+                            self._memory_samples += len(write_data)
+
+                            max_samples = self._memory_limit_samples
+                            if self.record_storage_mode == 'auto' and self._memory_samples > max_samples:
+                                logging.info(
+                                    f"Duração da gravação excedeu {self.current_max_memory_seconds}s. Migrando da RAM para o disco."
+                                )
+                                try:
+                                    total_mb = get_total_memory_mb()
+                                    avail_mb = get_available_memory_mb()
+                                    percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
+                                    logging.info(f"[METRIC] stage=ram_to_disk_migration reason=time_exceeded percent_free={percent_free:.1f}")
+                                except Exception:
+                                    pass
+                                self._migrate_to_file()
+                            elif self.record_storage_mode == 'auto':
+                                total_mb = get_total_memory_mb()
+                                avail_mb = get_available_memory_mb()
+                                try:
+                                    thr_percent = max(1, min(50, int(self.config_manager.get("auto_ram_threshold_percent"))))
+                                except Exception:
+                                    thr_percent = 10
+                                percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
+                                if total_mb and percent_free < thr_percent:
+                                    logging.info(
+                                        f"RAM livre abaixo de {thr_percent}% do total ({percent_free:.1f}%). Migrando da RAM para o disco."
+                                    )
+                                    try:
+                                        logging.info(f"[METRIC] stage=ram_to_disk_migration reason=low_free_ram percent_free={percent_free:.1f} threshold={thr_percent}")
+                                    except Exception:
+                                        pass
+                                    self._migrate_to_file()
+                        else:
+                            if self._sf_writer:
+                                self._sf_writer.write(write_data)
+
+                        self._sample_count += len(write_data)
+            except Exception as e:
+                logging.error(f"Erro no processamento da fila de áudio: {e}")
 
     def _record_audio_task(self):
         self.audio_stream = None
@@ -225,6 +236,11 @@ class AudioHandler:
         if self.is_recording:
             logging.warning("Grava\u00e7\u00e3o j\u00e1 est\u00e1 ativa.")
             return False
+        if not self._processing_thread or not self._processing_thread.is_alive():
+            self.audio_queue = queue.Queue()
+            self._processing_thread = threading.Thread(target=self._process_audio_queue, daemon=True)
+            self._processing_thread.start()
+
 
         if self._record_thread and self._record_thread.is_alive():
             logging.debug("Aguardando t\u00e9rmino da thread de grava\u00e7\u00e3o anterior.")
@@ -298,6 +314,15 @@ class AudioHandler:
         self.is_recording = False
         stream_was_started = self.stream_started
         self._stop_event.set()
+
+        # Encerra a thread consumidora
+        try:
+            self.audio_queue.put(None)
+        except Exception:
+            pass
+        if self._processing_thread:
+            self._processing_thread.join()
+            self._processing_thread = None
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
@@ -533,3 +558,13 @@ class AudioHandler:
             self._sf_writer = None
 
         self._cleanup_temp_file()
+
+        # Finaliza a thread de processamento, caso ainda esteja ativa
+        if self.audio_queue:
+            try:
+                self.audio_queue.put(None)
+            except Exception:
+                pass
+        if self._processing_thread:
+            self._processing_thread.join(timeout=2)
+            self._processing_thread = None
