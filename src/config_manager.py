@@ -1,3 +1,14 @@
+"""Gerenciador de configurações do aplicativo.
+
+Este módulo centraliza valores padrão e leitura de arquivos de configuração.
+
+Chaves relevantes do ``DEFAULT_CONFIG``:
+
+- ``chatgpt_headless`` – define se o navegador do ChatGPT roda *headless*.
+- ``chatgpt_url`` – URL base usada pelo automatizador.
+- ``chatgpt_selectors`` – dicionário de seletores CSS para a interface web.
+"""
+
 import os
 import json
 import logging
@@ -24,12 +35,13 @@ CONFIG_FILE = "config.json"
 SECRETS_FILE = "secrets.json" # Nova constante para o arquivo de segredos
 
 CHATGPT_DEFAULT_SELECTORS = {
-    "prompt_textarea": "#prompt-textarea",
-    "response_container": "div[data-message-author-role='assistant']",
-    "attach_button": 'button[data-testid="composer-plus-btn"]',
-    "send_button": 'button[data-testid="send-button"]',
+    "prompt_textarea": "textarea[placeholder='Send a message']",
+    "textarea": "textarea",
+    "file_input": "input[type='file']",
+    "send_button": "button[type='submit']",
+    "response_block": "div[data-testid='response']",
 }
-"""Lista de seletores CSS para os principais elementos da interface web do ChatGPT."""
+"""Seletores CSS padrão para interação com a interface web do ChatGPT."""
 
 DEFAULT_CONFIG = {
     "record_key": "F3",
@@ -51,8 +63,6 @@ DEFAULT_CONFIG = {
     "gemini_agent_model": "gemini-2.5-flash-lite",
     "ai_provider": "gemini",
     "openrouter_prompt": "",
-    "chatgpt_url": "https://chatgpt.com/",
-    "chatgpt_selectors": CHATGPT_DEFAULT_SELECTORS,
     "prompt_agentico": (
         "You are an AI assistant that executes text commands. "
         "The user will provide an instruction followed by the text to be processed. "
@@ -103,7 +113,9 @@ DEFAULT_CONFIG = {
     "launch_at_startup": False,
     "clear_gpu_cache": True,
     # Configurações específicas para automação do ChatGPT
-    "chatgpt_url": "https://chatgpt.com/",
+    "chatgpt_headless": False,
+    "chatgpt_url": "https://chat.openai.com/",
+    "chatgpt_selectors": CHATGPT_DEFAULT_SELECTORS,
     "chatgpt_retry_attempts": 3,
     "chatgpt_retry_interval": 1.0,
 }
@@ -783,3 +795,11 @@ class ConfigManager:
             self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = self.default_config[
                 MIN_RECORDING_DURATION_CONFIG_KEY
             ]
+
+    def get_selector(self, *keys):
+        """Retorna o primeiro seletor CSS disponível dentre as ``keys`` fornecidas."""
+        sel_cfg = self.config.get(CHATGPT_SELECTORS_CONFIG_KEY, {})
+        for k in keys:
+            if k in sel_cfg and sel_cfg[k]:
+                return sel_cfg[k]
+        return None
