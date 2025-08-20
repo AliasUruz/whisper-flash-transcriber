@@ -80,17 +80,8 @@ class AppCore:
 
         self.ui_manager = None # Será setado externamente pelo main.py
         self.chatgpt_automator = None
-        if self.config_manager.get("text_correction_service") == "chatgpt_web":
-            user_data_path = Path("user_data/playwright")
-            self.chatgpt_automator = ChatGPTAutomator(
-                self.config_manager,
-                user_data_dir=str(user_data_path),
-            )
-            threading.Thread(
-                target=self.chatgpt_automator.start,
-                daemon=True,
-                name="ChatGPTAutomatorThread",
-            ).start()
+        # A inicialização do ChatGPTAutomator será realizada dinamicamente
+        # sempre que o serviço de correção de texto for alterado.
 
         # --- Estado da Aplicação ---
         self.current_state = STATE_LOADING_MODEL
@@ -650,6 +641,23 @@ class AppCore:
         if config_changed:
             self.config_manager.save_config()
             self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
+
+            # Lógica para iniciar/parar o automator dinamicamente
+            service = self.config_manager.get("text_correction_service")
+            if service == "chatgpt_web" and self.chatgpt_automator is None:
+                logging.info("Iniciando o ChatGPT Automator devido à mudança de configuração.")
+                user_data_path = Path("user_data/playwright")
+                self.chatgpt_automator = ChatGPTAutomator(user_data_path, self.config_manager)
+                threading.Thread(
+                    target=self.chatgpt_automator.start,
+                    daemon=True,
+                    name="ChatGPTAutomatorThread",
+                ).start()
+            elif service != "chatgpt_web" and self.chatgpt_automator is not None:
+                logging.info("Encerrando o ChatGPT Automator devido à mudança de configuração.")
+                self.chatgpt_automator.close()
+                self.chatgpt_automator = None
+
             self.audio_handler.config_manager = self.config_manager # Atualizar referência
             self.transcription_handler.config_manager = self.config_manager # Atualizar referência
             if any(
