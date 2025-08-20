@@ -1,7 +1,13 @@
 import logging
 from pathlib import Path
-from playwright.sync_api import sync_playwright, Page, BrowserContext, Playwright
 from typing import Optional
+
+from playwright.sync_api import sync_playwright, Page, BrowserContext, Playwright
+
+from .config_manager import (
+    CHATGPT_URL_CONFIG_KEY,
+    CHATGPT_SELECTORS_CONFIG_KEY,
+)
 
 class ChatGPTAutomator:
     """
@@ -10,18 +16,38 @@ class ChatGPTAutomator:
     def __init__(self, user_data_dir: Path, config_manager):
         self.user_data_dir = user_data_dir
         self.config_manager = config_manager
-        self.playwright: Optional[Playwright] = None
-        self.browser: Optional[BrowserContext] = None
-        self.page: Optional[Page] = None
+        self.playwright: Optional["Playwright"] = None
+        self.browser: Optional["BrowserContext"] = None
+        self.page: Optional["Page"] = None
+
+    def _lista_seletores(self, chave: str, padrao: str) -> list:
+        """Recupera lista de seletores a partir da configuração."""
+        seletores = self.config_manager.get(CHATGPT_SELECTORS_CONFIG_KEY, {})
+        valor = seletores.get(chave, padrao)
+        return valor if isinstance(valor, list) else [valor]
+
+    def _esperar_seletor(self, seletores: list, timeout: int = 30000) -> str:
+        """Retorna o primeiro seletor disponível, testando em cascata."""
+        ultimo_erro = None
+        for seletor in seletores:
+            try:
+                self.page.wait_for_selector(seletor, timeout=timeout)
+                return seletor
+            except Exception as e:
+                ultimo_erro = e
+        raise ultimo_erro or ValueError("Nenhum seletor válido encontrado.")
 
     def start(self):
         """Inicia o Playwright e abre o navegador com um contexto persistente."""
         try:
+            from playwright.sync_api import sync_playwright
+
             self.user_data_dir.mkdir(parents=True, exist_ok=True)
+            headless = self.config_manager.get("chatgpt_headless", False)
             self.playwright = sync_playwright().start()
             self.browser = self.playwright.chromium.launch_persistent_context(
                 self.user_data_dir,
-                headless=False,
+                headless=headless,
                 slow_mo=50
             )
             self.page = self.browser.pages[0] if self.browser.pages else self.browser.new_page()
@@ -36,11 +62,12 @@ class ChatGPTAutomator:
             raise ConnectionError("A página do navegador não está disponível.")
 
         try:
-            if "chatgpt.com" not in self.page.url:
-                self.page.goto("https://chatgpt.com/", timeout=60000)
+            chatgpt_url = self.config_manager.get(CHATGPT_URL_CONFIG_KEY, "https://chatgpt.com/")
+            if chatgpt_url not in self.page.url:
+                self.page.goto(chatgpt_url, timeout=60000)
 
-            prompt_selector = self.config_manager.get("chatgpt_selectors", {}).get("prompt_textarea", "#prompt-textarea")
-            self.page.wait_for_selector(prompt_selector, timeout=30000)
+            seletor_prompt = self._esperar_seletor(self._lista_seletores("prompt", "#prompt-textarea"))
+            self.page.wait_for_selector(seletor_prompt, timeout=30000)
             logging.info("Página do ChatGPT carregada.")
         except Exception as e:
             logging.error(f"Não foi possível carregar a página do ChatGPT. O usuário pode precisar fazer login. Erro: {e}")
@@ -72,7 +99,7 @@ class ChatGPTAutomator:
             # Aguarda o último bloco do assistente aparecer e finalizar
             self._wait_for_assistant_finalization(response_selector, appear_timeout, finalize_timeout)
 
-            transcribed_text = self.page.locator(f"{response_selector} .markdown").last.inner_text()
+            transcribed_text = self.page.locator(f"{seletor_resposta} .markdown").last.inner_text()
             logging.info("Transcrição via ChatGPT (Web) capturada com sucesso.")
             return transcribed_text
         except Exception as e:
