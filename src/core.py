@@ -25,8 +25,6 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
-    TEXT_CORRECTION_SERVICE_CONFIG_KEY,
-    SERVICE_CHATGPT_WEB,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
@@ -80,21 +78,19 @@ class AppCore:
         )
         self.transcription_handler.core_instance_ref = self
 
+        self.ui_manager = None # Será setado externamente pelo main.py
         self.chatgpt_automator = None
-        text_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
-        if text_service == SERVICE_CHATGPT_WEB:
-            user_data_dir = str(Path.home() / ".chatgpt_automator")
+        if self.config_manager.get("text_correction_service") == "chatgpt_web":
+            user_data_path = Path("user_data/playwright")
             self.chatgpt_automator = ChatGPTAutomator(
                 self.config_manager,
-                user_data_dir=user_data_dir,
+                user_data_dir=str(user_data_path),
             )
             threading.Thread(
                 target=self.chatgpt_automator.start,
                 daemon=True,
-                name="ChatGPTAutomator",
+                name="ChatGPTAutomatorThread",
             ).start()
-
-        self.ui_manager = None # Será setado externamente pelo main.py
 
         # --- Estado da Aplicação ---
         self.current_state = STATE_LOADING_MODEL
@@ -840,6 +836,12 @@ class AppCore:
         except Exception as e:
             logging.error(f"Error during hotkey cleanup in shutdown: {e}")
 
+        if self.chatgpt_automator:
+            try:
+                self.chatgpt_automator.close()
+            except Exception as e:
+                logging.error(f"Erro ao encerrar ChatGPT Automator: {e}")
+
         if self.transcription_handler:
             try:
                 self.transcription_handler.shutdown()
@@ -875,12 +877,6 @@ class AppCore:
                 self.audio_handler.cleanup()
             except Exception as e:
                 logging.error(f"Erro no cleanup do AudioHandler: {e}")
-
-        if getattr(self, "chatgpt_automator", None):
-            try:
-                self.chatgpt_automator.close()
-            except Exception as e:
-                logging.error(f"Erro ao encerrar ChatGPTAutomator: {e}")
 
         if self.reregister_timer_thread and self.reregister_timer_thread.is_alive():
             self.reregister_timer_thread.join(timeout=1.5)
