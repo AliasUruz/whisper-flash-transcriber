@@ -1,7 +1,8 @@
 import logging
+import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright, Page, BrowserContext, Playwright
-from typing import Optional
+from typing import Optional, Callable
 
 class ChatGPTAutomator:
     """
@@ -13,6 +14,21 @@ class ChatGPTAutomator:
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+
+    def _executar_com_retry(self, acao: Callable, tentativas: int, intervalo: float):
+        """Executa ``acao`` com retries e backoff exponencial."""
+        for tentativa in range(1, tentativas + 1):
+            try:
+                return acao()
+            except Exception as e:
+                if tentativa == tentativas:
+                    raise
+                espera = intervalo * (2 ** (tentativa - 1))
+                logging.warning(
+                    f"Ação sensível falhou (tentativa {tentativa}/{tentativas}): {e}. "
+                    f"Nova tentativa em {espera}s."
+                )
+                time.sleep(espera)
 
     def start(self):
         """Inicia o Playwright e abre o navegador com um contexto persistente."""
@@ -56,17 +72,37 @@ class ChatGPTAutomator:
             attach_button_selector = selectors.get("attach_button", 'button[data-testid="composer-plus-btn"]')
             send_button_selector = selectors.get("send_button", 'button[data-testid="send-button"]')
 
+            tentativas = self.config_manager.get("chatgpt_retry_attempts", 3)
+            intervalo = self.config_manager.get("chatgpt_retry_interval", 1.0)
+
             initial_response_count = self.page.locator(response_selector).count()
 
-            with self.page.expect_file_chooser() as fc_info:
+            def abrir_menu():
                 self.page.click(attach_button_selector)
-            file_chooser = fc_info.value
-            file_chooser.set_files(audio_file_path)
 
-            self.page.wait_for_selector(f"{send_button_selector}:not([disabled])", timeout=20000)
-            self.page.click(send_button_selector)
+            def selecionar_upload():
+                with self.page.expect_file_chooser() as fc_info:
+                    self.page.get_by_text("Upload files").click()
+                fc_info.value.set_files(audio_file_path)
 
-            self.page.locator(response_selector).nth(initial_response_count).wait_for(timeout=60000)
+            def esperar_botao_enviar():
+                self.page.wait_for_selector(
+                    f"{send_button_selector}:not([disabled])", timeout=20000
+                )
+
+            def clicar_enviar():
+                self.page.click(send_button_selector)
+
+            def aguardar_resposta():
+                self.page.locator(response_selector).nth(initial_response_count).wait_for(
+                    timeout=60000
+                )
+
+            self._executar_com_retry(abrir_menu, tentativas, intervalo)
+            self._executar_com_retry(selecionar_upload, tentativas, intervalo)
+            self._executar_com_retry(esperar_botao_enviar, tentativas, intervalo)
+            self._executar_com_retry(clicar_enviar, tentativas, intervalo)
+            self._executar_com_retry(aguardar_resposta, tentativas, intervalo)
 
             transcribed_text = self.page.locator(f"{response_selector} .markdown").last.inner_text()
             logging.info("Transcrição via ChatGPT (Web) capturada com sucesso.")
