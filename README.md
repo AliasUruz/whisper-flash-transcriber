@@ -26,7 +26,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   Supports both **Toggle Mode** (press once to start, press again to stop) and **Hold Mode** (record only while the key is held down).
     *   Dedicated "Agent Mode" hotkey for special commands.
 *   **AI-Powered Text Correction (Optional):**
-    *   Integrates with **Google Gemini** or **OpenRouter** to automatically correct punctuation, grammar, and remove speech disfluencies.
+    *   Integrates with **Google Gemini**, **OpenRouter**, or **ChatGPT Web** to automatically correct punctuation, grammar, and remove speech disfluencies. ChatGPT Web also accepts in-memory audio by internally writing a temporary WAV file.
     *   Prompts are fully customizable through the settings GUI.
 *   **Agent Mode:** Use a separate hotkey to process your speech with a different, customizable prompt (e.g., "translate this to English", "summarize this text").
 *   **User-Friendly Interface:**
