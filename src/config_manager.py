@@ -23,10 +23,12 @@ CONFIG_FILE = "config.json"
 SECRETS_FILE = "secrets.json" # Nova constante para o arquivo de segredos
 
 CHATGPT_DEFAULT_SELECTORS = {
-    "prompt_textarea": "",
-    "response_container": "",
-    "attach_button": "",
-    "send_button": "",
+    "prompt_textarea": "#prompt-textarea",
+    "response_container": "div[data-message-author-role='assistant']",
+    "attach_button": "button[data-testid='composer-plus-btn']",
+    "upload_menu_item": "button[role='menuitem']:has-text('Upload files')",
+    "file_input": "input[type=file]",
+    "send_button": "button[data-testid='send-button']",
 }
 """Seletores CSS que identificam elementos principais da interface web do ChatGPT."""
 
@@ -91,13 +93,7 @@ Transcribed speech: {text}""",
     "launch_at_startup": False,
     "clear_gpu_cache": True,
     # Configurações específicas para automação do ChatGPT
-    "chatgpt_url": "https://chatgpt.com/",
-    "chatgpt_headless": False,
-    "chatgpt_selectors": {
-        "textarea": "textarea[data-id='root']",
-        "file_input": "input[type=file]",
-        "response_block": "div[data-message-author-role='assistant']"
-    }
+    "chatgpt_url": "https://chatgpt.com/"
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
