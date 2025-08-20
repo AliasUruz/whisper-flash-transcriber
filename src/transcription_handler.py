@@ -8,6 +8,7 @@ from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
 import tempfile
 import os
 import soundfile as sf
+from pathlib import Path
 
 try:
     from transformers import BitsAndBytesConfig
@@ -75,6 +76,9 @@ class TranscriptionHandler:
         # Evento para sinalizar cancelamento de transcrição em andamento
         self.transcription_cancel_event = threading.Event()
 
+        # Lista de arquivos temporários gerados para limpeza posterior
+        self._created_tmp_files: list[Path] = []
+
         # Configurações de modelo e API (carregadas do config_manager)
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY) # Novo
@@ -118,6 +122,32 @@ class TranscriptionHandler:
 
         # O cliente Gemini agora é injetado, então sua inicialização foi removida daqui.
         # A inicialização do OpenRouter é mantida.
+
+    def _ensure_wav_path(self, audio_source: str | Path | np.ndarray, samplerate: int = AUDIO_SAMPLE_RATE) -> Path:
+        """Garante que o *audio_source* seja um caminho WAV válido.
+
+        Se um ``np.ndarray`` for fornecido, cria um arquivo WAV temporário e registra
+        para remoção posterior.
+        """
+        if isinstance(audio_source, (str, Path)):
+            return Path(audio_source)
+        if isinstance(audio_source, np.ndarray):
+            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            tmp_path = Path(tmp_file.name)
+            tmp_file.close()
+            sf.write(tmp_path, audio_source, samplerate)
+            self._created_tmp_files.append(tmp_path)
+            return tmp_path
+        raise TypeError("Tipo de audio_source não suportado")
+
+    def _cleanup_tmp_files(self) -> None:
+        """Remove todos os arquivos temporários registrados."""
+        for path in self._created_tmp_files:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        self._created_tmp_files.clear()
 
     def update_config(self):
         """Atualiza as configurações do handler a partir do config_manager."""
@@ -460,13 +490,14 @@ class TranscriptionHandler:
             # Removido: self.on_model_error_callback(error_message) # Notifica o erro imediatamente
             return None, None # Retorna None em caso de falha
 
-    def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
-        """Envia o áudio (arquivo ou array) para transcrição assíncrona."""
+    def transcribe_audio_segment(self, audio_source: str | np.ndarray | Path, agent_mode: bool = False):
+        """Envia o áudio (arquivo ou buffer) para transcrição assíncrona."""
+        audio_path = self._ensure_wav_path(audio_source)
         self.transcription_future = self.transcription_executor.submit(
-            self._transcription_task, audio_source, agent_mode
+            self._transcription_task, audio_path, agent_mode
         )
 
-    def _transcription_task(self, audio_source: str | np.ndarray, agent_mode: bool) -> None:
+    def _transcription_task(self, audio_source: Path, agent_mode: bool) -> None:
         self.transcription_cancel_event.clear()
 
         if self.transcription_cancel_event.is_set():
@@ -478,47 +509,15 @@ class TranscriptionHandler:
         try:
             if self.config_manager.get("text_correction_service") == "chatgpt_web":
                 if self.core_instance_ref and getattr(self.core_instance_ref, "chatgpt_automator", None):
-                    if isinstance(audio_source, str):
-                        logging.info("Delegando transcrição para o ChatGPT (Web)...")
-                        text_result = self.core_instance_ref.chatgpt_automator.transcribe_audio(audio_source)
-                        callback = self.on_transcription_result_callback
-                        if text_result:
-                            callback(text_result, text_result)
-                        else:
-                            callback("[Falha na automação do ChatGPT]", "[Falha na automação do ChatGPT]")
-                        used_chatgpt_web = True
-                        return
-                    elif isinstance(audio_source, np.ndarray):
-                        logging.info("Convertendo array de áudio em WAV temporário para o ChatGPT (Web)...")
-                        temp_path = None
-                        try:
-                            if audio_source.ndim > 1:
-                                audio_array = audio_source.flatten()
-                            else:
-                                audio_array = audio_source
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-                                temp_path = tmp_file.name
-                                sf.write(temp_path, audio_array.astype(np.float32), AUDIO_SAMPLE_RATE)
-                            logging.info("Delegando transcrição para o ChatGPT (Web)...")
-                            text_result = self.core_instance_ref.chatgpt_automator.transcribe_audio(temp_path)
-                            callback = self.on_transcription_result_callback
-                            if text_result:
-                                callback(text_result, text_result)
-                            else:
-                                callback("[Falha na automação do ChatGPT]", "[Falha na automação do ChatGPT]")
-                        finally:
-                            if temp_path and os.path.exists(temp_path):
-                                try:
-                                    os.remove(temp_path)
-                                except Exception:
-                                    pass
-                        used_chatgpt_web = True
-                        return
+                    logging.info("Delegando transcrição para o ChatGPT (Web)...")
+                    text_result = self.core_instance_ref.chatgpt_automator.transcribe_audio(str(audio_source))
+                    callback = self.on_transcription_result_callback
+                    if text_result:
+                        callback(text_result, text_result)
                     else:
-                        logging.error("O modo ChatGPT (Web) requer gravação em 'disk', 'auto' ou array em memória.")
-                        self.on_transcription_result_callback("[Modo de gravação incompatível]", "[Modo de gravação incompatível]")
-                        used_chatgpt_web = True
-                        return
+                        callback("[Falha na automação do ChatGPT]", "[Falha na automação do ChatGPT]")
+                    used_chatgpt_web = True
+                    return
                 else:
                     logging.error("Serviço ChatGPT (Web) selecionado, mas o automator não está inicializado.")
                     self.on_transcription_result_callback("[Automator não inicializado]", "[Automator não inicializado]")
@@ -538,8 +537,6 @@ class TranscriptionHandler:
                 "task": "transcribe",
                 "language": None
             }
-            if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
-                audio_source = audio_source.flatten()
 
             # Revalidar chunk em runtime se modo auto (segurança extra)
             if self.chunk_length_mode == "auto":
@@ -571,7 +568,7 @@ class TranscriptionHandler:
             with torch.no_grad():
                 t_infer_start = time.perf_counter()
                 result = self.pipe(
-                    audio_source,
+                    str(audio_source),
                     chunk_length_s=self.chunk_length_sec,
                     batch_size=dynamic_batch_size,
                     return_timestamps=False,
@@ -660,6 +657,7 @@ class TranscriptionHandler:
             text_result = f"[Transcription Error: {e}]"
 
         finally:
+            self._cleanup_tmp_files()
             if used_chatgpt_web:
                 return
 
@@ -695,7 +693,6 @@ class TranscriptionHandler:
 
             # empty_cache opcional após segmentos longos (heurística simples) quando em GPU
             try:
-                import torch
                 from .config_manager import CLEAR_GPU_CACHE_CONFIG_KEY
                 enable_clear = bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY))
                 is_gpu = torch.cuda.is_available() and getattr(self, "gpu_index", -1) >= 0
