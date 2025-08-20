@@ -647,7 +647,10 @@ class AppCore:
             if service == "chatgpt_web" and self.chatgpt_automator is None:
                 logging.info("Iniciando o ChatGPT Automator devido à mudança de configuração.")
                 user_data_path = Path("user_data/playwright")
-                self.chatgpt_automator = ChatGPTAutomator(user_data_path, self.config_manager)
+                self.chatgpt_automator = ChatGPTAutomator(
+                    user_data_dir=user_data_path,
+                    config_manager=self.config_manager,
+                )
                 threading.Thread(
                     target=self.chatgpt_automator.start,
                     daemon=True,
