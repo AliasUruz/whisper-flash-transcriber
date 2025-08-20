@@ -30,6 +30,41 @@ class ChatGPTAutomator:
             logging.error(f"Falha ao iniciar o Playwright: {e}")
             raise
 
+    def _handle_login_or_consent(self) -> bool:
+        """Detecta telas de **login** ou de *consentimento* e redireciona o usuário."""
+        if not self.page:
+            return False
+
+        labels_tipicas = [
+            "Log in",
+            "Sign in",
+            "Entrar",
+            "Aceitar",
+            "Concordo",
+        ]
+
+        if self.page.locator("form").count() > 0:
+            login_url = "https://chatgpt.com/auth/login"
+            logging.warning(
+                "Tela de **login/consentimento** detectada. Abrindo a URL de autenticação: %s",
+                login_url,
+            )
+            self.page.goto(login_url, timeout=60000)
+            return True
+
+        for rotulo in labels_tipicas:
+            if self.page.get_by_role("button", name=rotulo, exact=False).count() > 0:
+                login_url = "https://chatgpt.com/auth/login"
+                logging.warning(
+                    "Elemento '%s' detectado. Redirecionando para a página de **login**: %s",
+                    rotulo,
+                    login_url,
+                )
+                self.page.goto(login_url, timeout=60000)
+                return True
+
+        return False
+
     def ensure_chatgpt_open(self):
         """Garante que a página do ChatGPT esteja aberta e pronta."""
         if not self.page or self.page.is_closed():
@@ -38,6 +73,9 @@ class ChatGPTAutomator:
         try:
             if "chatgpt.com" not in self.page.url:
                 self.page.goto("https://chatgpt.com/", timeout=60000)
+
+            if self._handle_login_or_consent():
+                raise ConnectionError("Autenticação necessária para prosseguir.")
 
             prompt_selector = self.config_manager.get("chatgpt_selectors", {}).get("prompt_textarea", "#prompt-textarea")
             self.page.wait_for_selector(prompt_selector, timeout=30000)
