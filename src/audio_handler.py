@@ -7,7 +7,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 import tempfile
-from pathlib import Path
+import shutil
 from .utils.memory import get_available_memory_mb, get_total_memory_mb
 
 from .vad_manager import VADManager
@@ -216,9 +216,9 @@ class AudioHandler:
 
     def _migrate_to_file(self):
         """Move os quadros gravados em memória para um arquivo temporário."""
-        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        self.temp_file_path = raw_tmp.name
-        raw_tmp.close()
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+        os.close(tmp_fd)
+        self.temp_file_path = tmp_path
         self._sf_writer = sf.SoundFile(
             self.temp_file_path,
             mode="w",
@@ -286,9 +286,9 @@ class AudioHandler:
                 self._sf_writer = None
                 self._audio_frames = []
             else:
-                raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-                self.temp_file_path = raw_tmp.name
-                raw_tmp.close()
+                tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+                os.close(tmp_fd)
+                self.temp_file_path = tmp_path
                 self._sf_writer = sf.SoundFile(
                     self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
                 )
@@ -370,22 +370,21 @@ class AudioHandler:
         else:
             # Se não estiver no modo de memória, o arquivo temporário já contém todos os dados
             if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
+                final_path = None
                 try:
                     ts = int(time.time())
-                    filename = f"temp_recording_{ts}.wav"
-                    Path(self.temp_file_path).rename(filename)
-                    # Usa sf.write para forçar a criação de um arquivo vazio
-                    sf.write(filename, np.empty((0, 1), dtype=np.float32), AUDIO_SAMPLE_RATE)
-                    self.temp_file_path = filename
-                    logging.info(f"Gravação temporária salva em {filename}")
+                    final_path = f"temp_recording_{ts}.wav"
+                    shutil.move(self.temp_file_path, final_path)
+                    self.temp_file_path = final_path
+                    logging.info(f"Gravação temporária salva em {final_path}")
                 except Exception as e:
                     logging.error(f"Falha ao salvar gravação temporária: {e}")
                     try:
-                        if os.path.exists(filename):
-                            os.remove(filename)
+                        if final_path and os.path.exists(final_path):
+                            os.remove(final_path)
                     except Exception:
                         pass
-                    self.temp_file_path = filename
+                    self.temp_file_path = None
             self.on_audio_segment_ready_callback(self.temp_file_path)
 
         if not self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
@@ -537,34 +536,51 @@ class AudioHandler:
             self.temp_file_path = None
 
     def cleanup(self):
-        if self.is_recording:
-            self.stop_recording()
-        elif self.audio_stream is not None:
-            try:
+        """Finaliza recursos de forma idempotente."""
+        try:
+            if self.is_recording:
+                self.stop_recording()
+        except Exception:
+            logging.exception("Falha ao encerrar grava\u00e7\u00e3o durante cleanup")
+
+        try:
+            if self.audio_stream is not None:
                 if self.audio_stream.active:
                     self.audio_stream.stop()
                 self.audio_stream.close()
                 logging.info("Audio stream stopped during cleanup.")
-            except Exception as e:
-                logging.error(f"Erro ao fechar stream de \u00e1udio: {e}")
-            finally:
-                self.audio_stream = None
+        except Exception as e:
+            logging.error(f"Erro ao fechar stream de \u00e1udio: {e}")
+        finally:
+            self.audio_stream = None
 
         if self._sf_writer is not None:
             try:
                 self._sf_writer.close()
             except Exception:
-                pass
-            self._sf_writer = None
+                logging.exception("Falha ao fechar arquivo tempor\u00e1rio")
+            finally:
+                self._sf_writer = None
 
-        self._cleanup_temp_file()
+        try:
+            self._cleanup_temp_file()
+        except Exception:
+            logging.exception("Erro ao remover arquivo tempor\u00e1rio no cleanup")
 
-        # Finaliza a thread de processamento, caso ainda esteja ativa
         if self.audio_queue:
             try:
                 self.audio_queue.put(None)
             except Exception:
                 pass
+
         if self._processing_thread:
-            self._processing_thread.join(timeout=2)
-            self._processing_thread = None
+            try:
+                self._processing_thread.join(timeout=2)
+            except Exception:
+                logging.exception("Erro ao aguardar thread de processamento")
+            finally:
+                self._processing_thread = None
+
+    def shutdown(self):
+        """Interface de desligamento para compatibilidade externa."""
+        self.cleanup()
