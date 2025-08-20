@@ -5,6 +5,9 @@ import time
 import numpy as np
 import torch
 from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
+import tempfile
+import os
+import soundfile as sf
 
 try:
     from transformers import BitsAndBytesConfig
@@ -13,6 +16,7 @@ except Exception:
         def __init__(self, *_, **__):
             pass
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
+from .audio_handler import AUDIO_SAMPLE_RATE
 
 # Importar constantes de configuração
 from utils import select_batch_size
@@ -484,8 +488,34 @@ class TranscriptionHandler:
                             callback("[Falha na automação do ChatGPT]", "[Falha na automação do ChatGPT]")
                         used_chatgpt_web = True
                         return
+                    elif isinstance(audio_source, np.ndarray):
+                        logging.info("Convertendo array de áudio em WAV temporário para o ChatGPT (Web)...")
+                        temp_path = None
+                        try:
+                            if audio_source.ndim > 1:
+                                audio_array = audio_source.flatten()
+                            else:
+                                audio_array = audio_source
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                                temp_path = tmp_file.name
+                                sf.write(temp_path, audio_array.astype(np.float32), AUDIO_SAMPLE_RATE)
+                            logging.info("Delegando transcrição para o ChatGPT (Web)...")
+                            text_result = self.core_instance_ref.chatgpt_automator.transcribe_audio(temp_path)
+                            callback = self.on_transcription_result_callback
+                            if text_result:
+                                callback(text_result, text_result)
+                            else:
+                                callback("[Falha na automação do ChatGPT]", "[Falha na automação do ChatGPT]")
+                        finally:
+                            if temp_path and os.path.exists(temp_path):
+                                try:
+                                    os.remove(temp_path)
+                                except Exception:
+                                    pass
+                        used_chatgpt_web = True
+                        return
                     else:
-                        logging.error("O modo ChatGPT (Web) requer gravação em 'disk' ou 'auto'.")
+                        logging.error("O modo ChatGPT (Web) requer gravação em 'disk', 'auto' ou array em memória.")
                         self.on_transcription_result_callback("[Modo de gravação incompatível]", "[Modo de gravação incompatível]")
                         used_chatgpt_web = True
                         return
