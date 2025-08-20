@@ -64,8 +64,6 @@ class TranscriptionHandler:
         self.pipe = None
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
-        # Evento de sinalização para parar tarefas de transcrição
-        self._stop_signal_event = threading.Event()
         # Executor dedicado para a tarefa de transcrição em background
         self.transcription_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1
@@ -460,13 +458,13 @@ class TranscriptionHandler:
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""
-        self._stop_signal_event.clear()
-
         self.transcription_future = self.transcription_executor.submit(
             self._transcription_task, audio_source, agent_mode
         )
 
     def _transcription_task(self, audio_source: str | np.ndarray, agent_mode: bool) -> None:
+        self.transcription_cancel_event.clear()
+
         if self.transcription_cancel_event.is_set():
             logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
             return
