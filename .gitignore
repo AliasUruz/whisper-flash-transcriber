@@ -1,5 +1,5 @@
 # Arquivos de configuração com informações sensíveis
-config.json
+# config.json
 
 # Arquivos de log
 *.log

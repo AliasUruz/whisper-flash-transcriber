@@ -23,12 +23,24 @@ CONFIG_FILE = "config.json"
 SECRETS_FILE = "secrets.json" # Nova constante para o arquivo de segredos
 
 CHATGPT_DEFAULT_SELECTORS = {
-    "prompt_textarea": "",
-    "response_container": "",
-    "attach_button": "",
-    "send_button": "",
+    "prompt": [
+        "textarea[data-id='root']",
+        "#prompt-textarea"
+    ],
+    "plus": [
+        "button[data-testid='composer-plus-btn']"
+    ],
+    "upload": [
+        "input[type='file']"
+    ],
+    "send": [
+        "button[data-testid='send-button']"
+    ],
+    "resp": [
+        "div[data-message-author-role='assistant']"
+    ],
 }
-"""Seletores CSS que identificam elementos principais da interface web do ChatGPT."""
+"""Lista de seletores CSS para os principais elementos da interface web do ChatGPT."""
 
 DEFAULT_CONFIG = {
     "record_key": "F3",
@@ -50,6 +62,7 @@ DEFAULT_CONFIG = {
     "gemini_agent_model": "gemini-2.5-flash-lite",
     "ai_provider": "gemini",
     "openrouter_prompt": "",
+    "chatgpt_url": "https://chatgpt.com/",
     "chatgpt_selectors": CHATGPT_DEFAULT_SELECTORS,
     "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
     "gemini_prompt": """You are a meticulous speech-to-text correction AI. Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below while preserving the original content and structure as closely as possible.
@@ -90,13 +103,6 @@ Transcribed speech: {text}""",
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
-    # Configurações específicas para automação do ChatGPT
-    "chatgpt_url": "https://chatgpt.com/",
-    "chatgpt_selectors": {
-        "textarea": "textarea[data-id='root']",
-        "file_input": "input[type=file]",
-        "response_block": "div[data-message-author-role='assistant']"
-    }
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -153,6 +159,7 @@ HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
 CHATGPT_URL_CONFIG_KEY = "chatgpt_url"
 CHATGPT_SELECTORS_CONFIG_KEY = "chatgpt_selectors"
+CHATGPT_HEADLESS_CONFIG_KEY = "chatgpt_headless"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -535,7 +542,7 @@ class ConfigManager:
 
         Chaves separadas por pontos indicam níveis dentro de dicionários,
         possibilitando obter dinamicamente seletores como
-        ``chatgpt_selectors.prompt_textarea``.
+        ``chatgpt_selectors.prompt``.
         """
         if isinstance(key, str) and "." in key:
             current = self.config
