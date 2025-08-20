@@ -159,6 +159,7 @@ HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
 CHATGPT_URL_CONFIG_KEY = "chatgpt_url"
 CHATGPT_SELECTORS_CONFIG_KEY = "chatgpt_selectors"
+CHATGPT_HEADLESS_CONFIG_KEY = "chatgpt_headless"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):

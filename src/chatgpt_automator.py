@@ -16,9 +16,9 @@ class ChatGPTAutomator:
     def __init__(self, user_data_dir: Path, config_manager):
         self.user_data_dir = user_data_dir
         self.config_manager = config_manager
-        self.playwright: Optional[Playwright] = None
-        self.browser: Optional[BrowserContext] = None
-        self.page: Optional[Page] = None
+        self.playwright: Optional["Playwright"] = None
+        self.browser: Optional["BrowserContext"] = None
+        self.page: Optional["Page"] = None
 
     def _lista_seletores(self, chave: str, padrao: str) -> list:
         """Recupera lista de seletores a partir da configuração."""
@@ -40,11 +40,14 @@ class ChatGPTAutomator:
     def start(self):
         """Inicia o Playwright e abre o navegador com um contexto persistente."""
         try:
+            from playwright.sync_api import sync_playwright
+
             self.user_data_dir.mkdir(parents=True, exist_ok=True)
+            headless = self.config_manager.get("chatgpt_headless", False)
             self.playwright = sync_playwright().start()
             self.browser = self.playwright.chromium.launch_persistent_context(
                 self.user_data_dir,
-                headless=False,
+                headless=headless,
                 slow_mo=50
             )
             self.page = self.browser.pages[0] if self.browser.pages else self.browser.new_page()
