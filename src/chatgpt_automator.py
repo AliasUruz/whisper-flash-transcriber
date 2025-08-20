@@ -56,17 +56,21 @@ class ChatGPTAutomator:
             attach_button_selector = selectors.get("attach_button", 'button[data-testid="composer-plus-btn"]')
             send_button_selector = selectors.get("send_button", 'button[data-testid="send-button"]')
 
-            initial_response_count = self.page.locator(response_selector).count()
-
             with self.page.expect_file_chooser() as fc_info:
                 self.page.click(attach_button_selector)
             file_chooser = fc_info.value
             file_chooser.set_files(audio_file_path)
 
-            self.page.wait_for_selector(f"{send_button_selector}:not([disabled])", timeout=20000)
+            # --- Timeouts segmentados ---
+            send_timeout = 20000  # aguardar botão de envio habilitar
+            appear_timeout = 60000  # aguardar bloco de resposta surgir
+            finalize_timeout = 60000  # aguardar conclusão da resposta
+
+            self.page.wait_for_selector(f"{send_button_selector}:not([disabled])", timeout=send_timeout)
             self.page.click(send_button_selector)
 
-            self.page.locator(response_selector).nth(initial_response_count).wait_for(timeout=60000)
+            # Aguarda o último bloco do assistente aparecer e finalizar
+            self._wait_for_assistant_finalization(response_selector, appear_timeout, finalize_timeout)
 
             transcribed_text = self.page.locator(f"{response_selector} .markdown").last.inner_text()
             logging.info("Transcrição via ChatGPT (Web) capturada com sucesso.")
@@ -74,6 +78,27 @@ class ChatGPTAutomator:
         except Exception as e:
             logging.error(f"Falha no processo de transcrição automatizada: {e}")
             return None
+
+    def _wait_for_assistant_finalization(self, response_selector: str, appear_timeout: int, finalize_timeout: int):
+        """Aguarda o surgimento do último bloco de resposta do assistente e sua finalização."""
+        # Localizador para o bloco mais recente do assistente
+        response_block = self.page.locator(response_selector).last
+        # Aguarda o bloco aparecer na página
+        response_block.wait_for(timeout=appear_timeout)
+        # Aguarda desaparecer qualquer indicador de carregamento ou rascunho
+        self.page.wait_for_function(
+            """
+            (el) => {
+                const html = el.innerHTML.toLowerCase();
+                const hasDraft = html.includes('draft');
+                const hasSpinner = el.querySelector('.spinner, [data-testid="loading-spinner"], svg[aria-label="Stop generating"]');
+                return !(hasDraft || hasSpinner);
+            }
+            """,
+            arg=response_block,
+            timeout=finalize_timeout,
+        )
+        return response_block
 
     def close(self):
         """Encerra a sessão de automação de forma segura."""
