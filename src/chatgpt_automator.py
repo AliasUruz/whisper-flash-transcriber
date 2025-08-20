@@ -1,7 +1,13 @@
 import logging
 from pathlib import Path
-from playwright.sync_api import sync_playwright, Page, BrowserContext, Playwright
 from typing import Optional
+
+from playwright.sync_api import sync_playwright, Page, BrowserContext, Playwright
+
+from .config_manager import (
+    CHATGPT_URL_CONFIG_KEY,
+    CHATGPT_SELECTORS_CONFIG_KEY,
+)
 
 class ChatGPTAutomator:
     """
@@ -13,6 +19,23 @@ class ChatGPTAutomator:
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+
+    def _lista_seletores(self, chave: str, padrao: str) -> list:
+        """Recupera lista de seletores a partir da configuração."""
+        seletores = self.config_manager.get(CHATGPT_SELECTORS_CONFIG_KEY, {})
+        valor = seletores.get(chave, padrao)
+        return valor if isinstance(valor, list) else [valor]
+
+    def _esperar_seletor(self, seletores: list, timeout: int = 30000) -> str:
+        """Retorna o primeiro seletor disponível, testando em cascata."""
+        ultimo_erro = None
+        for seletor in seletores:
+            try:
+                self.page.wait_for_selector(seletor, timeout=timeout)
+                return seletor
+            except Exception as e:
+                ultimo_erro = e
+        raise ultimo_erro or ValueError("Nenhum seletor válido encontrado.")
 
     def start(self):
         """Inicia o Playwright e abre o navegador com um contexto persistente."""
@@ -36,11 +59,12 @@ class ChatGPTAutomator:
             raise ConnectionError("A página do navegador não está disponível.")
 
         try:
-            if "chatgpt.com" not in self.page.url:
-                self.page.goto("https://chatgpt.com/", timeout=60000)
+            chatgpt_url = self.config_manager.get(CHATGPT_URL_CONFIG_KEY, "https://chatgpt.com/")
+            if chatgpt_url not in self.page.url:
+                self.page.goto(chatgpt_url, timeout=60000)
 
-            prompt_selector = self.config_manager.get("chatgpt_selectors", {}).get("prompt_textarea", "#prompt-textarea")
-            self.page.wait_for_selector(prompt_selector, timeout=30000)
+            seletor_prompt = self._esperar_seletor(self._lista_seletores("prompt", "#prompt-textarea"))
+            self.page.wait_for_selector(seletor_prompt, timeout=30000)
             logging.info("Página do ChatGPT carregada.")
         except Exception as e:
             logging.error(f"Não foi possível carregar a página do ChatGPT. O usuário pode precisar fazer login. Erro: {e}")
@@ -51,24 +75,29 @@ class ChatGPTAutomator:
         try:
             self.ensure_chatgpt_open()
 
-            selectors = self.config_manager.get("chatgpt_selectors", {})
-            response_selector = selectors.get("response_container", "div[data-message-author-role='assistant']")
-            attach_button_selector = selectors.get("attach_button", 'button[data-testid="composer-plus-btn"]')
-            send_button_selector = selectors.get("send_button", 'button[data-testid="send-button"]')
+            seletor_resposta = self._esperar_seletor(
+                self._lista_seletores("resp", "div[data-message-author-role='assistant']")
+            )
+            seletor_plus = self._esperar_seletor(
+                self._lista_seletores("plus", 'button[data-testid="composer-plus-btn"]')
+            )
+            seletor_upload = self._esperar_seletor(
+                self._lista_seletores("upload", 'input[type="file"]')
+            )
+            seletor_send = self._esperar_seletor(
+                self._lista_seletores("send", 'button[data-testid="send-button"]')
+            )
+            contagem_inicial = self.page.locator(seletor_resposta).count()
 
-            initial_response_count = self.page.locator(response_selector).count()
+            self.page.click(seletor_plus)
+            self.page.set_input_files(seletor_upload, audio_file_path)
 
-            with self.page.expect_file_chooser() as fc_info:
-                self.page.click(attach_button_selector)
-            file_chooser = fc_info.value
-            file_chooser.set_files(audio_file_path)
+            self.page.wait_for_selector(f"{seletor_send}:not([disabled])", timeout=20000)
+            self.page.click(seletor_send)
 
-            self.page.wait_for_selector(f"{send_button_selector}:not([disabled])", timeout=20000)
-            self.page.click(send_button_selector)
+            self.page.locator(seletor_resposta).nth(contagem_inicial).wait_for(timeout=60000)
 
-            self.page.locator(response_selector).nth(initial_response_count).wait_for(timeout=60000)
-
-            transcribed_text = self.page.locator(f"{response_selector} .markdown").last.inner_text()
+            transcribed_text = self.page.locator(f"{seletor_resposta} .markdown").last.inner_text()
             logging.info("Transcrição via ChatGPT (Web) capturada com sucesso.")
             return transcribed_text
         except Exception as e:
