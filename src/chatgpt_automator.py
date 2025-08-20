@@ -39,6 +39,7 @@ class ChatGPTAutomator:
 
     def start(self):
         """Inicia o Playwright e abre o navegador com um contexto persistente."""
+        sucesso = False
         try:
             from playwright.sync_api import sync_playwright
 
@@ -47,14 +48,21 @@ class ChatGPTAutomator:
             self.playwright = sync_playwright().start()
             self.browser = self.playwright.chromium.launch_persistent_context(
                 self.user_data_dir,
-                headless=headless,
-                slow_mo=50
+                headless=False,
+                slow_mo=50,
             )
             self.page = self.browser.pages[0] if self.browser.pages else self.browser.new_page()
             logging.info("Navegador com contexto persistente iniciado.")
+            sucesso = True
         except Exception as e:
             logging.error(f"Falha ao iniciar o Playwright: {e}")
             raise
+        finally:
+            if not sucesso:
+                try:
+                    self.close()
+                except Exception as err:
+                    logging.error(f"Falha ao encerrar sessão após erro de inicialização: {err}")
 
     def ensure_chatgpt_open(self):
         """Garante que a página do ChatGPT esteja aberta e pronta."""
@@ -75,6 +83,7 @@ class ChatGPTAutomator:
 
     def transcribe_audio(self, audio_file_path: str) -> Optional[str]:
         """Faz o upload do arquivo de áudio e captura a transcrição resultante."""
+        sucesso = False
         try:
             self.ensure_chatgpt_open()
 
@@ -101,10 +110,17 @@ class ChatGPTAutomator:
 
             transcribed_text = self.page.locator(f"{seletor_resposta} .markdown").last.inner_text()
             logging.info("Transcrição via ChatGPT (Web) capturada com sucesso.")
+            sucesso = True
             return transcribed_text
         except Exception as e:
             logging.error(f"Falha no processo de transcrição automatizada: {e}")
             return None
+        finally:
+            if not sucesso:
+                try:
+                    self.close()
+                except Exception as err:
+                    logging.error(f"Erro ao encerrar sessão após falha de transcrição: {err}")
 
     def _wait_for_assistant_finalization(self, response_selector: str, appear_timeout: int, finalize_timeout: int):
         """Aguarda o surgimento do último bloco de resposta do assistente e sua finalização."""
@@ -133,4 +149,7 @@ class ChatGPTAutomator:
             self.browser.close()
         if self.playwright:
             self.playwright.stop()
+        self.browser = None
+        self.playwright = None
+        self.page = None
         logging.info("Sessão de automação web encerrada.")
