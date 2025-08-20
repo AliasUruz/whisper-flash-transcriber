@@ -53,6 +53,7 @@ class TranscriptionHandler:
         self.on_agent_result_callback = on_agent_result_callback # Para resultado do agente
         self.on_segment_transcribed_callback = on_segment_transcribed_callback # Para segmentos em tempo real
         self.is_state_transcribing_fn = is_state_transcribing_fn
+        self.core_instance_ref = None  # Referência ao AppCore
         # "state_check_callback" é preservado apenas para retrocompatibilidade;
         # utilize "is_state_transcribing_fn" nas novas implementações.
         self.state_check_callback = is_state_transcribing_fn
@@ -95,7 +96,6 @@ class TranscriptionHandler:
         self.openrouter_client = None
         # self.gemini_client é injetado
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
-        self.core_instance_ref = None
 
         self._init_api_clients()
         # Removido: self._initialize_model_and_processor() # Chamada para inicializar o modelo e o processador
@@ -471,34 +471,32 @@ class TranscriptionHandler:
             logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
             return
 
-        if self.text_correction_service == SERVICE_CHATGPT_WEB:
-            if not isinstance(audio_source, str):
-                error_message = (
-                    "'audio_source' deve ser um caminho de arquivo quando se usa chatgpt_web."
-                )
-                logging.error(error_message)
-                self.on_model_error_callback(error_message)
-                return
-            if not self.core_instance_ref or not getattr(self.core_instance_ref, "chatgpt_automator", None):
-                error_message = (
-                    "ChatGPT Automator não inicializado. Não é possível delegar a transcrição."
-                )
-                logging.error(error_message)
-                self.on_model_error_callback(error_message)
-                return
-            try:
-                logging.info("Delegando transcrição para o ChatGPT Web...")
-                text_result = self.core_instance_ref.chatgpt_automator.transcribe_audio(audio_source)
-                logging.info("Transcrição via ChatGPT Web concluída.")
-                self.on_transcription_result_callback(text_result, text_result)
-            except Exception as e:
-                error_message = f"Falha na transcrição via ChatGPT Web: {e}"
-                logging.error(error_message, exc_info=True)
-                self.on_model_error_callback(error_message)
-            return
-
+        used_chatgpt_web = False
         text_result = None
         try:
+            if self.config_manager.get("text_correction_service") == "chatgpt_web":
+                if self.core_instance_ref and getattr(self.core_instance_ref, "chatgpt_automator", None):
+                    if isinstance(audio_source, str):
+                        logging.info("Delegando transcrição para o ChatGPT (Web)...")
+                        text_result = self.core_instance_ref.chatgpt_automator.transcribe_audio(audio_source)
+                        callback = self.on_transcription_result_callback
+                        if text_result:
+                            callback(text_result, text_result)
+                        else:
+                            callback("[Falha na automação do ChatGPT]", "[Falha na automação do ChatGPT]")
+                        used_chatgpt_web = True
+                        return
+                    else:
+                        logging.error("O modo ChatGPT (Web) requer gravação em 'disk' ou 'auto'.")
+                        self.on_transcription_result_callback("[Modo de gravação incompatível]", "[Modo de gravação incompatível]")
+                        used_chatgpt_web = True
+                        return
+                else:
+                    logging.error("Serviço ChatGPT (Web) selecionado, mas o automator não está inicializado.")
+                    self.on_transcription_result_callback("[Automator não inicializado]", "[Automator não inicializado]")
+                    used_chatgpt_web = True
+                    return
+
             if self.pipe is None:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
@@ -634,6 +632,9 @@ class TranscriptionHandler:
             text_result = f"[Transcription Error: {e}]"
 
         finally:
+            if used_chatgpt_web:
+                return
+
             if self.transcription_cancel_event.is_set():
                 logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
                 self.transcription_cancel_event.clear()

@@ -78,7 +78,7 @@ class AppCore:
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
             is_state_transcribing_fn=self.is_state_transcribing,
         )
-        self.transcription_handler.core_instance_ref = self
+        self.transcription_handler.core_instance_ref = self  # Expõe referência do núcleo ao handler
 
         self.chatgpt_automator = None
         text_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
