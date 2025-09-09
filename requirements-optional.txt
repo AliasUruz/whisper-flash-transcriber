@@ -1,0 +1,3 @@
+# Optional dependencies for additional ASR backends
+faster-whisper>=1.0
+ctranslate2>=4.6
