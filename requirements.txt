@@ -1,5 +1,5 @@
 torch==2.7.1
-transformers==4.52.4
+transformers>=4.44,<5
 sounddevice==0.5.2
 numpy==2.3.0
 pyautogui==0.9.54
@@ -15,3 +15,8 @@ soundfile==0.13.1
 onnxruntime==1.22.0
 bitsandbytes
 playwright==1.44.0
+accelerate>=0.33
+datasets[audio]>=3.0
+huggingface_hub>=0.24
+faster-whisper>=1.0
+ctranslate2>=4.6
