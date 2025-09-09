@@ -1,0 +1,8 @@
+{
+    "asr_model_id": "openai/whisper-large-v3",
+    "asr_backend": "transformers",
+    "asr_compute_device": "auto",
+    "asr_dtype": "float16",
+    "asr_ct2_compute_type": "default",
+    "asr_cache_dir": ""
+}

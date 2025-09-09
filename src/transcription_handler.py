@@ -4,19 +4,15 @@ import concurrent.futures
 import time
 import numpy as np
 import torch
-from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
-import tempfile
-import os
-import soundfile as sf
 
-try:
-    from transformers import BitsAndBytesConfig
-except Exception:
-    class BitsAndBytesConfig:  # type: ignore[py-class-var]
-        def __init__(self, *_, **__):
-            pass
+try:  # pragma: no cover - biblioteca opcional
+    from whisper_flash import make_backend  # type: ignore
+except Exception:  # pragma: no cover
+    make_backend = None  # type: ignore
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
 from .audio_handler import AUDIO_SAMPLE_RATE
+from .model_manager import ensure_download
+from .config_manager import ASR_CACHE_DIR
 
 # Importar constantes de configuração
 from .utils import select_batch_size
@@ -42,6 +38,7 @@ from .config_manager import (
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
 )
+from .asr_backends import backend_registry, WhisperBackend
 
 class TranscriptionHandler:
     def __init__(
@@ -102,6 +99,7 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.asr_model = self.config_manager.get(ASR_MODEL_CONFIG_KEY)
 
         # Configurações de ASR
         self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
@@ -117,7 +115,6 @@ class TranscriptionHandler:
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
 
         self._init_api_clients()
-        # Removido: self._initialize_model_and_processor() # Chamada para inicializar o modelo e o processador
 
     def _init_api_clients(self):
         # Lógica de inicialização de OpenRouterAPI e GeminiAPI
@@ -135,6 +132,44 @@ class TranscriptionHandler:
 
         # O cliente Gemini agora é injetado, então sua inicialização foi removida daqui.
         # A inicialização do OpenRouter é mantida.
+
+    @property
+    def asr_backend(self):
+        return self._asr_backend_name
+
+    @asr_backend.setter
+    def asr_backend(self, value):
+        if value != self._asr_backend_name:
+            self._asr_backend_name = value
+            self.reload_asr()
+
+    @property
+    def asr_model_id(self):
+        return self._asr_model_id
+
+    @asr_model_id.setter
+    def asr_model_id(self, value):
+        if value != self._asr_model_id:
+            self._asr_model_id = value
+            self.reload_asr()
+
+    def unload(self):
+        """Descarta a pipeline atual."""
+        self.pipe = None
+
+    def reload_asr(self):
+        """Recarrega o backend de ASR e o modelo associado."""
+        try:
+            self._asr_backend.unload()
+        except Exception as e:
+            logging.warning(f"Falha ao descarregar backend ASR: {e}")
+
+        if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        backend_cls = backend_registry.get(self._asr_backend_name, WhisperBackend)
+        self._asr_backend = backend_cls(self)
+        self._asr_backend.load()
 
     def update_config(self):
         """Atualiza as configurações do handler a partir do config_manager."""
@@ -397,7 +432,7 @@ class TranscriptionHandler:
         )
 
     def start_model_loading(self):
-        threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
+        threading.Thread(target=self._load_model_task, daemon=True, name="ModelLoadThread").start()
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""
@@ -415,8 +450,6 @@ class TranscriptionHandler:
         self.transcription_cancel_event.set()
 
     def _load_model_task(self):
-        # Removido: model_loaded_successfully = False
-        # Removido: error_message = "Unknown error during model load."
         try:
             backend, model_id, compute_device, dtype = self._resolve_asr_settings()
             self.backend_resolved = backend
@@ -482,7 +515,7 @@ class TranscriptionHandler:
                     best_free = -1
                     for i in range(torch.cuda.device_count()):
                         try:
-                            free_b, total_b = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
+                            free_b, _ = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
                             if free_b > best_free:
                                 best_free = free_b
                                 best_idx = i
@@ -499,7 +532,9 @@ class TranscriptionHandler:
             except Exception as _gpu_sel_e:
                 logging.warning(f"Falha ao escolher GPU por memória livre: {_gpu_sel_e}")
 
-            logging.info(f"Carregando modelo {model_id}...")
+            if backend == "transformers":
+                logging.info(f"Carregando modelo Transformers {model_id}...")
+                processor = AutoProcessor.from_pretrained(model_path)
 
             quant_config = None
             if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0:
@@ -543,8 +578,7 @@ class TranscriptionHandler:
         except Exception as e:
             error_message = f"Falha ao carregar o modelo: {e}"
             logging.error(error_message, exc_info=True)
-            # Removido: self.on_model_error_callback(error_message) # Notifica o erro imediatamente
-            return None, None # Retorna None em caso de falha
+            return None, None
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""

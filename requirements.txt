@@ -1,5 +1,5 @@
 torch==2.7.1
-transformers==4.52.4
+transformers>=4.44,<5
 sounddevice==0.5.2
 numpy==2.3.0
 pyautogui==0.9.54

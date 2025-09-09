@@ -120,6 +120,9 @@ class AppCore:
         self.keyboard_library = self.config_manager.get("keyboard_library")
         self.min_record_duration = self.config_manager.get("min_record_duration")
         self.display_transcripts_in_terminal = self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY)
+        self.asr_backend = self.config_manager.get("asr_backend")
+        self.asr_model_id = self.config_manager.get("asr_model_id")
+        self.ct2_quantization = self.config_manager.get("ct2_quantization")
         # ... e outras configurações que AppCore precisa diretamente
 
     # --- Callbacks de Módulos ---
