@@ -6,19 +6,31 @@ from typing import Any
 class FasterWhisperBackend:
     """ASR backend powered by faster-whisper."""
 
-    def __init__(self, model_id: str = "whisper-large-v3", device: str = "auto") -> None:
-        self.model_id = model_id
-        self.device = device
+    def __init__(self) -> None:
+        self.model_id = ""
+        self.device = "auto"
         self.model = None
 
-    def load(self, ct2_compute_type: str = "default", cache_dir: str | None = None, **kwargs) -> None:
+    def load(
+        self,
+        *,
+        model_id: str,
+        device: str | None = None,
+        ct2_compute_type: str = "default",
+        cache_dir: str | None = None,
+        dtype: str | None = None,
+        **kwargs,
+    ) -> None:
         """Load the WhisperModel with the given compute type."""
         from faster_whisper import WhisperModel
 
+        self.model_id = model_id
+        self.device = device or "auto"
+
         device = self.device
-        if device == "auto":
+        if device in (None, "auto"):
             device = "cuda" if _has_cuda() else "cpu"
-        if ct2_compute_type == "default":
+        if ct2_compute_type in ("default", "auto"):
             ct2_compute_type = "int8_float16" if device == "cuda" else "int8"
 
         self.model = WhisperModel(

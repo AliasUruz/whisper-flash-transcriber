@@ -6,9 +6,9 @@ from typing import Any
 class TransformersBackend:
     """ASR backend based on Hugging Face Transformers."""
 
-    def __init__(self, model_id: str = "openai/whisper-large-v3", device: int | str | None = None) -> None:
-        self.model_id = model_id
-        self.device = device
+    def __init__(self) -> None:
+        self.model_id = ""
+        self.device: int | str | None = None
         self.processor = None
         self.model = None
         self.pipe = None
@@ -17,6 +17,7 @@ class TransformersBackend:
     def load(
         self,
         *,
+        model_id: str,
         device: int | str | None = None,
         dtype: str | None = "auto",
         cache_dir: str | None = None,
@@ -27,7 +28,12 @@ class TransformersBackend:
         from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
         import torch
 
-        device = device if device not in (None, "auto") else ("cuda:0" if torch.cuda.is_available() else -1)
+        self.model_id = model_id
+        self.device = device
+
+        device = device if device not in (None, "auto") else (
+            "cuda:0" if torch.cuda.is_available() else -1
+        )
         torch_dtype = (
             torch.float16
             if (device != -1 and (dtype in (None, "auto", "float16", "fp16")))
@@ -51,7 +57,9 @@ class TransformersBackend:
             device=(0 if device != -1 else -1),
         )
         try:
-            self.sample_rate = int(self.processor.feature_extractor.sampling_rate)  # type: ignore[attr-defined]
+            self.sample_rate = int(
+                self.processor.feature_extractor.sampling_rate
+            )  # type: ignore[attr-defined]
         except Exception:
             self.sample_rate = 16000
 

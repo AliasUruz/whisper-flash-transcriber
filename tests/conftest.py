@@ -12,8 +12,11 @@ torch_stub = types.SimpleNamespace(
     no_grad=lambda: types.SimpleNamespace(__enter__=lambda self: None, __exit__=lambda self, exc, val, tb: None),
 )
 sys.modules.setdefault("torch", torch_stub)
-sys.modules.setdefault("requests", types.ModuleType("requests"))
+requests_stub = types.ModuleType("requests")
+requests_stub.get = lambda *a, **k: None
+sys.modules.setdefault("requests", requests_stub)
 sys.modules.setdefault("psutil", types.ModuleType("psutil"))
+sys.modules.setdefault("onnxruntime", types.ModuleType("onnxruntime"))
 
 hub = types.ModuleType("huggingface_hub")
 
