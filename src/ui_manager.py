@@ -394,27 +394,7 @@ class UIManager:
                 asr_compute_device_var = ctk.StringVar(value=self.config_manager.get_asr_compute_device())
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
-                asr_ct2_cpu_threads_var = ctk.StringVar(value=str(self.config_manager.get_asr_ct2_cpu_threads()))
                 asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
-
-                def _current_model_options():
-                    curated = [m.get("model_id", "") for m in self.config_manager.get_asr_curated_catalog()]
-                    installed = self.config_manager.get_asr_installed_models()
-                    return sorted({m for m in curated + installed if m})
-
-                model_options = _current_model_options()
-                asr_model_select_var = ctk.StringVar(value=model_options[0] if model_options else "")
-
-                def refresh_catalog(menu):
-                    url = self.config_manager.get_asr_curated_catalog_url()
-                    if self.config_manager.update_asr_curated_catalog_from_url(url):
-                        new_vals = _current_model_options()
-                        menu.configure(values=new_vals)
-                        if new_vals:
-                            asr_model_select_var.set(new_vals[0])
-                        messagebox.showinfo("Catálogo", "Catálogo atualizado com sucesso.", parent=settings_win)
-                    else:
-                        messagebox.showerror("Catálogo", "Falha ao atualizar catálogo.", parent=settings_win)
 
                 def update_text_correction_fields():
                     enabled = text_correction_enabled_var.get()
@@ -518,6 +498,13 @@ class UIManager:
                         asr_ct2_cpu_threads_to_apply = ct2_threads_val
                     asr_cache_dir_to_apply = asr_cache_dir_var.get()
 
+                    asr_backend_to_apply = asr_backend_var.get()
+                    asr_model_id_to_apply = asr_model_id_var.get()
+                    asr_compute_device_to_apply = asr_compute_device_var.get()
+                    asr_dtype_to_apply = asr_dtype_var.get()
+                    asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
+                    asr_cache_dir_to_apply = asr_cache_dir_var.get()
+
                     # Logic for converting UI to GPU index
                     selected_device_str = gpu_selection_var.get()
                     gpu_index_to_apply = -1 # Default to "Auto-select"
@@ -582,7 +569,6 @@ class UIManager:
                         new_asr_compute_device=asr_compute_device_to_apply,
                         new_asr_dtype=asr_dtype_to_apply,
                         new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
-                        new_asr_ct2_cpu_threads=asr_ct2_cpu_threads_to_apply,
                         new_asr_cache_dir=asr_cache_dir_to_apply
                     )
                     self._close_settings_window() # Call class method
@@ -670,7 +656,6 @@ class UIManager:
                     asr_compute_device_var.set(DEFAULT_CONFIG["asr_compute_device"])
                     asr_dtype_var.set(DEFAULT_CONFIG["asr_dtype"])
                     asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
-                    asr_ct2_cpu_threads_var.set(str(DEFAULT_CONFIG["asr_ct2_cpu_threads"]))
                     asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
 
                     self.config_manager.save_config()
@@ -1149,12 +1134,8 @@ class UIManager:
                 asr_model_frame = ctk.CTkFrame(transcription_frame)
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="ASR Model ID:").pack(side="left", padx=(5, 10))
-                asr_model_menu = ctk.CTkOptionMenu(asr_model_frame, variable=asr_model_select_var, values=model_options, command=lambda choice: asr_model_id_var.set(choice))
-                asr_model_menu.pack(side="left", padx=5)
-                asr_model_entry = ctk.CTkEntry(asr_model_frame, textvariable=asr_model_id_var, width=180)
+                asr_model_entry = ctk.CTkEntry(asr_model_frame, textvariable=asr_model_id_var, width=240)
                 asr_model_entry.pack(side="left", padx=5)
-                update_catalog_btn = ctk.CTkButton(asr_model_frame, text="Atualizar Catálogo", command=lambda: refresh_catalog(asr_model_menu))
-                update_catalog_btn.pack(side="left", padx=5)
                 Tooltip(asr_model_entry, "Hugging Face model identifier.")
 
                 asr_device_frame = ctk.CTkFrame(transcription_frame)
@@ -1177,13 +1158,6 @@ class UIManager:
                 asr_ct2_menu = ctk.CTkOptionMenu(asr_ct2_frame, variable=asr_ct2_compute_type_var, values=["auto", "float16", "float32", "int8_float16", "int8_float32"])
                 asr_ct2_menu.pack(side="left", padx=5)
                 Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
-
-                asr_ct2_threads_frame = ctk.CTkFrame(transcription_frame)
-                asr_ct2_threads_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_ct2_threads_frame, text="CT2 Threads:").pack(side="left", padx=(5, 10))
-                asr_ct2_threads_entry = ctk.CTkEntry(asr_ct2_threads_frame, textvariable=asr_ct2_cpu_threads_var, width=80)
-                asr_ct2_threads_entry.pack(side="left", padx=5)
-                Tooltip(asr_ct2_threads_entry, "CPU threads for CTranslate2 backend.")
 
                 asr_cache_frame = ctk.CTkFrame(transcription_frame)
                 asr_cache_frame.pack(fill="x", pady=5)

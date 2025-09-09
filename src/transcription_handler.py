@@ -35,7 +35,6 @@ from .config_manager import (
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-    ASR_CT2_CPU_THREADS_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
 )
 from .asr_backends import backend_registry, WhisperBackend
@@ -108,6 +107,14 @@ class TranscriptionHandler:
         self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
         self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         self.asr_ct2_cpu_threads = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
+        self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+
+        # Configurações de ASR
+        self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
+        self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
+        self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
+        self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
+        self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
 
         self.openrouter_client = None
@@ -193,7 +200,6 @@ class TranscriptionHandler:
         self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
         self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
         self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
-        self.asr_ct2_cpu_threads = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
         self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
@@ -205,20 +211,7 @@ class TranscriptionHandler:
         dtype = (self.asr_dtype or "auto").lower()
 
         if backend == "auto":
-            try:
-                import importlib.util as _spec
-                has_ct2 = _spec.find_spec("faster_whisper") is not None
-            except Exception:
-                has_ct2 = False
-            backend = "ctranslate2" if has_ct2 else "transformers"
-        elif backend == "ctranslate2":
-            try:
-                import importlib.util as _spec
-                if _spec.find_spec("faster_whisper") is None:
-                    logging.warning("Backend 'ctranslate2' solicitado mas 'faster_whisper' não está instalado. Usando 'transformers'.")
-                    backend = "transformers"
-            except Exception:
-                backend = "transformers"
+            backend = "transformers"
 
         if compute_device == "auto":
             compute_device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -452,26 +445,7 @@ class TranscriptionHandler:
     def _load_model_task(self):
         try:
             backend, model_id, compute_device, dtype = self._resolve_asr_settings()
-            self.backend_resolved = backend
             os.environ.setdefault("TRANSFORMERS_CACHE", os.path.expanduser(self.asr_cache_dir))
-
-            if backend == "ctranslate2":
-                from faster_whisper import WhisperModel
-
-                compute_type = self.asr_ct2_compute_type
-                if compute_type == "auto":
-                    compute_type = "float16" if compute_device == "cuda" else "int8_float16"
-                threads = self.asr_ct2_cpu_threads
-                if isinstance(threads, str) and threads == "auto":
-                    threads = 0
-                model = WhisperModel(
-                    model_id,
-                    device=compute_device,
-                    compute_type=compute_type,
-                    cache_directory=os.path.expanduser(self.asr_cache_dir),
-                    cpu_threads=threads,
-                )
-                return model, None
 
             torch_dtype_local = torch.float16 if dtype == "float16" else torch.float32
 

@@ -103,8 +103,6 @@ DEFAULT_CONFIG = {
     "asr_cache_dir": os.path.expanduser("~/.cache/whisper_models"),
     "asr_installed_models": [],
     "asr_curated_catalog": [],  # carregado posteriormente
-    "asr_curated_catalog_url": "https://example.com/asr_curated_catalog.json",
-    "asr_ct2_cpu_threads": "auto",
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -166,8 +164,6 @@ ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
 ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
-ASR_CURATED_CATALOG_URL_CONFIG_KEY = "asr_curated_catalog_url"
-ASR_CT2_CPU_THREADS_CONFIG_KEY = "asr_ct2_cpu_threads"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -560,23 +556,6 @@ class ConfigManager:
         self.config[ASR_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(
             self.config.get(ASR_CACHE_DIR_CONFIG_KEY, self.default_config[ASR_CACHE_DIR_CONFIG_KEY])
         )
-        self.config[ASR_CURATED_CATALOG_URL_CONFIG_KEY] = str(
-            self.config.get(
-                ASR_CURATED_CATALOG_URL_CONFIG_KEY,
-                self.default_config[ASR_CURATED_CATALOG_URL_CONFIG_KEY],
-            )
-        )
-        threads_val = self.config.get(
-            ASR_CT2_CPU_THREADS_CONFIG_KEY,
-            self.default_config[ASR_CT2_CPU_THREADS_CONFIG_KEY],
-        )
-        if isinstance(threads_val, str) and threads_val.lower() == "auto":
-            self.config[ASR_CT2_CPU_THREADS_CONFIG_KEY] = "auto"
-        else:
-            try:
-                self.config[ASR_CT2_CPU_THREADS_CONFIG_KEY] = int(threads_val)
-            except (ValueError, TypeError):
-                self.config[ASR_CT2_CPU_THREADS_CONFIG_KEY] = self.default_config[ASR_CT2_CPU_THREADS_CONFIG_KEY]
         installed = self.config.get(
             ASR_INSTALLED_MODELS_CONFIG_KEY,
             self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY],
@@ -794,32 +773,6 @@ class ConfigManager:
             self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = self.default_config[
                 ASR_CURATED_CATALOG_CONFIG_KEY
             ]
-
-    def get_asr_curated_catalog_url(self):
-        return self.config.get(
-            ASR_CURATED_CATALOG_URL_CONFIG_KEY,
-            self.default_config[ASR_CURATED_CATALOG_URL_CONFIG_KEY],
-        )
-
-    def set_asr_curated_catalog_url(self, value: str):
-        self.config[ASR_CURATED_CATALOG_URL_CONFIG_KEY] = str(value)
-
-    def get_asr_ct2_cpu_threads(self):
-        return self.config.get(
-            ASR_CT2_CPU_THREADS_CONFIG_KEY,
-            self.default_config[ASR_CT2_CPU_THREADS_CONFIG_KEY],
-        )
-
-    def set_asr_ct2_cpu_threads(self, value):
-        if isinstance(value, str) and value.lower() == "auto":
-            self.config[ASR_CT2_CPU_THREADS_CONFIG_KEY] = "auto"
-        else:
-            try:
-                self.config[ASR_CT2_CPU_THREADS_CONFIG_KEY] = int(value)
-            except (ValueError, TypeError):
-                self.config[ASR_CT2_CPU_THREADS_CONFIG_KEY] = self.default_config[
-                    ASR_CT2_CPU_THREADS_CONFIG_KEY
-                ]
 
     def update_asr_curated_catalog_from_url(self, url: str, timeout: int = 10) -> bool:
         """Carrega um catálogo curado de modelos de ASR a partir de ``url``.
