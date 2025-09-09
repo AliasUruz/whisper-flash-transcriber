@@ -25,6 +25,21 @@ from .utils.tooltip import Tooltip
 # Para este plano, vamos movê-lo para cá.
 import torch # Necessário para get_available_devices_for_ui
 
+# Importar gerenciador de modelos de ASR
+try:
+    from . import model_manager
+except Exception:  # pragma: no cover - fallback caso o módulo não exista
+    class _DummyModelManager:
+        CURATED = {}
+
+        def asr_installed_models(self):
+            return {}
+
+        def ensure_download(self, *_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+
+    model_manager = _DummyModelManager()
+
 def get_available_devices_for_ui():
     """Returns a list of devices for the settings interface."""
     devices = ["Auto-select (Recommended)"]
@@ -756,6 +771,86 @@ class UIManager:
                 gemini_models_textbox.pack(fill="x", expand=True, pady=5)
                 gemini_models_textbox.insert("1.0", "\n".join(self.config_manager.get("gemini_model_options", [])))
                 Tooltip(gemini_models_textbox, "List of models to try, one per line.")
+
+                # --- ASR Settings ---
+                asr_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
+                asr_frame.pack(fill="x", padx=10, pady=5)
+                ctk.CTkLabel(asr_frame, text="ASR", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+
+                # Backend selection
+                asr_backend_frame = ctk.CTkFrame(asr_frame)
+                asr_backend_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_backend_frame, text="Backend:").pack(side="left", padx=(5, 10))
+                asr_backend_var = ctk.StringVar(value=self.config_manager.get("asr_backend", "Transformers"))
+                backend_menu = ctk.CTkOptionMenu(
+                    asr_backend_frame,
+                    variable=asr_backend_var,
+                    values=["Transformers", "Faster-Whisper"],
+                )
+                backend_menu.pack(side="left", padx=5)
+                Tooltip(backend_menu, "Mecanismo de reconhecimento de fala.")
+
+                # Model selection
+                asr_model_frame = ctk.CTkFrame(asr_frame)
+                asr_model_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_model_frame, text="Modelo:").pack(side="left", padx=(5, 10))
+
+                installed = getattr(model_manager, "asr_installed_models", {})
+                if callable(installed):
+                    installed = installed()
+                curated = getattr(model_manager, "CURATED", {})
+                combined_models = {**installed, **curated}
+                model_options = list(combined_models.keys())
+                asr_model_var = ctk.StringVar(
+                    value=self.config_manager.get(
+                        "asr_model", model_options[0] if model_options else ""
+                    )
+                )
+                model_menu = ctk.CTkOptionMenu(
+                    asr_model_frame,
+                    variable=asr_model_var,
+                    values=model_options,
+                )
+                model_menu.pack(side="left", padx=5)
+                model_tooltip = Tooltip(model_menu, "")
+
+                def _update_model_tooltip(name: str) -> None:
+                    info = combined_models.get(name, {})
+                    tip = " | ".join(
+                        str(info.get(k, "?"))
+                        for k in ("backend", "dtype", "chunk", "batch", "device")
+                    )
+                    model_tooltip.text = tip
+
+                def _on_backend_change(choice: str) -> None:
+                    prev = self.config_manager.get("asr_backend")
+                    self.config_manager.set("asr_backend", choice)
+                    self.config_manager.save_config()
+                    if prev != choice and getattr(self.core_instance_ref, "transcription_handler", None):
+                        self.core_instance_ref.transcription_handler.start_model_loading()
+
+                def _on_model_change(choice: str) -> None:
+                    prev = self.config_manager.get("asr_model")
+                    self.config_manager.set("asr_model", choice)
+                    self.config_manager.save_config()
+                    _update_model_tooltip(choice)
+                    if prev != choice and getattr(self.core_instance_ref, "transcription_handler", None):
+                        self.core_instance_ref.transcription_handler.start_model_loading()
+
+                backend_menu.configure(command=_on_backend_change)
+                model_menu.configure(command=_on_model_change)
+                if model_options:
+                    _update_model_tooltip(asr_model_var.get())
+
+                install_button = ctk.CTkButton(
+                    asr_frame,
+                    text="Instalar/Atualizar",
+                    command=lambda: model_manager.ensure_download(
+                        asr_backend_var.get(), asr_model_var.get()
+                    ),
+                )
+                install_button.pack(pady=5)
+                Tooltip(install_button, "Baixa ou atualiza o modelo selecionado.")
 
                 # --- Transcription Settings (Advanced) Section ---
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")

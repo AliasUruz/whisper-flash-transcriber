@@ -3,6 +3,7 @@ import json
 import logging
 import copy
 import hashlib
+from .model_manager import list_catalog, list_installed
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -247,6 +248,13 @@ class ConfigManager:
             logging.error(f"An unexpected error occurred while loading {SECRETS_FILE}: {e}. API keys might be missing or invalid.", exc_info=True)
             secrets_loaded = {}
             self._secrets_hash = None
+
+        cfg["asr_curated_catalog"] = list_catalog()
+        try:
+            cfg["asr_installed_models"] = list_installed(ASR_CACHE_DIR)
+        except Exception as e:  # pragma: no cover - salvaguarda
+            logging.warning(f"Falha ao listar modelos instalados: {e}")
+            cfg["asr_installed_models"] = []
 
         self.config = cfg
         # Aplicar validação e conversão de tipo
@@ -570,7 +578,12 @@ class ConfigManager:
                 secrets_to_save[key] = config_to_save.pop(key)
 
         # Remover chaves não persistentes
-        keys_to_ignore = ["tray_menu_items", "hotkey_manager"]
+        keys_to_ignore = [
+            "tray_menu_items",
+            "hotkey_manager",
+            "asr_curated_catalog",
+            "asr_installed_models",
+        ]
         for key in keys_to_ignore:
             if key in config_to_save:
                 del config_to_save[key]
@@ -646,6 +659,12 @@ class ConfigManager:
 
     def set(self, key, value):
         self.config[key] = value
+
+    def get_asr_installed_models(self) -> List[str]:
+        return self.config.get(ASR_INSTALLED_MODELS_CONFIG_KEY, [])
+
+    def set_asr_installed_models(self, models: List[str]):
+        self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = list(models)
 
     def get_api_key(self, provider: str) -> str:
         if provider == SERVICE_GEMINI:

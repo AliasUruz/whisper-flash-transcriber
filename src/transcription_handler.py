@@ -4,17 +4,10 @@ import concurrent.futures
 import time
 import numpy as np
 import torch
-from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
-import tempfile
-import os
-import soundfile as sf
-
 try:
-    from transformers import BitsAndBytesConfig
-except Exception:
-    class BitsAndBytesConfig:  # type: ignore[py-class-var]
-        def __init__(self, *_, **__):
-            pass
+    from whisper_flash import make_backend
+except Exception:  # pragma: no cover - dependency not installed during tests
+    make_backend = None  # type: ignore
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
 from .audio_handler import AUDIO_SAMPLE_RATE
 
@@ -34,6 +27,7 @@ from .config_manager import (
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
+    CLEAR_GPU_CACHE_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -65,7 +59,8 @@ class TranscriptionHandler:
         self.correction_thread = None
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-        self.pipe = None
+        self._asr_backend = None
+        self._asr_loaded = False
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
         # Executor dedicado para a tarefa de transcrição em background
@@ -119,6 +114,43 @@ class TranscriptionHandler:
         # O cliente Gemini agora é injetado, então sua inicialização foi removida daqui.
         # A inicialização do OpenRouter é mantida.
 
+    @property
+    def asr_backend(self):
+        return self._asr_backend_name
+
+    @asr_backend.setter
+    def asr_backend(self, value):
+        if value != self._asr_backend_name:
+            self._asr_backend_name = value
+            self.reload_asr()
+
+    @property
+    def asr_model_id(self):
+        return self._asr_model_id
+
+    @asr_model_id.setter
+    def asr_model_id(self, value):
+        if value != self._asr_model_id:
+            self._asr_model_id = value
+            self.reload_asr()
+
+    def unload(self):
+        """Descarta a pipeline atual."""
+        self.pipe = None
+
+    def reload_asr(self):
+        """Recarrega o backend de ASR e o modelo associado."""
+        try:
+            self._asr_backend.unload()
+        except Exception as e:
+            logging.warning(f"Falha ao descarregar backend ASR: {e}")
+
+        if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # _initialize_model_and_processor executa _load_model_task internamente
+        self._initialize_model_and_processor()
+
     def update_config(self):
         """Atualiza as configurações do handler a partir do config_manager."""
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)
@@ -136,99 +168,17 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.asr_backend = self.config_manager.get("asr_backend", self.asr_backend)
+        self.asr_model_id = self.config_manager.get("asr_model_id", self.asr_model_id)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
-        # Este método será chamado para orquestrar o carregamento do modelo e a criação da pipeline
-        # Ele será chamado por start_model_loading
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            model, processor = self._load_model_task()
-            if model and processor:
-                device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
-
-                # Definir o modelo para modo de avaliação (evita cálculos de gradiente)
-                try:
-                    if hasattr(model, "eval"):
-                        model.eval()
-                        logging.info("[METRIC] stage=model_eval_applied value_ms=0")
-                        try:
-                            # Sanidade: se possível, confirmar flag de treino
-                            training_flag = getattr(model, "training", None)
-                            if training_flag is not None:
-                                logging.debug(f"Model.training={training_flag} (esperado False)")
-                        except Exception:
-                            pass
-                except Exception as e:
-                    logging.warning(f"Falha ao aplicar model.eval(): {e}")
-                # torch.compile opcional
-                try:
-                    if self.enable_torch_compile and hasattr(torch, "compile") and device.startswith("cuda"):
-                        model = torch.compile(model)  # type: ignore[attr-defined]
-                        logging.info("torch.compile aplicado ao modelo (experimental).")
-                    else:
-                        logging.info("torch.compile desativado ou indisponível; seguindo sem compile.")
-                except Exception as e:
-                    logging.warning(f"Falha ao aplicar torch.compile: {e}. Seguindo sem compile.", exc_info=True)
-
-                # Forçar a detecção de idioma na inicialização da pipeline
-                generate_kwargs_init = {
-                    "task": "transcribe",
-                    "language": None
-                }
-
-                # Ajuste de chunk_length_sec quando em modo 'auto' (antes de criar a pipeline)
-                if self.chunk_length_mode == "auto":
-                    try:
-                        eff_chunk = float(self._effective_chunk_length())
-                        if eff_chunk != self.chunk_length_sec:
-                            logging.info(f"Chunk length ajustado automaticamente: {self.chunk_length_sec:.1f}s -> {eff_chunk:.1f}s")
-                        self.chunk_length_sec = eff_chunk
-                    except Exception as e:
-                        logging.warning(f"Falha ao calcular chunk_length auto: {e}. Mantendo valor atual {self.chunk_length_sec}.")
-
-                self.pipe = pipeline(
-                    "automatic-speech-recognition",
-                    model=model,
-                    tokenizer=processor.tokenizer,
-                    feature_extractor=processor.feature_extractor,
-                    chunk_length_s=self.chunk_length_sec,
-                    batch_size=self.batch_size,  # Usar o batch_size configurado
-                    torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
-                    generate_kwargs=generate_kwargs_init
-                )
-                logging.info("Pipeline de transcrição inicializada com sucesso.")
-
-                # Warmup da pipeline para reduzir first-hit latency
-                try:
-                    import numpy as _np
-                    warmup_dur = max(0.1, min(0.25, float(self.chunk_length_sec) * 0.01))
-                    sr = 16000
-                    n = int(sr * warmup_dur)
-                    t = _np.linspace(0, warmup_dur, n, False, dtype=_np.float32)
-                    tone = (_np.sin(2 * _np.pi * 440.0 * t)).astype(_np.float32)
-                    t0 = time.perf_counter()
-                    with torch.no_grad():
-                        _ = self.pipe(
-                            tone,
-                            chunk_length_s=self.chunk_length_sec,
-                            batch_size=max(1, int(self.batch_size)),
-                            return_timestamps=False,
-                            generate_kwargs={"task": "transcribe", "language": None}
-                        )
-                    t1 = time.perf_counter()
-                    logging.info(f"[METRIC] stage=warmup_infer value_ms={(t1 - t0) * 1000:.2f} device={device} chunk={self.chunk_length_sec} batch={self.batch_size}")
-                except Exception as e:
-                    logging.warning(f"Warmup da pipeline falhou: {e}")
-
-                self.on_model_ready_callback()
-            else:
-                error_message = "Falha ao carregar modelo ou processador."
-                logging.error(error_message)
-                self.on_model_error_callback(error_message)
+            self._load_model_task()
         except Exception as e:
-            error_message = f"Erro na inicialização da pipeline: {e}"
+            error_message = f"Erro na inicialização do backend ASR: {e}"
             logging.error(error_message, exc_info=True)
             self.on_model_error_callback(error_message)
 
@@ -349,114 +299,42 @@ class TranscriptionHandler:
         self.transcription_cancel_event.set()
 
     def _load_model_task(self):
-        # Removido: model_loaded_successfully = False
-        # Removido: error_message = "Unknown error during model load."
         try:
-            # Removido: device_param = "cpu"
-            torch_dtype_local = torch.float32
+            if make_backend is None:
+                raise RuntimeError("make_backend function is not available")
 
-            if torch.cuda.is_available():
-                if self.gpu_index == -1: # Auto-seleção de GPU
-                    num_gpus = torch.cuda.device_count()
-                    if num_gpus > 0:
-                        best_gpu_index = 0
-                        max_vram = 0
-                        for i in range(num_gpus):
-                            props = torch.cuda.get_device_properties(i)
-                            if props.total_memory > max_vram:
-                                max_vram = props.total_memory
-                                best_gpu_index = i
-                        self.gpu_index = best_gpu_index
-                        logging.info(f"Auto-seleção de GPU (maior VRAM total): {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})")
-                    else:
-                        logging.info("Nenhuma GPU disponível, usando CPU.")
-                        self.gpu_index = -1 # Garante que o índice seja -1 se não houver GPU
-                
-            model_id = "openai/whisper-large-v3"
-            
-            logging.info(f"Carregando processador de {model_id}...")
-            processor = AutoProcessor.from_pretrained(model_id)
+            asr_model_id = self.config_manager.get("asr_model_id")
+            asr_backend = self.config_manager.get("asr_backend")
+            asr_compute_device = self.config_manager.get("asr_compute_device")
+            asr_dtype = self.config_manager.get("asr_dtype")
+            asr_ct2_compute_type = self.config_manager.get("asr_ct2_compute_type")
+            asr_cache_dir = self.config_manager.get("asr_cache_dir")
 
-            # Determinar o dispositivo explicitamente antes de carregar o modelo
-            device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
-            logging.info(f"Dispositivo de carregamento do modelo definido explicitamente como: {device}")
+            self._asr_backend = make_backend(asr_backend)
 
-            if torch.cuda.is_available() and self.gpu_index >= 0:
-                torch_dtype_local = torch.float16
-                logging.info("GPU detectada e selecionada, usando torch.float16.")
-            else:
-                torch_dtype_local = torch.float32
-                logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
-            # Seleção automática de GPU por memória livre quando gpu_index == -1
-            try:
-                if torch.cuda.is_available() and self.gpu_index == -1:
-                    best_idx = None
-                    best_free = -1
-                    for i in range(torch.cuda.device_count()):
-                        try:
-                            free_b, total_b = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
-                            if free_b > best_free:
-                                best_free = free_b
-                                best_idx = i
-                        except Exception as _e:
-                            logging.debug(f"Falha ao consultar mem_get_info para GPU {i}: {_e}")
-                    if best_idx is not None:
-                        self.gpu_index = best_idx
-                        free_gb = best_free / (1024 ** 3) if best_free > 0 else 0.0
-                        total_gb = torch.cuda.get_device_properties(self.gpu_index).total_memory / (1024 ** 3)
-                        logging.info(f"[METRIC] stage=gpu_autoselect gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}")
-            except Exception as _gpu_sel_e:
-                logging.warning(f"Falha ao escolher GPU por memória livre: {_gpu_sel_e}")
-
-            logging.info(f"Carregando modelo {model_id}...")
-
-            # Define configuração de quantização apenas se uma GPU válida estiver disponível
-            quant_config = None
-            if torch.cuda.is_available() and self.gpu_index >= 0:
-                quant_config = BitsAndBytesConfig(load_in_8bit=True)
-
-            # Determina dinamicamente se o FlashAttention 2 está disponível
+            attn_impl = "sdpa"
             try:
                 import importlib.util
-
-                use_flash_attn = importlib.util.find_spec("flash_attn") is not None
-            except Exception:  # pragma: no cover - segurança extra
-                use_flash_attn = False
-
-            attn_impl = "flash_attention_2" if use_flash_attn else "sdpa"
-
-            model_kwargs = {
-                "torch_dtype": torch_dtype_local,
-                "low_cpu_mem_usage": True,
-                "use_safetensors": True,
-                "device_map": {'': device},
-                "attn_implementation": attn_impl,
-            }
-            # Adiciona a configuração de quantização somente quando aplicável
-            if quant_config is not None:
-                model_kwargs["quantization_config"] = quant_config
-
-            model = AutoModelForSpeechSeq2Seq.from_pretrained(
-                model_id,
-                **model_kwargs,
-            )
-
-            # Log do attn_implementation efetivo
-            try:
-                eff_attn = getattr(model, "config", None)
-                if eff_attn and hasattr(eff_attn, "attn_implementation"):
-                    logging.info(f"[METRIC] stage=attn_impl_effective value={getattr(eff_attn, 'attn_implementation', 'unknown')}")
+                if importlib.util.find_spec("flash_attn") is not None:
+                    attn_impl = "flash_attn2"
             except Exception:
                 pass
-            
-            # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
-            return model, processor
 
+            self._asr_backend.load(
+                model_id=asr_model_id,
+                compute_device=asr_compute_device,
+                dtype=asr_dtype,
+                ct2_compute_type=asr_ct2_compute_type,
+                cache_dir=asr_cache_dir,
+                attn_implementation=attn_impl,
+            )
+            self._asr_backend.warmup()
+            self._asr_loaded = True
+            self.on_model_ready_callback()
         except Exception as e:
             error_message = f"Falha ao carregar o modelo: {e}"
             logging.error(error_message, exc_info=True)
-            # Removido: self.on_model_error_callback(error_message) # Notifica o erro imediatamente
-            return None, None # Retorna None em caso de falha
+            self.on_model_error_callback(error_message)
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""
@@ -474,8 +352,8 @@ class TranscriptionHandler:
         text_result = None
         try:
 
-            if self.pipe is None:
-                error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
+            if not self._asr_loaded or self._asr_backend is None:
+                error_message = "Backend de ASR indisponível. Modelo não carregado ou falhou."
                 logging.error(error_message)
                 self.on_model_error_callback(error_message)
                 return
@@ -483,10 +361,6 @@ class TranscriptionHandler:
             dynamic_batch_size = self._get_dynamic_batch_size()
             logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
 
-            generate_kwargs = {
-                "task": "transcribe",
-                "language": None
-            }
             if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
                 audio_source = audio_source.flatten()
 
@@ -519,12 +393,10 @@ class TranscriptionHandler:
             # Inferência (t_infer) sob no_grad
             with torch.no_grad():
                 t_infer_start = time.perf_counter()
-                result = self.pipe(
+                result = self._asr_backend.transcribe(
                     audio_source,
                     chunk_length_s=self.chunk_length_sec,
                     batch_size=dynamic_batch_size,
-                    return_timestamps=False,
-                    generate_kwargs=generate_kwargs
                 )
                 t_infer_end = time.perf_counter()
             t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
