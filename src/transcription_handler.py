@@ -490,7 +490,12 @@ class TranscriptionHandler:
 
             # --- Fallback sem whisper_flash ---
             model_id = self.asr_model_id
-            ensure_download(model_id, config_manager=self.config_manager)
+            ensure_download(
+                model_id,
+                backend=self.asr_backend,
+                cache_dir=self.asr_cache_dir,
+                quant=self.asr_ct2_compute_type,
+            )
             logging.info(f"Carregando processador de {model_id}...")
             processor = AutoProcessor.from_pretrained(model_id)
 

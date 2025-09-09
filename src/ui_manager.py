@@ -962,7 +962,9 @@ class UIManager:
                 def _install_model() -> None:
                     try:
                         model_manager.ensure_download(
-                            asr_backend_var.get(), asr_model_var.get()
+                            asr_model_var.get(),
+                            asr_backend_var.get(),
+                            self.config_manager.get_asr_cache_dir(),
                         )
                     except Exception as e:  # pragma: no cover
                         logging.error("Model download failed: %s", e)
