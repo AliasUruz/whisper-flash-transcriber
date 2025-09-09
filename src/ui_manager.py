@@ -349,6 +349,7 @@ class UIManager:
                 openrouter_model_var = ctk.StringVar(value=self.config_manager.get("openrouter_model"))
                 gemini_api_key_var = ctk.StringVar(value=self.config_manager.get("gemini_api_key"))
                 gemini_model_var = ctk.StringVar(value=self.config_manager.get("gemini_model"))
+                asr_model_var = ctk.StringVar(value=self.config_manager.get_asr_model())
                 batch_size_var = ctk.StringVar(value=str(self.config_manager.get("batch_size")))
                 use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
                 launch_at_startup_var = ctk.BooleanVar(value=self.config_manager.get("launch_at_startup"))
@@ -429,6 +430,7 @@ class UIManager:
                     openrouter_model_to_apply = openrouter_model_var.get()
                     gemini_api_key_to_apply = gemini_api_key_var.get()
                     gemini_model_to_apply = gemini_model_var.get()
+                    asr_model_to_apply = asr_model_var.get()
                     gemini_prompt_correction_to_apply = gemini_prompt_correction_textbox.get("1.0", "end-1c")
                     agentico_prompt_to_apply = agentico_prompt_textbox.get("1.0", "end-1c")
                     batch_size_to_apply = self._safe_get_int(batch_size_var, "Batch Size", settings_win)
@@ -488,6 +490,7 @@ class UIManager:
                         new_openrouter_model=openrouter_model_to_apply,
                         new_gemini_api_key=gemini_api_key_to_apply,
                         new_gemini_model=gemini_model_to_apply,
+                        new_asr_model=asr_model_to_apply,
                         new_gemini_prompt=gemini_prompt_correction_to_apply,
                         prompt_agentico=agentico_prompt_to_apply,
                         new_agent_model=model_to_apply,
@@ -561,6 +564,7 @@ class UIManager:
                     openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
                     gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
                     gemini_model_var.set(DEFAULT_CONFIG["gemini_model"])
+                    asr_model_var.set(DEFAULT_CONFIG["asr_model"])
                     gemini_prompt_correction_textbox.delete("1.0", "end")
                     gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG["gemini_prompt"])
                     agentico_prompt_textbox.delete("1.0", "end")
@@ -761,6 +765,16 @@ class UIManager:
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 transcription_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(transcription_frame, text="Transcription Settings (Advanced)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+
+                asr_models = self.config_manager.get_asr_installed_models()
+                if not asr_models:
+                    asr_models = [self.config_manager.get_asr_model()]
+                asr_model_frame = ctk.CTkFrame(transcription_frame)
+                asr_model_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
+                asr_model_menu = ctk.CTkOptionMenu(asr_model_frame, variable=asr_model_var, values=asr_models)
+                asr_model_menu.pack(side="left", padx=5)
+                Tooltip(asr_model_menu, "Select the speech recognition model.")
 
                 device_frame = ctk.CTkFrame(transcription_frame)
                 device_frame.pack(fill="x", pady=5)

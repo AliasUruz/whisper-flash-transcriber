@@ -25,6 +25,7 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
+    ASR_MODEL_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
@@ -609,6 +610,7 @@ class AppCore:
                 "new_chunk_length_mode": "chunk_length_mode",
                 "new_chunk_length_sec": "chunk_length_sec",
                 "new_enable_torch_compile": "enable_torch_compile",
+                "new_asr_model": ASR_MODEL_CONFIG_KEY,
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 

@@ -17,6 +17,7 @@ except Exception:
             pass
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
 from .audio_handler import AUDIO_SAMPLE_RATE
+from .model_manager import ensure_download
 
 # Importar constantes de configuração
 from .utils import select_batch_size
@@ -34,6 +35,7 @@ from .config_manager import (
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
+    ASR_MODEL_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -94,6 +96,7 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.asr_model = self.config_manager.get(ASR_MODEL_CONFIG_KEY)
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -136,6 +139,7 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.asr_model = self.config_manager.get(ASR_MODEL_CONFIG_KEY)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
@@ -372,8 +376,9 @@ class TranscriptionHandler:
                         logging.info("Nenhuma GPU disponível, usando CPU.")
                         self.gpu_index = -1 # Garante que o índice seja -1 se não houver GPU
                 
-            model_id = "openai/whisper-large-v3"
+            model_id = self.asr_model
             
+            ensure_download(model_id, config_manager=self.config_manager)
             logging.info(f"Carregando processador de {model_id}...")
             processor = AutoProcessor.from_pretrained(model_id)
 
