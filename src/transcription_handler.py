@@ -617,6 +617,9 @@ class TranscriptionHandler:
             return
 
         text_result = None
+        # Garantir que dynamic_batch_size esteja definido mesmo quando o backend
+        # for CTranslate2, evitando UnboundLocalError no bloco de exceção.
+        dynamic_batch_size = None
         try:
             if self.backend_resolved == "ctranslate2":
                 segments, _ = self.pipe.transcribe(audio_source, language=None)
