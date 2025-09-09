@@ -3,7 +3,8 @@ import json
 import logging
 import copy
 import hashlib
-from .model_manager import list_catalog, list_installed
+from typing import List
+from .model_manager import scan_installed, DEFAULT_CACHE_DIR
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -93,8 +94,8 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
-    "asr_backend": "whisper",
-    "asr_model_id": "openai/whisper-large-v3",
+    "asr_model": "openai/whisper-large-v3",
+    "asr_installed_models": [],
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -148,8 +149,8 @@ REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
-ASR_BACKEND_CONFIG_KEY = "asr_backend"
-ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
+ASR_MODEL_CONFIG_KEY = "asr_model"
+ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -237,12 +238,12 @@ class ConfigManager:
             secrets_loaded = {}
             self._secrets_hash = None
 
-        cfg["asr_curated_catalog"] = list_catalog()
+        # Atualizar lista de modelos ASR instalados a partir do cache
         try:
-            cfg["asr_installed_models"] = list_installed(ASR_CACHE_DIR)
-        except Exception as e:  # pragma: no cover - salvaguarda
-            logging.warning(f"Falha ao listar modelos instalados: {e}")
-            cfg["asr_installed_models"] = []
+            installed_models: List[str] = scan_installed(DEFAULT_CACHE_DIR)
+            cfg[ASR_INSTALLED_MODELS_CONFIG_KEY] = installed_models
+        except Exception as e:
+            logging.warning(f"Falha ao escanear modelos instalados: {e}")
 
         self.config = cfg
         # Aplicar validação e conversão de tipo
@@ -655,6 +656,12 @@ class ConfigManager:
 
     def set(self, key, value):
         self.config[key] = value
+
+    def get_asr_model(self) -> str:
+        return self.config.get(ASR_MODEL_CONFIG_KEY, self.default_config[ASR_MODEL_CONFIG_KEY])
+
+    def set_asr_model(self, model_id: str):
+        self.config[ASR_MODEL_CONFIG_KEY] = model_id
 
     def get_asr_installed_models(self) -> List[str]:
         return self.config.get(ASR_INSTALLED_MODELS_CONFIG_KEY, [])
