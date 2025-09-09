@@ -5,45 +5,27 @@ import time
 import numpy as np
 import torch
 
-try:  # pragma: no cover - biblioteca opcional
-    from whisper_flash import make_backend  # type: ignore
-except Exception:  # pragma: no cover
-    make_backend = None  # type: ignore
-
-try:  # pragma: no cover - transformers podem não estar instalados em testes
-    from transformers import (
-        pipeline,
-        AutoProcessor,
-        AutoModelForSpeechSeq2Seq,
-        BitsAndBytesConfig,
-    )
-except Exception:  # pragma: no cover
-    pipeline = None  # type: ignore
-    AutoProcessor = None  # type: ignore
-    AutoModelForSpeechSeq2Seq = None  # type: ignore
-    class BitsAndBytesConfig:  # type: ignore[py-class-var]
-        def __init__(self, *_, **__):
-            pass
-
-from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
-from .audio_handler import AUDIO_SAMPLE_RATE
-from .model_manager import ensure_download
-from .config_manager import ASR_CACHE_DIR
-
-# Importar constantes de configuração
+from .openrouter_api import OpenRouterAPI  # Assumindo que está na raiz ou em path acessível
 from .utils import select_batch_size
 from .config_manager import (
-    BATCH_SIZE_CONFIG_KEY, GPU_INDEX_CONFIG_KEY,
-    BATCH_SIZE_MODE_CONFIG_KEY, MANUAL_BATCH_SIZE_CONFIG_KEY,
-    TEXT_CORRECTION_ENABLED_CONFIG_KEY, TEXT_CORRECTION_SERVICE_CONFIG_KEY,
-    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
-    OPENROUTER_API_KEY_CONFIG_KEY, OPENROUTER_MODEL_CONFIG_KEY,
+    BATCH_SIZE_CONFIG_KEY,
+    GPU_INDEX_CONFIG_KEY,
+    BATCH_SIZE_MODE_CONFIG_KEY,
+    MANUAL_BATCH_SIZE_CONFIG_KEY,
+    TEXT_CORRECTION_ENABLED_CONFIG_KEY,
+    TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+    SERVICE_NONE,
+    SERVICE_OPENROUTER,
+    SERVICE_GEMINI,
+    OPENROUTER_API_KEY_CONFIG_KEY,
+    OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     GEMINI_AGENT_PROMPT_CONFIG_KEY,
     OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
-    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY,
+    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
+    DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
@@ -55,7 +37,7 @@ from .config_manager import (
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
 )
-from .asr_backends import backend_registry, WhisperBackend
+from .asr.backends import make_backend
 
 class TranscriptionHandler:
     def __init__(
@@ -97,6 +79,12 @@ class TranscriptionHandler:
         # Evento para sinalizar cancelamento de transcrição em andamento
         self.transcription_cancel_event = threading.Event()
 
+        # Estado do backend de ASR
+        self._asr_backend = None
+        self._asr_backend_name = None
+        self._asr_model_id = None
+        self._asr_loaded = False
+
         # Configurações de modelo e API (carregadas do config_manager)
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY) # Novo
@@ -117,8 +105,8 @@ class TranscriptionHandler:
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
         # Configurações de ASR
-        self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
-        self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
+        self._asr_backend_name = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
+        self._asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
         self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
         self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
         self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
@@ -174,17 +162,18 @@ class TranscriptionHandler:
 
     def reload_asr(self):
         """Recarrega o backend de ASR e o modelo associado."""
-        try:
-            self._asr_backend.unload()
-        except Exception as e:
-            logging.warning(f"Falha ao descarregar backend ASR: {e}")
+        if hasattr(self, "_asr_backend") and self._asr_backend is not None:
+            try:
+                self._asr_backend.unload()
+                logging.info("Backend ASR anterior descarregado.")
+            except Exception as e:
+                logging.warning(f"Falha ao descarregar backend ASR: {e}")
 
         if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        backend_cls = backend_registry.get(self._asr_backend_name, WhisperBackend)
-        self._asr_backend = backend_cls(self)
-        self._asr_backend.load()
+        # Inicia o carregamento do novo modelo em uma thread
+        self.start_model_loading()
 
     def update_config(self):
         """Atualiza as configurações do handler a partir do config_manager."""
@@ -234,105 +223,6 @@ class TranscriptionHandler:
 
         return backend, model_id, compute_device, dtype
 
-    def _initialize_model_and_processor(self):
-        # Este método será chamado para orquestrar o carregamento do modelo e a criação da pipeline
-        # Ele será chamado por start_model_loading
-        try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            model, processor = self._load_model_task()
-            if self.backend_resolved == "ctranslate2" and model:
-                self.pipe = model
-                logging.info("Modelo CTranslate2 carregado.")
-                if self.on_model_ready_callback:
-                    self.on_model_ready_callback()
-                return
-            if model and processor:
-                device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
-
-                # Definir o modelo para modo de avaliação (evita cálculos de gradiente)
-                try:
-                    if hasattr(model, "eval"):
-                        model.eval()
-                        logging.info("[METRIC] stage=model_eval_applied value_ms=0")
-                        try:
-                            # Sanidade: se possível, confirmar flag de treino
-                            training_flag = getattr(model, "training", None)
-                            if training_flag is not None:
-                                logging.debug(f"Model.training={training_flag} (esperado False)")
-                        except Exception:
-                            pass
-                except Exception as e:
-                    logging.warning(f"Falha ao aplicar model.eval(): {e}")
-                # torch.compile opcional
-                try:
-                    if self.enable_torch_compile and hasattr(torch, "compile") and device.startswith("cuda"):
-                        model = torch.compile(model)  # type: ignore[attr-defined]
-                        logging.info("torch.compile aplicado ao modelo (experimental).")
-                    else:
-                        logging.info("torch.compile desativado ou indisponível; seguindo sem compile.")
-                except Exception as e:
-                    logging.warning(f"Falha ao aplicar torch.compile: {e}. Seguindo sem compile.", exc_info=True)
-
-                # Forçar a detecção de idioma na inicialização da pipeline
-                generate_kwargs_init = {
-                    "task": "transcribe",
-                    "language": None
-                }
-
-                # Ajuste de chunk_length_sec quando em modo 'auto' (antes de criar a pipeline)
-                if self.chunk_length_mode == "auto":
-                    try:
-                        eff_chunk = float(self._effective_chunk_length())
-                        if eff_chunk != self.chunk_length_sec:
-                            logging.info(f"Chunk length ajustado automaticamente: {self.chunk_length_sec:.1f}s -> {eff_chunk:.1f}s")
-                        self.chunk_length_sec = eff_chunk
-                    except Exception as e:
-                        logging.warning(f"Falha ao calcular chunk_length auto: {e}. Mantendo valor atual {self.chunk_length_sec}.")
-
-                self.pipe = pipeline(
-                    "automatic-speech-recognition",
-                    model=model,
-                    tokenizer=processor.tokenizer,
-                    feature_extractor=processor.feature_extractor,
-                    chunk_length_s=self.chunk_length_sec,
-                    batch_size=self.batch_size,  # Usar o batch_size configurado
-                    torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
-                    generate_kwargs=generate_kwargs_init
-                )
-                logging.info("Pipeline de transcrição inicializada com sucesso.")
-
-                # Warmup da pipeline para reduzir first-hit latency
-                try:
-                    import numpy as _np
-                    warmup_dur = max(0.1, min(0.25, float(self.chunk_length_sec) * 0.01))
-                    sr = 16000
-                    n = int(sr * warmup_dur)
-                    t = _np.linspace(0, warmup_dur, n, False, dtype=_np.float32)
-                    tone = (_np.sin(2 * _np.pi * 440.0 * t)).astype(_np.float32)
-                    t0 = time.perf_counter()
-                    with torch.no_grad():
-                        _ = self.pipe(
-                            tone,
-                            chunk_length_s=self.chunk_length_sec,
-                            batch_size=max(1, int(self.batch_size)),
-                            return_timestamps=False,
-                            generate_kwargs={"task": "transcribe", "language": None}
-                        )
-                    t1 = time.perf_counter()
-                    logging.info(f"[METRIC] stage=warmup_infer value_ms={(t1 - t0) * 1000:.2f} device={device} chunk={self.chunk_length_sec} batch={self.batch_size}")
-                except Exception as e:
-                    logging.warning(f"Warmup da pipeline falhou: {e}")
-
-                self.on_model_ready_callback()
-            else:
-                error_message = "Falha ao carregar modelo ou processador."
-                logging.error(error_message)
-                self.on_model_error_callback(error_message)
-        except Exception as e:
-            error_message = f"Erro na inicialização da pipeline: {e}"
-            logging.error(error_message, exc_info=True)
-            self.on_model_error_callback(error_message)
 
     def _get_text_correction_service(self):
         if not self.text_correction_enabled: return SERVICE_NONE
@@ -452,150 +342,52 @@ class TranscriptionHandler:
 
     def _load_model_task(self):
         try:
-            if make_backend is not None:
-                asr_model_id = self.config_manager.get("asr_model_id")
-                asr_backend = self.config_manager.get("asr_backend")
-                asr_compute_device = self.config_manager.get("asr_compute_device")
-                asr_dtype = self.config_manager.get("asr_dtype")
-                asr_ct2_compute_type = self.config_manager.get("asr_ct2_compute_type")
-                asr_cache_dir = self.config_manager.get("asr_cache_dir")
+            backend_name, model_id, compute_device, dtype = self._resolve_asr_settings()
 
-                self._asr_backend = make_backend(asr_backend)
+            logging.info(
+                "Carregando backend ASR: %s com modelo %s em %s (%s)",
+                backend_name,
+                model_id,
+                compute_device,
+                dtype,
+            )
 
-                attn_impl = "sdpa"
-                try:
-                    import importlib.util
-                    if importlib.util.find_spec("flash_attn") is not None:
-                        attn_impl = "flash_attn2"
-                except Exception:
-                    pass
-
-                self._asr_backend.load(
-                    model_id=asr_model_id,
-                    compute_device=asr_compute_device,
-                    dtype=asr_dtype,
-                    ct2_compute_type=asr_ct2_compute_type,
-                    cache_dir=asr_cache_dir,
-                    attn_implementation=attn_impl,
-                )
-                self._asr_backend.warmup()
-                self._asr_loaded = True
-                self.on_model_ready_callback()
-                return
-
-            # --- Fallback sem whisper_flash ---
-            model_id = self.asr_model_id
-            ensure_download(model_id, config_manager=self.config_manager)
-            logging.info(f"Carregando processador de {model_id}...")
-            processor = AutoProcessor.from_pretrained(model_id)
-
-            if torch.cuda.is_available():
-                if self.gpu_index == -1:
-                    num_gpus = torch.cuda.device_count()
-                    if num_gpus > 0:
-                        best_gpu_index = 0
-                        max_vram = 0
-                        for i in range(num_gpus):
-                            props = torch.cuda.get_device_properties(i)
-                            if props.total_memory > max_vram:
-                                max_vram = props.total_memory
-                                best_gpu_index = i
-                        self.gpu_index = best_gpu_index
-                        logging.info(
-                            f"Auto-seleção de GPU (maior VRAM total): {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})"
-                        )
-                    else:
-                        logging.info("Nenhuma GPU disponível, usando CPU.")
-                        self.gpu_index = -1
-
-            device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
-            torch_dtype_local = torch.float16 if device.startswith("cuda") else torch.float32
-
-            logging.info(f"Dispositivo de carregamento do modelo definido explicitamente como: {device}")
-
-            try:
-                if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index == -1:
-                    best_idx = None
-                    best_free = -1
-                    for i in range(torch.cuda.device_count()):
-                        try:
-                            free_b, _ = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
-                            if free_b > best_free:
-                                best_free = free_b
-                                best_idx = i
-                        except Exception as _e:
-                            logging.debug(f"Falha ao consultar mem_get_info para GPU {i}: {_e}")
-                    if best_idx is not None:
-                        self.gpu_index = best_idx
-                        free_gb = best_free / (1024 ** 3) if best_free > 0 else 0.0
-                        total_gb = torch.cuda.get_device_properties(self.gpu_index).total_memory / (1024 ** 3)
-                        logging.info(
-                            f"[METRIC] stage=gpu_autoselect gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}"
-                        )
-            except Exception as _gpu_sel_e:
-                logging.warning(f"Falha ao escolher GPU por memória livre: {_gpu_sel_e}")
-
-            if backend == "transformers":
-                logging.info(f"Carregando modelo Transformers {model_id}...")
-                processor = AutoProcessor.from_pretrained(model_path)
-
-            quant_config = None
-            if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0:
-                quant_config = BitsAndBytesConfig(load_in_8bit=True)
-
-            # Determina dinamicamente se o FlashAttention 2 está disponível
-            self._asr_backend = make_backend(asr_backend)
+            self._asr_backend = make_backend(backend_name)
 
             attn_impl = "sdpa"
             try:
                 import importlib.util
-                use_flash_attn = importlib.util.find_spec("flash_attn") is not None
+
+                if importlib.util.find_spec("flash_attn") is not None:
+                    attn_impl = "flash_attn2"
+                    logging.info("FlashAttention 2 detectado.")
             except Exception:
-                use_flash_attn = False
-            attn_impl = "flash_attention_2" if use_flash_attn else "sdpa"
+                pass
 
-            model_kwargs = {
-                "torch_dtype": torch_dtype_local,
-                "low_cpu_mem_usage": True,
-                "use_safetensors": True,
-                "device_map": {"": device},
-                "attn_implementation": attn_impl,
-            }
-            if quant_config is not None:
-                model_kwargs["quantization_config"] = quant_config
-
-            model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, **model_kwargs)
-
-            generate_kwargs = {"task": "transcribe", "language": None}
-            self.pipe = pipeline(
-                "automatic-speech-recognition",
-                model=model,
-                tokenizer=processor.tokenizer,
-                feature_extractor=processor.feature_extractor,
-                chunk_length_s=self.chunk_length_sec,
-                batch_size=self.batch_size,
-                torch_dtype=torch_dtype_local,
-                generate_kwargs=generate_kwargs,
+            self._asr_backend.load(
+                model_id=model_id,
+                device=compute_device,
+                dtype=dtype,
+                ct2_compute_type=self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
+                cache_dir=self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY),
+                attn_implementation=attn_impl,
             )
 
-            # Warmup simples
-            try:
-                warmup_dur = max(0.1, min(0.25, float(self.chunk_length_sec) * 0.01))
-                sr = AUDIO_SAMPLE_RATE
-                n = int(sr * warmup_dur)
-                t = np.linspace(0, warmup_dur, n, False, dtype=np.float32)
-                tone = (np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
-                with torch.no_grad():
-                    _ = self.pipe(tone, chunk_length_s=self.chunk_length_sec, batch_size=1, return_timestamps=False, generate_kwargs=generate_kwargs)
-            except Exception as e:
-                logging.debug(f"Falha no warmup da pipeline: {e}")
-
+            self._asr_backend.warmup()
             self._asr_loaded = True
             self.on_model_ready_callback()
-        except Exception as e:
-            error_message = f"Falha ao carregar o modelo: {e}"
+            logging.info("Backend ASR e modelo carregados com sucesso.")
+
+        except ImportError as e:
+            self._asr_loaded = False
+            error_message = f"Falha ao importar dependências do backend ASR: {e}"
             logging.error(error_message, exc_info=True)
-            return None, None
+            self.on_model_error_callback(error_message)
+        except Exception as e:
+            self._asr_loaded = False
+            error_message = f"Falha ao carregar backend ASR: {e}"
+            logging.error(error_message, exc_info=True)
+            self.on_model_error_callback(error_message)
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""
@@ -604,257 +396,50 @@ class TranscriptionHandler:
         )
 
     def _transcription_task(self, audio_source: str | np.ndarray, agent_mode: bool) -> None:
+        """Tarefa executada em uma thread para transcrever um segmento de áudio."""
         self.transcription_cancel_event.clear()
+        text_result = ""
 
-        if self.transcription_cancel_event.is_set():
-            logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
-            return
-
-        dynamic_batch_size = self._get_dynamic_batch_size()
-        result = self._asr_backend.transcribe(
-            audio_source,
-            chunk_length_s=float(self.chunk_length_sec),
-            batch_size=dynamic_batch_size,
-        )
-        text_result = result.get("text", "").strip() or "[No speech detected]"
-        if agent_mode and self.on_agent_result_callback:
-            self.on_agent_result_callback(text_result)
-        elif self.on_transcription_result_callback:
-            self.on_transcription_result_callback(text_result, text_result)
-        return
-
-        # Legacy pipeline (desativado após retorno antecipado)
-        text_result = None
-        # Garantir que dynamic_batch_size esteja definido mesmo quando o backend
-        # for CTranslate2, evitando UnboundLocalError no bloco de exceção.
-        dynamic_batch_size = None
         try:
-            if self.backend_resolved == "ctranslate2":
-                segments, _ = self.pipe.transcribe(audio_source, language=None)
-                text_result = "".join(seg.text for seg in segments).strip()
-                if not text_result:
-                    text_result = "[No speech detected]"
-                logging.info("Transcrição via CTranslate2 concluída.")
-            else:
-                if self.pipe is None:
-                    error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
-                    logging.error(error_message)
-                    self.on_model_error_callback(error_message)
-                    return
+            if not self._asr_loaded or self._asr_backend is None:
+                error_message = "Backend ASR indisponível. Modelo não carregado ou falhou."
+                logging.error(error_message)
+                self.on_model_error_callback(error_message)
+                return
 
-                dynamic_batch_size = self._get_dynamic_batch_size()
-                logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
+            if self.transcription_cancel_event.is_set():
+                logging.info("Transcrição interrompida antes do início do processamento.")
+                return
 
-                generate_kwargs = {
-                    "task": "transcribe",
-                    "language": None
-                }
-                if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
-                    audio_source = audio_source.flatten()
+            dynamic_batch_size = self._get_dynamic_batch_size()
+            logging.info(
+                f"Iniciando transcrição com backend: {type(self._asr_backend).__name__}, batch_size={dynamic_batch_size}"
+            )
 
-                if self.chunk_length_mode == "auto":
-                    try:
-                        self.chunk_length_sec = float(self._effective_chunk_length())
-                    except Exception:
-                        pass
+            result = self._asr_backend.transcribe(
+                audio_source,
+                chunk_length_s=float(self.chunk_length_sec),
+                batch_size=dynamic_batch_size,
+            )
 
-                try:
-                    device = f"cuda:{self.gpu_index}" if torch.cuda.is_available() and self.gpu_index >= 0 else "cpu"
-                except Exception:
-                    device = "cpu"
-                dtype = "fp16" if (torch.cuda.is_available() and self.gpu_index >= 0) else "fp32"
-                try:
-                    import importlib.util as _spec_util
-                    attn_impl = "flash_attn2" if _spec_util.find_spec("flash_attn") is not None else "sdpa"
-                except Exception:
-                    attn_impl = "sdpa"
-
-                t_total_start = time.perf_counter()
-                t_pre_start = time.perf_counter()
-                t_pre_end = time.perf_counter()
-                t_pre_ms = (t_pre_end - t_pre_start) * 1000.0
-
-                with torch.no_grad():
-                    t_infer_start = time.perf_counter()
-                    result = self.pipe(
-                        audio_source,
-                        chunk_length_s=self.chunk_length_sec,
-                        batch_size=dynamic_batch_size,
-                        return_timestamps=False,
-                        generate_kwargs=generate_kwargs
-                    )
-                    t_infer_end = time.perf_counter()
-                t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
-
-                try:
-                    self.last_dynamic_batch_size = int(dynamic_batch_size)
-                except Exception:
-                    self.last_dynamic_batch_size = None
-
-                t_post_start = time.perf_counter()
-
-                if result and "text" in result:
-                    text_result = result["text"].strip()
-                    if not text_result:
-                        text_result = "[No speech detected]"
-                    else:
-                        logging.info("Transcrição de segmento bem-sucedida.")
-                else:
-                    text_result = "[Transcription failed: Bad format]"
-                    logging.error(f"Formato de resultado inesperado: {result}")
-
-                t_post_end = time.perf_counter()
-                t_post_ms = (t_post_end - t_post_start) * 1000.0
-                t_total_ms = (t_post_end - t_total_start) * 1000.0
-
-                try:
-                    logging.info(f"[METRIC] stage=t_pre value_ms={t_pre_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
-                    logging.info(f"[METRIC] stage=t_infer value_ms={t_infer_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
-                    logging.info(f"[METRIC] stage=t_post value_ms={t_post_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
-                    logging.info(f"[METRIC] stage=segment_total value_ms={t_total_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
-                except Exception:
-                    pass
-
-                # Fim do bloco de processamento principal do segmento
+            text_result = result.get("text", "").strip() or "[No speech detected]"
+            logging.info("Transcrição concluída com sucesso.")
 
         except Exception as e:
-            # Tratamento de OOM e fallback automático (reduz batch, depois chunk) – não recria a pipeline
-            try:
-                err_txt = str(e).lower()
-                is_oom = any(tok in err_txt for tok in ["out of memory", "cuda oom", "cublas", "cudnn", "hip out of memory", "alloc"])
-                if is_oom:
-                    try:
-                        old_bs = int(dynamic_batch_size)
-                    except Exception:
-                        old_bs = None
-                    did_change = False
-                    if old_bs and old_bs > 1:
-                        new_bs = max(1, old_bs // 2)
-                        try:
-                            self.last_dynamic_batch_size = new_bs
-                        except Exception:
-                            pass
-                        did_change = True
-                        logging.warning(f"OOM detectado. Reduzindo batch_size de {old_bs} para {new_bs} para próximas submissões.")
-                        try:
-                            logging.info(f"[METRIC] stage=oom_recovery action=reduce_batch from={old_bs} to={new_bs}")
-                        except Exception:
-                            pass
-                    if not did_change:
-                        # Reduz chunk_length_sec moderadamente
-                        try:
-                            old_chunk = float(self.chunk_length_sec)
-                        except Exception:
-                            old_chunk = 30.0
-                        new_chunk = max(10.0, old_chunk * 0.66)
-                        if new_chunk < old_chunk:
-                            self.chunk_length_sec = new_chunk
-                            logging.warning(f"OOM persistente. Reduzindo chunk_length_sec de {old_chunk:.1f}s para {new_chunk:.1f}s para próximas submissões.")
-                            try:
-                                logging.info(f"[METRIC] stage=oom_recovery action=reduce_chunk from={old_chunk:.1f} to={new_chunk:.1f}")
-                            except Exception:
-                                pass
-                # Continua fluxo normal de erro
-            except Exception as _oom_adj_e:
-                logging.debug(f"Falha ao ajustar parâmetros após OOM: {_oom_adj_e}")
-            logging.error(f"Erro durante a transcrição de segmento: {e}", exc_info=True)
+            logging.error(f"Erro durante a tarefa de transcrição: {e}", exc_info=True)
             text_result = f"[Transcription Error: {e}]"
 
         finally:
             if self.transcription_cancel_event.is_set():
-                logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
-                self.transcription_cancel_event.clear()
+                logging.info("Transcrição interrompida durante o processamento. Resultado descartado.")
                 return
-
-            if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
-                logging.info(f"Transcrição bruta: {text_result}")
-
-            if not text_result or text_result == "[No speech detected]" or text_result.strip().startswith("[Transcription Error:"):
-                logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
-                if text_result and self.on_segment_transcribed_callback:
-                    self.on_segment_transcribed_callback(text_result or "")
-                if (
-                    not agent_mode
-                    and text_result
-                    and (
-                        not self.is_state_transcribing_fn
-                        or self.is_state_transcribing_fn()
-                    )
-                ):
-                    self.on_transcription_result_callback(text_result, text_result)
-                elif not agent_mode and text_result:
-                    logging.warning(
-                        "Estado mudou antes do resultado de transcrição. UI não será atualizada."
-                    )
-                return
-
-            if self.on_segment_transcribed_callback:
-                self.on_segment_transcribed_callback(text_result)
-
-            # empty_cache opcional após segmentos longos (heurística simples) quando em GPU
-            try:
-                import torch
-                from .config_manager import CLEAR_GPU_CACHE_CONFIG_KEY
-                enable_clear = bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY))
-                is_gpu = torch.cuda.is_available() and getattr(self, "gpu_index", -1) >= 0
-                long_audio = float(getattr(self, "chunk_length_sec", 30.0)) >= 45.0
-                if enable_clear and is_gpu and long_audio:
-                    t_ec_start = time.perf_counter()
-                    before_b = torch.cuda.memory_allocated() if hasattr(torch.cuda, "memory_allocated") else 0
-                    torch.cuda.empty_cache()
-                    after_b = torch.cuda.memory_allocated() if hasattr(torch.cuda, "memory_allocated") else 0
-                    t_ec_ms = (time.perf_counter() - t_ec_start) * 1000.0
-                    freed_mb = max(0.0, (before_b - after_b) / (1024 ** 2))
-                    logging.info(f"[METRIC] stage=empty_cache value_ms={t_ec_ms:.2f} freed_estimate_mb={freed_mb:.1f}")
-            except Exception as _ec_e:
-                logging.debug(f"Falha ao executar empty_cache opcional: {_ec_e}")
 
             if agent_mode:
-                try:
-                    logging.info(f"Enviando texto para o modo agente: '{text_result}'")
-                    agent_response = self.gemini_client.get_agent_response(text_result)
-                    logging.info(
-                        f"Resposta recebida do modo agente: '{agent_response}'"
-                    )
-                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
-                        self.on_agent_result_callback(agent_response)
-                    else:
-                        logging.warning(
-                            "Estado mudou antes do resultado do agente. UI não será atualizada."
-                        )
-                except Exception as e:
-                    logging.error(f"Erro ao processar o comando do agente: {e}", exc_info=True)
-                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
-                        self.on_agent_result_callback(text_result)  # Falha, retorna o texto original
-                    else:
-                        logging.warning(
-                            "Estado mudou antes do resultado do agente. UI não será atualizada."
-                        )
-            else:
-                if self.text_correction_enabled:
-                    self._get_text_correction_service()
-                    was_transcribing_when_started = (
-                        self.is_state_transcribing_fn()
-                        if self.is_state_transcribing_fn
-                        else False
-                    )
-                    openrouter_prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
-                    self.correction_thread = threading.Thread(
-                        target=self._async_text_correction,
-                        args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt, was_transcribing_when_started),
-                        daemon=True,
-                        name="TextCorrectionThread",
-                    )
-                    self.correction_thread.start()
-                else:
-                    self.on_transcription_result_callback(text_result, text_result)
-
-            # Mantemos a VRAM em cache para acelerar transcrições consecutivas.
-            # A limpeza completa ocorre somente no shutdown.
-            if torch.cuda.is_available():
-                logging.debug(
-                    "Cache da GPU preservado para transcrições consecutivas."
-                )
+                if self.on_agent_result_callback:
+                    self.on_agent_result_callback(text_result)
+            elif self.on_transcription_result_callback:
+                # O callback lida com o texto bruto e o corrigido (se habilitado)
+                self.on_transcription_result_callback(text_result, text_result)
 
     def _effective_chunk_length(self) -> float:
         """

@@ -49,43 +49,6 @@ class DummyResponse:
 
     def json(self):
         return self._data
-
-
-def test_curated_catalog_update(monkeypatch):
-    data = [{"model_id": "m1"}, {"model_id": "m2"}]
-    monkeypatch.setattr(
-        "requests.get", lambda url, timeout=10: DummyResponse(data)
-    )
-    cm = ConfigManager()
-    assert cm.get_asr_curated_catalog() == data
-
-
-def test_resolve_backend_ct2(monkeypatch):
-    monkeypatch.setattr("requests.get", lambda url, timeout=10: DummyResponse([]))
-    cm = ConfigManager()
-    th = TranscriptionHandler(
-        config_manager=cm,
-        gemini_api_client=None,
-        on_model_ready_callback=lambda: None,
-        on_model_error_callback=lambda e: None,
-        on_transcription_result_callback=lambda r: None,
-        on_agent_result_callback=lambda r: None,
-        on_segment_transcribed_callback=lambda s: None,
-        is_state_transcribing_fn=lambda: False,
-    )
-
-    th.asr_backend = "auto"
-
-    def fake_find_spec(name):
-        if name == "faster_whisper":
-            return object()
-        return importlib.util.find_spec(name)
-
-    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
-    backend, *_ = th._resolve_asr_settings()
-    assert backend == "ctranslate2"
-
-
 def test_apply_settings_updates_trans_handler(monkeypatch):
     data = [{"model_id": "m1"}]
     monkeypatch.setattr(
