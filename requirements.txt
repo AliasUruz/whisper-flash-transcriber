@@ -15,3 +15,4 @@ soundfile==0.13.1
 onnxruntime==1.22.0
 bitsandbytes
 playwright==1.44.0
+faster-whisper

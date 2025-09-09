@@ -258,6 +258,26 @@ To access and change settings:
 *   **Model:** For text correction, choose one of the available models for the selected service (e.g., "deepseek/deepseek-chat-v3-0324:free" on OpenRouter or "gemini-2.5-flash" on Gemini).
 *   **Gemini Correction Prompt:** Customize the prompt sent to Gemini for text correction.
 *   **Agent Mode Prompt:** Customize the prompt sent to Gemini when using "Agent Mode".
+
+### CTranslate2 Backend (Optional)
+
+For faster inference, the application can use the [CTranslate2](https://github.com/OpenNMT/CTranslate2) backend through the `faster-whisper` library.
+
+**Installation:**
+
+```bash
+pip install faster-whisper
+```
+
+**Configuration Parameters:**
+
+* `asr_backend` – set to `"ctranslate2"` or leave as `"auto"` for automatic detection.
+* `asr_ct2_compute_type` – quantization mode. Options include `float16`, `int8_float16`, and `int4_float16` (smaller models but lower accuracy).
+* `asr_ct2_cpu_threads` – limit CPU threads used by the decoder.
+* `asr_ct2_beam_size` – beam search width (larger values improve accuracy at the cost of speed).
+* `asr_ct2_temperature` – decoding temperature (use values >0.0 to allow sampling when the model fails to predict).
+
+If the backend or required hardware is unavailable, the application transparently falls back to the standard Transformers pipeline.
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
 *   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.

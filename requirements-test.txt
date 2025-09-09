@@ -1,5 +1,6 @@
 # Ferramentas de Teste e Qualidade
 pytest
+pytest-cov
 flake8==7.2.0
 
 # Dependências da Aplicação usadas nos Testes
@@ -14,3 +15,4 @@ keyboard
 soundfile>=0.13.1
 onnxruntime
 psutil
+faster-whisper
