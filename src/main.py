@@ -63,6 +63,19 @@ except Exception as e:
     # torch pode não estar instalado em alguns ambientes de teste; seguir silenciosamente
     logging.debug(f"torch não disponível para configurar cudnn.benchmark: {e}")
 
+<<<<<<< HEAD
+=======
+# Log explícito de CPU quando nenhuma GPU disponível (TODO 4.3/5.2)
+try:
+    torch_spec = importlib.util.find_spec("torch")
+    if torch_spec is not None:
+        import torch  # type: ignore
+        if not torch.cuda.is_available():
+            logging.info("[METRIC] stage=device_select device=cpu reason=no_cuda_available")
+except Exception:
+    pass
+
+>>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
 # --- Ajuste para evitar erros "main thread is not in main loop" ao destruir
 # variáveis Tkinter quando a aplicação encerra. Mantemos o destrutor original
 # em `_original_variable_del` para preservar comportamentos internos e facilitar

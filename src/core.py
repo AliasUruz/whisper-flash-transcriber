@@ -3,6 +3,7 @@ import threading
 import time
 import os
 from threading import RLock
+from pathlib import Path
 import atexit
 try:
     import pyautogui  # Ainda necessário para _do_paste
@@ -29,6 +30,7 @@ from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE a
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
+from .chatgpt_automator import ChatGPTAutomator
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -74,7 +76,12 @@ class AppCore:
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
             is_state_transcribing_fn=self.is_state_transcribing,
         )
+        self.transcription_handler.core_instance_ref = self  # Expõe referência do núcleo ao handler
+
         self.ui_manager = None # Será setado externamente pelo main.py
+        self.chatgpt_automator = None
+        # A inicialização do ChatGPTAutomator será realizada dinamicamente
+        # sempre que o serviço de correção de texto for alterado.
 
         # --- Estado da Aplicação ---
         self.current_state = STATE_LOADING_MODEL
@@ -210,6 +217,12 @@ class AppCore:
 
         if self.display_transcripts_in_terminal:
             print("\n=== COMPLETE TRANSCRIPTION ===\n" + final_text + "\n==============================\n")
+        # Métricas de correção e paste
+        try:
+            # t_corr: medido indiretamente aqui usando logs de início/fim se disponíveis; como fallback, apenas marca etapa
+            logging.info("[METRIC] stage=correction_done value_ms=0")
+        except Exception:
+            pass
 
         if pyperclip:
             try:
@@ -218,10 +231,16 @@ class AppCore:
             except Exception as e:
                 logging.error(f"Erro ao copiar para o clipboard: {e}")
         
+        t_clip_copy_start = time.perf_counter()
         if self.auto_paste:
             self._do_paste()
         else:
             self._log_status("Transcription complete. Auto-paste disabled.")
+        t_clip_copy_end = time.perf_counter()
+        try:
+            logging.info(f"[METRIC] stage=clipboard_paste_block value_ms={(t_clip_copy_end - t_clip_copy_start) * 1000:.2f}")
+        except Exception:
+            pass
         
         self._set_state(STATE_IDLE)
         if self.ui_manager:
@@ -622,6 +641,26 @@ class AppCore:
         if config_changed:
             self.config_manager.save_config()
             self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
+
+            # Lógica para iniciar/parar o automator dinamicamente
+            service = self.config_manager.get("text_correction_service")
+            if service == "chatgpt_web" and self.chatgpt_automator is None:
+                logging.info("Iniciando o ChatGPT Automator devido à mudança de configuração.")
+                user_data_path = Path("user_data/playwright")
+                self.chatgpt_automator = ChatGPTAutomator(
+                    user_data_dir=user_data_path,
+                    config_manager=self.config_manager,
+                )
+                threading.Thread(
+                    target=self.chatgpt_automator.start,
+                    daemon=True,
+                    name="ChatGPTAutomatorThread",
+                ).start()
+            elif service != "chatgpt_web" and self.chatgpt_automator is not None:
+                logging.info("Encerrando o ChatGPT Automator devido à mudança de configuração.")
+                self.chatgpt_automator.close()
+                self.chatgpt_automator = None
+
             self.audio_handler.config_manager = self.config_manager # Atualizar referência
             self.transcription_handler.config_manager = self.config_manager # Atualizar referência
             if any(
@@ -807,6 +846,12 @@ class AppCore:
             self._cleanup_hotkeys()
         except Exception as e:
             logging.error(f"Error during hotkey cleanup in shutdown: {e}")
+
+        if self.chatgpt_automator:
+            try:
+                self.chatgpt_automator.close()
+            except Exception as e:
+                logging.error(f"Erro ao encerrar ChatGPT Automator: {e}")
 
         if self.transcription_handler:
             try:

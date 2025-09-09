@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 # Importar constantes de configuração
 from .config_manager import (
     SETTINGS_WINDOW_GEOMETRY,
-    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
+    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI, SERVICE_CHATGPT_WEB,
     GEMINI_MODEL_OPTIONS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
     DEFAULT_CONFIG,
@@ -161,6 +161,7 @@ class UIManager:
         return f"{m:02d}:{s:02d}"
 
     def _transcribing_tooltip_updater(self):
+<<<<<<< HEAD
         """Atualiza a tooltip com a duração da transcrição a cada segundo."""
         # Como não armazenamos o início da transcrição explicitamente,
         # estimamos a partir do fim da gravação:
@@ -172,6 +173,40 @@ class UIManager:
             tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
             if self.tray_icon:
                 self.tray_icon.title = tooltip
+=======
+        """Atualiza a tooltip com a duração da transcrição a cada segundo.
+
+        Estende a tooltip com informações técnicas (device/dtype/attn/chunk/batch)
+        quando disponíveis, atualizando a cada tick.
+        """
+        start_ts = time.time()
+        while not self.stop_transcribing_timer_event.is_set():
+            try:
+                tech = ""
+                th = getattr(self.core_instance_ref, "transcription_handler", None)
+                if th is not None:
+                    import torch
+                    device = f"cuda:{getattr(th, 'gpu_index', -1)}" if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0 else "cpu"
+                    dtype = "fp16" if (torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0) else "fp32"
+                    try:
+                        import importlib.util as _spec_util
+                        attn_impl = "FA2" if _spec_util.find_spec("flash_attn") is not None else "SDPA"
+                    except Exception:
+                        attn_impl = "SDPA"
+                    chunk = getattr(th, "chunk_length_sec", None)
+                    # Se disponível no handler, podemos expor last_dynamic_batch_size; fallback em None
+                    bs = getattr(th, "last_dynamic_batch_size", None) if hasattr(th, "last_dynamic_batch_size") else None
+                    tech = f" [{device} {dtype} | {attn_impl} | chunk={chunk}s | batch={bs}]"
+                elapsed = time.time() - start_ts
+                tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)}){tech}"
+                if self.tray_icon:
+                    self.tray_icon.title = tooltip
+            except Exception:
+                # Em caso de falha, mantém somente o tempo
+                elapsed = time.time() - start_ts
+                if self.tray_icon:
+                    self.tray_icon.title = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
+>>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
             time.sleep(1)
 
     def update_tray_icon(self, state):
@@ -212,7 +247,32 @@ class UIManager:
                 if not self.transcribing_timer_thread or not self.transcribing_timer_thread.is_alive():
                     self.stop_transcribing_timer_event.clear()
                     # Atualiza tooltip imediatamente ao entrar em TRANSCRIBING
+<<<<<<< HEAD
                     self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
+=======
+                    # Inclui dados técnicos quando disponíveis
+                    try:
+                        # Esses atributos são expostos via core_instance_ref.transcription_handler
+                        th = getattr(self.core_instance_ref, "transcription_handler", None)
+                        if th is not None:
+                            import torch
+                            device = f"cuda:{getattr(th, 'gpu_index', -1)}" if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0 else "cpu"
+                            dtype = "fp16" if (torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0) else "fp32"
+                            # Determinar attn_impl conforme detecção feita no handler
+                            try:
+                                import importlib.util as _spec_util
+                                attn_impl = "FA2" if _spec_util.find_spec("flash_attn") is not None else "SDPA"
+                            except Exception:
+                                attn_impl = "SDPA"
+                            chunk = getattr(th, "chunk_length_sec", None)
+                            # batch_size dinâmico só é conhecido no runtime; mostrar o valor padrão/configurado
+                            bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
+                            self.tray_icon.title = f"Whisper Recorder (TRANSCRIBING) [{device} {dtype} | {attn_impl} | chunk={chunk}s | batch={bs}]"
+                        else:
+                            self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
+                    except Exception:
+                        self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
+>>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
                     self.transcribing_timer_thread = threading.Thread(
                         target=self._transcribing_tooltip_updater,
                         daemon=True,
@@ -294,6 +354,16 @@ class UIManager:
                 sound_volume_var = ctk.DoubleVar(value=self.config_manager.get("sound_volume"))
                 text_correction_enabled_var = ctk.BooleanVar(value=self.config_manager.get("text_correction_enabled"))
                 text_correction_service_var = ctk.StringVar(value=self.config_manager.get("text_correction_service"))
+                service_display_map = {
+                    "None": SERVICE_NONE,
+                    "OpenRouter": SERVICE_OPENROUTER,
+                    "Gemini": SERVICE_GEMINI,
+                    "ChatGPT (Web)": SERVICE_CHATGPT_WEB,
+                }
+                text_correction_service_label_var = ctk.StringVar(
+                    value=next((label for label, val in service_display_map.items()
+                                if val == text_correction_service_var.get()), "None")
+                )
                 openrouter_api_key_var = ctk.StringVar(value=self.config_manager.get("openrouter_api_key"))
                 openrouter_model_var = ctk.StringVar(value=self.config_manager.get("openrouter_model"))
                 gemini_api_key_var = ctk.StringVar(value=self.config_manager.get("gemini_api_key"))
@@ -488,12 +558,23 @@ class UIManager:
                     sound_volume_var.set(DEFAULT_CONFIG["sound_volume"])
                     text_correction_enabled_var.set(DEFAULT_CONFIG["text_correction_enabled"])
                     text_correction_service_var.set(DEFAULT_CONFIG["text_correction_service"])
+                    text_correction_service_label_var.set(
+                        next(
+                            (
+                                label
+                                for label, val in service_display_map.items()
+                                if val == DEFAULT_CONFIG["text_correction_service"]
+                            ),
+                            "None",
+                        )
+                    )
                     # Sincroniza os campos de correção de texto caso os widgets existam
                     try:
                         service_menu  # Verifica se os widgets foram criados
                     except NameError:
                         pass
                     else:
+                        service_menu.set(text_correction_service_label_var.get())
                         update_text_correction_fields()
                     openrouter_api_key_var.set(DEFAULT_CONFIG["openrouter_api_key"])
                     openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
@@ -641,7 +722,12 @@ class UIManager:
                 service_frame = ctk.CTkFrame(ai_frame)
                 service_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(service_frame, text="Service:").pack(side="left", padx=(5, 10))
-                service_menu = ctk.CTkOptionMenu(service_frame, variable=text_correction_service_var, values=[SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI])
+                service_menu = ctk.CTkOptionMenu(
+                    service_frame,
+                    variable=text_correction_service_label_var,
+                    values=list(service_display_map.keys()),
+                    command=lambda choice: text_correction_service_var.set(service_display_map[choice]),
+                )
                 service_menu.pack(side="left", padx=5)
                 Tooltip(service_menu, "Select the service for text correction.")
 

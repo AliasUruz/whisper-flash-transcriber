@@ -212,11 +212,17 @@ class GeminiAPI:
         agent_prompt_template = self.config_manager.get('prompt_agentico')
         full_prompt = f"{agent_prompt_template}\n\n{text}"
         original_model = self.current_model_id
+        original_last_model = self.last_model_id
+        original_config_model = self.config_manager.get('gemini_model')
         self.current_model_id = self.config_manager.get('gemini_agent_model')
         self.last_model_id = None
+        self.config_manager.set('gemini_model', self.current_model_id)
+        self._load_model_from_config()
         agent_response = self._execute_request(full_prompt)
+        self.config_manager.set('gemini_model', original_config_model)
         self.current_model_id = original_model
-        self.last_model_id = None
+        self.last_model_id = original_last_model
+        self._load_model_from_config()
         return agent_response if agent_response else text
 
     def correct_text_async(self, text: str, prompt: str, api_key: str) -> str:

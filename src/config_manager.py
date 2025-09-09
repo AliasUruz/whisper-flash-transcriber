@@ -18,9 +18,19 @@ def _parse_bool(value):
             return bool(value)
     return bool(value)
 
+
 # --- Constantes de Configuração (movidas de whisper_tkinter.py) ---
 CONFIG_FILE = "config.json"
 SECRETS_FILE = "secrets.json" # Nova constante para o arquivo de segredos
+
+CHATGPT_DEFAULT_SELECTORS = {
+    "prompt_textarea": "#prompt-textarea",
+    "response_container": "div[data-message-author-role='assistant']",
+    "attach_button": 'button[data-testid="composer-plus-btn"]',
+    "send_button": 'button[data-testid="send-button"]',
+}
+"""Lista de seletores CSS para os principais elementos da interface web do ChatGPT."""
+
 DEFAULT_CONFIG = {
     "record_key": "F3",
     "record_mode": "toggle",
@@ -40,19 +50,30 @@ DEFAULT_CONFIG = {
     "gemini_model": "gemini-2.5-flash-lite",
     "gemini_agent_model": "gemini-2.5-flash-lite",
     "ai_provider": "gemini",
-    "openrouter_agent_prompt": "",
     "openrouter_prompt": "",
-    "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. The output language should match the main language of the provided text.",
-    "gemini_prompt": """You are a meticulous speech-to-text correction AI. Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below while preserving the original content and structure as closely as possible.
-Key instructions:
-- Correct punctuation, such as adding commas, periods, and question marks where appropriate.
-- Fix capitalization at the beginning of sentences.
-- Remove only obvious speech disfluencies like stutters (e.g., \"I-I mean\") and false starts, but preserve the natural flow of speech.
-- DO NOT summarize, paraphrase, or change the original meaning of the sentences.
-- DO NOT remove any content, even if it seems redundant.
-- Preserve all language transitions (e.g., Portuguese/English) exactly as they occur.
-- Return only the corrected text, with no additional comments or explanations.
-Transcribed speech: {text}""",
+    "chatgpt_url": "https://chatgpt.com/",
+    "chatgpt_selectors": CHATGPT_DEFAULT_SELECTORS,
+    "prompt_agentico": (
+        "You are an AI assistant that executes text commands. "
+        "The user will provide an instruction followed by the text to be processed. "
+        "Your task is to execute the instruction on the text and return ONLY the final result. "
+        "Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. "
+        "The output language should match the main language of the provided text."
+    ),
+    "gemini_prompt": (
+        "You are a meticulous speech-to-text correction AI. "
+        "Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below "
+        "while preserving the original content and structure as closely as possible.\n"
+        "Key instructions:\n"
+        "- Correct punctuation, such as adding commas, periods, and question marks where appropriate.\n"
+        "- Fix capitalization at the beginning of sentences.\n"
+        "- Remove only obvious speech disfluencies like stutters (e.g., \"I-I mean\") and false starts, but preserve the natural flow of speech.\n"
+        "- DO NOT summarize, paraphrase, or change the original meaning of the sentences.\n"
+        "- DO NOT remove any content, even if it seems redundant.\n"
+        "- Preserve all language transitions (e.g., Portuguese/English) exactly as they occur.\n"
+        "- Return only the corrected text, with no additional comments or explanations.\n"
+        "Transcribed speech: {text}"
+    ),
     "batch_size": 16, # Valor padrão para o modo automático
     "batch_size_mode": "auto", # Novo: 'auto' ou 'manual'
     "manual_batch_size": 8, # Novo: Valor para o modo manual
@@ -74,12 +95,17 @@ Transcribed speech: {text}""",
     "max_memory_seconds_mode": "manual",
     "max_memory_seconds": 30,
     "min_free_ram_mb": 1000,
+    "auto_ram_threshold_percent": 10,
     "min_transcription_duration": 1.0, # Nova configuração
     "chunk_length_sec": 30,
     "chunk_length_mode": "manual",
     "enable_torch_compile": False,
     "launch_at_startup": False,
-    "clear_gpu_cache": True
+    "clear_gpu_cache": True,
+    # Configurações específicas para automação do ChatGPT
+    "chatgpt_url": "https://chatgpt.com/",
+    "chatgpt_retry_attempts": 3,
+    "chatgpt_retry_interval": 1.0,
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -114,6 +140,7 @@ ENABLE_AI_CORRECTION_CONFIG_KEY = TEXT_CORRECTION_ENABLED_CONFIG_KEY
 SERVICE_NONE = "none"
 SERVICE_OPENROUTER = "openrouter"
 SERVICE_GEMINI = "gemini"
+SERVICE_CHATGPT_WEB = "chatgpt_web"
 OPENROUTER_API_KEY_CONFIG_KEY = "openrouter_api_key"
 OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
@@ -125,14 +152,17 @@ CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
 ENABLE_TORCH_COMPILE_CONFIG_KEY = "enable_torch_compile"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
-OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
-OPENROUTER_AGENT_PROMPT_CONFIG_KEY = OPENROUTER_PROMPT_CONFIG_KEY
+OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
+OPENROUTER_AGENT_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
+CHATGPT_URL_CONFIG_KEY = "chatgpt_url"
+CHATGPT_SELECTORS_CONFIG_KEY = "chatgpt_selectors"
+CHATGPT_HEADLESS_CONFIG_KEY = "chatgpt_headless"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -161,15 +191,26 @@ class ConfigManager:
                 if "vad_enabled" in loaded_config_from_file:
                     logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
                     loaded_config_from_file["use_vad"] = loaded_config_from_file.pop("vad_enabled")
-                if "record_storage_mode" not in loaded_config_from_file and "record_to_memory" in loaded_config_from_file:
-                    logging.info("Migrating legacy 'record_to_memory' key to 'record_storage_mode'.")
+                if (
+                    "record_storage_mode" not in loaded_config_from_file and "record_to_memory" in loaded_config_from_file
+                ):
+                    logging.info(
+                        "Migrating legacy 'record_to_memory' key to 'record_storage_mode'."
+                    )
                     rec_mem = _parse_bool(loaded_config_from_file["record_to_memory"])
-                    loaded_config_from_file["record_storage_mode"] = "memory" if rec_mem else "disk"
+                    loaded_config_from_file["record_storage_mode"] = (
+                        "memory" if rec_mem else "disk"
+                    )
                 cfg.update(loaded_config_from_file)
                 logging.info(f"Configuration loaded from {self.config_file}.")
 
                 # --- Migração do Prompt Agêntico ---
-                old_agent_prompt = "Você é um assistente de IA que integra um sistema operacional. Se o usuário pedir uma ação que possa ser resolvida por um comando de terminal (como listar arquivos, verificar o IP, etc.), responda exclusivamente com o comando dentro das tags <cmd>comando</cmd>. Para todas as outras solicitações, responda normalmente."
+                old_agent_prompt = (
+                    "Você é um assistente de IA que integra um sistema operacional. "
+                    "Se o usuário pedir uma ação que possa ser resolvida por um comando de terminal "
+                    "(como listar arquivos, verificar o IP, etc.), responda exclusivamente com o comando "
+                    "dentro das tags <cmd>comando</cmd>. Para todas as outras solicitações, responda normalmente."
+                )
                 current_agent_prompt = cfg.get("prompt_agentico", "")
                 if current_agent_prompt == old_agent_prompt:
                     cfg["prompt_agentico"] = self.default_config["prompt_agentico"]
@@ -318,6 +359,17 @@ class ConfigManager:
         except (ValueError, TypeError):
             self.config["min_free_ram_mb"] = self.default_config["min_free_ram_mb"]
 
+        # auto_ram_threshold_percent: inteiro 1..50 (limite de segurança)
+        try:
+            raw_thr = self.config.get("auto_ram_threshold_percent", self.default_config.get("auto_ram_threshold_percent", 10))
+            thr = int(raw_thr)
+            if not (1 <= thr <= 50):
+                logging.warning(f"Invalid auto_ram_threshold_percent '{thr}'. Must be between 1 and 50. Using default (10).")
+                thr = self.default_config.get("auto_ram_threshold_percent", 10)
+            self.config["auto_ram_threshold_percent"] = thr
+        except (ValueError, TypeError):
+            self.config["auto_ram_threshold_percent"] = self.default_config.get("auto_ram_threshold_percent", 10)
+
         try:
             self.config[CHUNK_LENGTH_SEC_CONFIG_KEY] = float(
                 self.config.get(
@@ -362,33 +414,61 @@ class ConfigManager:
 
         # Lógica de validação para min_transcription_duration
         try:
-            raw_min_duration_val = loaded_config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY])
+            raw_min_duration_val = loaded_config.get(
+                MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
+                self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY],
+            )
             min_duration_val = float(raw_min_duration_val)
-            if not (0.1 <= min_duration_val <= 10.0): # Exemplo de range razoável
-                logging.warning(f"Invalid min_transcription_duration '{min_duration_val}'. Must be between 0.1 and 10.0. Using default ({self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]}).")
-                self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
+            if not (0.1 <= min_duration_val <= 10.0):  # Exemplo de range razoável
+                logging.warning(
+                    f"Invalid min_transcription_duration '{min_duration_val}'. "
+                    "Must be between 0.1 and 10.0. Using default "
+                    f"({self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]})."
+                )
+                self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = (
+                    self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
+                )
             else:
                 self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = min_duration_val
         except (ValueError, TypeError):
-            logging.warning(f"Invalid min_transcription_duration value '{self.config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]}).")
-            self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
+            logging.warning(
+                "Invalid min_transcription_duration value '%s' in config. "
+                "Falling back to default (%s).",
+                self.config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY),
+                self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY],
+            )
+            self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = (
+                self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
+            )
 
         # Validação para min_record_duration
         try:
-            raw_min_rec_val = loaded_config.get(MIN_RECORDING_DURATION_CONFIG_KEY, self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY])
+            raw_min_rec_val = loaded_config.get(
+                MIN_RECORDING_DURATION_CONFIG_KEY,
+                self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY],
+            )
             min_rec_val = float(raw_min_rec_val)
             if not (0.1 <= min_rec_val <= 10.0):
                 logging.warning(
-                    f"Invalid min_record_duration '{min_rec_val}'. Must be between 0.1 and 10.0. Using default ({self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]})."
+                    f"Invalid min_record_duration '{min_rec_val}'. "
+                    "Must be between 0.1 and 10.0. Using default "
+                    f"({self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]})."
                 )
-                self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]
+                self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = (
+                    self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]
+                )
             else:
                 self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = min_rec_val
         except (ValueError, TypeError):
             logging.warning(
-                f"Invalid min_record_duration value '{self.config.get(MIN_RECORDING_DURATION_CONFIG_KEY)}' in config. Falling back to default ({self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]})."
+                "Invalid min_record_duration value '%s' in config. "
+                "Falling back to default (%s).",
+                self.config.get(MIN_RECORDING_DURATION_CONFIG_KEY),
+                self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY],
             )
-            self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]
+            self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = (
+                self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]
+            )
 
         # Lógica para uso do VAD
         self.config[USE_VAD_CONFIG_KEY] = _parse_bool(
@@ -401,28 +481,43 @@ class ConfigManager:
             )
         )
         try:
-            raw_threshold = self.config.get(VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY])
+            raw_threshold = self.config.get(
+                VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY]
+            )
             self.config[VAD_THRESHOLD_CONFIG_KEY] = float(raw_threshold)
         except (ValueError, TypeError):
             logging.warning(
-                f"Invalid vad_threshold value '{self.config.get(VAD_THRESHOLD_CONFIG_KEY)}' in config. Using default ({self.default_config[VAD_THRESHOLD_CONFIG_KEY]})."
+                "Invalid vad_threshold value '%s' in config. Using default (%s).",
+                self.config.get(VAD_THRESHOLD_CONFIG_KEY),
+                self.default_config[VAD_THRESHOLD_CONFIG_KEY],
             )
-            self.config[VAD_THRESHOLD_CONFIG_KEY] = self.default_config[VAD_THRESHOLD_CONFIG_KEY]
+            self.config[VAD_THRESHOLD_CONFIG_KEY] = (
+                self.default_config[VAD_THRESHOLD_CONFIG_KEY]
+            )
 
         try:
-            raw_silence = self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY, self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY])
+            raw_silence = self.config.get(
+                VAD_SILENCE_DURATION_CONFIG_KEY,
+                self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY],
+            )
             silence_val = float(raw_silence)
             if silence_val < 0.1:
                 logging.warning(
-                    f"Invalid vad_silence_duration '{silence_val}'. Must be >= 0.1. Using default ({self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]})."
+                    "Invalid vad_silence_duration '%s'. Must be >= 0.1. Using default (%s).",
+                    silence_val,
+                    self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY],
                 )
                 silence_val = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
             self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = silence_val
         except (ValueError, TypeError):
             logging.warning(
-                f"Invalid vad_silence_duration value '{self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY)}' in config. Using default ({self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]})."
+                "Invalid vad_silence_duration value '%s' in config. Using default (%s).",
+                self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY),
+                self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY],
             )
-            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
+            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = (
+                self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
+            )
 
         safe_config = self.config.copy()
         safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
@@ -500,6 +595,21 @@ class ConfigManager:
             logging.info(f"No changes detected in {SECRETS_FILE}.")
 
     def get(self, key, default=None):
+        """Recupera valores da configuração permitindo acesso aninhado.
+
+        Chaves separadas por pontos indicam níveis dentro de dicionários,
+        possibilitando obter dinamicamente seletores como
+        ``chatgpt_selectors.prompt``.
+        """
+        if isinstance(key, str) and "." in key:
+            current = self.config
+            for part in key.split("."):
+                if not isinstance(current, dict):
+                    return default
+                current = current.get(part)
+                if current is None:
+                    return default
+            return current
         return self.config.get(key, default)
 
     def set(self, key, value):

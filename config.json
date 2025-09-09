@@ -1,0 +1,21 @@
+{
+  "chatgpt_url": "https://chatgpt.com/",
+  "chatgpt_selectors": {
+    "prompt": [
+      "textarea[data-id='root']",
+      "#prompt-textarea"
+    ],
+    "plus": [
+      "button[data-testid='composer-plus-btn']"
+    ],
+    "upload": [
+      "input[type='file']"
+    ],
+    "send": [
+      "button[data-testid='send-button']"
+    ],
+    "resp": [
+      "div[data-message-author-role='assistant']"
+    ]
+  }
+}
