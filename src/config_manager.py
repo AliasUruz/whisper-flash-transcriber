@@ -3,6 +3,7 @@ import json
 import logging
 import copy
 import hashlib
+from .model_manager import list_catalog, list_installed
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -145,6 +146,7 @@ REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
+ASR_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "whisper-flash-transcriber", "asr")
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -231,6 +233,13 @@ class ConfigManager:
             logging.error(f"An unexpected error occurred while loading {SECRETS_FILE}: {e}. API keys might be missing or invalid.", exc_info=True)
             secrets_loaded = {}
             self._secrets_hash = None
+
+        cfg["asr_curated_catalog"] = list_catalog()
+        try:
+            cfg["asr_installed_models"] = list_installed(ASR_CACHE_DIR)
+        except Exception as e:  # pragma: no cover - salvaguarda
+            logging.warning(f"Falha ao listar modelos instalados: {e}")
+            cfg["asr_installed_models"] = []
 
         self.config = cfg
         # Aplicar validação e conversão de tipo
@@ -520,7 +529,12 @@ class ConfigManager:
                 secrets_to_save[key] = config_to_save.pop(key)
 
         # Remover chaves não persistentes
-        keys_to_ignore = ["tray_menu_items", "hotkey_manager"]
+        keys_to_ignore = [
+            "tray_menu_items",
+            "hotkey_manager",
+            "asr_curated_catalog",
+            "asr_installed_models",
+        ]
         for key in keys_to_ignore:
             if key in config_to_save:
                 del config_to_save[key]
