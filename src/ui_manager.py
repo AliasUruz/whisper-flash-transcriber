@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 # Importar constantes de configuração
 from .config_manager import (
     SETTINGS_WINDOW_GEOMETRY,
-    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI, SERVICE_CHATGPT_WEB,
+    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
     GEMINI_MODEL_OPTIONS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
     DEFAULT_CONFIG,
@@ -161,19 +161,6 @@ class UIManager:
         return f"{m:02d}:{s:02d}"
 
     def _transcribing_tooltip_updater(self):
-<<<<<<< HEAD
-        """Atualiza a tooltip com a duração da transcrição a cada segundo."""
-        # Como não armazenamos o início da transcrição explicitamente,
-        # estimamos a partir do fim da gravação:
-        # Quando entra em TRANSCRIBING, o AudioHandler.start_time é zerado,
-        # então vamos capturar um timestamp local para contar.
-        start_ts = time.time()
-        while not self.stop_transcribing_timer_event.is_set():
-            elapsed = time.time() - start_ts
-            tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
-            if self.tray_icon:
-                self.tray_icon.title = tooltip
-=======
         """Atualiza a tooltip com a duração da transcrição a cada segundo.
 
         Estende a tooltip com informações técnicas (device/dtype/attn/chunk/batch)
@@ -206,7 +193,6 @@ class UIManager:
                 elapsed = time.time() - start_ts
                 if self.tray_icon:
                     self.tray_icon.title = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
->>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
             time.sleep(1)
 
     def update_tray_icon(self, state):
@@ -247,9 +233,6 @@ class UIManager:
                 if not self.transcribing_timer_thread or not self.transcribing_timer_thread.is_alive():
                     self.stop_transcribing_timer_event.clear()
                     # Atualiza tooltip imediatamente ao entrar em TRANSCRIBING
-<<<<<<< HEAD
-                    self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
-=======
                     # Inclui dados técnicos quando disponíveis
                     try:
                         # Esses atributos são expostos via core_instance_ref.transcription_handler
@@ -272,7 +255,6 @@ class UIManager:
                             self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
                     except Exception:
                         self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
->>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
                     self.transcribing_timer_thread = threading.Thread(
                         target=self._transcribing_tooltip_updater,
                         daemon=True,
@@ -358,7 +340,6 @@ class UIManager:
                     "None": SERVICE_NONE,
                     "OpenRouter": SERVICE_OPENROUTER,
                     "Gemini": SERVICE_GEMINI,
-                    "ChatGPT (Web)": SERVICE_CHATGPT_WEB,
                 }
                 text_correction_service_label_var = ctk.StringVar(
                     value=next((label for label, val in service_display_map.items()

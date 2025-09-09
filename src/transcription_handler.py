@@ -19,19 +19,19 @@ from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em pa
 from .audio_handler import AUDIO_SAMPLE_RATE
 
 # Importar constantes de configuração
-from utils import select_batch_size
+from .utils import select_batch_size
 from .config_manager import (
     BATCH_SIZE_CONFIG_KEY, GPU_INDEX_CONFIG_KEY,
-    BATCH_SIZE_MODE_CONFIG_KEY, MANUAL_BATCH_SIZE_CONFIG_KEY, # Novos
+    BATCH_SIZE_MODE_CONFIG_KEY, MANUAL_BATCH_SIZE_CONFIG_KEY,
     TEXT_CORRECTION_ENABLED_CONFIG_KEY, TEXT_CORRECTION_SERVICE_CONFIG_KEY,
-    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI, SERVICE_CHATGPT_WEB,
+    SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
     OPENROUTER_API_KEY_CONFIG_KEY, OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     GEMINI_AGENT_PROMPT_CONFIG_KEY,
     OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
-    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY, # Nova constante
+    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
 )
@@ -94,11 +94,6 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
-<<<<<<< HEAD
-        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
-        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
-=======
->>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -153,8 +148,6 @@ class TranscriptionHandler:
             if model and processor:
                 device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
 
-<<<<<<< HEAD
-=======
                 # Definir o modelo para modo de avaliação (evita cálculos de gradiente)
                 try:
                     if hasattr(model, "eval"):
@@ -169,8 +162,6 @@ class TranscriptionHandler:
                             pass
                 except Exception as e:
                     logging.warning(f"Falha ao aplicar model.eval(): {e}")
-
->>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
                 # torch.compile opcional
                 try:
                     if self.enable_torch_compile and hasattr(torch, "compile") and device.startswith("cuda"):
@@ -187,11 +178,6 @@ class TranscriptionHandler:
                     "language": None
                 }
 
-<<<<<<< HEAD
-                # Removido bloco duplicado de ajuste de chunk (mantemos apenas a verificação com modo 'auto' abaixo)
-
-=======
->>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
                 # Ajuste de chunk_length_sec quando em modo 'auto' (antes de criar a pipeline)
                 if self.chunk_length_mode == "auto":
                     try:
@@ -202,10 +188,6 @@ class TranscriptionHandler:
                     except Exception as e:
                         logging.warning(f"Falha ao calcular chunk_length auto: {e}. Mantendo valor atual {self.chunk_length_sec}.")
 
-<<<<<<< HEAD
-=======
-                # Criar pipeline
->>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
                 self.pipe = pipeline(
                     "automatic-speech-recognition",
                     model=model,
@@ -489,57 +471,8 @@ class TranscriptionHandler:
             logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
             return
 
-        used_chatgpt_web = False
         text_result = None
         try:
-            if self.config_manager.get("text_correction_service") == "chatgpt_web":
-                if self.core_instance_ref and getattr(self.core_instance_ref, "chatgpt_automator", None):
-                    if isinstance(audio_source, str):
-                        logging.info("Delegando transcrição para o ChatGPT (Web)...")
-                        text_result = self.core_instance_ref.chatgpt_automator.transcribe_audio(audio_source)
-                        callback = self.on_transcription_result_callback
-                        if text_result:
-                            callback(text_result, text_result)
-                        else:
-                            callback("[Falha na automação do ChatGPT]", "[Falha na automação do ChatGPT]")
-                        used_chatgpt_web = True
-                        return
-                    elif isinstance(audio_source, np.ndarray):
-                        logging.info("Convertendo array de áudio em WAV temporário para o ChatGPT (Web)...")
-                        temp_path = None
-                        try:
-                            if audio_source.ndim > 1:
-                                audio_array = audio_source.flatten()
-                            else:
-                                audio_array = audio_source
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-                                temp_path = tmp_file.name
-                                sf.write(temp_path, audio_array.astype(np.float32), AUDIO_SAMPLE_RATE)
-                            logging.info("Delegando transcrição para o ChatGPT (Web)...")
-                            text_result = self.core_instance_ref.chatgpt_automator.transcribe_audio(temp_path)
-                            callback = self.on_transcription_result_callback
-                            if text_result:
-                                callback(text_result, text_result)
-                            else:
-                                callback("[Falha na automação do ChatGPT]", "[Falha na automação do ChatGPT]")
-                        finally:
-                            if temp_path and os.path.exists(temp_path):
-                                try:
-                                    os.remove(temp_path)
-                                except Exception:
-                                    pass
-                        used_chatgpt_web = True
-                        return
-                    else:
-                        logging.error("O modo ChatGPT (Web) requer gravação em 'disk', 'auto' ou array em memória.")
-                        self.on_transcription_result_callback("[Modo de gravação incompatível]", "[Modo de gravação incompatível]")
-                        used_chatgpt_web = True
-                        return
-                else:
-                    logging.error("Serviço ChatGPT (Web) selecionado, mas o automator não está inicializado.")
-                    self.on_transcription_result_callback("[Automator não inicializado]", "[Automator não inicializado]")
-                    used_chatgpt_web = True
-                    return
 
             if self.pipe is None:
                 error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
@@ -564,15 +497,6 @@ class TranscriptionHandler:
                 except Exception:
                     pass
 
-<<<<<<< HEAD
-            result = self.pipe(
-                audio_source,
-                chunk_length_s=self.chunk_length_sec,
-                batch_size=dynamic_batch_size,
-                return_timestamps=False,
-                generate_kwargs=generate_kwargs
-            )
-=======
             # Métricas detalhadas de tempos: t_pre, t_infer, t_post e t_total_segment
             # Campos técnicos
             try:
@@ -614,7 +538,6 @@ class TranscriptionHandler:
             # t_post: montagem/validação do texto
             t_post_start = time.perf_counter()
             # o processamento de result segue abaixo (text_result, etc.)
->>>>>>> 46f4e0223a357f06128d49f094f2c94125c7e118
 
             if result and "text" in result:
                 text_result = result["text"].strip()
@@ -686,9 +609,6 @@ class TranscriptionHandler:
             text_result = f"[Transcription Error: {e}]"
 
         finally:
-            if used_chatgpt_web:
-                return
-
             if self.transcription_cancel_event.is_set():
                 logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
                 self.transcription_cancel_event.clear()
