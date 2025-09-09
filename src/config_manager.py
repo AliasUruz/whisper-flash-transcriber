@@ -93,6 +93,7 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
+    "asr_installed_models": [],
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -610,6 +611,12 @@ class ConfigManager:
 
     def set(self, key, value):
         self.config[key] = value
+
+    def get_asr_installed_models(self) -> List[str]:
+        return self.config.get(ASR_INSTALLED_MODELS_CONFIG_KEY, [])
+
+    def set_asr_installed_models(self, models: List[str]):
+        self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = list(models)
 
     def get_api_key(self, provider: str) -> str:
         if provider == SERVICE_GEMINI:
