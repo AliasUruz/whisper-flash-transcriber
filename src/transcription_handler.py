@@ -27,8 +27,7 @@ except Exception:  # pragma: no cover
 
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
 from .audio_handler import AUDIO_SAMPLE_RATE
-from .model_manager import ensure_download
-from .config_manager import ASR_CACHE_DIR
+from pathlib import Path
 
 # Importar constantes de configuração
 from .utils import select_batch_size
@@ -490,14 +489,15 @@ class TranscriptionHandler:
 
             # --- Fallback sem whisper_flash ---
             model_id = self.asr_model_id
-            ensure_download(
-                model_id,
-                backend=self.asr_backend,
-                cache_dir=self.asr_cache_dir,
-                quant=self.asr_ct2_compute_type,
-            )
+            backend = self.asr_backend
+            compute_device = self.asr_compute_device
+            model_path = Path(self.asr_cache_dir) / backend / model_id
+            if not (model_path.is_dir() and any(model_path.iterdir())):
+                raise FileNotFoundError(
+                    f"Modelo '{model_id}' não encontrado. Instale-o nas configurações."
+                )
             logging.info(f"Carregando processador de {model_id}...")
-            processor = AutoProcessor.from_pretrained(model_id)
+            processor = AutoProcessor.from_pretrained(str(model_path))
 
             if torch.cuda.is_available():
                 if self.gpu_index == -1:

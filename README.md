@@ -237,6 +237,7 @@ You are now ready to run the Whisper Transcription App!
     This command executes the main application file.
 2.  **Application Window:** A graphical window should appear. This is the application's main interface.
 3.  **System Tray Icon:** The application will likely minimize to your Windows system tray (near the clock). You can usually interact with it by right-clicking the icon.
+4.  **Model Download Prompt:** On first launch, if the selected Whisper model isn't installed, the app will ask before downloading it. You can always install or switch models later from the settings menu.
 
 ## Configuration
 
