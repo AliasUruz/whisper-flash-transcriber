@@ -549,6 +549,10 @@ class TranscriptionHandler:
             if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0:
                 quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
+            # Determina dinamicamente se o FlashAttention 2 está disponível
+            self._asr_backend = make_backend(asr_backend)
+
+            attn_impl = "sdpa"
             try:
                 import importlib.util
                 use_flash_attn = importlib.util.find_spec("flash_attn") is not None

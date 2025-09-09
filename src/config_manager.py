@@ -3,9 +3,9 @@ import json
 import logging
 import copy
 import hashlib
-from typing import Any, Dict, List
-
-import requests
+from pathlib import Path
+from typing import List
+from .model_manager import list_catalog, list_installed
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -97,12 +97,11 @@ DEFAULT_CONFIG = {
     "clear_gpu_cache": True,
     "asr_model": "openai/whisper-large-v3",
     "asr_model_id": "openai/whisper-large-v3",
-    "asr_backend": "whisper",
-    "asr_installed_models": [],
     "asr_compute_device": "auto",
     "asr_dtype": "float16",
     "asr_ct2_compute_type": "default",
-    "asr_cache_dir": "",
+    "asr_cache_dir": str((Path.home() / ".cache" / "whisper_flash_transcriber" / "asr").expanduser()),
+    "asr_installed_models": [],
     "asr_curated_catalog": [],
 }
 
@@ -164,13 +163,9 @@ ASR_DTYPE_CONFIG_KEY = "asr_dtype"
 ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
 ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
-ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
-ASR_BACKEND_CONFIG_KEY = "asr_backend"
-ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
-ASR_DTYPE_CONFIG_KEY = "asr_dtype"
-ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
-ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
+
+ASR_CACHE_DIR = os.path.expanduser(DEFAULT_CONFIG["asr_cache_dir"])
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):

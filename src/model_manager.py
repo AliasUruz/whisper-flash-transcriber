@@ -133,24 +133,16 @@ def ensure_download(
     local_dir = os.path.join(cache_dir, backend, model_id)
     if os.path.isdir(local_dir) and os.listdir(local_dir):
         return local_dir
+    except Exception as e:  # pragma: no cover - network/IO errors
+        logging.error("Failed to download model '%s': %s", repo, e)
+        raise
 
-    os.makedirs(local_dir, exist_ok=True)
 
-    if backend == "transformers":
-        repo_id = backend_info["repo_id"]
-        snapshot_download(repo_id, local_dir=local_dir, local_dir_use_symlinks=False)
-    elif backend == "ct2":
-        try:
-            from faster_whisper.utils import download_model
-        except Exception as exc:  # pragma: no cover - import guard
-            raise RuntimeError("faster-whisper não está instalado") from exc
-        download_model(
-            backend_info["size"],
-            output_dir=local_dir,
-            cache_dir=cache_dir,
-            revision=quant,
-        )
-    else:  # pragma: no cover - sanidade
-        raise ValueError(f"Backend desconhecido: {backend}")
+def list_catalog() -> list[str]:
+    """Return available curated model identifiers."""
+    return list(CURATED.keys())
 
-    return local_dir
+
+def list_installed(_cache_dir: Path | str | None = None) -> list[str]:
+    """Return identifiers of locally installed models."""
+    return list(asr_installed_models().keys())

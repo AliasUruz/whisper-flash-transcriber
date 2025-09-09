@@ -27,10 +27,6 @@ from .config_manager import (
     GEMINI_PROMPT_CONFIG_KEY,
     ASR_BACKEND_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
-    ASR_COMPUTE_DEVICE_CONFIG_KEY,
-    ASR_DTYPE_CONFIG_KEY,
-    ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-    ASR_CACHE_DIR_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
@@ -607,6 +603,8 @@ class AppCore:
                 "new_max_memory_seconds_mode": "max_memory_seconds_mode",
                 "new_max_memory_seconds": "max_memory_seconds",
                 "new_gemini_model_options": "gemini_model_options",
+                "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
+                "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
                 "new_use_vad": "use_vad",
                 "new_vad_threshold": "vad_threshold",
                 "new_vad_silence_duration": "vad_silence_duration",
@@ -742,7 +740,17 @@ class AppCore:
             set_launch_at_startup(bool(value))
 
         # Propagar para TranscriptionHandler se for uma configuração relevante
-        if key in ["batch_size_mode", "manual_batch_size", "gpu_index", "min_transcription_duration", "record_to_memory", "max_memory_seconds", "max_memory_seconds_mode"]:
+        if key in [
+            "batch_size_mode",
+            "manual_batch_size",
+            "gpu_index",
+            "min_transcription_duration",
+            "record_to_memory",
+            "max_memory_seconds",
+            "max_memory_seconds_mode",
+            ASR_MODEL_ID_CONFIG_KEY,
+            ASR_BACKEND_CONFIG_KEY,
+        ]:
             self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
             self.transcription_handler.update_config()
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
