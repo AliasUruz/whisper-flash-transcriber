@@ -88,6 +88,6 @@ class VADManager:
             "sr": np.array([self.sr], dtype=np.int64),
         }
         outs = self.session.run(None, ort_inputs)
-        speech_prob = float(outs[0][0][0])
+        speech_prob = outs[0][0][0].item()
         self._state = outs[1] # Atualiza o estado com a saída do modelo
         return speech_prob > self.threshold
