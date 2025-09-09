@@ -34,6 +34,7 @@ from .config_manager import (
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
+    CLEAR_GPU_CACHE_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -66,6 +67,9 @@ class TranscriptionHandler:
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
         self.pipe = None
+        self._asr_backend = self  # Backend placeholder
+        self._asr_backend_name = self.config_manager.get("asr_backend")
+        self._asr_model_id = self.config_manager.get("asr_model_id", "openai/whisper-large-v3")
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
         # Executor dedicado para a tarefa de transcrição em background
@@ -119,6 +123,43 @@ class TranscriptionHandler:
         # O cliente Gemini agora é injetado, então sua inicialização foi removida daqui.
         # A inicialização do OpenRouter é mantida.
 
+    @property
+    def asr_backend(self):
+        return self._asr_backend_name
+
+    @asr_backend.setter
+    def asr_backend(self, value):
+        if value != self._asr_backend_name:
+            self._asr_backend_name = value
+            self.reload_asr()
+
+    @property
+    def asr_model_id(self):
+        return self._asr_model_id
+
+    @asr_model_id.setter
+    def asr_model_id(self, value):
+        if value != self._asr_model_id:
+            self._asr_model_id = value
+            self.reload_asr()
+
+    def unload(self):
+        """Descarta a pipeline atual."""
+        self.pipe = None
+
+    def reload_asr(self):
+        """Recarrega o backend de ASR e o modelo associado."""
+        try:
+            self._asr_backend.unload()
+        except Exception as e:
+            logging.warning(f"Falha ao descarregar backend ASR: {e}")
+
+        if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # _initialize_model_and_processor executa _load_model_task internamente
+        self._initialize_model_and_processor()
+
     def update_config(self):
         """Atualiza as configurações do handler a partir do config_manager."""
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)
@@ -136,6 +177,8 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.asr_backend = self.config_manager.get("asr_backend", self.asr_backend)
+        self.asr_model_id = self.config_manager.get("asr_model_id", self.asr_model_id)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
@@ -372,7 +415,7 @@ class TranscriptionHandler:
                         logging.info("Nenhuma GPU disponível, usando CPU.")
                         self.gpu_index = -1 # Garante que o índice seja -1 se não houver GPU
                 
-            model_id = "openai/whisper-large-v3"
+            model_id = self.asr_model_id or "openai/whisper-large-v3"
             
             logging.info(f"Carregando processador de {model_id}...")
             processor = AutoProcessor.from_pretrained(model_id)
