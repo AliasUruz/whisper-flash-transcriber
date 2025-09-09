@@ -30,7 +30,6 @@ from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE a
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
-from .chatgpt_automator import ChatGPTAutomator
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -79,10 +78,6 @@ class AppCore:
         self.transcription_handler.core_instance_ref = self  # Expõe referência do núcleo ao handler
 
         self.ui_manager = None # Será setado externamente pelo main.py
-        self.chatgpt_automator = None
-        # A inicialização do ChatGPTAutomator será realizada dinamicamente
-        # sempre que o serviço de correção de texto for alterado.
-
         # --- Estado da Aplicação ---
         self.current_state = STATE_LOADING_MODEL
         self.shutting_down = False
@@ -642,25 +637,6 @@ class AppCore:
             self.config_manager.save_config()
             self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
 
-            # Lógica para iniciar/parar o automator dinamicamente
-            service = self.config_manager.get("text_correction_service")
-            if service == "chatgpt_web" and self.chatgpt_automator is None:
-                logging.info("Iniciando o ChatGPT Automator devido à mudança de configuração.")
-                user_data_path = Path("user_data/playwright")
-                self.chatgpt_automator = ChatGPTAutomator(
-                    user_data_dir=user_data_path,
-                    config_manager=self.config_manager,
-                )
-                threading.Thread(
-                    target=self.chatgpt_automator.start,
-                    daemon=True,
-                    name="ChatGPTAutomatorThread",
-                ).start()
-            elif service != "chatgpt_web" and self.chatgpt_automator is not None:
-                logging.info("Encerrando o ChatGPT Automator devido à mudança de configuração.")
-                self.chatgpt_automator.close()
-                self.chatgpt_automator = None
-
             self.audio_handler.config_manager = self.config_manager # Atualizar referência
             self.transcription_handler.config_manager = self.config_manager # Atualizar referência
             if any(
@@ -847,12 +823,6 @@ class AppCore:
         except Exception as e:
             logging.error(f"Error during hotkey cleanup in shutdown: {e}")
 
-        if self.chatgpt_automator:
-            try:
-                self.chatgpt_automator.close()
-            except Exception as e:
-                logging.error(f"Erro ao encerrar ChatGPT Automator: {e}")
-
         if self.transcription_handler:
             try:
                 self.transcription_handler.shutdown()
@@ -881,7 +851,6 @@ class AppCore:
                         logging.info("Audio stream stopped and closed during shutdown.")
                 except Exception as e:
                     logging.error(f"Error stopping audio stream on close: {e}")
-            self.audio_handler.recording_data.clear()
 
         if hasattr(self.audio_handler, "cleanup"):
             try:
