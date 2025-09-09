@@ -75,13 +75,16 @@ class _AdapterBackend:
         cache = cfg.get("asr_cache_dir") or None
         ct2_type = cfg.get("asr_ct2_compute_type") or "default"
         self._backend = _make_asr_backend(self._name)
-        self._backend.load(
-            model_id=model_id,
-            device=device,
-            dtype=dtype,
-            cache_dir=cache,
-            ct2_compute_type=ct2_type,
-        )
+        if hasattr(self._backend, "model_id"):
+            self._backend.model_id = model_id
+        if hasattr(self._backend, "device"):
+            self._backend.device = device
+        if self._name == "transformers":
+            self._backend.load(device=device, dtype=dtype, cache_dir=cache)
+        elif self._name == "faster-whisper":
+            self._backend.load(cache_dir=cache, ct2_compute_type=ct2_type)
+        else:
+            self._backend.load()
 
     def unload(self) -> None:
         if self._backend:
