@@ -92,6 +92,12 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
+    "asr_model_id": "openai/whisper-large-v3",
+    "asr_backend": "transformers",
+    "asr_compute_device": "auto",
+    "asr_dtype": "float16",
+    "asr_ct2_compute_type": "default",
+    "asr_cache_dir": "",
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -145,6 +151,12 @@ REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
+ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
+ASR_BACKEND_CONFIG_KEY = "asr_backend"
+ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
+ASR_DTYPE_CONFIG_KEY = "asr_dtype"
+ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
+ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -765,3 +777,64 @@ class ConfigManager:
             self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = self.default_config[
                 MIN_RECORDING_DURATION_CONFIG_KEY
             ]
+        self.save_config()
+
+    def get_asr_model_id(self):
+        return self.config.get(
+            ASR_MODEL_ID_CONFIG_KEY,
+            self.default_config[ASR_MODEL_ID_CONFIG_KEY],
+        )
+
+    def set_asr_model_id(self, value: str):
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(value)
+        self.save_config()
+
+    def get_asr_backend(self):
+        return self.config.get(
+            ASR_BACKEND_CONFIG_KEY,
+            self.default_config[ASR_BACKEND_CONFIG_KEY],
+        )
+
+    def set_asr_backend(self, value: str):
+        self.config[ASR_BACKEND_CONFIG_KEY] = str(value)
+        self.save_config()
+
+    def get_asr_compute_device(self):
+        return self.config.get(
+            ASR_COMPUTE_DEVICE_CONFIG_KEY,
+            self.default_config[ASR_COMPUTE_DEVICE_CONFIG_KEY],
+        )
+
+    def set_asr_compute_device(self, value: str):
+        self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(value)
+        self.save_config()
+
+    def get_asr_dtype(self):
+        return self.config.get(
+            ASR_DTYPE_CONFIG_KEY,
+            self.default_config[ASR_DTYPE_CONFIG_KEY],
+        )
+
+    def set_asr_dtype(self, value: str):
+        self.config[ASR_DTYPE_CONFIG_KEY] = str(value)
+        self.save_config()
+
+    def get_asr_ct2_compute_type(self):
+        return self.config.get(
+            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            self.default_config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY],
+        )
+
+    def set_asr_ct2_compute_type(self, value: str):
+        self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(value)
+        self.save_config()
+
+    def get_asr_cache_dir(self):
+        return self.config.get(
+            ASR_CACHE_DIR_CONFIG_KEY,
+            self.default_config[ASR_CACHE_DIR_CONFIG_KEY],
+        )
+
+    def set_asr_cache_dir(self, value: str):
+        self.config[ASR_CACHE_DIR_CONFIG_KEY] = str(value)
+        self.save_config()
