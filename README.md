@@ -278,6 +278,46 @@ To access and change settings:
 *   **VAD Threshold:** sensitivity of voice detection.
 *   **VAD Silence Duration (s):** maximum pause length to keep; longer silences are trimmed.
 
+### ASR Backend Configuration
+
+The speech recognition engine supports multiple backends. The following keys in `config.json` control how the model is loaded:
+
+| Key | Description | Example |
+| --- | ----------- | ------- |
+| `asr_model_id` | Model identifier to download. | `"openai/whisper-large-v3"` |
+| `asr_backend` | Backend implementation (`transformers`, `ct2`, etc.). | `"transformers"` |
+| `asr_compute_device` | Target device such as `cpu`, `cuda:0`, or `auto`. | `"cuda:0"` |
+| `asr_dtype` | Numerical precision (`float16`, `float32`, ...). | `"float16"` |
+| `asr_ct2_compute_type` | Compute type for the CTranslate2 backend. | `"default"` |
+| `asr_cache_dir` | Optional path to cache downloaded models. | `"/models"` |
+
+Examples:
+
+```json
+{
+  "asr_backend": "transformers",
+  "asr_compute_device": "cpu",
+  "asr_dtype": "float32"
+}
+```
+
+```json
+{
+  "asr_backend": "ct2",
+  "asr_compute_device": "cuda:0",
+  "asr_dtype": "float16",
+  "asr_ct2_compute_type": "default"
+}
+```
+
+Install `flash-attn` to enable FlashAttention&nbsp;2 for the Transformers backend:
+
+```
+pip install flash-attn --no-build-isolation
+```
+
+If the library is missing, the application automatically falls back to standard attention.
+
 Using a shorter **Chunk Length** lowers GPU memory usage but increases overhead because more segments need to be processed. Longer chunks speed up transcription at the cost of higher memory consumption.
 
 

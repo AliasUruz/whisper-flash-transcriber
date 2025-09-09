@@ -1,68 +1,137 @@
-import json
-import logging
-from pathlib import Path
-from typing import Dict, Any
+"""Gerenciador de modelos ASR.
 
-try:
-    from huggingface_hub import snapshot_download
-except Exception:  # pragma: no cover - huggingface_hub is a transformers dependency
-    snapshot_download = None  # type: ignore
+Fornece catálogo curado, listagem de modelos instalados e
+função utilitária para garantir o download de modelos nos
+backends suportados (Transformers e CTranslate2).
+"""
 
-# Base directory for storing ASR models
-MODEL_DIR = Path.home() / ".cache" / "whisper_flash_transcriber" / "asr"
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
+from __future__ import annotations
 
-# Curated models with metadata; repo indicates HF repo id
-CURATED: Dict[str, Dict[str, Any]] = {
-    "distil-whisper/large-v2": {
-        "backend": "Transformers",
-        "dtype": "fp16",
-        "chunk": 30,
-        "batch": 16,
-        "device": "auto",
-        "repo": "distil-whisper/distil-large-v2",
+import os
+from typing import Dict, List
+
+from huggingface_hub import snapshot_download
+
+# Catálogo curado de modelos suportados
+# Cada entrada possui ID base e metadados dos backends
+CURATED: List[Dict] = [
+    {
+        "id": "tiny",
+        "description": "Modelo mais leve",
+        "backends": {
+            "transformers": {"repo_id": "openai/whisper-tiny"},
+            "ct2": {"size": "tiny"},
+        },
     },
-    "Systran/faster-whisper-large-v3": {
-        "backend": "Faster-Whisper",
-        "dtype": "fp16",
-        "chunk": 30,
-        "batch": 16,
-        "device": "auto",
-        "repo": "Systran/faster-whisper-large-v3",
+    {
+        "id": "base",
+        "description": "Modelo base",
+        "backends": {
+            "transformers": {"repo_id": "openai/whisper-base"},
+            "ct2": {"size": "base"},
+        },
     },
-}
+    {
+        "id": "small",
+        "description": "Modelo pequeno",
+        "backends": {
+            "transformers": {"repo_id": "openai/whisper-small"},
+            "ct2": {"size": "small"},
+        },
+    },
+    {
+        "id": "medium",
+        "description": "Modelo médio",
+        "backends": {
+            "transformers": {"repo_id": "openai/whisper-medium"},
+            "ct2": {"size": "medium"},
+        },
+    },
+    {
+        "id": "large-v2",
+        "description": "Modelo grande v2",
+        "backends": {
+            "transformers": {"repo_id": "openai/whisper-large-v2"},
+            "ct2": {"size": "large-v2"},
+        },
+    },
+    {
+        "id": "large-v3",
+        "description": "Modelo grande v3",
+        "backends": {
+            "transformers": {"repo_id": "openai/whisper-large-v3"},
+            "ct2": {"size": "large-v3"},
+        },
+    },
+]
 
 
-def asr_installed_models() -> Dict[str, Dict[str, Any]]:
-    """Return installed ASR models with metadata."""
-    models: Dict[str, Dict[str, Any]] = {}
-    for path in MODEL_DIR.glob("*"):
-        if not path.is_dir():
+def list_catalog() -> List[Dict]:
+    """Retorna o catálogo curado de modelos."""
+
+    return CURATED
+
+
+def list_installed(cache_dir: str) -> List[Dict]:
+    """Lista modelos já baixados no ``cache_dir``.
+
+    O diretório esperado possui subpastas por backend (``transformers`` e
+    ``ct2``), cada qual contendo subpastas com o ``model_id``.
+    """
+
+    installed: List[Dict] = []
+    for backend in ("transformers", "ct2"):
+        backend_path = os.path.join(cache_dir, backend)
+        if not os.path.isdir(backend_path):
             continue
-        meta_file = path / "metadata.json"
-        try:
-            info = json.loads(meta_file.read_text()) if meta_file.exists() else {}
-        except Exception:
-            info = {}
-        models[path.name.replace("__", "/")] = info
-    return models
+        for model_id in os.listdir(backend_path):
+            model_path = os.path.join(backend_path, model_id)
+            if os.path.isdir(model_path):
+                installed.append({
+                    "id": model_id,
+                    "backend": backend,
+                    "path": model_path,
+                })
+    return installed
 
 
-def ensure_download(backend: str, model: str) -> Path:
-    """Ensure model is downloaded; returns local path."""
-    info = CURATED.get(model, {})
-    repo = info.get("repo", model)
-    local_dir = MODEL_DIR / model.replace("/", "__")
-    if local_dir.exists():
-        logging.info("Model already available: %s", local_dir)
-        return local_dir
-    if snapshot_download is None:
-        raise RuntimeError("huggingface_hub not available for downloading models")
-    try:
-        snapshot_download(repo_id=repo, local_dir=local_dir)
-        meta = {"backend": backend, **{k: v for k, v in info.items() if k != "repo"}}
-        (local_dir / "metadata.json").write_text(json.dumps(meta))
-        logging.info("Model '%s' downloaded to %s", repo, local_dir)
+def ensure_download(
+    model_id: str,
+    backend: str,
+    cache_dir: str,
+    quant: str | None = None,
+) -> str:
+    """Garante que o modelo solicitado esteja disponível localmente.
+
+    Parameters
+    ----------
+    model_id:
+        Identificador do modelo no catálogo ``CURATED``.
+    backend:
+        ``"transformers"`` ou ``"ct2"``.
+    cache_dir:
+        Diretório raiz onde os modelos são armazenados.
+    quant:
+        Para o backend CT2, branch de quantização (``int8``, ``int8_float16``,
+        ``float16`` etc.). Ignorado para Transformers.
+
+    Returns
+    -------
+    str
+        Caminho local onde o modelo está armazenado.
+    """
+
+    catalog_map = {entry["id"]: entry for entry in CURATED}
+    if model_id not in catalog_map:
+        raise ValueError(f"Modelo '{model_id}' não encontrado no catálogo curado.")
+
+    entry = catalog_map[model_id]
+    backend_info = entry["backends"].get(backend)
+    if backend_info is None:
+        raise ValueError(f"Backend '{backend}' não disponível para o modelo '{model_id}'.")
+
+    local_dir = os.path.join(cache_dir, backend, model_id)
+    if os.path.isdir(local_dir) and os.listdir(local_dir):
         return local_dir
     except Exception as e:  # pragma: no cover - network/IO errors
         logging.error("Failed to download model '%s': %s", repo, e)
