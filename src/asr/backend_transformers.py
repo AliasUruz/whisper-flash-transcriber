@@ -14,8 +14,12 @@ class TransformersBackend:
         self.pipe = None
         self.sample_rate = 16000
 
-    def load(self) -> None:
-        """Load model and processor, constructing the inference pipeline."""
+    def load(self, *args, **kwargs) -> None:
+        """Load model and processor, constructing the inference pipeline.
+
+        Extra positional or keyword arguments are accepted for compatibility
+        with the :class:`ASRBackend` protocol but are ignored.
+        """
         from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
 
         self.processor = AutoProcessor.from_pretrained(self.model_id)
