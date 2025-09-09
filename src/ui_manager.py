@@ -359,6 +359,9 @@ class UIManager:
                 record_storage_mode_var = ctk.StringVar(
                     value=self.config_manager.get("record_storage_mode", "auto")
                 )
+                asr_backend_var = ctk.StringVar(value=self.config_manager.get("asr_backend"))
+                asr_model_var = ctk.StringVar(value=self.config_manager.get("asr_model_id"))
+                ct2_quant_var = ctk.StringVar(value=self.config_manager.get("ct2_quantization"))
                 max_memory_seconds_mode_var = ctk.StringVar(
                     value=self.config_manager.get("max_memory_seconds_mode", "manual")
                 )
@@ -453,6 +456,9 @@ class UIManager:
                     max_memory_seconds_to_apply = self._safe_get_float(max_memory_seconds_var, "Max Memory Retention", settings_win)
                     if max_memory_seconds_to_apply is None:
                         return
+                    asr_backend_to_apply = asr_backend_var.get()
+                    asr_model_to_apply = asr_model_var.get()
+                    ct2_quant_to_apply = ct2_quant_var.get()
 
                     # Logic for converting UI to GPU index
                     selected_device_str = gpu_selection_var.get()
@@ -511,7 +517,10 @@ class UIManager:
                         new_chunk_length_mode=chunk_length_mode_var.get(),
                         new_chunk_length_sec=float(chunk_length_sec_var.get()),
                         # New: torch compile setting
-                        new_enable_torch_compile=bool(enable_torch_compile_var.get())
+                        new_enable_torch_compile=bool(enable_torch_compile_var.get()),
+                        new_asr_backend=asr_backend_to_apply,
+                        new_asr_model_id=asr_model_to_apply,
+                        new_ct2_quantization=ct2_quant_to_apply,
                     )
                     self._close_settings_window() # Call class method
 
@@ -568,6 +577,10 @@ class UIManager:
                     gemini_models_textbox.delete("1.0", "end")
                     gemini_models_textbox.insert("1.0", "\n".join(DEFAULT_CONFIG["gemini_model_options"]))
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
+                    asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
+                    asr_model_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    ct2_quant_var.set(DEFAULT_CONFIG["ct2_quantization"])
+                    quant_menu.configure(state="normal" if DEFAULT_CONFIG["asr_backend"] == "ct2" else "disabled")
 
                     if DEFAULT_CONFIG["gpu_index"] == -1:
                         gpu_selection_var.set("Force CPU")
@@ -662,6 +675,51 @@ class UIManager:
                 startup_switch = ctk.CTkSwitch(startup_frame, text="Launch at Startup", variable=launch_at_startup_var)
                 startup_switch.pack(side="left", padx=5)
                 Tooltip(startup_switch, "Start the app automatically with Windows.")
+
+                # --- ASR Model Settings ---
+                asr_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
+                asr_frame.pack(fill="x", padx=10, pady=5)
+                ctk.CTkLabel(asr_frame, text="ASR Model", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+
+                backend_frame = ctk.CTkFrame(asr_frame)
+                backend_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(backend_frame, text="Backend:").pack(side="left", padx=(5, 10))
+                backend_menu = ctk.CTkOptionMenu(
+                    backend_frame,
+                    variable=asr_backend_var,
+                    values=["transformers", "ct2"],
+                )
+                backend_menu.pack(side="left", padx=5)
+
+                model_ids = [entry.get("id") for entry in self.config_manager.get("asr_curated_catalog", [])]
+                model_frame = ctk.CTkFrame(asr_frame)
+                model_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(model_frame, text="Model:").pack(side="left", padx=(5, 10))
+                model_menu = ctk.CTkOptionMenu(model_frame, variable=asr_model_var, values=model_ids)
+                model_menu.pack(side="left", padx=5)
+
+                quant_frame = ctk.CTkFrame(asr_frame)
+                quant_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
+                quant_menu = ctk.CTkOptionMenu(quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"])
+                quant_menu.pack(side="left", padx=5)
+                if asr_backend_var.get() != "ct2":
+                    quant_menu.configure(state="disabled")
+
+                def _update_quantization(choice):
+                    quant_menu.configure(state="normal" if choice == "ct2" else "disabled")
+
+                backend_menu.configure(command=_update_quantization)
+
+                installed = self.config_manager.get("asr_installed_models", [])
+                installed_text = "\n".join(f"{m['backend']}/{m['id']}" for m in installed) or "None"
+                installed_frame = ctk.CTkFrame(asr_frame)
+                installed_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(installed_frame, text="Installed:").pack(anchor="w", padx=5)
+                installed_box = ctk.CTkTextbox(installed_frame, height=60)
+                installed_box.pack(fill="x", padx=5)
+                installed_box.insert("1.0", installed_text)
+                installed_box.configure(state="disabled")
 
                 # --- Sound Settings Section ---
                 sound_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")

@@ -17,6 +17,8 @@ except Exception:
             pass
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
 from .audio_handler import AUDIO_SAMPLE_RATE
+from .model_manager import ensure_download
+from .config_manager import ASR_CACHE_DIR
 
 # Importar constantes de configuração
 from .utils import select_batch_size
@@ -349,14 +351,19 @@ class TranscriptionHandler:
         self.transcription_cancel_event.set()
 
     def _load_model_task(self):
-        # Removido: model_loaded_successfully = False
-        # Removido: error_message = "Unknown error during model load."
         try:
-            # Removido: device_param = "cpu"
-            torch_dtype_local = torch.float32
+            backend = self.config_manager.get("asr_backend")
+            model_id = self.config_manager.get("asr_model_id")
+            quant = self.config_manager.get("ct2_quantization")
+            if self.core_instance_ref:
+                self.core_instance_ref._log_status(f"Baixando modelo {model_id} ({backend})...")
+            model_path = ensure_download(model_id, backend, ASR_CACHE_DIR, quant)
+            if self.core_instance_ref:
+                self.core_instance_ref._log_status(f"Modelo pronto: {model_id} ({backend})")
 
+            torch_dtype_local = torch.float32
             if torch.cuda.is_available():
-                if self.gpu_index == -1: # Auto-seleção de GPU
+                if self.gpu_index == -1:
                     num_gpus = torch.cuda.device_count()
                     if num_gpus > 0:
                         best_gpu_index = 0
@@ -367,34 +374,28 @@ class TranscriptionHandler:
                                 max_vram = props.total_memory
                                 best_gpu_index = i
                         self.gpu_index = best_gpu_index
-                        logging.info(f"Auto-seleção de GPU (maior VRAM total): {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})")
+                        logging.info(
+                            f"Auto-seleção de GPU (maior VRAM total): {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})"
+                        )
                     else:
                         logging.info("Nenhuma GPU disponível, usando CPU.")
-                        self.gpu_index = -1 # Garante que o índice seja -1 se não houver GPU
-                
-            model_id = "openai/whisper-large-v3"
-            
-            logging.info(f"Carregando processador de {model_id}...")
-            processor = AutoProcessor.from_pretrained(model_id)
+                        self.gpu_index = -1
 
-            # Determinar o dispositivo explicitamente antes de carregar o modelo
             device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
             logging.info(f"Dispositivo de carregamento do modelo definido explicitamente como: {device}")
 
             if torch.cuda.is_available() and self.gpu_index >= 0:
                 torch_dtype_local = torch.float16
-                logging.info("GPU detectada e selecionada, usando torch.float16.")
             else:
                 torch_dtype_local = torch.float32
-                logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
-            # Seleção automática de GPU por memória livre quando gpu_index == -1
+
             try:
                 if torch.cuda.is_available() and self.gpu_index == -1:
                     best_idx = None
                     best_free = -1
                     for i in range(torch.cuda.device_count()):
                         try:
-                            free_b, total_b = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
+                            free_b, _ = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
                             if free_b > best_free:
                                 best_free = free_b
                                 best_idx = i
@@ -404,59 +405,64 @@ class TranscriptionHandler:
                         self.gpu_index = best_idx
                         free_gb = best_free / (1024 ** 3) if best_free > 0 else 0.0
                         total_gb = torch.cuda.get_device_properties(self.gpu_index).total_memory / (1024 ** 3)
-                        logging.info(f"[METRIC] stage=gpu_autoselect gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}")
+                        logging.info(
+                            f"[METRIC] stage=gpu_autoselect gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}"
+                        )
             except Exception as _gpu_sel_e:
                 logging.warning(f"Falha ao escolher GPU por memória livre: {_gpu_sel_e}")
 
-            logging.info(f"Carregando modelo {model_id}...")
+            if backend == "transformers":
+                logging.info(f"Carregando modelo Transformers {model_id}...")
+                processor = AutoProcessor.from_pretrained(model_path)
 
-            # Define configuração de quantização apenas se uma GPU válida estiver disponível
-            quant_config = None
-            if torch.cuda.is_available() and self.gpu_index >= 0:
-                quant_config = BitsAndBytesConfig(load_in_8bit=True)
+                quant_config = None
+                if torch.cuda.is_available() and self.gpu_index >= 0:
+                    quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
-            # Determina dinamicamente se o FlashAttention 2 está disponível
-            try:
-                import importlib.util
+                try:
+                    import importlib.util
 
-                use_flash_attn = importlib.util.find_spec("flash_attn") is not None
-            except Exception:  # pragma: no cover - segurança extra
-                use_flash_attn = False
+                    use_flash_attn = importlib.util.find_spec("flash_attn") is not None
+                except Exception:  # pragma: no cover
+                    use_flash_attn = False
 
-            attn_impl = "flash_attention_2" if use_flash_attn else "sdpa"
+                attn_impl = "flash_attention_2" if use_flash_attn else "sdpa"
 
-            model_kwargs = {
-                "torch_dtype": torch_dtype_local,
-                "low_cpu_mem_usage": True,
-                "use_safetensors": True,
-                "device_map": {'': device},
-                "attn_implementation": attn_impl,
-            }
-            # Adiciona a configuração de quantização somente quando aplicável
-            if quant_config is not None:
-                model_kwargs["quantization_config"] = quant_config
+                model_kwargs = {
+                    "torch_dtype": torch_dtype_local,
+                    "low_cpu_mem_usage": True,
+                    "use_safetensors": True,
+                    "device_map": {'': device},
+                    "attn_implementation": attn_impl,
+                }
+                if quant_config is not None:
+                    model_kwargs["quantization_config"] = quant_config
 
-            model = AutoModelForSpeechSeq2Seq.from_pretrained(
-                model_id,
-                **model_kwargs,
-            )
+                model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                    model_path,
+                    **model_kwargs,
+                )
 
-            # Log do attn_implementation efetivo
-            try:
-                eff_attn = getattr(model, "config", None)
-                if eff_attn and hasattr(eff_attn, "attn_implementation"):
-                    logging.info(f"[METRIC] stage=attn_impl_effective value={getattr(eff_attn, 'attn_implementation', 'unknown')}")
-            except Exception:
-                pass
-            
-            # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
-            return model, processor
+                try:
+                    eff_attn = getattr(model, "config", None)
+                    if eff_attn and hasattr(eff_attn, "attn_implementation"):
+                        logging.info(
+                            f"[METRIC] stage=attn_impl_effective value={getattr(eff_attn, 'attn_implementation', 'unknown')}"
+                        )
+                except Exception:
+                    pass
+
+                return model, processor
+
+            if backend == "ct2":
+                raise NotImplementedError("Backend CT2 ainda não suportado")
+
+            raise ValueError(f"Backend desconhecido: {backend}")
 
         except Exception as e:
             error_message = f"Falha ao carregar o modelo: {e}"
             logging.error(error_message, exc_info=True)
-            # Removido: self.on_model_error_callback(error_message) # Notifica o erro imediatamente
-            return None, None # Retorna None em caso de falha
+            return None, None
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""
