@@ -9,6 +9,7 @@ torch_stub = types.SimpleNamespace(
 sys.modules["torch"] = torch_stub
 numpy_stub = types.ModuleType("numpy")
 numpy_stub.ndarray = object
+numpy_stub.zeros = lambda n, *a, **k: [0] * n
 sys.modules["numpy"] = numpy_stub
 sys.modules["soundfile"] = types.ModuleType("soundfile")
 sys.modules["requests"] = types.ModuleType("requests")

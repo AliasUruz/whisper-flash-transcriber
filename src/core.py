@@ -27,6 +27,7 @@ from .config_manager import (
     GEMINI_PROMPT_CONFIG_KEY,
     ASR_BACKEND_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
+    ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
@@ -582,6 +583,13 @@ class AppCore:
 
         # Atualizar ConfigManager e verificar se houve mudanças
         launch_changed = False
+        reload_required = False
+        reload_keys = {
+            ASR_BACKEND_CONFIG_KEY,
+            ASR_MODEL_ID_CONFIG_KEY,
+            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            "asr_model",
+        }
         for key, value in kwargs.items():
             # Mapear nomes de kwargs para chaves de config_manager se necessário
             config_key_map = {
@@ -616,12 +624,10 @@ class AppCore:
                 "new_chunk_length_mode": "chunk_length_mode",
                 "new_chunk_length_sec": "chunk_length_sec",
                 "new_enable_torch_compile": "enable_torch_compile",
+                "new_asr_model": "asr_model",
                 "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
                 "new_asr_model_id": ASR_MODEL_ID_CONFIG_KEY,
-                "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
-                "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
-                "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-                "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
+                "new_ct2_quantization": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
@@ -629,6 +635,8 @@ class AppCore:
             if current_value != value:
                 self.config_manager.set(mapped_key, value)
                 config_changed = True
+                if mapped_key in reload_keys:
+                    reload_required = True
                 if mapped_key == "launch_at_startup":
                     launch_changed = True
                 logging.info(f"Configuração '{mapped_key}' alterada para: {value}")
@@ -665,6 +673,8 @@ class AppCore:
             ):
                 self.audio_handler.update_config()
             self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
+            if reload_required:
+                self.transcription_handler.start_model_loading()
             if launch_changed:
                 from .utils.autostart import set_launch_at_startup
                 set_launch_at_startup(self.config_manager.get("launch_at_startup"))
