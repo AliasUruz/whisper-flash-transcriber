@@ -370,6 +370,12 @@ class UIManager:
                 chunk_length_sec_var = ctk.DoubleVar(value=self.config_manager.get_chunk_length_sec())
                 # New: Torch compile switch variable
                 enable_torch_compile_var = ctk.BooleanVar(value=self.config_manager.get_enable_torch_compile())
+                asr_backend_var = ctk.StringVar(value=self.config_manager.get_asr_backend())
+                asr_model_id_var = ctk.StringVar(value=self.config_manager.get_asr_model_id())
+                asr_compute_device_var = ctk.StringVar(value=self.config_manager.get_asr_compute_device())
+                asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
+                asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
+                asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
 
                 def update_text_correction_fields():
                     enabled = text_correction_enabled_var.get()
@@ -454,6 +460,13 @@ class UIManager:
                     if max_memory_seconds_to_apply is None:
                         return
 
+                    asr_backend_to_apply = asr_backend_var.get()
+                    asr_model_id_to_apply = asr_model_id_var.get()
+                    asr_compute_device_to_apply = asr_compute_device_var.get()
+                    asr_dtype_to_apply = asr_dtype_var.get()
+                    asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
+                    asr_cache_dir_to_apply = asr_cache_dir_var.get()
+
                     # Logic for converting UI to GPU index
                     selected_device_str = gpu_selection_var.get()
                     gpu_index_to_apply = -1 # Default to "Auto-select"
@@ -511,7 +524,13 @@ class UIManager:
                         new_chunk_length_mode=chunk_length_mode_var.get(),
                         new_chunk_length_sec=float(chunk_length_sec_var.get()),
                         # New: torch compile setting
-                        new_enable_torch_compile=bool(enable_torch_compile_var.get())
+                        new_enable_torch_compile=bool(enable_torch_compile_var.get()),
+                        new_asr_backend=asr_backend_to_apply,
+                        new_asr_model_id=asr_model_id_to_apply,
+                        new_asr_compute_device=asr_compute_device_to_apply,
+                        new_asr_dtype=asr_dtype_to_apply,
+                        new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
+                        new_asr_cache_dir=asr_cache_dir_to_apply
                     )
                     self._close_settings_window() # Call class method
 
@@ -588,6 +607,12 @@ class UIManager:
                     max_memory_seconds_var.set(DEFAULT_CONFIG["max_memory_seconds"])
                     max_memory_seconds_mode_var.set(DEFAULT_CONFIG["max_memory_seconds_mode"])
                     launch_at_startup_var.set(DEFAULT_CONFIG["launch_at_startup"])
+                    asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
+                    asr_model_id_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_compute_device_var.set(DEFAULT_CONFIG["asr_compute_device"])
+                    asr_dtype_var.set(DEFAULT_CONFIG["asr_dtype"])
+                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
 
                     self.config_manager.save_config()
 
@@ -888,6 +913,49 @@ class UIManager:
                 display_switch = ctk.CTkSwitch(display_transcripts_frame, text="Display Transcript in Terminal", variable=display_transcripts_var)
                 display_switch.pack(side="left", padx=5)
                 Tooltip(display_switch, "Print transcripts to the terminal window.")
+
+                # --- ASR Settings ---
+                asr_backend_frame = ctk.CTkFrame(transcription_frame)
+                asr_backend_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
+                asr_backend_menu = ctk.CTkOptionMenu(asr_backend_frame, variable=asr_backend_var, values=["auto", "transformers"])
+                asr_backend_menu.pack(side="left", padx=5)
+                Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
+
+                asr_model_frame = ctk.CTkFrame(transcription_frame)
+                asr_model_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_model_frame, text="ASR Model ID:").pack(side="left", padx=(5, 10))
+                asr_model_entry = ctk.CTkEntry(asr_model_frame, textvariable=asr_model_id_var, width=240)
+                asr_model_entry.pack(side="left", padx=5)
+                Tooltip(asr_model_entry, "Hugging Face model identifier.")
+
+                asr_device_frame = ctk.CTkFrame(transcription_frame)
+                asr_device_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_device_frame, text="ASR Compute Device:").pack(side="left", padx=(5, 10))
+                asr_device_menu = ctk.CTkOptionMenu(asr_device_frame, variable=asr_compute_device_var, values=["auto", "cuda", "cpu"])
+                asr_device_menu.pack(side="left", padx=5)
+                Tooltip(asr_device_menu, "Execution device for ASR model.")
+
+                asr_dtype_frame = ctk.CTkFrame(transcription_frame)
+                asr_dtype_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_dtype_frame, text="ASR DType:").pack(side="left", padx=(5, 10))
+                asr_dtype_menu = ctk.CTkOptionMenu(asr_dtype_frame, variable=asr_dtype_var, values=["auto", "float16", "float32"])
+                asr_dtype_menu.pack(side="left", padx=5)
+                Tooltip(asr_dtype_menu, "Torch dtype for ASR model.")
+
+                asr_ct2_frame = ctk.CTkFrame(transcription_frame)
+                asr_ct2_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 10))
+                asr_ct2_menu = ctk.CTkOptionMenu(asr_ct2_frame, variable=asr_ct2_compute_type_var, values=["auto", "float16", "float32", "int8_float16", "int8_float32"])
+                asr_ct2_menu.pack(side="left", padx=5)
+                Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
+
+                asr_cache_frame = ctk.CTkFrame(transcription_frame)
+                asr_cache_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_cache_frame, text="ASR Cache Dir:").pack(side="left", padx=(5, 10))
+                asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
+                asr_cache_entry.pack(side="left", padx=5)
+                Tooltip(asr_cache_entry, "Directory for cached ASR models.")
 
                 # --- Action Buttons ---
                 button_frame = ctk.CTkFrame(settings_win) # Move outside scrollable_frame to keep fixed

@@ -3,6 +3,9 @@ import json
 import logging
 import copy
 import hashlib
+from typing import Any, Dict, List
+
+import requests
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -92,6 +95,14 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
+    "asr_backend": "auto",
+    "asr_model_id": "openai/whisper-large-v3-turbo",
+    "asr_compute_device": "auto",
+    "asr_dtype": "auto",
+    "asr_ct2_compute_type": "auto",
+    "asr_cache_dir": os.path.expanduser("~/.cache/whisper_models"),
+    "asr_installed_models": [],
+    "asr_curated_catalog": [],  # carregado posteriormente
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -145,6 +156,14 @@ REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
+ASR_BACKEND_CONFIG_KEY = "asr_backend"
+ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
+ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
+ASR_DTYPE_CONFIG_KEY = "asr_dtype"
+ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
+ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
+ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
+ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -501,6 +520,40 @@ class ConfigManager:
                 self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
             )
 
+        self.config[ASR_BACKEND_CONFIG_KEY] = str(
+            self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
+        )
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(
+            self.config.get(ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY])
+        )
+        self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(
+            self.config.get(ASR_COMPUTE_DEVICE_CONFIG_KEY, self.default_config[ASR_COMPUTE_DEVICE_CONFIG_KEY])
+        )
+        self.config[ASR_DTYPE_CONFIG_KEY] = str(
+            self.config.get(ASR_DTYPE_CONFIG_KEY, self.default_config[ASR_DTYPE_CONFIG_KEY])
+        )
+        self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(
+            self.config.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY, self.default_config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY])
+        )
+        self.config[ASR_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(
+            self.config.get(ASR_CACHE_DIR_CONFIG_KEY, self.default_config[ASR_CACHE_DIR_CONFIG_KEY])
+        )
+        installed = self.config.get(
+            ASR_INSTALLED_MODELS_CONFIG_KEY,
+            self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY],
+        )
+        if not isinstance(installed, list):
+            installed = self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY]
+        self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = installed
+
+        curated = self.config.get(
+            ASR_CURATED_CATALOG_CONFIG_KEY,
+            self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
+        )
+        if not isinstance(curated, list):
+            curated = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
+        self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = curated
+
         safe_config = self.config.copy()
         safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
         safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
@@ -603,6 +656,119 @@ class ConfigManager:
         if provider == SERVICE_OPENROUTER:
             return self.get(OPENROUTER_API_KEY_CONFIG_KEY)
         return ""
+
+    def get_asr_backend(self):
+        return self.config.get(
+            ASR_BACKEND_CONFIG_KEY,
+            self.default_config[ASR_BACKEND_CONFIG_KEY],
+        )
+
+    def set_asr_backend(self, value: str):
+        self.config[ASR_BACKEND_CONFIG_KEY] = str(value)
+
+    def get_asr_model_id(self):
+        return self.config.get(
+            ASR_MODEL_ID_CONFIG_KEY,
+            self.default_config[ASR_MODEL_ID_CONFIG_KEY],
+        )
+
+    def set_asr_model_id(self, value: str):
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(value)
+
+    def get_asr_compute_device(self):
+        return self.config.get(
+            ASR_COMPUTE_DEVICE_CONFIG_KEY,
+            self.default_config[ASR_COMPUTE_DEVICE_CONFIG_KEY],
+        )
+
+    def set_asr_compute_device(self, value: str):
+        self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(value)
+
+    def get_asr_dtype(self):
+        return self.config.get(
+            ASR_DTYPE_CONFIG_KEY,
+            self.default_config[ASR_DTYPE_CONFIG_KEY],
+        )
+
+    def set_asr_dtype(self, value: str):
+        self.config[ASR_DTYPE_CONFIG_KEY] = str(value)
+
+    def get_asr_ct2_compute_type(self):
+        return self.config.get(
+            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            self.default_config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY],
+        )
+
+    def set_asr_ct2_compute_type(self, value: str):
+        self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(value)
+
+    def get_asr_cache_dir(self):
+        return self.config.get(
+            ASR_CACHE_DIR_CONFIG_KEY,
+            self.default_config[ASR_CACHE_DIR_CONFIG_KEY],
+        )
+
+    def set_asr_cache_dir(self, value: str):
+        self.config[ASR_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_asr_installed_models(self):
+        return self.config.get(
+            ASR_INSTALLED_MODELS_CONFIG_KEY,
+            self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY],
+        )
+
+    def set_asr_installed_models(self, value: list):
+        if isinstance(value, list):
+            self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = value
+        else:
+            self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = self.default_config[
+                ASR_INSTALLED_MODELS_CONFIG_KEY
+            ]
+
+    def get_asr_curated_catalog(self):
+        return self.config.get(
+            ASR_CURATED_CATALOG_CONFIG_KEY,
+            self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
+        )
+
+    def set_asr_curated_catalog(self, value: list):
+        if isinstance(value, list):
+            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = value
+        else:
+            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = self.default_config[
+                ASR_CURATED_CATALOG_CONFIG_KEY
+            ]
+
+    def update_asr_curated_catalog_from_url(self, url: str, timeout: int = 10) -> bool:
+        """Carrega um catálogo curado de modelos de ASR a partir de ``url``.
+
+        O JSON recebido deve ser uma lista de dicionários contendo pelo menos o
+        campo ``model_id``. Caso os dados sejam válidos, o catálogo interno é
+        atualizado e salvo no arquivo de configuração.
+
+        :param url: Endereço da fonte externa.
+        :param timeout: Tempo máximo de espera para a requisição em segundos.
+        :return: ``True`` se o catálogo foi atualizado com sucesso.
+        """
+
+        try:
+            response = requests.get(url, timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+            if (
+                isinstance(data, list)
+                and all(isinstance(item, dict) and "model_id" in item for item in data)
+            ):
+                self.set_asr_curated_catalog(data)
+                try:
+                    self.save_config()
+                except Exception:
+                    logging.warning("Falha ao salvar config após atualizar catálogo curado.")
+                return True
+            logging.warning("Formato inválido de catálogo obtido de %s", url)
+        except Exception as e:
+            logging.error("Erro ao atualizar catálogo curado de %s: %s", url, e)
+        return False
 
     def get_use_vad(self):
         return self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])

@@ -34,6 +34,12 @@ from .config_manager import (
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
+    ASR_BACKEND_CONFIG_KEY,
+    ASR_MODEL_ID_CONFIG_KEY,
+    ASR_COMPUTE_DEVICE_CONFIG_KEY,
+    ASR_DTYPE_CONFIG_KEY,
+    ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+    ASR_CACHE_DIR_CONFIG_KEY,
 )
 
 class TranscriptionHandler:
@@ -95,6 +101,14 @@ class TranscriptionHandler:
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
 
+        # Configurações de ASR
+        self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
+        self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
+        self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
+        self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
+        self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+        self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+
         self.openrouter_client = None
         # self.gemini_client é injetado
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
@@ -136,7 +150,36 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
+        self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
+        self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
+        self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
+        self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+        self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
+
+    def _resolve_asr_settings(self):
+        """Determina backend, modelo e parâmetros de ASR conforme hardware."""
+        backend = (self.asr_backend or "auto").lower()
+        compute_device = (self.asr_compute_device or "auto").lower()
+        model_id = self.asr_model_id or "auto"
+        dtype = (self.asr_dtype or "auto").lower()
+
+        if backend == "auto":
+            backend = "transformers"
+
+        if compute_device == "auto":
+            compute_device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        if dtype == "auto":
+            dtype = "float16" if compute_device.startswith("cuda") else "float32"
+
+        default_gpu_model = "openai/whisper-large-v3-turbo"
+        default_cpu_model = "openai/whisper-large-v3"
+        if model_id in ("auto", default_gpu_model, default_cpu_model):
+            model_id = default_gpu_model if compute_device.startswith("cuda") else default_cpu_model
+
+        return backend, model_id, compute_device, dtype
 
     def _initialize_model_and_processor(self):
         # Este método será chamado para orquestrar o carregamento do modelo e a criação da pipeline
@@ -352,44 +395,47 @@ class TranscriptionHandler:
         # Removido: model_loaded_successfully = False
         # Removido: error_message = "Unknown error during model load."
         try:
-            # Removido: device_param = "cpu"
-            torch_dtype_local = torch.float32
+            backend, model_id, compute_device, dtype = self._resolve_asr_settings()
+            os.environ.setdefault("TRANSFORMERS_CACHE", os.path.expanduser(self.asr_cache_dir))
 
-            if torch.cuda.is_available():
-                if self.gpu_index == -1: # Auto-seleção de GPU
-                    num_gpus = torch.cuda.device_count()
-                    if num_gpus > 0:
-                        best_gpu_index = 0
-                        max_vram = 0
-                        for i in range(num_gpus):
-                            props = torch.cuda.get_device_properties(i)
-                            if props.total_memory > max_vram:
-                                max_vram = props.total_memory
-                                best_gpu_index = i
-                        self.gpu_index = best_gpu_index
-                        logging.info(f"Auto-seleção de GPU (maior VRAM total): {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})")
-                    else:
-                        logging.info("Nenhuma GPU disponível, usando CPU.")
-                        self.gpu_index = -1 # Garante que o índice seja -1 se não houver GPU
-                
-            model_id = "openai/whisper-large-v3"
-            
+            torch_dtype_local = torch.float16 if dtype == "float16" else torch.float32
+
+            if compute_device == "cpu":
+                self.gpu_index = -1
+            elif compute_device == "cuda" and self.gpu_index == -1 and torch.cuda.is_available():
+                num_gpus = torch.cuda.device_count()
+                if num_gpus > 0:
+                    best_gpu_index = 0
+                    max_vram = 0
+                    for i in range(num_gpus):
+                        props = torch.cuda.get_device_properties(i)
+                        if props.total_memory > max_vram:
+                            max_vram = props.total_memory
+                            best_gpu_index = i
+                    self.gpu_index = best_gpu_index
+                    logging.info(
+                        f"Auto-seleção de GPU (maior VRAM total): {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})"
+                    )
+                else:
+                    compute_device = "cpu"
+                    self.gpu_index = -1
+
             logging.info(f"Carregando processador de {model_id}...")
             processor = AutoProcessor.from_pretrained(model_id)
 
-            # Determinar o dispositivo explicitamente antes de carregar o modelo
-            device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
+            device = (
+                f"cuda:{self.gpu_index}" if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0 else "cpu"
+            )
             logging.info(f"Dispositivo de carregamento do modelo definido explicitamente como: {device}")
 
-            if torch.cuda.is_available() and self.gpu_index >= 0:
-                torch_dtype_local = torch.float16
-                logging.info("GPU detectada e selecionada, usando torch.float16.")
+            if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0:
+                torch_dtype_local = torch.float16 if dtype == "float16" else torch.float32
             else:
                 torch_dtype_local = torch.float32
                 logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
-            # Seleção automática de GPU por memória livre quando gpu_index == -1
+
             try:
-                if torch.cuda.is_available() and self.gpu_index == -1:
+                if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index == -1:
                     best_idx = None
                     best_free = -1
                     for i in range(torch.cuda.device_count()):
@@ -404,18 +450,19 @@ class TranscriptionHandler:
                         self.gpu_index = best_idx
                         free_gb = best_free / (1024 ** 3) if best_free > 0 else 0.0
                         total_gb = torch.cuda.get_device_properties(self.gpu_index).total_memory / (1024 ** 3)
-                        logging.info(f"[METRIC] stage=gpu_autoselect gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}")
+                        logging.info(
+                            f"[METRIC] stage=gpu_autoselect gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}"
+                        )
+                        device = f"cuda:{self.gpu_index}"
             except Exception as _gpu_sel_e:
                 logging.warning(f"Falha ao escolher GPU por memória livre: {_gpu_sel_e}")
 
             logging.info(f"Carregando modelo {model_id}...")
 
-            # Define configuração de quantização apenas se uma GPU válida estiver disponível
             quant_config = None
-            if torch.cuda.is_available() and self.gpu_index >= 0:
+            if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0:
                 quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
-            # Determina dinamicamente se o FlashAttention 2 está disponível
             try:
                 import importlib.util
 
@@ -432,7 +479,6 @@ class TranscriptionHandler:
                 "device_map": {'': device},
                 "attn_implementation": attn_impl,
             }
-            # Adiciona a configuração de quantização somente quando aplicável
             if quant_config is not None:
                 model_kwargs["quantization_config"] = quant_config
 
