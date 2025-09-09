@@ -36,7 +36,7 @@ sys.modules["distutils.util"] = distutils_util
 import torch
 from src.config_manager import ConfigManager, DEFAULT_CONFIG, CLEAR_GPU_CACHE_CONFIG_KEY
 from src.transcription_handler import TranscriptionHandler
-from src.asr_backends import backend_registry
+from src.asr_backends import backend_registry, _AdapterBackend
 
 
 def _build_handler(monkeypatch, clear_gpu_cache=True):
@@ -91,3 +91,78 @@ def test_switches_backend(monkeypatch):
     handler.asr_backend = "second"
     assert isinstance(handler._asr_backend, SecondBackend)
     assert handler._asr_backend.loaded
+
+
+def test_adapter_backend_respects_config_transformers(monkeypatch):
+    class DummyBackend:
+        def __init__(self):
+            self.model_id = None
+            self.device = None
+            self.loaded_kwargs = None
+
+        def load(self, **kwargs):
+            self.loaded_kwargs = kwargs
+
+    config = {
+        "asr_model_id": "custom-model",
+        "asr_compute_device": "cpu",
+        "asr_dtype": "float32",
+        "asr_cache_dir": "/tmp",
+        "asr_ct2_compute_type": "int8",
+    }
+
+    class Cfg:
+        def get(self, key):
+            return config.get(key)
+
+    handler = types.SimpleNamespace(config_manager=Cfg())
+    monkeypatch.setattr(
+        "src.asr_backends._make_asr_backend", lambda name: DummyBackend()
+    )
+    adapter = _AdapterBackend(handler, "transformers")
+    adapter.load()
+    backend = adapter._backend
+    assert backend.model_id == "custom-model"
+    assert backend.device == "cpu"
+    assert backend.loaded_kwargs == {
+        "device": "cpu",
+        "dtype": "float32",
+        "cache_dir": "/tmp",
+    }
+
+
+def test_adapter_backend_respects_config_faster_whisper(monkeypatch):
+    class DummyBackend:
+        def __init__(self):
+            self.model_id = None
+            self.device = None
+            self.loaded_kwargs = None
+
+        def load(self, **kwargs):
+            self.loaded_kwargs = kwargs
+
+    config = {
+        "asr_model_id": "custom-model",
+        "asr_compute_device": "cuda",
+        "asr_dtype": "float16",
+        "asr_cache_dir": "/cache",
+        "asr_ct2_compute_type": "int8",
+    }
+
+    class Cfg:
+        def get(self, key):
+            return config.get(key)
+
+    handler = types.SimpleNamespace(config_manager=Cfg())
+    monkeypatch.setattr(
+        "src.asr_backends._make_asr_backend", lambda name: DummyBackend()
+    )
+    adapter = _AdapterBackend(handler, "faster-whisper")
+    adapter.load()
+    backend = adapter._backend
+    assert backend.model_id == "custom-model"
+    assert backend.device == "cuda"
+    assert backend.loaded_kwargs == {
+        "cache_dir": "/cache",
+        "ct2_compute_type": "int8",
+    }

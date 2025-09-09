@@ -14,6 +14,9 @@ torch_stub = types.SimpleNamespace(
 sys.modules.setdefault("torch", torch_stub)
 sys.modules.setdefault("requests", types.ModuleType("requests"))
 sys.modules.setdefault("psutil", types.ModuleType("psutil"))
+sys.modules.setdefault("sounddevice", types.ModuleType("sounddevice"))
+sys.modules.setdefault("soundfile", types.ModuleType("soundfile"))
+sys.modules.setdefault("onnxruntime", types.ModuleType("onnxruntime"))
 
 hub = types.ModuleType("huggingface_hub")
 
@@ -68,8 +71,9 @@ if not hasattr(_th, "CLEAR_GPU_CACHE_CONFIG_KEY"):
     _th.CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
 orig_th_init = _th.TranscriptionHandler.__init__
 def _patched_th_init(self, *args, **kwargs):
-    orig_th_init(self, *args, **kwargs)
     self._asr_backend_name = None
+    self._asr_model_id = None
+    orig_th_init(self, *args, **kwargs)
 _th.TranscriptionHandler.__init__ = _patched_th_init
 orig_reload = _th.TranscriptionHandler.reload_asr
 def _patched_reload(self):
