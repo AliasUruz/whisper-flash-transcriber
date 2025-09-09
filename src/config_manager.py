@@ -95,7 +95,14 @@ DEFAULT_CONFIG = {
     "launch_at_startup": False,
     "clear_gpu_cache": True,
     "asr_model": "openai/whisper-large-v3",
+    "asr_model_id": "openai/whisper-large-v3",
+    "asr_backend": "whisper",
     "asr_installed_models": [],
+    "asr_compute_device": "auto",
+    "asr_dtype": "float16",
+    "asr_ct2_compute_type": "default",
+    "asr_cache_dir": "",
+    "asr_curated_catalog": [],
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -151,6 +158,13 @@ HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
 ASR_MODEL_CONFIG_KEY = "asr_model"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
+ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
+ASR_BACKEND_CONFIG_KEY = "asr_backend"
+ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
+ASR_DTYPE_CONFIG_KEY = "asr_dtype"
+ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
+ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
+ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
