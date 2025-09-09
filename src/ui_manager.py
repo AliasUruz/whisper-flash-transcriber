@@ -79,6 +79,10 @@ class UIManager:
         self.recording_timer_thread = None
         self.stop_recording_timer_event = threading.Event()
 
+        # Controle interno para atualizar a tooltip durante a transcrição
+        self.transcribing_timer_thread = None
+        self.stop_transcribing_timer_event = threading.Event()
+
     # Methods for the live transcription window
     def _show_live_transcription_window(self):
         # This functionality has been disabled at the user's request.
@@ -156,6 +160,20 @@ class UIManager:
         m, s = divmod(int(seconds), 60)
         return f"{m:02d}:{s:02d}"
 
+    def _transcribing_tooltip_updater(self):
+        """Atualiza a tooltip com a duração da transcrição a cada segundo."""
+        # Como não armazenamos o início da transcrição explicitamente,
+        # estimamos a partir do fim da gravação:
+        # Quando entra em TRANSCRIBING, o AudioHandler.start_time é zerado,
+        # então vamos capturar um timestamp local para contar.
+        start_ts = time.time()
+        while not self.stop_transcribing_timer_event.is_set():
+            elapsed = time.time() - start_ts
+            tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
+            if self.tray_icon:
+                self.tray_icon.title = tooltip
+            time.sleep(1)
+
     def update_tray_icon(self, state):
         # Logic moved from global, adjusted to use self.tray_icon and self.core_instance_ref
         if self.tray_icon:
@@ -163,7 +181,14 @@ class UIManager:
             icon_image = self.create_image(64, 64, color1, color2)
             self.tray_icon.icon = icon_image
             tooltip = f"Whisper Recorder ({state})"
+
+            # Controle de threads de tooltip por estado
             if state == "RECORDING":
+                # Parar contador de TRANSCRIBING se estiver ativo
+                if self.transcribing_timer_thread and self.transcribing_timer_thread.is_alive():
+                    self.stop_transcribing_timer_event.set()
+                    self.transcribing_timer_thread.join(timeout=1)
+
                 if not self.recording_timer_thread or not self.recording_timer_thread.is_alive():
                     self.stop_recording_timer_event.clear()
                     self.recording_timer_thread = threading.Thread(
@@ -176,14 +201,50 @@ class UIManager:
                 if start_time is not None:
                     elapsed = time.time() - start_time
                     tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
-            else:
+
+            elif state == "TRANSCRIBING":
+                # Parar contador de RECORDING se estiver ativo
                 if self.recording_timer_thread and self.recording_timer_thread.is_alive():
                     self.stop_recording_timer_event.set()
                     self.recording_timer_thread.join(timeout=1)
+
+                # Iniciar contador de TRANSCRIBING
+                if not self.transcribing_timer_thread or not self.transcribing_timer_thread.is_alive():
+                    self.stop_transcribing_timer_event.clear()
+                    # Atualiza tooltip imediatamente ao entrar em TRANSCRIBING
+                    self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
+                    self.transcribing_timer_thread = threading.Thread(
+                        target=self._transcribing_tooltip_updater,
+                        daemon=True,
+                        name="TranscribingTooltipThread",
+                    )
+                    self.transcribing_timer_thread.start()
+
+            else:
+                # Parar ambos contadores em outros estados
+                if self.recording_timer_thread and self.recording_timer_thread.is_alive():
+                    self.stop_recording_timer_event.set()
+                    self.recording_timer_thread.join(timeout=1)
+                if self.transcribing_timer_thread and self.transcribing_timer_thread.is_alive():
+                    self.stop_transcribing_timer_event.set()
+                    self.transcribing_timer_thread.join(timeout=1)
+
                 if state == "IDLE" and self.core_instance_ref:
                     tooltip += f" - Record: {self.core_instance_ref.record_key.upper()} - Agent: {self.core_instance_ref.agent_key.upper()}"
                 elif state.startswith("ERROR") and self.core_instance_ref:
                     tooltip += " - Check Logs/Settings"
+
+            # Ajusta tooltip final conforme estado atual para evitar mensagens inconsistentes
+            if state == "TRANSCRIBING":
+                # Garante que o texto base esteja correto mesmo antes do primeiro tick
+                tooltip = "Whisper Recorder (TRANSCRIBING)"
+            elif state == "RECORDING":
+                tooltip = "Whisper Recorder (RECORDING)"
+            elif state == "LOADING_MODEL":
+                tooltip = "Whisper Recorder (LOADING_MODEL)"
+            else:
+                tooltip = tooltip
+
             self.tray_icon.title = tooltip
             self.tray_icon.update_menu()
             logging.debug(f"Tray icon updated for state: {state}")
@@ -253,6 +314,11 @@ class UIManager:
                 max_memory_seconds_var = ctk.DoubleVar(
                     value=self.config_manager.get("max_memory_seconds")
                 )
+                # New: Chunk length controls
+                chunk_length_mode_var = ctk.StringVar(value=self.config_manager.get_chunk_length_mode())
+                chunk_length_sec_var = ctk.DoubleVar(value=self.config_manager.get_chunk_length_sec())
+                # New: Torch compile switch variable
+                enable_torch_compile_var = ctk.BooleanVar(value=self.config_manager.get_enable_torch_compile())
 
                 def update_text_correction_fields():
                     enabled = text_correction_enabled_var.get()
@@ -389,7 +455,12 @@ class UIManager:
                         new_vad_threshold=vad_threshold_to_apply,
                         new_vad_silence_duration=vad_silence_duration_to_apply,
                         new_display_transcripts_in_terminal=display_transcripts_to_apply,
-                        new_launch_at_startup=launch_at_startup_var.get()
+                        new_launch_at_startup=launch_at_startup_var.get(),
+                        # New chunk settings
+                        new_chunk_length_mode=chunk_length_mode_var.get(),
+                        new_chunk_length_sec=float(chunk_length_sec_var.get()),
+                        # New: torch compile setting
+                        new_enable_torch_compile=bool(enable_torch_compile_var.get())
                     )
                     self._close_settings_window() # Call class method
 
@@ -637,6 +708,49 @@ class UIManager:
                 batch_entry = ctk.CTkEntry(batch_size_frame, textvariable=batch_size_var, width=60)
                 batch_entry.pack(side="left", padx=5)
                 Tooltip(batch_entry, "Number of segments processed together.")
+
+                # New: Torch Compile
+                torch_compile_frame = ctk.CTkFrame(transcription_frame)
+                torch_compile_frame.pack(fill="x", pady=5)
+                torch_compile_switch = ctk.CTkSwitch(
+                    torch_compile_frame,
+                    text="Enable Torch Compile (Experimental)",
+                    variable=enable_torch_compile_var
+                )
+                torch_compile_switch.pack(side="left", padx=5)
+                Tooltip(torch_compile_switch, "Enable PyTorch compile (may improve performance on supported GPUs).")
+
+                # New: Chunk Length Mode
+                chunk_mode_frame = ctk.CTkFrame(transcription_frame)
+                chunk_mode_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(chunk_mode_frame, text="Chunk Length Mode:").pack(side="left", padx=(5, 10))
+                chunk_mode_menu = ctk.CTkOptionMenu(chunk_mode_frame, variable=chunk_length_mode_var, values=["auto", "manual"])
+                chunk_mode_menu.pack(side="left", padx=5)
+                Tooltip(chunk_mode_menu, "Choose how chunk size is determined.")
+
+                # New: Chunk Length (sec)
+                chunk_len_frame = ctk.CTkFrame(transcription_frame)
+                chunk_len_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(chunk_len_frame, text="Chunk Length (sec):").pack(side="left", padx=(5, 10))
+                chunk_len_entry = ctk.CTkEntry(chunk_len_frame, textvariable=chunk_length_sec_var, width=80)
+                chunk_len_entry.pack(side="left", padx=5)
+                Tooltip(chunk_len_entry, "Fixed chunk duration when in manual mode.")
+
+                def update_chunk_length_state():
+                    try:
+                        mode_val = chunk_length_mode_var.get().lower()
+                    except Exception:
+                        mode_val = "manual"
+                    state = "normal" if mode_val == "manual" else "disabled"
+                    try:
+                        chunk_len_entry.configure(state=state)
+                    except Exception:
+                        pass
+
+                # initialize state
+                update_chunk_length_state()
+                # bind changes
+                chunk_mode_menu.configure(command=lambda _: update_chunk_length_state())
     
                 # New: Ignore Transcriptions Shorter Than
                 min_transcription_duration_frame = ctk.CTkFrame(transcription_frame)

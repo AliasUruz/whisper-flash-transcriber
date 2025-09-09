@@ -76,6 +76,8 @@ Transcribed speech: {text}""",
     "min_free_ram_mb": 1000,
     "min_transcription_duration": 1.0, # Nova configuração
     "chunk_length_sec": 30,
+    "chunk_length_mode": "manual",
+    "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True
 }
@@ -118,6 +120,9 @@ GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
 GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
+# Novas constantes para otimizações de desempenho
+CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
+ENABLE_TORCH_COMPILE_CONFIG_KEY = "enable_torch_compile"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
@@ -324,6 +329,18 @@ class ConfigManager:
             self.config[CHUNK_LENGTH_SEC_CONFIG_KEY] = self.default_config[
                 CHUNK_LENGTH_SEC_CONFIG_KEY
             ]
+
+        # chunk_length_mode: 'auto' | 'manual'
+        raw_chunk_mode = str(self.config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual"))).lower()
+        if raw_chunk_mode not in ["auto", "manual"]:
+            logging.warning(f"Invalid chunk_length_mode '{raw_chunk_mode}'. Falling back to 'manual'.")
+            raw_chunk_mode = "manual"
+        self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = raw_chunk_mode
+
+        # enable_torch_compile: bool
+        self.config[ENABLE_TORCH_COMPILE_CONFIG_KEY] = _parse_bool(
+            self.config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False))
+        )
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -613,6 +630,27 @@ class ConfigManager:
             CHUNK_LENGTH_SEC_CONFIG_KEY,
             self.default_config[CHUNK_LENGTH_SEC_CONFIG_KEY],
         )
+
+    def get_chunk_length_mode(self):
+        return self.config.get(
+            CHUNK_LENGTH_MODE_CONFIG_KEY,
+            self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual"),
+        )
+
+    def set_chunk_length_mode(self, value: str):
+        val = str(value).lower()
+        if val not in ["auto", "manual"]:
+            val = "manual"
+        self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = val
+
+    def get_enable_torch_compile(self):
+        return self.config.get(
+            ENABLE_TORCH_COMPILE_CONFIG_KEY,
+            self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False),
+        )
+
+    def set_enable_torch_compile(self, value: bool):
+        self.config[ENABLE_TORCH_COMPILE_CONFIG_KEY] = bool(value)
 
     def set_chunk_length_sec(self, value: float | int):
         try:

@@ -88,6 +88,10 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
+        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -128,6 +132,8 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
+        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
@@ -139,11 +145,35 @@ class TranscriptionHandler:
             model, processor = self._load_model_task()
             if model and processor:
                 device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
+
+                # torch.compile opcional
+                try:
+                    if self.enable_torch_compile and hasattr(torch, "compile") and device.startswith("cuda"):
+                        model = torch.compile(model)  # type: ignore[attr-defined]
+                        logging.info("torch.compile aplicado ao modelo (experimental).")
+                    else:
+                        logging.info("torch.compile desativado ou indisponível; seguindo sem compile.")
+                except Exception as e:
+                    logging.warning(f"Falha ao aplicar torch.compile: {e}. Seguindo sem compile.", exc_info=True)
+
                 # Forçar a detecção de idioma na inicialização da pipeline
                 generate_kwargs_init = {
                     "task": "transcribe",
                     "language": None
                 }
+
+                # Removido bloco duplicado de ajuste de chunk (mantemos apenas a verificação com modo 'auto' abaixo)
+
+                # Ajuste de chunk_length_sec quando em modo 'auto' (antes de criar a pipeline)
+                if self.chunk_length_mode == "auto":
+                    try:
+                        eff_chunk = float(self._effective_chunk_length())
+                        if eff_chunk != self.chunk_length_sec:
+                            logging.info(f"Chunk length ajustado automaticamente: {self.chunk_length_sec:.1f}s -> {eff_chunk:.1f}s")
+                        self.chunk_length_sec = eff_chunk
+                    except Exception as e:
+                        logging.warning(f"Falha ao calcular chunk_length auto: {e}. Mantendo valor atual {self.chunk_length_sec}.")
+
                 self.pipe = pipeline(
                     "automatic-speech-recognition",
                     model=model,
@@ -257,7 +287,11 @@ class TranscriptionHandler:
             return self.manual_batch_size
 
         # Lógica para modo "auto" (dinâmico)
-        return select_batch_size(self.gpu_index, fallback=self.batch_size)
+        return select_batch_size(
+            self.gpu_index,
+            fallback=self.batch_size,
+            chunk_length_sec=self.chunk_length_sec
+        )
 
     def start_model_loading(self):
         threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
@@ -390,6 +424,13 @@ class TranscriptionHandler:
             if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
                 audio_source = audio_source.flatten()
 
+            # Revalidar chunk em runtime se modo auto (segurança extra)
+            if self.chunk_length_mode == "auto":
+                try:
+                    self.chunk_length_sec = float(self._effective_chunk_length())
+                except Exception:
+                    pass
+
             result = self.pipe(
                 audio_source,
                 chunk_length_s=self.chunk_length_sec,
@@ -489,6 +530,34 @@ class TranscriptionHandler:
                 logging.debug(
                     "Cache da GPU preservado para transcrições consecutivas."
                 )
+
+    def _effective_chunk_length(self) -> float:
+        """
+        Heurística simples para chunk_length_sec quando em modo 'auto'.
+        Baseada na VRAM livre estimada da GPU alvo.
+        """
+        try:
+            if not torch.cuda.is_available() or self.gpu_index < 0:
+                return float(self.chunk_length_sec)  # manter o manual atual em CPU
+            free_bytes, total_bytes = torch.cuda.mem_get_info(torch.device(f"cuda:{self.gpu_index}"))
+            free_gb = free_bytes / (1024 ** 3)
+            # Heurística: mais VRAM livre -> chunks maiores
+            if free_gb >= 12:
+                return 60.0
+            elif free_gb >= 8:
+                return 45.0
+            elif free_gb >= 6:
+                return 30.0
+            elif free_gb >= 4:
+                return 20.0
+            else:
+                return 15.0
+        except Exception:
+            # fallback seguro
+            try:
+                return float(self.chunk_length_sec)
+            except Exception:
+                return 30.0
 
     def shutdown(self) -> None:
         """Encerra o executor de transcrição."""

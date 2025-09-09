@@ -591,6 +591,10 @@ class AppCore:
                 "new_record_storage_mode": "record_storage_mode",
                 "new_record_storage_limit": "record_storage_limit",
                 "new_launch_at_startup": "launch_at_startup",
+                # Novas chaves para opções de chunk e recurso experimental
+                "new_chunk_length_mode": "chunk_length_mode",
+                "new_chunk_length_sec": "chunk_length_sec",
+                "new_enable_torch_compile": "enable_torch_compile",
             }
             mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 

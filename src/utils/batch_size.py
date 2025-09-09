@@ -1,8 +1,13 @@
 import logging
 
 
-def select_batch_size(gpu_index: int, fallback: int = 4) -> int:
-    """Calcula batch size dinâmico baseado na VRAM disponível."""
+def select_batch_size(gpu_index: int, fallback: int = 4, *, chunk_length_sec: float | None = None) -> int:
+    """
+    Calcula batch size dinâmico baseado na VRAM disponível.
+    Ajusta agressividade conforme o tamanho do chunk (segundos):
+      - chunks maiores consomem mais memória -> reduzir batch.
+      - chunks menores permitem batch maior.
+    """
     try:
         import torch
     except Exception as e:  # pragma: no cover - torch pode não estar instalado
@@ -40,6 +45,31 @@ def select_batch_size(gpu_index: int, fallback: int = 4) -> int:
             bs = 4
         else:
             bs = 2
+
+        # Ajuste por tamanho de chunk (heurística simples e segura)
+        if chunk_length_sec is not None:
+            try:
+                cl = float(chunk_length_sec)
+                if cl >= 60:
+                    factor = 0.5   # reduzir pela metade
+                elif cl >= 45:
+                    factor = 0.66  # reduzir ~1/3
+                elif cl >= 30:
+                    factor = 0.75
+                elif cl >= 15:
+                    factor = 0.9
+                else:
+                    factor = 1.0
+                new_bs = max(1, int(bs * factor))
+                logging.info(
+                    "Ajustando batch pelo chunk_length_sec=%.1fs: %s -> %s",
+                    cl, bs, new_bs
+                )
+                bs = new_bs
+            except Exception:
+                # Ignorar falhas de conversão
+                pass
+
         logging.info(
             "VRAM livre (%.2fGB) -> Batch size dinâmico selecionado: %s",
             free_memory_gb,

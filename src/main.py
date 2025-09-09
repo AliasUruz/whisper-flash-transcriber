@@ -3,6 +3,7 @@ import tkinter as tk
 import logging
 import atexit
 import os  # Adicionado para manipulação de caminhos
+import importlib
 
 # Configuração de logging (mantida aqui para o ponto de entrada)
 sys.stdout.reconfigure(encoding='utf-8')
@@ -22,6 +23,45 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 # Importar os módulos da aplicação
 from src.core import AppCore  # noqa: E402
 from src.ui_manager import UIManager  # noqa: E402
+
+# Ativar cudnn.benchmark quando CUDA estiver disponível (pode acelerar convoluções do encoder de áudio)
+try:
+    torch_spec = importlib.util.find_spec("torch")
+    if torch_spec is not None:
+        import torch  # type: ignore
+        if torch.cuda.is_available():
+            try:
+                torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
+                logging.info("cudnn.benchmark ativado (CUDA disponível).")
+            except Exception as e:
+                logging.warning(f"Não foi possível ativar cudnn.benchmark: {e}")
+
+            # Logs detalhados de capacidades CUDA (T5.2)
+            try:
+                num_gpus = torch.cuda.device_count()
+                logging.info(f"CUDA disponível: {torch.version.cuda}; GPUs detectadas: {num_gpus}")
+                for i in range(num_gpus):
+                    try:
+                        name = torch.cuda.get_device_name(i)
+                        props = torch.cuda.get_device_properties(i)
+                        total_mem_gb = props.total_memory / (1024 ** 3)
+                        capability = f"{props.major}.{props.minor}"
+                        logging.info(f"GPU {i}: {name} | VRAM total: {total_mem_gb:.2f} GB | CC: {capability}")
+                    except Exception as eg:
+                        logging.warning(f"Falha ao consultar propriedades da GPU {i}: {eg}")
+
+                # Detectar presença de FlashAttention 2
+                try:
+                    fa_spec = importlib.util.find_spec("flash_attn")
+                    has_flash_attn = fa_spec is not None
+                except Exception:
+                    has_flash_attn = False
+                logging.info(f"FlashAttention 2 detectado: {has_flash_attn}")
+            except Exception as el:
+                logging.warning(f"Não foi possível coletar capacidades CUDA: {el}")
+except Exception as e:
+    # torch pode não estar instalado em alguns ambientes de teste; seguir silenciosamente
+    logging.debug(f"torch não disponível para configurar cudnn.benchmark: {e}")
 
 # --- Ajuste para evitar erros "main thread is not in main loop" ao destruir
 # variáveis Tkinter quando a aplicação encerra. Mantemos o destrutor original
