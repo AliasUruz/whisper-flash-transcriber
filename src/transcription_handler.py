@@ -4,19 +4,15 @@ import concurrent.futures
 import time
 import numpy as np
 import torch
-from transformers import pipeline, AutoProcessor, AutoModelForSpeechSeq2Seq
-import tempfile
-import os
-import soundfile as sf
 
-try:
-    from transformers import BitsAndBytesConfig
-except Exception:
-    class BitsAndBytesConfig:  # type: ignore[py-class-var]
-        def __init__(self, *_, **__):
-            pass
+try:  # pragma: no cover - biblioteca opcional
+    from whisper_flash import make_backend  # type: ignore
+except Exception:  # pragma: no cover
+    make_backend = None  # type: ignore
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
 from .audio_handler import AUDIO_SAMPLE_RATE
+from .model_manager import ensure_download
+from .config_manager import ASR_CACHE_DIR
 
 # Importar constantes de configuração
 from .utils import select_batch_size
@@ -41,6 +37,7 @@ from .config_manager import (
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
 )
+from .asr_backends import backend_registry, WhisperBackend
 
 class TranscriptionHandler:
     def __init__(
@@ -72,6 +69,7 @@ class TranscriptionHandler:
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
         self.pipe = None
+        self.backend_resolved = None
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
         # Executor dedicado para a tarefa de transcrição em background
@@ -100,6 +98,16 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.asr_model = self.config_manager.get(ASR_MODEL_CONFIG_KEY)
+
+        # Configurações de ASR
+        self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
+        self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
+        self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
+        self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
+        self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+        self.asr_ct2_cpu_threads = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
+        self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
 
         # Configurações de ASR
         self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
@@ -114,7 +122,6 @@ class TranscriptionHandler:
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
 
         self._init_api_clients()
-        # Removido: self._initialize_model_and_processor() # Chamada para inicializar o modelo e o processador
 
     def _init_api_clients(self):
         # Lógica de inicialização de OpenRouterAPI e GeminiAPI
@@ -132,6 +139,44 @@ class TranscriptionHandler:
 
         # O cliente Gemini agora é injetado, então sua inicialização foi removida daqui.
         # A inicialização do OpenRouter é mantida.
+
+    @property
+    def asr_backend(self):
+        return self._asr_backend_name
+
+    @asr_backend.setter
+    def asr_backend(self, value):
+        if value != self._asr_backend_name:
+            self._asr_backend_name = value
+            self.reload_asr()
+
+    @property
+    def asr_model_id(self):
+        return self._asr_model_id
+
+    @asr_model_id.setter
+    def asr_model_id(self, value):
+        if value != self._asr_model_id:
+            self._asr_model_id = value
+            self.reload_asr()
+
+    def unload(self):
+        """Descarta a pipeline atual."""
+        self.pipe = None
+
+    def reload_asr(self):
+        """Recarrega o backend de ASR e o modelo associado."""
+        try:
+            self._asr_backend.unload()
+        except Exception as e:
+            logging.warning(f"Falha ao descarregar backend ASR: {e}")
+
+        if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        backend_cls = backend_registry.get(self._asr_backend_name, WhisperBackend)
+        self._asr_backend = backend_cls(self)
+        self._asr_backend.load()
 
     def update_config(self):
         """Atualiza as configurações do handler a partir do config_manager."""
@@ -188,6 +233,12 @@ class TranscriptionHandler:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             model, processor = self._load_model_task()
+            if self.backend_resolved == "ctranslate2" and model:
+                self.pipe = model
+                logging.info("Modelo CTranslate2 carregado.")
+                if self.on_model_ready_callback:
+                    self.on_model_ready_callback()
+                return
             if model and processor:
                 device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
 
@@ -374,7 +425,7 @@ class TranscriptionHandler:
         )
 
     def start_model_loading(self):
-        threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
+        threading.Thread(target=self._load_model_task, daemon=True, name="ModelLoadThread").start()
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""
@@ -392,8 +443,6 @@ class TranscriptionHandler:
         self.transcription_cancel_event.set()
 
     def _load_model_task(self):
-        # Removido: model_loaded_successfully = False
-        # Removido: error_message = "Unknown error during model load."
         try:
             backend, model_id, compute_device, dtype = self._resolve_asr_settings()
             os.environ.setdefault("TRANSFORMERS_CACHE", os.path.expanduser(self.asr_cache_dir))
@@ -440,7 +489,7 @@ class TranscriptionHandler:
                     best_free = -1
                     for i in range(torch.cuda.device_count()):
                         try:
-                            free_b, total_b = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
+                            free_b, _ = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
                             if free_b > best_free:
                                 best_free = free_b
                                 best_idx = i
@@ -457,7 +506,9 @@ class TranscriptionHandler:
             except Exception as _gpu_sel_e:
                 logging.warning(f"Falha ao escolher GPU por memória livre: {_gpu_sel_e}")
 
-            logging.info(f"Carregando modelo {model_id}...")
+            if backend == "transformers":
+                logging.info(f"Carregando modelo Transformers {model_id}...")
+                processor = AutoProcessor.from_pretrained(model_path)
 
             quant_config = None
             if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0:
@@ -494,15 +545,14 @@ class TranscriptionHandler:
                     logging.info(f"[METRIC] stage=attn_impl_effective value={getattr(eff_attn, 'attn_implementation', 'unknown')}")
             except Exception:
                 pass
-            
+
             # Retorna o modelo e o processador para que a pipeline seja criada fora desta função
             return model, processor
 
         except Exception as e:
             error_message = f"Falha ao carregar o modelo: {e}"
             logging.error(error_message, exc_info=True)
-            # Removido: self.on_model_error_callback(error_message) # Notifica o erro imediatamente
-            return None, None # Retorna None em caso de falha
+            return None, None
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""
@@ -519,97 +569,93 @@ class TranscriptionHandler:
 
         text_result = None
         try:
+            if self.backend_resolved == "ctranslate2":
+                segments, _ = self.pipe.transcribe(audio_source, language=None)
+                text_result = "".join(seg.text for seg in segments).strip()
+                if not text_result:
+                    text_result = "[No speech detected]"
+                logging.info("Transcrição via CTranslate2 concluída.")
+            else:
+                if self.pipe is None:
+                    error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
+                    logging.error(error_message)
+                    self.on_model_error_callback(error_message)
+                    return
 
-            if self.pipe is None:
-                error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
-                logging.error(error_message)
-                self.on_model_error_callback(error_message)
-                return
+                dynamic_batch_size = self._get_dynamic_batch_size()
+                logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
 
-            dynamic_batch_size = self._get_dynamic_batch_size()
-            logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
+                generate_kwargs = {
+                    "task": "transcribe",
+                    "language": None
+                }
+                if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
+                    audio_source = audio_source.flatten()
 
-            generate_kwargs = {
-                "task": "transcribe",
-                "language": None
-            }
-            if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
-                audio_source = audio_source.flatten()
+                if self.chunk_length_mode == "auto":
+                    try:
+                        self.chunk_length_sec = float(self._effective_chunk_length())
+                    except Exception:
+                        pass
 
-            # Revalidar chunk em runtime se modo auto (segurança extra)
-            if self.chunk_length_mode == "auto":
                 try:
-                    self.chunk_length_sec = float(self._effective_chunk_length())
+                    device = f"cuda:{self.gpu_index}" if torch.cuda.is_available() and self.gpu_index >= 0 else "cpu"
+                except Exception:
+                    device = "cpu"
+                dtype = "fp16" if (torch.cuda.is_available() and self.gpu_index >= 0) else "fp32"
+                try:
+                    import importlib.util as _spec_util
+                    attn_impl = "flash_attn2" if _spec_util.find_spec("flash_attn") is not None else "sdpa"
+                except Exception:
+                    attn_impl = "sdpa"
+
+                t_total_start = time.perf_counter()
+                t_pre_start = time.perf_counter()
+                t_pre_end = time.perf_counter()
+                t_pre_ms = (t_pre_end - t_pre_start) * 1000.0
+
+                with torch.no_grad():
+                    t_infer_start = time.perf_counter()
+                    result = self.pipe(
+                        audio_source,
+                        chunk_length_s=self.chunk_length_sec,
+                        batch_size=dynamic_batch_size,
+                        return_timestamps=False,
+                        generate_kwargs=generate_kwargs
+                    )
+                    t_infer_end = time.perf_counter()
+                t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
+
+                try:
+                    self.last_dynamic_batch_size = int(dynamic_batch_size)
+                except Exception:
+                    self.last_dynamic_batch_size = None
+
+                t_post_start = time.perf_counter()
+
+                if result and "text" in result:
+                    text_result = result["text"].strip()
+                    if not text_result:
+                        text_result = "[No speech detected]"
+                    else:
+                        logging.info("Transcrição de segmento bem-sucedida.")
+                else:
+                    text_result = "[Transcription failed: Bad format]"
+                    logging.error(f"Formato de resultado inesperado: {result}")
+
+                t_post_end = time.perf_counter()
+                t_post_ms = (t_post_end - t_post_start) * 1000.0
+                t_total_ms = (t_post_end - t_total_start) * 1000.0
+
+                try:
+                    logging.info(f"[METRIC] stage=t_pre value_ms={t_pre_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
+                    logging.info(f"[METRIC] stage=t_infer value_ms={t_infer_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
+                    logging.info(f"[METRIC] stage=t_post value_ms={t_post_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
+                    logging.info(f"[METRIC] stage=segment_total value_ms={t_total_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
                 except Exception:
                     pass
 
-            # Métricas detalhadas de tempos: t_pre, t_infer, t_post e t_total_segment
-            # Campos técnicos
-            try:
-                device = f"cuda:{self.gpu_index}" if torch.cuda.is_available() and self.gpu_index >= 0 else "cpu"
-            except Exception:
-                device = "cpu"
-            dtype = "fp16" if (torch.cuda.is_available() and self.gpu_index >= 0) else "fp32"
-            try:
-                import importlib.util as _spec_util
-                attn_impl = "flash_attn2" if _spec_util.find_spec("flash_attn") is not None else "sdpa"
-            except Exception:
-                attn_impl = "sdpa"
-
-            t_total_start = time.perf_counter()
-            # t_pre: placeholder para etapas leves de pré-processamento (flatten já foi aplicado)
-            t_pre_start = time.perf_counter()
-            t_pre_end = time.perf_counter()
-            t_pre_ms = (t_pre_end - t_pre_start) * 1000.0
-
-            # Inferência (t_infer) sob no_grad
-            with torch.no_grad():
-                t_infer_start = time.perf_counter()
-                result = self.pipe(
-                    audio_source,
-                    chunk_length_s=self.chunk_length_sec,
-                    batch_size=dynamic_batch_size,
-                    return_timestamps=False,
-                    generate_kwargs=generate_kwargs
-                )
-                t_infer_end = time.perf_counter()
-            t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
-
-            # Expor último batch dinâmico para UI/tooltip
-            try:
-                self.last_dynamic_batch_size = int(dynamic_batch_size)
-            except Exception:
-                self.last_dynamic_batch_size = None
-
-            # t_post: montagem/validação do texto
-            t_post_start = time.perf_counter()
-            # o processamento de result segue abaixo (text_result, etc.)
-
-            if result and "text" in result:
-                text_result = result["text"].strip()
-                if not text_result:
-                    text_result = "[No speech detected]"
-                else:
-                    logging.info("Transcrição de segmento bem-sucedida.")
-            else:
-                text_result = "[Transcription failed: Bad format]"
-                logging.error(f"Formato de resultado inesperado: {result}")
-
-            # concluir t_post e t_total
-            t_post_end = time.perf_counter()
-            t_post_ms = (t_post_end - t_post_start) * 1000.0
-            t_total_ms = (t_post_end - t_total_start) * 1000.0
-
-            # Logs [METRIC]
-            try:
-                logging.info(f"[METRIC] stage=t_pre value_ms={t_pre_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
-                logging.info(f"[METRIC] stage=t_infer value_ms={t_infer_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
-                logging.info(f"[METRIC] stage=t_post value_ms={t_post_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
-                logging.info(f"[METRIC] stage=segment_total value_ms={t_total_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
-            except Exception:
-                pass
-
-            # Fim do bloco de processamento principal do segmento
+                # Fim do bloco de processamento principal do segmento
 
         except Exception as e:
             # Tratamento de OOM e fallback automático (reduz batch, depois chunk) – não recria a pipeline
