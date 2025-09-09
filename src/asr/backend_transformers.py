@@ -14,21 +14,41 @@ class TransformersBackend:
         self.pipe = None
         self.sample_rate = 16000
 
-    def load(self, *args, **kwargs) -> None:
-        """Load model and processor, constructing the inference pipeline.
-
-        Extra positional or keyword arguments are accepted for compatibility
-        with the :class:`ASRBackend` protocol but are ignored.
-        """
+    def load(
+        self,
+        *,
+        device: int | str | None = None,
+        dtype: str | None = "auto",
+        cache_dir: str | None = None,
+        attn_implementation: str = "sdpa",
+        **_,
+    ) -> None:
+        """Load model and processor, constructing the inference pipeline."""
         from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
+        import torch
 
-        self.processor = AutoProcessor.from_pretrained(self.model_id)
-        self.model = AutoModelForSpeechSeq2Seq.from_pretrained(self.model_id)
+        device = device if device not in (None, "auto") else ("cuda:0" if torch.cuda.is_available() else -1)
+        torch_dtype = (
+            torch.float16
+            if (device != -1 and (dtype in (None, "auto", "float16", "fp16")))
+            else torch.float32
+        )
+
+        self.processor = AutoProcessor.from_pretrained(self.model_id, cache_dir=cache_dir)
+        self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            self.model_id,
+            cache_dir=cache_dir,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
+            use_safetensors=True,
+            attn_implementation=attn_implementation,
+        )
         self.pipe = pipeline(
             "automatic-speech-recognition",
             model=self.model,
-            processor=self.processor,
-            device=self.device,
+            tokenizer=self.processor.tokenizer,
+            feature_extractor=self.processor.feature_extractor,
+            device=(0 if device != -1 else -1),
         )
         try:
             self.sample_rate = int(self.processor.feature_extractor.sampling_rate)  # type: ignore[attr-defined]

@@ -95,14 +95,15 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
-    "asr_model": "openai/whisper-large-v3",
     "asr_model_id": "openai/whisper-large-v3",
+    "asr_backend": "transformers",
     "asr_compute_device": "auto",
     "asr_dtype": "float16",
     "asr_ct2_compute_type": "default",
     "asr_cache_dir": str((Path.home() / ".cache" / "whisper_flash_transcriber" / "asr").expanduser()),
     "asr_installed_models": [],
     "asr_curated_catalog": [],
+    "asr_curated_catalog_url": "",
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -161,9 +162,11 @@ ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
 ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
 ASR_DTYPE_CONFIG_KEY = "asr_dtype"
 ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
+ASR_CT2_CPU_THREADS_CONFIG_KEY = "asr_ct2_cpu_threads"
 ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
+ASR_CURATED_CATALOG_URL_CONFIG_KEY = "asr_curated_catalog_url"
 
 ASR_CACHE_DIR = os.path.expanduser(DEFAULT_CONFIG["asr_cache_dir"])
 
@@ -676,10 +679,14 @@ class ConfigManager:
         self.config[key] = value
 
     def get_asr_model(self) -> str:
-        return self.config.get(ASR_MODEL_CONFIG_KEY, self.default_config[ASR_MODEL_CONFIG_KEY])
+        """Compatibilidade: retorna o ``asr_model_id`` atual."""
+        return self.config.get(
+            ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY]
+        )
 
     def set_asr_model(self, model_id: str):
-        self.config[ASR_MODEL_CONFIG_KEY] = model_id
+        """Compatibilidade: define o ``asr_model_id``."""
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = model_id
 
     def get_asr_installed_models(self) -> List[str]:
         return self.config.get(ASR_INSTALLED_MODELS_CONFIG_KEY, [])

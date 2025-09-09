@@ -46,11 +46,14 @@ from .config_manager import (
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY, DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
-    ASR_MODEL_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
-    ASR_MODEL_CONFIG_KEY,
     ASR_BACKEND_CONFIG_KEY,
     CLEAR_GPU_CACHE_CONFIG_KEY,
+    ASR_COMPUTE_DEVICE_CONFIG_KEY,
+    ASR_DTYPE_CONFIG_KEY,
+    ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+    ASR_CT2_CPU_THREADS_CONFIG_KEY,
+    ASR_CACHE_DIR_CONFIG_KEY,
 )
 from .asr_backends import backend_registry, WhisperBackend
 
@@ -113,8 +116,6 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
-        self.asr_model = self.config_manager.get(ASR_MODEL_CONFIG_KEY)
-
         # Configurações de ASR
         self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
         self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
@@ -122,14 +123,6 @@ class TranscriptionHandler:
         self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
         self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         self.asr_ct2_cpu_threads = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
-        self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
-
-        # Configurações de ASR
-        self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
-        self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
-        self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
-        self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
-        self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
 
         self.openrouter_client = None
@@ -491,7 +484,7 @@ class TranscriptionHandler:
                 return
 
             # --- Fallback sem whisper_flash ---
-            model_id = self.asr_model
+            model_id = self.asr_model_id
             ensure_download(model_id, config_manager=self.config_manager)
             logging.info(f"Carregando processador de {model_id}...")
             processor = AutoProcessor.from_pretrained(model_id)
@@ -617,6 +610,20 @@ class TranscriptionHandler:
             logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
             return
 
+        dynamic_batch_size = self._get_dynamic_batch_size()
+        result = self._asr_backend.transcribe(
+            audio_source,
+            chunk_length_s=float(self.chunk_length_sec),
+            batch_size=dynamic_batch_size,
+        )
+        text_result = result.get("text", "").strip() or "[No speech detected]"
+        if agent_mode and self.on_agent_result_callback:
+            self.on_agent_result_callback(text_result)
+        elif self.on_transcription_result_callback:
+            self.on_transcription_result_callback(text_result, text_result)
+        return
+
+        # Legacy pipeline (desativado após retorno antecipado)
         text_result = None
         # Garantir que dynamic_batch_size esteja definido mesmo quando o backend
         # for CTranslate2, evitando UnboundLocalError no bloco de exceção.

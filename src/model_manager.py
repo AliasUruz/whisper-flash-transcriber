@@ -1,148 +1,77 @@
-"""Gerenciador de modelos ASR.
-
-Fornece catálogo curado, listagem de modelos instalados e
-função utilitária para garantir o download de modelos nos
-backends suportados (Transformers e CTranslate2).
-"""
+"""Utilities for curated ASR model management."""
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import Dict, List
 
 from huggingface_hub import snapshot_download
 
-# Catálogo curado de modelos suportados
-# Cada entrada possui ID base e metadados dos backends
-CURATED: List[Dict] = [
-    {
-        "id": "tiny",
-        "description": "Modelo mais leve",
-        "backends": {
-            "transformers": {"repo_id": "openai/whisper-tiny"},
-            "ct2": {"size": "tiny"},
-        },
-    },
-    {
-        "id": "base",
-        "description": "Modelo base",
-        "backends": {
-            "transformers": {"repo_id": "openai/whisper-base"},
-            "ct2": {"size": "base"},
-        },
-    },
-    {
-        "id": "small",
-        "description": "Modelo pequeno",
-        "backends": {
-            "transformers": {"repo_id": "openai/whisper-small"},
-            "ct2": {"size": "small"},
-        },
-    },
-    {
-        "id": "medium",
-        "description": "Modelo médio",
-        "backends": {
-            "transformers": {"repo_id": "openai/whisper-medium"},
-            "ct2": {"size": "medium"},
-        },
-    },
-    {
-        "id": "large-v2",
-        "description": "Modelo grande v2",
-        "backends": {
-            "transformers": {"repo_id": "openai/whisper-large-v2"},
-            "ct2": {"size": "large-v2"},
-        },
-    },
-    {
-        "id": "large-v3",
-        "description": "Modelo grande v3",
-        "backends": {
-            "transformers": {"repo_id": "openai/whisper-large-v3"},
-            "ct2": {"size": "large-v3"},
-        },
-    },
+CURATED: List[Dict[str, str]] = [
+    {"id": "openai/whisper-large-v3", "backend": "transformers"},
+    {"id": "openai/whisper-large-v3-turbo", "backend": "transformers"},
+    {"id": "distil-whisper/distil-large-v3", "backend": "transformers"},
+    {"id": "Systran/faster-whisper-large-v3", "backend": "ct2"},
+    {"id": "h2oai/faster-whisper-large-v3-turbo", "backend": "ct2"},
+    {"id": "Systran/faster-distil-whisper-large-v3", "backend": "ct2"},
 ]
 
 
-def list_catalog() -> List[Dict]:
-    """Retorna o catálogo curado de modelos."""
-
+def list_catalog() -> List[Dict[str, str]]:
+    """Return curated catalog entries."""
     return CURATED
 
 
-def list_installed(cache_dir: str) -> List[Dict]:
-    """Lista modelos já baixados no ``cache_dir``.
-
-    O diretório esperado possui subpastas por backend (``transformers`` e
-    ``ct2``), cada qual contendo subpastas com o ``model_id``.
-    """
-
-    installed: List[Dict] = []
+def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
+    """List models already downloaded in ``cache_dir``."""
+    installed: List[Dict[str, str]] = []
+    cache_dir = Path(cache_dir)
     for backend in ("transformers", "ct2"):
-        backend_path = os.path.join(cache_dir, backend)
-        if not os.path.isdir(backend_path):
+        backend_path = cache_dir / backend
+        if not backend_path.is_dir():
             continue
-        for model_id in os.listdir(backend_path):
-            model_path = os.path.join(backend_path, model_id)
-            if os.path.isdir(model_path):
-                installed.append({
-                    "id": model_id,
-                    "backend": backend,
-                    "path": model_path,
-                })
+        for model_dir in backend_path.iterdir():
+            if model_dir.is_dir():
+                installed.append(
+                    {"id": model_dir.name, "backend": backend, "path": str(model_dir)}
+                )
     return installed
 
 
 def ensure_download(
     model_id: str,
     backend: str,
-    cache_dir: str,
+    cache_dir: str | Path,
     quant: str | None = None,
 ) -> str:
-    """Garante que o modelo solicitado esteja disponível localmente.
+    """Ensure that the given model is present locally.
 
     Parameters
     ----------
-    model_id:
-        Identificador do modelo no catálogo ``CURATED``.
-    backend:
-        ``"transformers"`` ou ``"ct2"``.
-    cache_dir:
-        Diretório raiz onde os modelos são armazenados.
-    quant:
-        Para o backend CT2, branch de quantização (``int8``, ``int8_float16``,
-        ``float16`` etc.). Ignorado para Transformers.
-
-    Returns
-    -------
-    str
-        Caminho local onde o modelo está armazenado.
+    model_id: str
+        Full model identifier as in the curated catalog.
+    backend: str
+        Either ``"transformers"`` or ``"ct2"``.
+    cache_dir: str | Path
+        Root directory where models are cached.
+    quant: str | None
+        Quantization branch for CT2 models. Ignored for Transformers.
     """
 
-    catalog_map = {entry["id"]: entry for entry in CURATED}
-    if model_id not in catalog_map:
-        raise ValueError(f"Modelo '{model_id}' não encontrado no catálogo curado.")
+    cache_dir = Path(cache_dir)
+    local_dir = cache_dir / backend / model_id
+    if local_dir.is_dir() and any(local_dir.iterdir()):
+        return str(local_dir)
 
-    entry = catalog_map[model_id]
-    backend_info = entry["backends"].get(backend)
-    if backend_info is None:
-        raise ValueError(f"Backend '{backend}' não disponível para o modelo '{model_id}'.")
+    local_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    local_dir = os.path.join(cache_dir, backend, model_id)
-    if os.path.isdir(local_dir) and os.listdir(local_dir):
-        return local_dir
-    except Exception as e:  # pragma: no cover - network/IO errors
-        logging.error("Failed to download model '%s': %s", repo, e)
-        raise
+    if backend == "transformers":
+        snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
+    elif backend == "ct2":
+        from faster_whisper import WhisperModel
 
+        WhisperModel(model_id, device="cpu", compute_type=quant or "int8", download_root=str(local_dir))
+    else:
+        raise ValueError(f"Unknown backend: {backend}")
 
-def list_catalog() -> list[str]:
-    """Return available curated model identifiers."""
-    return list(CURATED.keys())
-
-
-def list_installed(_cache_dir: Path | str | None = None) -> list[str]:
-    """Return identifiers of locally installed models."""
-    return list(asr_installed_models().keys())
+    return str(local_dir)

@@ -1127,16 +1127,25 @@ class UIManager:
                 asr_backend_frame = ctk.CTkFrame(transcription_frame)
                 asr_backend_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
-                asr_backend_menu = ctk.CTkOptionMenu(asr_backend_frame, variable=asr_backend_var, values=["auto", "transformers"])
+                asr_backend_menu = ctk.CTkOptionMenu(
+                    asr_backend_frame,
+                    variable=asr_backend_var,
+                    values=["auto", "transformers", "faster-whisper"],
+                )
                 asr_backend_menu.pack(side="left", padx=5)
                 Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
 
                 asr_model_frame = ctk.CTkFrame(transcription_frame)
                 asr_model_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_model_frame, text="ASR Model ID:").pack(side="left", padx=(5, 10))
-                asr_model_entry = ctk.CTkEntry(asr_model_frame, textvariable=asr_model_id_var, width=240)
-                asr_model_entry.pack(side="left", padx=5)
-                Tooltip(asr_model_entry, "Hugging Face model identifier.")
+                ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
+                model_ids = [m["id"] for m in model_manager.list_catalog()]
+                asr_model_menu = ctk.CTkOptionMenu(
+                    asr_model_frame,
+                    variable=asr_model_id_var,
+                    values=model_ids,
+                )
+                asr_model_menu.pack(side="left", padx=5)
+                Tooltip(asr_model_menu, "Model identifier from curated catalog.")
 
                 asr_device_frame = ctk.CTkFrame(transcription_frame)
                 asr_device_frame.pack(fill="x", pady=5)
@@ -1165,6 +1174,31 @@ class UIManager:
                 asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
                 asr_cache_entry.pack(side="left", padx=5)
                 Tooltip(asr_cache_entry, "Directory for cached ASR models.")
+
+                def _install_model():
+                    try:
+                        model_manager.ensure_download(
+                            asr_model_id_var.get(),
+                            asr_backend_var.get(),
+                            asr_cache_dir_var.get(),
+                        )
+                        messagebox.showinfo("Model", "Download completed.")
+                    except Exception as e:
+                        messagebox.showerror("Model", f"Download failed: {e}")
+
+                def _reload_model():
+                    handler = getattr(self.core_instance_ref, "transcription_handler", None)
+                    if handler:
+                        handler.reload_asr()
+
+                install_button = ctk.CTkButton(
+                    transcription_frame, text="Install/Update", command=_install_model
+                )
+                install_button.pack(pady=5)
+                reload_button = ctk.CTkButton(
+                    transcription_frame, text="Reload Model", command=_reload_model
+                )
+                reload_button.pack(pady=5)
 
                 # --- Action Buttons ---
                 button_frame = ctk.CTkFrame(settings_win) # Move outside scrollable_frame to keep fixed
