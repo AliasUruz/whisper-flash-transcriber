@@ -117,6 +117,11 @@ class TranscriptionHandler:
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
         # Configurações de ASR
+        # Inicializar atributos internos antes de usar os setters
+        self._asr_backend_name = None
+        self._asr_model_id = None
+        self._asr_backend = None
+
         self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
         self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
         self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
