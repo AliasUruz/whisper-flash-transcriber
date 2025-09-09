@@ -795,21 +795,18 @@ class UIManager:
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="Modelo:").pack(side="left", padx=(5, 10))
 
-                installed = getattr(model_manager, "asr_installed_models", {})
-                if callable(installed):
-                    installed = installed()
+                installed = (
+                    model_manager.asr_installed_models()
+                    if hasattr(model_manager, "asr_installed_models")
+                    else {}
+                )
                 curated = getattr(model_manager, "CURATED", {})
                 combined_models = {**installed, **curated}
-                model_options = list(combined_models.keys())
                 asr_model_var = ctk.StringVar(
-                    value=self.config_manager.get(
-                        "asr_model", model_options[0] if model_options else ""
-                    )
+                    value=self.config_manager.get("asr_model", "")
                 )
                 model_menu = ctk.CTkOptionMenu(
-                    asr_model_frame,
-                    variable=asr_model_var,
-                    values=model_options,
+                    asr_model_frame, variable=asr_model_var, values=[]
                 )
                 model_menu.pack(side="left", padx=5)
                 model_tooltip = Tooltip(model_menu, "")
@@ -822,35 +819,68 @@ class UIManager:
                     )
                     model_tooltip.text = tip
 
+                def _refresh_model_options() -> None:
+                    backend = asr_backend_var.get()
+                    options = [
+                        m for m, meta in combined_models.items() if meta.get("backend") == backend
+                    ]
+                    model_menu.configure(values=options)
+                    if asr_model_var.get() not in options and options:
+                        asr_model_var.set(options[0])
+                        self.config_manager.set("asr_model", options[0])
+                    _update_model_tooltip(asr_model_var.get())
+
+                def _reload_if_idle() -> None:
+                    handler = getattr(self.core_instance_ref, "transcription_handler", None)
+                    state = getattr(self.core_instance_ref, "current_state", "IDLE")
+                    if handler and state not in ["LOADING_MODEL", "RECORDING", "TRANSCRIBING"]:
+                        try:
+                            handler.start_model_loading()
+                        except Exception as e:  # pragma: no cover
+                            logging.error("Model reload failed: %s", e)
+                            messagebox.showerror("Model", f"Falha ao carregar modelo: {e}")
+
                 def _on_backend_change(choice: str) -> None:
                     prev = self.config_manager.get("asr_backend")
                     self.config_manager.set("asr_backend", choice)
                     self.config_manager.save_config()
-                    if prev != choice and getattr(self.core_instance_ref, "transcription_handler", None):
-                        self.core_instance_ref.transcription_handler.start_model_loading()
+                    _refresh_model_options()
+                    if prev != choice:
+                        _reload_if_idle()
 
                 def _on_model_change(choice: str) -> None:
                     prev = self.config_manager.get("asr_model")
                     self.config_manager.set("asr_model", choice)
                     self.config_manager.save_config()
                     _update_model_tooltip(choice)
-                    if prev != choice and getattr(self.core_instance_ref, "transcription_handler", None):
-                        self.core_instance_ref.transcription_handler.start_model_loading()
+                    if prev != choice:
+                        _reload_if_idle()
 
                 backend_menu.configure(command=_on_backend_change)
                 model_menu.configure(command=_on_model_change)
-                if model_options:
-                    _update_model_tooltip(asr_model_var.get())
+                _refresh_model_options()
+
+                def _install_model() -> None:
+                    try:
+                        model_manager.ensure_download(
+                            asr_backend_var.get(), asr_model_var.get()
+                        )
+                    except Exception as e:  # pragma: no cover
+                        logging.error("Model download failed: %s", e)
+                        messagebox.showerror(
+                            "Model Manager", f"Falha ao baixar modelo: {e}"
+                        )
+                    else:
+                        messagebox.showinfo(
+                            "Model Manager", "Modelo instalado/atualizado com sucesso."
+                        )
 
                 install_button = ctk.CTkButton(
-                    asr_frame,
-                    text="Instalar/Atualizar",
-                    command=lambda: model_manager.ensure_download(
-                        asr_backend_var.get(), asr_model_var.get()
-                    ),
+                    asr_frame, text="Instalar/Atualizar", command=_install_model
                 )
                 install_button.pack(pady=5)
                 Tooltip(install_button, "Baixa ou atualiza o modelo selecionado.")
+
 
                 # --- Transcription Settings (Advanced) Section ---
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
