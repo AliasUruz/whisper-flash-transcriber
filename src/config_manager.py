@@ -3,8 +3,9 @@ import json
 import logging
 import copy
 import hashlib
+from pathlib import Path
 from typing import List
-from .model_manager import scan_installed, DEFAULT_CACHE_DIR
+from .model_manager import list_catalog, list_installed
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -94,12 +95,14 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
+    "asr_model": "openai/whisper-large-v3",
     "asr_model_id": "openai/whisper-large-v3",
-    "asr_backend": "transformers",
     "asr_compute_device": "auto",
     "asr_dtype": "float16",
     "asr_ct2_compute_type": "default",
-    "asr_cache_dir": "",
+    "asr_cache_dir": str((Path.home() / ".cache" / "whisper_flash_transcriber" / "asr").expanduser()),
+    "asr_installed_models": [],
+    "asr_curated_catalog": [],
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -153,12 +156,16 @@ REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
-ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
 ASR_BACKEND_CONFIG_KEY = "asr_backend"
+ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
 ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
 ASR_DTYPE_CONFIG_KEY = "asr_dtype"
 ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
 ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
+ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
+ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
+
+ASR_CACHE_DIR = os.path.expanduser(DEFAULT_CONFIG["asr_cache_dir"])
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -168,6 +175,9 @@ class ConfigManager:
         self._config_hash = None
         self._secrets_hash = None
         self.load_config()
+        url = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
+        if url:
+            self.update_asr_curated_catalog_from_url(url)
 
     def _compute_hash(self, data) -> str:
         """Gera um hash SHA256 determinístico para o dicionário informado."""
@@ -246,12 +256,12 @@ class ConfigManager:
             secrets_loaded = {}
             self._secrets_hash = None
 
-        # Atualizar lista de modelos ASR instalados a partir do cache
+        cfg["asr_curated_catalog"] = list_catalog()
         try:
-            installed_models: List[str] = scan_installed(DEFAULT_CACHE_DIR)
-            cfg[ASR_INSTALLED_MODELS_CONFIG_KEY] = installed_models
-        except Exception as e:
-            logging.warning(f"Falha ao escanear modelos instalados: {e}")
+            cfg["asr_installed_models"] = list_installed(ASR_CACHE_DIR)
+        except Exception as e:  # pragma: no cover - salvaguarda
+            logging.warning(f"Falha ao listar modelos instalados: {e}")
+            cfg["asr_installed_models"] = []
 
         self.config = cfg
         # Aplicar validação e conversão de tipo
@@ -765,6 +775,37 @@ class ConfigManager:
             self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = self.default_config[
                 ASR_CURATED_CATALOG_CONFIG_KEY
             ]
+
+    def update_asr_curated_catalog_from_url(self, url: str, timeout: int = 10) -> bool:
+        """Carrega um catálogo curado de modelos de ASR a partir de ``url``.
+
+        O JSON recebido deve ser uma lista de dicionários contendo pelo menos o
+        campo ``model_id``. Caso os dados sejam válidos, o catálogo interno é
+        atualizado e salvo no arquivo de configuração.
+
+        :param url: Endereço da fonte externa.
+        :param timeout: Tempo máximo de espera para a requisição em segundos.
+        :return: ``True`` se o catálogo foi atualizado com sucesso.
+        """
+
+        try:
+            response = requests.get(url, timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+            if (
+                isinstance(data, list)
+                and all(isinstance(item, dict) and "model_id" in item for item in data)
+            ):
+                self.set_asr_curated_catalog(data)
+                try:
+                    self.save_config()
+                except Exception:
+                    logging.warning("Falha ao salvar config após atualizar catálogo curado.")
+                return True
+            logging.warning("Formato inválido de catálogo obtido de %s", url)
+        except Exception as e:
+            logging.error("Erro ao atualizar catálogo curado de %s: %s", url, e)
+        return False
 
     def get_use_vad(self):
         return self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])

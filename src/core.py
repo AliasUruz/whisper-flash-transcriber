@@ -116,6 +116,9 @@ class AppCore:
         self.keyboard_library = self.config_manager.get("keyboard_library")
         self.min_record_duration = self.config_manager.get("min_record_duration")
         self.display_transcripts_in_terminal = self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY)
+        self.asr_backend = self.config_manager.get("asr_backend")
+        self.asr_model_id = self.config_manager.get("asr_model_id")
+        self.ct2_quantization = self.config_manager.get("ct2_quantization")
         # ... e outras configurações que AppCore precisa diretamente
 
     # --- Callbacks de Módulos ---
@@ -608,6 +611,8 @@ class AppCore:
                 "new_max_memory_seconds_mode": "max_memory_seconds_mode",
                 "new_max_memory_seconds": "max_memory_seconds",
                 "new_gemini_model_options": "gemini_model_options",
+                "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
+                "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
                 "new_use_vad": "use_vad",
                 "new_vad_threshold": "vad_threshold",
                 "new_vad_silence_duration": "vad_silence_duration",
@@ -745,7 +750,17 @@ class AppCore:
             set_launch_at_startup(bool(value))
 
         # Propagar para TranscriptionHandler se for uma configuração relevante
-        if key in ["batch_size_mode", "manual_batch_size", "gpu_index", "min_transcription_duration", "record_to_memory", "max_memory_seconds", "max_memory_seconds_mode"]:
+        if key in [
+            "batch_size_mode",
+            "manual_batch_size",
+            "gpu_index",
+            "min_transcription_duration",
+            "record_to_memory",
+            "max_memory_seconds",
+            "max_memory_seconds_mode",
+            ASR_MODEL_ID_CONFIG_KEY,
+            ASR_BACKEND_CONFIG_KEY,
+        ]:
             self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
             self.transcription_handler.update_config()
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
