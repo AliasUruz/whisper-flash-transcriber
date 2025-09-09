@@ -25,6 +25,7 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
+    ASR_MODEL_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler

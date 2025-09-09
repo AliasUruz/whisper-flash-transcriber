@@ -25,6 +25,21 @@ from .utils.tooltip import Tooltip
 # Para este plano, vamos movê-lo para cá.
 import torch # Necessário para get_available_devices_for_ui
 
+# Importar gerenciador de modelos de ASR
+try:
+    from . import model_manager
+except Exception:  # pragma: no cover - fallback caso o módulo não exista
+    class _DummyModelManager:
+        CURATED = {}
+
+        def asr_installed_models(self):
+            return {}
+
+        def ensure_download(self, *_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+
+    model_manager = _DummyModelManager()
+
 def get_available_devices_for_ui():
     """Returns a list of devices for the settings interface."""
     devices = ["Auto-select (Recommended)"]
@@ -349,6 +364,7 @@ class UIManager:
                 openrouter_model_var = ctk.StringVar(value=self.config_manager.get("openrouter_model"))
                 gemini_api_key_var = ctk.StringVar(value=self.config_manager.get("gemini_api_key"))
                 gemini_model_var = ctk.StringVar(value=self.config_manager.get("gemini_model"))
+                asr_model_var = ctk.StringVar(value=self.config_manager.get_asr_model())
                 batch_size_var = ctk.StringVar(value=str(self.config_manager.get("batch_size")))
                 use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
                 launch_at_startup_var = ctk.BooleanVar(value=self.config_manager.get("launch_at_startup"))
@@ -432,6 +448,7 @@ class UIManager:
                     openrouter_model_to_apply = openrouter_model_var.get()
                     gemini_api_key_to_apply = gemini_api_key_var.get()
                     gemini_model_to_apply = gemini_model_var.get()
+                    asr_model_to_apply = asr_model_var.get()
                     gemini_prompt_correction_to_apply = gemini_prompt_correction_textbox.get("1.0", "end-1c")
                     agentico_prompt_to_apply = agentico_prompt_textbox.get("1.0", "end-1c")
                     batch_size_to_apply = self._safe_get_int(batch_size_var, "Batch Size", settings_win)
@@ -494,6 +511,7 @@ class UIManager:
                         new_openrouter_model=openrouter_model_to_apply,
                         new_gemini_api_key=gemini_api_key_to_apply,
                         new_gemini_model=gemini_model_to_apply,
+                        new_asr_model=asr_model_to_apply,
                         new_gemini_prompt=gemini_prompt_correction_to_apply,
                         prompt_agentico=agentico_prompt_to_apply,
                         new_agent_model=model_to_apply,
@@ -570,6 +588,7 @@ class UIManager:
                     openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
                     gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
                     gemini_model_var.set(DEFAULT_CONFIG["gemini_model"])
+                    asr_model_var.set(DEFAULT_CONFIG["asr_model"])
                     gemini_prompt_correction_textbox.delete("1.0", "end")
                     gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG["gemini_prompt"])
                     agentico_prompt_textbox.delete("1.0", "end")
@@ -815,10 +834,130 @@ class UIManager:
                 gemini_models_textbox.insert("1.0", "\n".join(self.config_manager.get("gemini_model_options", [])))
                 Tooltip(gemini_models_textbox, "List of models to try, one per line.")
 
+                # --- ASR Settings ---
+                asr_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
+                asr_frame.pack(fill="x", padx=10, pady=5)
+                ctk.CTkLabel(asr_frame, text="ASR", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+
+                # Backend selection
+                asr_backend_frame = ctk.CTkFrame(asr_frame)
+                asr_backend_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_backend_frame, text="Backend:").pack(side="left", padx=(5, 10))
+                asr_backend_var = ctk.StringVar(value=self.config_manager.get("asr_backend", "Transformers"))
+                backend_menu = ctk.CTkOptionMenu(
+                    asr_backend_frame,
+                    variable=asr_backend_var,
+                    values=["Transformers", "Faster-Whisper"],
+                )
+                backend_menu.pack(side="left", padx=5)
+                Tooltip(backend_menu, "Mecanismo de reconhecimento de fala.")
+
+                # Model selection
+                asr_model_frame = ctk.CTkFrame(asr_frame)
+                asr_model_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_model_frame, text="Modelo:").pack(side="left", padx=(5, 10))
+
+                installed = (
+                    model_manager.asr_installed_models()
+                    if hasattr(model_manager, "asr_installed_models")
+                    else {}
+                )
+                curated = getattr(model_manager, "CURATED", {})
+                combined_models = {**installed, **curated}
+                asr_model_var = ctk.StringVar(
+                    value=self.config_manager.get("asr_model", "")
+                )
+                model_menu = ctk.CTkOptionMenu(
+                    asr_model_frame, variable=asr_model_var, values=[]
+                )
+                model_menu.pack(side="left", padx=5)
+                model_tooltip = Tooltip(model_menu, "")
+
+                def _update_model_tooltip(name: str) -> None:
+                    info = combined_models.get(name, {})
+                    tip = " | ".join(
+                        str(info.get(k, "?"))
+                        for k in ("backend", "dtype", "chunk", "batch", "device")
+                    )
+                    model_tooltip.text = tip
+
+                def _refresh_model_options() -> None:
+                    backend = asr_backend_var.get()
+                    options = [
+                        m for m, meta in combined_models.items() if meta.get("backend") == backend
+                    ]
+                    model_menu.configure(values=options)
+                    if asr_model_var.get() not in options and options:
+                        asr_model_var.set(options[0])
+                        self.config_manager.set("asr_model", options[0])
+                    _update_model_tooltip(asr_model_var.get())
+
+                def _reload_if_idle() -> None:
+                    handler = getattr(self.core_instance_ref, "transcription_handler", None)
+                    state = getattr(self.core_instance_ref, "current_state", "IDLE")
+                    if handler and state not in ["LOADING_MODEL", "RECORDING", "TRANSCRIBING"]:
+                        try:
+                            handler.start_model_loading()
+                        except Exception as e:  # pragma: no cover
+                            logging.error("Model reload failed: %s", e)
+                            messagebox.showerror("Model", f"Falha ao carregar modelo: {e}")
+
+                def _on_backend_change(choice: str) -> None:
+                    prev = self.config_manager.get("asr_backend")
+                    self.config_manager.set("asr_backend", choice)
+                    self.config_manager.save_config()
+                    _refresh_model_options()
+                    if prev != choice:
+                        _reload_if_idle()
+
+                def _on_model_change(choice: str) -> None:
+                    prev = self.config_manager.get("asr_model")
+                    self.config_manager.set("asr_model", choice)
+                    self.config_manager.save_config()
+                    _update_model_tooltip(choice)
+                    if prev != choice:
+                        _reload_if_idle()
+
+                backend_menu.configure(command=_on_backend_change)
+                model_menu.configure(command=_on_model_change)
+                _refresh_model_options()
+
+                def _install_model() -> None:
+                    try:
+                        model_manager.ensure_download(
+                            asr_backend_var.get(), asr_model_var.get()
+                        )
+                    except Exception as e:  # pragma: no cover
+                        logging.error("Model download failed: %s", e)
+                        messagebox.showerror(
+                            "Model Manager", f"Falha ao baixar modelo: {e}"
+                        )
+                    else:
+                        messagebox.showinfo(
+                            "Model Manager", "Modelo instalado/atualizado com sucesso."
+                        )
+
+                install_button = ctk.CTkButton(
+                    asr_frame, text="Instalar/Atualizar", command=_install_model
+                )
+                install_button.pack(pady=5)
+                Tooltip(install_button, "Baixa ou atualiza o modelo selecionado.")
+
+
                 # --- Transcription Settings (Advanced) Section ---
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 transcription_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(transcription_frame, text="Transcription Settings (Advanced)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+
+                asr_models = self.config_manager.get_asr_installed_models()
+                if not asr_models:
+                    asr_models = [self.config_manager.get_asr_model()]
+                asr_model_frame = ctk.CTkFrame(transcription_frame)
+                asr_model_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
+                asr_model_menu = ctk.CTkOptionMenu(asr_model_frame, variable=asr_model_var, values=asr_models)
+                asr_model_menu.pack(side="left", padx=5)
+                Tooltip(asr_model_menu, "Select the speech recognition model.")
 
                 device_frame = ctk.CTkFrame(transcription_frame)
                 device_frame.pack(fill="x", pady=5)
