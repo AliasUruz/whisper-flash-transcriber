@@ -388,6 +388,14 @@ class ConfigManager:
         self.config[ENABLE_TORCH_COMPILE_CONFIG_KEY] = _parse_bool(
             self.config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False))
         )
+
+        self.config[ASR_BACKEND_CONFIG_KEY] = str(
+            self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
+        )
+
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(
+            self.config.get(ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY])
+        )
     
         # Para gpu_index_specified e batch_size_specified
         self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
@@ -514,6 +522,40 @@ class ConfigManager:
                 self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
             )
 
+        self.config[ASR_BACKEND_CONFIG_KEY] = str(
+            self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
+        )
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(
+            self.config.get(ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY])
+        )
+        self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(
+            self.config.get(ASR_COMPUTE_DEVICE_CONFIG_KEY, self.default_config[ASR_COMPUTE_DEVICE_CONFIG_KEY])
+        )
+        self.config[ASR_DTYPE_CONFIG_KEY] = str(
+            self.config.get(ASR_DTYPE_CONFIG_KEY, self.default_config[ASR_DTYPE_CONFIG_KEY])
+        )
+        self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(
+            self.config.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY, self.default_config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY])
+        )
+        self.config[ASR_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(
+            self.config.get(ASR_CACHE_DIR_CONFIG_KEY, self.default_config[ASR_CACHE_DIR_CONFIG_KEY])
+        )
+        installed = self.config.get(
+            ASR_INSTALLED_MODELS_CONFIG_KEY,
+            self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY],
+        )
+        if not isinstance(installed, list):
+            installed = self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY]
+        self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = installed
+
+        curated = self.config.get(
+            ASR_CURATED_CATALOG_CONFIG_KEY,
+            self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
+        )
+        if not isinstance(curated, list):
+            curated = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
+        self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = curated
+
         safe_config = self.config.copy()
         safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
         safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
@@ -533,7 +575,12 @@ class ConfigManager:
                 secrets_to_save[key] = config_to_save.pop(key)
 
         # Remover chaves não persistentes
-        keys_to_ignore = ["tray_menu_items", "hotkey_manager"]
+        keys_to_ignore = [
+            "tray_menu_items",
+            "hotkey_manager",
+            "asr_curated_catalog",
+            "asr_installed_models",
+        ]
         for key in keys_to_ignore:
             if key in config_to_save:
                 del config_to_save[key]
@@ -628,6 +675,88 @@ class ConfigManager:
         if provider == SERVICE_OPENROUTER:
             return self.get(OPENROUTER_API_KEY_CONFIG_KEY)
         return ""
+
+    def get_asr_backend(self):
+        return self.config.get(
+            ASR_BACKEND_CONFIG_KEY,
+            self.default_config[ASR_BACKEND_CONFIG_KEY],
+        )
+
+    def set_asr_backend(self, value: str):
+        self.config[ASR_BACKEND_CONFIG_KEY] = str(value)
+
+    def get_asr_model_id(self):
+        return self.config.get(
+            ASR_MODEL_ID_CONFIG_KEY,
+            self.default_config[ASR_MODEL_ID_CONFIG_KEY],
+        )
+
+    def set_asr_model_id(self, value: str):
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(value)
+
+    def get_asr_compute_device(self):
+        return self.config.get(
+            ASR_COMPUTE_DEVICE_CONFIG_KEY,
+            self.default_config[ASR_COMPUTE_DEVICE_CONFIG_KEY],
+        )
+
+    def set_asr_compute_device(self, value: str):
+        self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(value)
+
+    def get_asr_dtype(self):
+        return self.config.get(
+            ASR_DTYPE_CONFIG_KEY,
+            self.default_config[ASR_DTYPE_CONFIG_KEY],
+        )
+
+    def set_asr_dtype(self, value: str):
+        self.config[ASR_DTYPE_CONFIG_KEY] = str(value)
+
+    def get_asr_ct2_compute_type(self):
+        return self.config.get(
+            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            self.default_config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY],
+        )
+
+    def set_asr_ct2_compute_type(self, value: str):
+        self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(value)
+
+    def get_asr_cache_dir(self):
+        return self.config.get(
+            ASR_CACHE_DIR_CONFIG_KEY,
+            self.default_config[ASR_CACHE_DIR_CONFIG_KEY],
+        )
+
+    def set_asr_cache_dir(self, value: str):
+        self.config[ASR_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_asr_installed_models(self):
+        return self.config.get(
+            ASR_INSTALLED_MODELS_CONFIG_KEY,
+            self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY],
+        )
+
+    def set_asr_installed_models(self, value: list):
+        if isinstance(value, list):
+            self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = value
+        else:
+            self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = self.default_config[
+                ASR_INSTALLED_MODELS_CONFIG_KEY
+            ]
+
+    def get_asr_curated_catalog(self):
+        return self.config.get(
+            ASR_CURATED_CATALOG_CONFIG_KEY,
+            self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
+        )
+
+    def set_asr_curated_catalog(self, value: list):
+        if isinstance(value, list):
+            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = value
+        else:
+            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = self.default_config[
+                ASR_CURATED_CATALOG_CONFIG_KEY
+            ]
 
     def get_use_vad(self):
         return self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])
