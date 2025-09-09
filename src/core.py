@@ -33,6 +33,7 @@ from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE a
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
+from .model_manager import ensure_download
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -98,10 +99,38 @@ class AppCore:
         self.stop_health_check_event = threading.Event()
         self.key_detection_callback = None # Callback para atualizar a UI com a tecla detectada
 
-        # Carregar configurações iniciais e iniciar carregamento do modelo
+        # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
 
-        self.transcription_handler.start_model_loading()
+        cache_dir = self.config_manager.get("asr_cache_dir")
+        model_id = self.asr_model_id
+        backend = self.asr_backend
+        ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+        model_path = Path(cache_dir) / backend / model_id
+
+        if not (model_path.is_dir() and any(model_path.iterdir())):
+            if messagebox.askyesno(
+                "Model Download",
+                f"Model '{model_id}' is not installed. Download now?",
+            ):
+                try:
+                    ensure_download(model_id, backend, cache_dir, quant=ct2_type)
+                except Exception as e:
+                    logging.error(f"Model download failed: {e}")
+                    messagebox.showerror("Model", f"Download failed: {e}")
+                    self._set_state(STATE_ERROR_MODEL)
+                else:
+                    self.transcription_handler.start_model_loading()
+            else:
+                logging.info("User skipped model download.")
+                messagebox.showinfo(
+                    "Model",
+                    "No model installed. You can install one later in the settings.",
+                )
+                self._set_state(STATE_ERROR_MODEL)
+        else:
+            self.transcription_handler.start_model_loading()
+
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
 
