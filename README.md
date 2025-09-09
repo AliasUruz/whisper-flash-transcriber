@@ -26,7 +26,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   Supports both **Toggle Mode** (press once to start, press again to stop) and **Hold Mode** (record only while the key is held down).
     *   Dedicated "Agent Mode" hotkey for special commands.
 *   **AI-Powered Text Correction (Optional):**
-    *   Integrates with **Google Gemini**, **OpenRouter**, or **ChatGPT Web** to automatically correct punctuation, grammar, and remove speech disfluencies. ChatGPT Web also accepts in-memory audio by internally writing a temporary WAV file.
+    *   Integrates with **Google Gemini** or **OpenRouter** to automatically correct punctuation, grammar, and remove speech disfluencies.
     *   Prompts are fully customizable through the settings GUI.
 *   **Agent Mode:** Use a separate hotkey to process your speech with a different, customizable prompt (e.g., "translate this to English", "summarize this text").
 *   **User-Friendly Interface:**
@@ -309,50 +309,50 @@ Once the application is running and configured:
 
 The application terminates immediately and safely when closed. Even if a transcription is still running, the executor shuts down to prevent zombie processes.
 
-## Performance Flags e Métricas
+## Performance Flags and Metrics
 
-Esta versão adiciona sinalizadores de performance e logs de métricas para apoiar otimizações e diagnóstico.
+This release adds performance flags and metric logs to support optimization and diagnostics.
 
-Sinalizadores de Configuração
-- enable_torch_compile: ativa otimizações do PyTorch (quando aplicável). Padrão: falso.
-- chunk_length_mode: "manual" ou "auto". No modo auto, o chunk_length_sec é recalculado com base na VRAM livre.
-- chunk_length_sec: duração do chunk em segundos. Impacta memória/throughput.
-- batch_size: valor base para cálculo do batch dinâmico (pode variar conforme VRAM).
-- auto_ram_threshold_percent: quando em modo memória, migra para disco se RAM livre ficar abaixo deste percentual (1–50). Padrão: 10.
-- display_transcripts_in_terminal: imprime a transcrição final no terminal.
+Configuration Flags
+- enable_torch_compile: enables PyTorch optimizations when applicable. Default: false.
+- chunk_length_mode: "manual" or "auto". In auto mode, chunk_length_sec is recalculated based on free VRAM.
+- chunk_length_sec: chunk duration in seconds, affecting memory and throughput.
+- batch_size: base value for dynamic batch calculation (may vary with VRAM).
+- auto_ram_threshold_percent: when recording to memory, switches to disk if free RAM falls below this percentage (1–50). Default: 10.
+- display_transcripts_in_terminal: prints the final transcription to the terminal.
 
-Métricas [METRIC]
-Todas as métricas são emitidas via logging com o prefixo [METRIC] para fácil filtragem.
+Metrics [METRIC]
+All metrics are emitted via logging with the [METRIC] prefix for easy filtering.
 
-- t_pre, t_infer, t_post, segment_total
-  Exemplo: [METRIC] stage=t_infer value_ms=123.45 device=cuda:0 chunk=30.0 batch=16 dtype=fp16 attn=flash_attn2
-  Campos padrão: stage, value_ms, device (cpu/cuda:N), chunk (s), batch, dtype (fp16/fp32), attn (flash_attn2/sdpa).
+- t_pre, t_infer, t_post, segment_total  
+  Example: [METRIC] stage=t_infer value_ms=123.45 device=cuda:0 chunk=30.0 batch=16 dtype=fp16 attn=flash_attn2  
+  Default fields: stage, value_ms, device (cpu/cuda:N), chunk (s), batch, dtype (fp16/fp32), attn (flash_attn2/sdpa).
 
-- warmup_infer
-  Exemplo: [METRIC] stage=warmup_infer value_ms=85.2
+- warmup_infer  
+  Example: [METRIC] stage=warmup_infer value_ms=85.2
 
-- gpu_autoselect
-  Exemplo: [METRIC] stage=gpu_autoselect gpu=0 free_gb=9.75 total_gb=12.00
+- gpu_autoselect  
+  Example: [METRIC] stage=gpu_autoselect gpu=0 free_gb=9.75 total_gb=12.00
 
-- attn_impl, attn_impl_effective
-  Ex.: [METRIC] stage=attn_impl value=flash_attn2
+- attn_impl, attn_impl_effective  
+  Example: [METRIC] stage=attn_impl value=flash_attn2
 
-- record_thread_finalize, record_stop_overhead
-  Ex.: [METRIC] stage=record_stop_overhead value_ms=3.1
+- record_thread_finalize, record_stop_overhead  
+  Example: [METRIC] stage=record_stop_overhead value_ms=3.1
 
-- ram_to_disk_migration
-  Ex.: [METRIC] stage=ram_to_disk_migration reason=low_free_ram percent_free=8.5 threshold=10
+- ram_to_disk_migration  
+  Example: [METRIC] stage=ram_to_disk_migration reason=low_free_ram percent_free=8.5 threshold=10
 
-- empty_cache
-  Ex.: [METRIC] stage=empty_cache value_ms=4.2 freed_estimate_mb=128.0
+- empty_cache  
+  Example: [METRIC] stage=empty_cache value_ms=4.2 freed_estimate_mb=128.0
 
-- oom_recovery
-  Ex.: [METRIC] stage=oom_recovery action=reduce_batch from=16 to=8
+- oom_recovery  
+  Example: [METRIC] stage=oom_recovery action=reduce_batch from=16 to=8
 
-Boas Práticas
-- Chunk maior acelera a transcrição, mas consome mais memória. Em máquinas com 8–12GB de VRAM, 30–45s tende a ser eficiente com FP16.
-- Se ocorrer OOM, o sistema tenta reduzir batch e, se necessário, o chunk para as próximas submissões.
-- Em CPU, prefira chunk menor (15–20s) e batch reduzido.
+Best Practices
+- Larger chunks speed up transcription but consume more memory. On systems with 8–12GB of VRAM, 30–45s with FP16 tends to be efficient.
+- If an OOM occurs, the system attempts to reduce batch size and, if necessary, chunk length for subsequent submissions.
+- On CPU, prefer smaller chunks (15–20s) and reduced batch sizes.
 
 ## Troubleshooting
 
