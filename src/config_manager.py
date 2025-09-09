@@ -92,6 +92,8 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
+    "asr_backend": "whisper",
+    "asr_model_id": "openai/whisper-large-v3",
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -145,6 +147,8 @@ REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
+ASR_BACKEND_CONFIG_KEY = "asr_backend"
+ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -374,6 +378,14 @@ class ConfigManager:
         # enable_torch_compile: bool
         self.config[ENABLE_TORCH_COMPILE_CONFIG_KEY] = _parse_bool(
             self.config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False))
+        )
+
+        self.config[ASR_BACKEND_CONFIG_KEY] = str(
+            self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
+        )
+
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(
+            self.config.get(ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY])
         )
     
         # Para gpu_index_specified e batch_size_specified
