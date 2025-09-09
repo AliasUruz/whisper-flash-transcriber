@@ -67,3 +67,13 @@ def ensure_download(backend: str, model: str) -> Path:
     except Exception as e:  # pragma: no cover - network/IO errors
         logging.error("Failed to download model '%s': %s", repo, e)
         raise
+
+
+def list_catalog() -> list[str]:
+    """Return available curated model identifiers."""
+    return list(CURATED.keys())
+
+
+def list_installed(_cache_dir: Path | str | None = None) -> list[str]:
+    """Return identifiers of locally installed models."""
+    return list(asr_installed_models().keys())

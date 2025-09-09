@@ -370,9 +370,6 @@ class TranscriptionHandler:
                 quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
             # Determina dinamicamente se o FlashAttention 2 está disponível
-            try:
-                import importlib.util
-
             self._asr_backend = make_backend(asr_backend)
 
             attn_impl = "sdpa"
