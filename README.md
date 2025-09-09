@@ -202,7 +202,13 @@ With your virtual environment activated, you can now install the libraries the a
     ```
 The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
 
-2.  **Optional: Install PyTorch with CUDA (For GPU Acceleration):**
+2.  **Optional: Install faster-whisper backend (for ctranslate2 support):**
+    These packages provide an alternative Whisper backend powered by CTranslate2. They require AVX2 support or a recent GPU and may fail on older CPUs. Install them only if your hardware supports these features.
+    ```bash
+    pip install -r requirements-optional.txt
+    ```
+
+3.  **Optional: Install PyTorch with CUDA (For GPU Acceleration):**
     The `requirements.txt` includes a basic installation of PyTorch. However, if you have a compatible NVIDIA graphics card, you can significantly speed up the transcription process by installing a version of PyTorch that uses your GPU (CUDA).
     *   **How to check if you have CUDA:** Open Command Prompt and type `nvcc --version`. If you see version information, CUDA is installed. Note the version number (e.g., CUDA 11.8, CUDA 12.1). If the command is not found, you likely don't have CUDA installed or it's not in your PATH.
     *   **Get the correct command:** Go to the official PyTorch website's installation section: [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/)
@@ -215,7 +221,7 @@ The `pip` command is Python's package installer. The `-r requirements.txt` part 
     *   This command will download and install the GPU-accelerated version of PyTorch. It's a large download. If you already installed the CPU version via `requirements.txt`, this command will upgrade it.
     *   If you do *not* have a compatible GPU or prefer not to use it, you can skip this step. The application will still work using your CPU, just slower.
 
-3.  **Optional: Install onnxruntime-gpu (for VAD acceleration):**
+4.  **Optional: Install onnxruntime-gpu (for VAD acceleration):**
     The VAD relies on **ONNX Runtime**. While `requirements.txt` installs the CPU version (`onnxruntime`), you can install `onnxruntime-gpu` if you own a compatible GPU to speed up voice detection. The application automatically selects `CUDAExecutionProvider` when available or falls back to `CPUExecutionProvider`.
 
 ### Step 5: Run the Application

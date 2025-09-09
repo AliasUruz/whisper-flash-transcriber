@@ -34,6 +34,7 @@ from .config_manager import (
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
 )
+from .asr_backends import backend_registry, WhisperBackend
 
 class TranscriptionHandler:
     def __init__(
@@ -94,6 +95,7 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.asr_model = self.config_manager.get(ASR_MODEL_CONFIG_KEY)
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -118,6 +120,44 @@ class TranscriptionHandler:
         # O cliente Gemini agora é injetado, então sua inicialização foi removida daqui.
         # A inicialização do OpenRouter é mantida.
 
+    @property
+    def asr_backend(self):
+        return self._asr_backend_name
+
+    @asr_backend.setter
+    def asr_backend(self, value):
+        if value != self._asr_backend_name:
+            self._asr_backend_name = value
+            self.reload_asr()
+
+    @property
+    def asr_model_id(self):
+        return self._asr_model_id
+
+    @asr_model_id.setter
+    def asr_model_id(self, value):
+        if value != self._asr_model_id:
+            self._asr_model_id = value
+            self.reload_asr()
+
+    def unload(self):
+        """Descarta a pipeline atual."""
+        self.pipe = None
+
+    def reload_asr(self):
+        """Recarrega o backend de ASR e o modelo associado."""
+        try:
+            self._asr_backend.unload()
+        except Exception as e:
+            logging.warning(f"Falha ao descarregar backend ASR: {e}")
+
+        if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        backend_cls = backend_registry.get(self._asr_backend_name, WhisperBackend)
+        self._asr_backend = backend_cls(self)
+        self._asr_backend.load()
+
     def update_config(self):
         """Atualiza as configurações do handler a partir do config_manager."""
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)
@@ -135,6 +175,7 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
+        self.asr_model = self.config_manager.get(ASR_MODEL_CONFIG_KEY)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _get_text_correction_service(self):
