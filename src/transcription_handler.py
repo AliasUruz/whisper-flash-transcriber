@@ -10,6 +10,9 @@ try:  # pragma: no cover - biblioteca opcional
 except Exception:  # pragma: no cover
     make_backend = None  # type: ignore
 from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
+from .audio_handler import AUDIO_SAMPLE_RATE
+from .model_manager import ensure_download
+from .config_manager import ASR_CACHE_DIR
 
 # Importar constantes de configuração
 from .utils import select_batch_size
@@ -296,41 +299,117 @@ class TranscriptionHandler:
 
     def _load_model_task(self):
         try:
-            if make_backend is None:
-                raise RuntimeError("make_backend não disponível")
+            backend = self.config_manager.get("asr_backend")
+            model_id = self.config_manager.get("asr_model_id")
+            quant = self.config_manager.get("ct2_quantization")
+            if self.core_instance_ref:
+                self.core_instance_ref._log_status(f"Baixando modelo {model_id} ({backend})...")
+            model_path = ensure_download(model_id, backend, ASR_CACHE_DIR, quant)
+            if self.core_instance_ref:
+                self.core_instance_ref._log_status(f"Modelo pronto: {model_id} ({backend})")
 
-            asr_model_id = self.config_manager.get_asr_model_id()
-            asr_backend = self.config_manager.get_asr_backend()
-            asr_compute_device = self.config_manager.get_asr_compute_device()
-            asr_dtype = self.config_manager.get_asr_dtype()
-            asr_ct2_compute_type = self.config_manager.get_asr_ct2_compute_type()
-            asr_cache_dir = self.config_manager.get_asr_cache_dir()
+            torch_dtype_local = torch.float32
+            if torch.cuda.is_available():
+                if self.gpu_index == -1:
+                    num_gpus = torch.cuda.device_count()
+                    if num_gpus > 0:
+                        best_gpu_index = 0
+                        max_vram = 0
+                        for i in range(num_gpus):
+                            props = torch.cuda.get_device_properties(i)
+                            if props.total_memory > max_vram:
+                                max_vram = props.total_memory
+                                best_gpu_index = i
+                        self.gpu_index = best_gpu_index
+                        logging.info(
+                            f"Auto-seleção de GPU (maior VRAM total): {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})"
+                        )
+                    else:
+                        logging.info("Nenhuma GPU disponível, usando CPU.")
+                        self.gpu_index = -1
 
-            self._asr_backend = make_backend(asr_backend)
+            device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
+            logging.info(f"Dispositivo de carregamento do modelo definido explicitamente como: {device}")
+
+            if torch.cuda.is_available() and self.gpu_index >= 0:
+                torch_dtype_local = torch.float16
+            else:
+                torch_dtype_local = torch.float32
 
             try:
-                import importlib.util
-                attn_impl = (
-                    "flash_attn2" if importlib.util.find_spec("flash_attn") else None
-                )
-            except Exception:
-                attn_impl = None
+                if torch.cuda.is_available() and self.gpu_index == -1:
+                    best_idx = None
+                    best_free = -1
+                    for i in range(torch.cuda.device_count()):
+                        try:
+                            free_b, _ = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
+                            if free_b > best_free:
+                                best_free = free_b
+                                best_idx = i
+                        except Exception as _e:
+                            logging.debug(f"Falha ao consultar mem_get_info para GPU {i}: {_e}")
+                    if best_idx is not None:
+                        self.gpu_index = best_idx
+                        free_gb = best_free / (1024 ** 3) if best_free > 0 else 0.0
+                        total_gb = torch.cuda.get_device_properties(self.gpu_index).total_memory / (1024 ** 3)
+                        logging.info(
+                            f"[METRIC] stage=gpu_autoselect gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}"
+                        )
+            except Exception as _gpu_sel_e:
+                logging.warning(f"Falha ao escolher GPU por memória livre: {_gpu_sel_e}")
 
-            self._asr_backend.load(
-                model_id=asr_model_id,
-                compute_device=asr_compute_device,
-                dtype=asr_dtype,
-                ct2_compute_type=asr_ct2_compute_type,
-                cache_dir=asr_cache_dir,
-                attn_implementation=attn_impl,
-            )
-            self._asr_backend.warmup()
-            self._asr_loaded = True
-            self.on_model_ready_callback()
+            if backend == "transformers":
+                logging.info(f"Carregando modelo Transformers {model_id}...")
+                processor = AutoProcessor.from_pretrained(model_path)
+
+                quant_config = None
+                if torch.cuda.is_available() and self.gpu_index >= 0:
+                    quant_config = BitsAndBytesConfig(load_in_8bit=True)
+
+                try:
+                    import importlib.util
+
+                    use_flash_attn = importlib.util.find_spec("flash_attn") is not None
+                except Exception:  # pragma: no cover
+                    use_flash_attn = False
+
+                attn_impl = "flash_attention_2" if use_flash_attn else "sdpa"
+
+                model_kwargs = {
+                    "torch_dtype": torch_dtype_local,
+                    "low_cpu_mem_usage": True,
+                    "use_safetensors": True,
+                    "device_map": {'': device},
+                    "attn_implementation": attn_impl,
+                }
+                if quant_config is not None:
+                    model_kwargs["quantization_config"] = quant_config
+
+                model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                    model_path,
+                    **model_kwargs,
+                )
+
+                try:
+                    eff_attn = getattr(model, "config", None)
+                    if eff_attn and hasattr(eff_attn, "attn_implementation"):
+                        logging.info(
+                            f"[METRIC] stage=attn_impl_effective value={getattr(eff_attn, 'attn_implementation', 'unknown')}"
+                        )
+                except Exception:
+                    pass
+
+                return model, processor
+
+            if backend == "ct2":
+                raise NotImplementedError("Backend CT2 ainda não suportado")
+
+            raise ValueError(f"Backend desconhecido: {backend}")
+
         except Exception as e:
-            logging.error(f"Falha ao carregar backend de ASR: {e}", exc_info=True)
-            self._asr_loaded = False
-            self.on_model_error_callback(f"Falha ao carregar backend de ASR: {e}")
+            error_message = f"Falha ao carregar o modelo: {e}"
+            logging.error(error_message, exc_info=True)
+            return None, None
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""

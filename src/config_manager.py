@@ -3,8 +3,7 @@ import json
 import logging
 import copy
 import hashlib
-from typing import List
-from .model_manager import scan_installed, DEFAULT_CACHE_DIR
+from .model_manager import list_catalog, list_installed
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -94,12 +93,9 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
-    "asr_model_id": "openai/whisper-large-v3",
     "asr_backend": "transformers",
-    "asr_compute_device": "auto",
-    "asr_dtype": "float16",
-    "asr_ct2_compute_type": "default",
-    "asr_cache_dir": "",
+    "asr_model_id": "large-v3",
+    "ct2_quantization": "float16",
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -153,12 +149,7 @@ REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
-ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
-ASR_BACKEND_CONFIG_KEY = "asr_backend"
-ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
-ASR_DTYPE_CONFIG_KEY = "asr_dtype"
-ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
-ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
+ASR_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "whisper-flash-transcriber", "asr")
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -246,12 +237,12 @@ class ConfigManager:
             secrets_loaded = {}
             self._secrets_hash = None
 
-        # Atualizar lista de modelos ASR instalados a partir do cache
+        cfg["asr_curated_catalog"] = list_catalog()
         try:
-            installed_models: List[str] = scan_installed(DEFAULT_CACHE_DIR)
-            cfg[ASR_INSTALLED_MODELS_CONFIG_KEY] = installed_models
-        except Exception as e:
-            logging.warning(f"Falha ao escanear modelos instalados: {e}")
+            cfg["asr_installed_models"] = list_installed(ASR_CACHE_DIR)
+        except Exception as e:  # pragma: no cover - salvaguarda
+            logging.warning(f"Falha ao listar modelos instalados: {e}")
+            cfg["asr_installed_models"] = []
 
         self.config = cfg
         # Aplicar validação e conversão de tipo
