@@ -28,7 +28,9 @@ from .config_manager import (
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
     CLEAR_GPU_CACHE_CONFIG_KEY,
+    ASR_BACKEND_CONFIG_KEY, ASR_MODEL_ID_CONFIG_KEY,
 )
+from .asr_backends import backend_registry, WhisperBackend
 
 class TranscriptionHandler:
     def __init__(
@@ -59,8 +61,11 @@ class TranscriptionHandler:
         self.correction_thread = None
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-        self._asr_backend = None
-        self._asr_loaded = False
+        self.pipe = None
+        self._asr_backend_name = self.config_manager.get(ASR_BACKEND_CONFIG_KEY, "whisper")
+        backend_cls = backend_registry.get(self._asr_backend_name, WhisperBackend)
+        self._asr_backend = backend_cls(self)
+        self._asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY, "openai/whisper-large-v3")
         # Futura tarefa de transcrição em andamento
         self.transcription_future = None
         # Executor dedicado para a tarefa de transcrição em background
@@ -148,8 +153,9 @@ class TranscriptionHandler:
         if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # _initialize_model_and_processor executa _load_model_task internamente
-        self._initialize_model_and_processor()
+        backend_cls = backend_registry.get(self._asr_backend_name, WhisperBackend)
+        self._asr_backend = backend_cls(self)
+        self._asr_backend.load()
 
     def update_config(self):
         """Atualiza as configurações do handler a partir do config_manager."""
@@ -168,8 +174,8 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
-        self.asr_backend = self.config_manager.get("asr_backend", self.asr_backend)
-        self.asr_model_id = self.config_manager.get("asr_model_id", self.asr_model_id)
+        self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY, self.asr_backend)
+        self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY, self.asr_model_id)
         logging.info("TranscriptionHandler: Configurações atualizadas.")
 
     def _initialize_model_and_processor(self):
@@ -281,7 +287,7 @@ class TranscriptionHandler:
         )
 
     def start_model_loading(self):
-        threading.Thread(target=self._initialize_model_and_processor, daemon=True, name="ModelLoadThread").start()
+        threading.Thread(target=self._asr_backend.load, daemon=True, name="ModelLoadThread").start()
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""
@@ -303,12 +309,69 @@ class TranscriptionHandler:
             if make_backend is None:
                 raise RuntimeError("make_backend function is not available")
 
-            asr_model_id = self.config_manager.get("asr_model_id")
-            asr_backend = self.config_manager.get("asr_backend")
-            asr_compute_device = self.config_manager.get("asr_compute_device")
-            asr_dtype = self.config_manager.get("asr_dtype")
-            asr_ct2_compute_type = self.config_manager.get("asr_ct2_compute_type")
-            asr_cache_dir = self.config_manager.get("asr_cache_dir")
+            if torch.cuda.is_available():
+                if self.gpu_index == -1: # Auto-seleção de GPU
+                    num_gpus = torch.cuda.device_count()
+                    if num_gpus > 0:
+                        best_gpu_index = 0
+                        max_vram = 0
+                        for i in range(num_gpus):
+                            props = torch.cuda.get_device_properties(i)
+                            if props.total_memory > max_vram:
+                                max_vram = props.total_memory
+                                best_gpu_index = i
+                        self.gpu_index = best_gpu_index
+                        logging.info(f"Auto-seleção de GPU (maior VRAM total): {self.gpu_index} ({torch.cuda.get_device_name(self.gpu_index)})")
+                    else:
+                        logging.info("Nenhuma GPU disponível, usando CPU.")
+                        self.gpu_index = -1 # Garante que o índice seja -1 se não houver GPU
+                
+            model_id = self.asr_model_id or "openai/whisper-large-v3"
+            
+            logging.info(f"Carregando processador de {model_id}...")
+            processor = AutoProcessor.from_pretrained(model_id)
+
+            # Determinar o dispositivo explicitamente antes de carregar o modelo
+            device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
+            logging.info(f"Dispositivo de carregamento do modelo definido explicitamente como: {device}")
+
+            if torch.cuda.is_available() and self.gpu_index >= 0:
+                torch_dtype_local = torch.float16
+                logging.info("GPU detectada e selecionada, usando torch.float16.")
+            else:
+                torch_dtype_local = torch.float32
+                logging.info("Nenhuma GPU detectada ou selecionada, usando torch.float32 (CPU).")
+            # Seleção automática de GPU por memória livre quando gpu_index == -1
+            try:
+                if torch.cuda.is_available() and self.gpu_index == -1:
+                    best_idx = None
+                    best_free = -1
+                    for i in range(torch.cuda.device_count()):
+                        try:
+                            free_b, total_b = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
+                            if free_b > best_free:
+                                best_free = free_b
+                                best_idx = i
+                        except Exception as _e:
+                            logging.debug(f"Falha ao consultar mem_get_info para GPU {i}: {_e}")
+                    if best_idx is not None:
+                        self.gpu_index = best_idx
+                        free_gb = best_free / (1024 ** 3) if best_free > 0 else 0.0
+                        total_gb = torch.cuda.get_device_properties(self.gpu_index).total_memory / (1024 ** 3)
+                        logging.info(f"[METRIC] stage=gpu_autoselect gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}")
+            except Exception as _gpu_sel_e:
+                logging.warning(f"Falha ao escolher GPU por memória livre: {_gpu_sel_e}")
+
+            logging.info(f"Carregando modelo {model_id}...")
+
+            # Define configuração de quantização apenas se uma GPU válida estiver disponível
+            quant_config = None
+            if torch.cuda.is_available() and self.gpu_index >= 0:
+                quant_config = BitsAndBytesConfig(load_in_8bit=True)
+
+            # Determina dinamicamente se o FlashAttention 2 está disponível
+            try:
+                import importlib.util
 
             self._asr_backend = make_backend(asr_backend)
 
