@@ -1,4 +1,6 @@
-from typing import Dict, Type, Protocol
+from typing import Dict, Protocol, Callable
+
+from .asr.backends import make_backend as _make_asr_backend
 
 
 class ASRBackend(Protocol):
@@ -51,7 +53,50 @@ class DummyBackend:
         return {"text": ""}
 
 
-backend_registry: Dict[str, Type[ASRBackend]] = {
+backend_registry: Dict[str, Callable[[any], ASRBackend]] = {
     "whisper": WhisperBackend,
     "dummy": DummyBackend,
 }
+
+
+class _AdapterBackend:
+    """Adaptador que integra os novos backends de ``src/asr``."""
+
+    def __init__(self, handler, name: str):
+        self._handler = handler
+        self._name = name
+        self._backend = None
+
+    def load(self) -> None:
+        cfg = self._handler.config_manager
+        model_id = cfg.get("asr_model_id")
+        device = cfg.get("asr_compute_device") or "auto"
+        dtype = cfg.get("asr_dtype") or "auto"
+        cache = cfg.get("asr_cache_dir") or None
+        ct2_type = cfg.get("asr_ct2_compute_type") or "default"
+        self._backend = _make_asr_backend(self._name)
+        self._backend.load(
+            model_id=model_id,
+            device=device,
+            dtype=dtype,
+            cache_dir=cache,
+            ct2_compute_type=ct2_type,
+        )
+
+    def unload(self) -> None:
+        if self._backend:
+            self._backend.unload()
+            self._backend = None
+
+    def transcribe(self, audio_source, *, chunk_length_s: float, batch_size: int):
+        return self._backend.transcribe(
+            audio_source, chunk_length_s=chunk_length_s, batch_size=batch_size
+        )
+
+
+backend_registry.update(
+    {
+        "transformers": lambda h: _AdapterBackend(h, "transformers"),
+        "faster-whisper": lambda h: _AdapterBackend(h, "faster-whisper"),
+    }
+)
