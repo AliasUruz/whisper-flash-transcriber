@@ -346,7 +346,9 @@ class UIManager:
                 logging.error("Failed to initialize settings UI", exc_info=True)
                 self.settings_thread_running = False
                 if self.settings_window_instance:
-                    self._close_settings_window()
+                    # Avoid deadlock: destroy directly without reacquiring the lock
+                    self.settings_window_instance.destroy()
+                    self.settings_window_instance = None
                 return
 
             try:
