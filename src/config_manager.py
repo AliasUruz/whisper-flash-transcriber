@@ -168,6 +168,22 @@ ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
 ASR_CURATED_CATALOG_URL_CONFIG_KEY = "asr_curated_catalog_url"
 
+
+def _normalize_asr_backend(name: str | None) -> str | None:
+    """Return canonical backend name.
+
+    Accepts legacy aliases like "faster-whisper" or "ctranslate2" and maps
+    them to the internal identifier "ct2". The function is case-insensitive
+    and returns ``None`` unchanged.
+    """
+    if not isinstance(name, str):
+        return name
+    normalized = name.strip().lower()
+    if normalized in {"faster-whisper", "faster_whisper", "ctranslate2"}:
+        return "ct2"
+    return normalized
+
+
 ASR_CACHE_DIR = os.path.expanduser(DEFAULT_CONFIG["asr_cache_dir"])
 
 class ConfigManager:
@@ -673,9 +689,14 @@ class ConfigManager:
                 if current is None:
                     return default
             return current
-        return self.config.get(key, default)
+        value = self.config.get(key, default)
+        if key == ASR_BACKEND_CONFIG_KEY:
+            value = _normalize_asr_backend(value)
+        return value
 
     def set(self, key, value):
+        if key == ASR_BACKEND_CONFIG_KEY:
+            value = _normalize_asr_backend(value)
         self.config[key] = value
 
     def get_asr_model(self) -> str:
@@ -702,13 +723,14 @@ class ConfigManager:
         return ""
 
     def get_asr_backend(self):
-        return self.config.get(
+        value = self.config.get(
             ASR_BACKEND_CONFIG_KEY,
             self.default_config[ASR_BACKEND_CONFIG_KEY],
         )
+        return _normalize_asr_backend(value)
 
     def set_asr_backend(self, value: str):
-        self.config[ASR_BACKEND_CONFIG_KEY] = str(value)
+        self.config[ASR_BACKEND_CONFIG_KEY] = _normalize_asr_backend(value)
 
     def get_asr_model_id(self):
         return self.config.get(
@@ -988,13 +1010,14 @@ class ConfigManager:
         self.save_config()
 
     def get_asr_backend(self):
-        return self.config.get(
+        value = self.config.get(
             ASR_BACKEND_CONFIG_KEY,
             self.default_config[ASR_BACKEND_CONFIG_KEY],
         )
+        return _normalize_asr_backend(value)
 
     def set_asr_backend(self, value: str):
-        self.config[ASR_BACKEND_CONFIG_KEY] = str(value)
+        self.config[ASR_BACKEND_CONFIG_KEY] = _normalize_asr_backend(value)
         self.save_config()
 
     def get_asr_compute_device(self):

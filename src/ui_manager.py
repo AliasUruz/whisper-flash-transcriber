@@ -950,7 +950,7 @@ class UIManager:
                 asr_backend_menu = ctk.CTkOptionMenu(
                     asr_backend_frame,
                     variable=asr_backend_var,
-                    values=["auto", "transformers", "faster-whisper", "ct2"],
+                    values=["auto", "transformers", "ct2"],
                     command=_on_backend_change,
                 )
                 asr_backend_menu.pack(side="left", padx=5)
@@ -960,7 +960,7 @@ class UIManager:
                 quant_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
                 quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
+                    quant_frame, variable=asr_ct2_compute_type_var, values=["float16", "int8", "int8_float16"]
                 )
                 quant_menu.pack(side="left", padx=5)
 
@@ -1053,10 +1053,10 @@ class UIManager:
                 def _install_model():
                     try:
                         backend = asr_backend_var.get()
-                        if backend == "faster-whisper":
-                            backend = "ct2"
-                        elif backend == "auto":
+                        if backend == "auto":
                             backend = "transformers"
+                        elif backend in ("faster-whisper", "ctranslate2"):
+                            backend = "ct2"
 
                         model_manager.ensure_download(
                             asr_model_id_var.get(),
