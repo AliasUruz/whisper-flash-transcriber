@@ -547,7 +547,11 @@ class TranscriptionHandler:
 
             if backend == "transformers":
                 logging.info(f"Carregando modelo Transformers {model_id}...")
-                processor = AutoProcessor.from_pretrained(model_path)
+                model_path.mkdir(parents=True, exist_ok=True)
+                processor = AutoProcessor.from_pretrained(
+                    model_id,
+                    cache_dir=str(model_path)
+                )
 
             quant_config = None
             if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0:
@@ -574,7 +578,11 @@ class TranscriptionHandler:
             if quant_config is not None:
                 model_kwargs["quantization_config"] = quant_config
 
-            model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, **model_kwargs)
+            model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                model_id,
+                cache_dir=str(model_path),
+                **model_kwargs,
+            )
 
             generate_kwargs = {"task": "transcribe", "language": None}
             self.pipe = pipeline(
@@ -605,6 +613,10 @@ class TranscriptionHandler:
         except Exception as e:
             error_message = f"Falha ao carregar o modelo: {e}"
             logging.error(error_message, exc_info=True)
+            try:
+                self.on_model_error_callback(error_message)
+            except Exception:
+                pass
             return None, None
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
