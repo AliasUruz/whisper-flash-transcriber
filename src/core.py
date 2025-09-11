@@ -124,6 +124,10 @@ class AppCore:
             ):
                 try:
                     ensure_download(model_id, backend, cache_dir, quant=ct2_type)
+                except DownloadCancelledError:
+                    logging.info("Model download cancelled by user.")
+                    messagebox.showinfo("Model", "Download canceled.")
+                    self._set_state(STATE_LOADING_MODEL)
                 except Exception as e:
                     logging.error(f"Model download failed: {e}")
                     messagebox.showerror("Model", f"Download failed: {e}")
