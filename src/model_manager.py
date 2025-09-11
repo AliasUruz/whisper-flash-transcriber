@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List
 
-from huggingface_hub import snapshot_download
+from huggingface_hub import HfApi, snapshot_download
 
 CURATED: List[Dict[str, str]] = [
     {"id": "openai/whisper-large-v3", "backend": "transformers"},
@@ -36,6 +36,28 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
                     {"id": model_dir.name, "backend": backend, "path": str(model_dir)}
                 )
     return installed
+
+
+def get_model_size(model_id: str) -> int:
+    """Return the total download size for ``model_id`` in bytes.
+
+    If the model is not found or size information is unavailable, ``0`` is
+    returned. The implementation queries the Hugging Face Hub for metadata and
+    sums the reported file sizes.
+    """
+
+    api = HfApi()
+    try:
+        info = api.model_info(model_id)
+    except Exception:
+        return 0
+
+    total = 0
+    for sibling in info.siblings:
+        size = getattr(sibling, "size", None)
+        if size is not None:
+            total += int(size)
+    return total
 
 
 def ensure_download(
