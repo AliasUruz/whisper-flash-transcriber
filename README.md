@@ -279,6 +279,7 @@ To access and change settings:
 *   **Use VAD:** enables silence removal without automatically stopping the recording.
 *   **VAD Threshold:** sensitivity of voice detection.
 *   **VAD Silence Duration (s):** maximum pause length to keep; longer silences are trimmed.
+*   **Silero VAD Status:** indicates whether the VAD model is installed; the checkbox is disabled when the model file is missing.
 
 ### ASR Backend Configuration
 

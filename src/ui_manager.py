@@ -19,6 +19,7 @@ from .config_manager import (
 )
 
 from .utils.tooltip import Tooltip
+from .vad_manager import VADManager
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -884,9 +885,24 @@ class UIManager:
 
                 vad_enable_frame = ctk.CTkFrame(transcription_frame)
                 vad_enable_frame.pack(fill="x", pady=5)
-                vad_checkbox = ctk.CTkCheckBox(vad_enable_frame, text="Use VAD", variable=use_vad_var)
+
+                is_vad_available = VADManager.is_model_available()
+                if not is_vad_available:
+                    use_vad_var.set(False)
+                vad_checkbox = ctk.CTkCheckBox(
+                    vad_enable_frame,
+                    text="Use VAD",
+                    variable=use_vad_var,
+                    state="normal" if is_vad_available else "disabled",
+                )
                 vad_checkbox.pack(side="left", padx=5)
                 Tooltip(vad_checkbox, "Enable voice activity detection.")
+
+                vad_status_text = (
+                    "Silero VAD: installed" if is_vad_available else "Silero VAD: missing"
+                )
+                vad_status_label = ctk.CTkLabel(vad_enable_frame, text=vad_status_text)
+                vad_status_label.pack(side="left", padx=5)
 
                 vad_params_frame = ctk.CTkFrame(transcription_frame)
                 vad_params_frame.pack(fill="x", pady=5)
@@ -960,7 +976,9 @@ class UIManager:
                 quant_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
                 quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
+                    quant_frame,
+                    variable=asr_ct2_compute_type_var,
+                    values=["float16", "int8", "int8_float16"],
                 )
                 quant_menu.pack(side="left", padx=5)
 
