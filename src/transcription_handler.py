@@ -178,10 +178,11 @@ class TranscriptionHandler:
 
     def reload_asr(self):
         """Recarrega o backend de ASR e o modelo associado."""
-        try:
-            self._asr_backend.unload()
-        except Exception as e:
-            logging.warning(f"Falha ao descarregar backend ASR: {e}")
+        if self._asr_backend is not None:
+            try:
+                self._asr_backend.unload()
+            except Exception as e:
+                logging.warning(f"Falha ao descarregar backend ASR: {e}")
 
         if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and torch.cuda.is_available():
             torch.cuda.empty_cache()
