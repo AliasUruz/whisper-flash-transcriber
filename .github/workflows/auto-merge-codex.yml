@@ -10,15 +10,19 @@ permissions:
 
 jobs:
   automerge:
-    # Dispara para branches codex/... ou PRs com label "codex"
     if: |
       startsWith(github.event.pull_request.head.ref, 'codex/') ||
       contains(github.event.pull_request.labels.*.name, 'codex')
     runs-on: ubuntu-latest
     steps:
-      # Se você tiver um token de uma conta-bot e QUISER auto-aprovar,
-      # crie o secret AUTOMERGE_TOKEN e descomente o bloco abaixo.
-      # - name: Auto-approve (optional, requires PAT from a bot account)
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      # (opcional) auto-approve se você usar um PAT de uma conta-bot
+      # - name: Auto-approve (bot)
       #   uses: hmarr/auto-approve-action@v4
       #   with:
       #     github-token: ${{ secrets.AUTOMERGE_TOKEN }}
@@ -27,7 +31,5 @@ jobs:
       - name: Enable auto-merge (squash)
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
-          # GITHUB_TOKEN é suficiente para ligar o auto-merge.
-          # (Se quiser usar PAT, troque pelo secrets.AUTOMERGE_TOKEN)
           token: ${{ secrets.GITHUB_TOKEN }}
           merge-method: squash
