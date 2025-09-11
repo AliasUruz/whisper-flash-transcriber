@@ -33,7 +33,7 @@ from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE a
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
-from .model_manager import ensure_download
+from .model_manager import DownloadCancelledError, ensure_download
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -115,6 +115,10 @@ class AppCore:
             ):
                 try:
                     ensure_download(model_id, backend, cache_dir, quant=ct2_type)
+                except DownloadCancelledError:
+                    logging.info("Model download cancelled by user.")
+                    messagebox.showinfo("Model", "Download canceled.")
+                    self._set_state(STATE_LOADING_MODEL)
                 except Exception as e:
                     logging.error(f"Model download failed: {e}")
                     messagebox.showerror("Model", f"Download failed: {e}")

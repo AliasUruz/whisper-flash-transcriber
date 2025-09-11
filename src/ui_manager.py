@@ -40,6 +40,12 @@ except Exception:  # pragma: no cover - fallback caso o módulo não exista
 
     model_manager = _DummyModelManager()
 
+try:
+    from .model_manager import DownloadCancelledError
+except Exception:  # pragma: no cover - fallback se a exceção não existir
+    class DownloadCancelledError(Exception):
+        pass
+
 def get_available_devices_for_ui():
     """Returns a list of devices for the settings interface."""
     devices = ["Auto-select (Recommended)"]
@@ -1069,6 +1075,8 @@ class UIManager:
                         self.config_manager.save_config()
                         _update_model_info(asr_model_id_var.get())
                         messagebox.showinfo("Model", "Download completed.")
+                    except DownloadCancelledError:
+                        messagebox.showinfo("Model", "Download canceled.")
                     except Exception as e:
                         messagebox.showerror("Model", f"Download failed: {e}")
 
