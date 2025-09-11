@@ -989,9 +989,7 @@ class UIManager:
                 quant_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
                 quant_menu = ctk.CTkOptionMenu(
-                    quant_frame,
-                    variable=asr_ct2_compute_type_var,
-                    values=["float16", "int8", "int8_float16"],
+                    quant_frame, variable=asr_ct2_compute_type_var, values=["float16", "int8", "int8_float16"]
                 )
                 quant_menu.pack(side="left", padx=5)
 
@@ -1005,40 +1003,43 @@ class UIManager:
                 }
                 all_ids = sorted({m["id"] for m in catalog} | installed_ids)
 
-                model_info_var = ctk.StringVar()
+                asr_model_menu = ctk.CTkOptionMenu(
+                    asr_model_frame,
+                    variable=asr_model_id_var,
+                    values=all_ids,
+                )
+                asr_model_menu.pack(side="left", padx=5)
+                Tooltip(asr_model_menu, "Model identifier from curated catalog.")
+                model_size_label = ctk.CTkLabel(asr_model_frame, text="")
+                model_size_label.pack(side="left", padx=5)
 
                 def _update_model_info(choice: str) -> None:
-                    installed = {
-                        m.get("id", m) if isinstance(m, dict) else m
-                        for m in self.config_manager.get_asr_installed_models()
-                    }
-                    if choice in installed:
-                        model_info_var.set("Installed")
+                    try:
+                        d_bytes, d_files = model_manager.get_model_download_size(choice)
+                        d_mb = d_bytes / (1024 * 1024)
+                        download_text = f"{d_mb:.1f} MB ({d_files} files)"
+                    except Exception:
+                        download_text = "?"
+
+                    installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+                    entry = next((m for m in installed_models if m["id"] == choice), None)
+                    if entry:
+                        i_bytes, i_files = model_manager.get_installed_size(entry["path"])
+                        i_mb = i_bytes / (1024 * 1024)
+                        installed_text = f"{i_mb:.1f} MB ({i_files} files)"
                     else:
-                        try:
-                            size = model_manager.get_model_download_size(choice)
-                            size_mb = size / (1024 * 1024)
-                            model_info_var.set(f"Download: {size_mb:.1f} MB")
-                        except Exception:
-                            model_info_var.set("Download size: ?")
+                        installed_text = "-"
+
+                    model_size_label.configure(
+                        text=f"Download: {download_text} | Installed: {installed_text}"
+                    )
 
                 def _on_model_change(choice: str) -> None:
                     self.config_manager.set_asr_model_id(choice)
                     self.config_manager.save_config()
                     _update_model_info(choice)
 
-                asr_model_menu = ctk.CTkOptionMenu(
-                    asr_model_frame,
-                    variable=asr_model_id_var,
-                    values=all_ids,
-                    command=_on_model_change,
-                )
-                asr_model_menu.pack(side="left", padx=5)
-                Tooltip(asr_model_menu, "Model identifier from curated catalog.")
-
-                info_label = ctk.CTkLabel(asr_model_frame, textvariable=model_info_var)
-                info_label.pack(side="left", padx=5)
-
+                asr_model_menu.configure(command=_on_model_change)
                 _update_model_info(asr_model_id_var.get())
                 _on_backend_change(asr_backend_var.get())
 

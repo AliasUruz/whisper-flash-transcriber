@@ -75,12 +75,44 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     return installed
 
 
-def get_model_download_size(model_id: str) -> int:
-    """Return the total download size in bytes for ``model_id``."""
+def get_model_download_size(model_id: str) -> tuple[int, int]:
+    """Return the download size and file count for ``model_id``.
+
+    Parameters
+    ----------
+    model_id: str
+        Hugging Face model identifier.
+
+    Returns
+    -------
+    tuple[int, int]
+        Total size in bytes and number of files available for download.
+    """
 
     api = HfApi()
     info = api.model_info(model_id)
-    return sum((s.size or 0) for s in getattr(info, "siblings", []))
+    total = 0
+    files = 0
+    for sibling in getattr(info, "siblings", []):
+        total += sibling.size or 0
+        files += 1
+    return total, files
+
+
+def get_installed_size(model_path: str | Path) -> tuple[int, int]:
+    """Return the size on disk and file count for an installed model."""
+
+    path = Path(model_path)
+    if not path.exists():
+        return 0, 0
+
+    total = 0
+    files = 0
+    for p in path.rglob("*"):
+        if p.is_file():
+            files += 1
+            total += p.stat().st_size
+    return total, files
 
 
 def ensure_download(
