@@ -35,7 +35,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   Quickly switch between Gemini models directly from the tray menu.
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
 *   **Automatically remove silent sections** using the Silero VAD. Initialization uses `onnxruntime` with automatic selection of `CUDAExecutionProvider` when available, falling back to `CPUExecutionProvider`.
-*   **Model awareness:** the settings UI shows the download size of each Whisper model and whether it is already installed.
+*   **Model awareness:** the settings UI shows the download size of each Whisper model and whether it is already installed, scanning the local cache, global Hugging Face cache, and custom model directories.
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
 *   **Launch at Startup Option:** Start the application automatically when Windows boots.
 *   **Unified `TRANSCRIBING` State:** recording, Whisper processing, and optional AI correction all occur while the application remains in this state. Once the final text is ready, the state returns to `IDLE`.
@@ -203,8 +203,8 @@ With your virtual environment activated, you can now install the libraries the a
     ```
 The `pip` command is Python's package installer. The `-r requirements.txt` part tells pip to install everything listed in that file. This step will download and install all necessary packages, including large ones like `torch` and `transformers`. This might take several minutes depending on your internet speed.
 
-2.  **Optional: Install faster-whisper backend (for ctranslate2 support):**
-    These packages provide an alternative Whisper backend powered by CTranslate2. They require AVX2 support or a recent GPU and may fail on older CPUs. Install them only if your hardware supports these features.
+2.  **Optional: Install CTranslate2 backend (via faster-whisper):**
+    These packages provide an alternative Whisper backend powered by CTranslate2 through the `faster-whisper` library. They require AVX2 support or a recent GPU and may fail on older CPUs. Install them only if your hardware supports these features.
     ```bash
     pip install -r requirements-optional.txt
     ```
@@ -279,6 +279,7 @@ To access and change settings:
 *   **Use VAD:** enables silence removal without automatically stopping the recording.
 *   **VAD Threshold:** sensitivity of voice detection.
 *   **VAD Silence Duration (s):** maximum pause length to keep; longer silences are trimmed.
+*   **Silero VAD Status:** indicates whether the VAD model is installed; the checkbox is disabled when the model file is missing.
 
 ### ASR Backend Configuration
 
@@ -287,11 +288,15 @@ The speech recognition engine supports multiple backends. The following keys in 
 | Key | Description | Example |
 | --- | ----------- | ------- |
 | `asr_model_id` | Model identifier to download. | `"openai/whisper-large-v3"` |
-| `asr_backend` | Backend implementation (`transformers`, `ct2`, etc.). | `"transformers"` |
+| `asr_backend` | Backend implementation (`transformers` or `ct2`). The value `faster-whisper` is accepted as an alias for `ct2`. | `"transformers"` |
 | `asr_compute_device` | Target device such as `cpu`, `cuda:0`, or `auto`. | `"cuda:0"` |
 | `asr_dtype` | Numerical precision (`float16`, `float32`, ...). | `"float16"` |
 | `asr_ct2_compute_type` | Compute type for the CTranslate2 backend. | `"default"` |
 | `asr_cache_dir` | Optional path to cache downloaded models. | `"/models"` |
+
+> **Note:** When loading settings, the application normalizes backend names.
+Values such as `faster-whisper` or `ctranslate2` are automatically mapped to
+`ct2`.
 
 Examples:
 

@@ -7,6 +7,10 @@ from typing import Dict, List
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
+
+class DownloadCancelledError(Exception):
+    """Raised when a model download is cancelled by the user."""
+
 CURATED: List[Dict[str, str]] = [
     {"id": "openai/whisper-large-v3", "backend": "transformers"},
     {"id": "openai/whisper-large-v3-turbo", "backend": "transformers"},
@@ -23,20 +27,35 @@ def list_catalog() -> List[Dict[str, str]]:
 
 
 def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
-    """List models already downloaded in ``cache_dir`` or in the shared HF cache."""
+    """Discover models available on disk and in the shared HF cache.
+
+    Detection covers curated backends (``transformers`` and ``ct2``), custom
+    directory layouts (e.g., Silero VAD), single model files, and the global
+    Hugging Face cache. Any model found is returned with its backend (or
+    ``"custom"`` when unknown) and resolved path.
+    """
 
     installed: List[Dict[str, str]] = []
     seen = set()
 
     cache_dir = Path(cache_dir)
-    for backend in ("transformers", "ct2"):
-        backend_path = cache_dir / backend
-        if not backend_path.is_dir():
-            continue
-        for model_dir in backend_path.iterdir():
-            if model_dir.is_dir():
-                mid = model_dir.name
-                installed.append({"id": mid, "backend": backend, "path": str(model_dir)})
+    if cache_dir.is_dir():
+        for item in cache_dir.iterdir():
+            if item.is_dir():
+                subdirs = [p for p in item.iterdir() if p.is_dir()]
+                if subdirs:
+                    backend = item.name
+                    for model_dir in subdirs:
+                        mid = model_dir.name
+                        installed.append({"id": mid, "backend": backend, "path": str(model_dir)})
+                        seen.add(mid)
+                else:
+                    mid = item.name
+                    installed.append({"id": mid, "backend": "custom", "path": str(item)})
+                    seen.add(mid)
+            elif item.is_file():
+                mid = item.stem
+                installed.append({"id": mid, "backend": "custom", "path": str(item)})
                 seen.add(mid)
 
     try:
@@ -56,12 +75,44 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     return installed
 
 
-def get_model_download_size(model_id: str) -> int:
-    """Return the total download size in bytes for ``model_id``."""
+def get_model_download_size(model_id: str) -> tuple[int, int]:
+    """Return the download size and file count for ``model_id``.
+
+    Parameters
+    ----------
+    model_id: str
+        Hugging Face model identifier.
+
+    Returns
+    -------
+    tuple[int, int]
+        Total size in bytes and number of files available for download.
+    """
 
     api = HfApi()
     info = api.model_info(model_id)
-    return sum((s.size or 0) for s in getattr(info, "siblings", []))
+    total = 0
+    files = 0
+    for sibling in getattr(info, "siblings", []):
+        total += sibling.size or 0
+        files += 1
+    return total, files
+
+
+def get_installed_size(model_path: str | Path) -> tuple[int, int]:
+    """Return the size on disk and file count for an installed model."""
+
+    path = Path(model_path)
+    if not path.exists():
+        return 0, 0
+
+    total = 0
+    files = 0
+    for p in path.rglob("*"):
+        if p.is_file():
+            files += 1
+            total += p.stat().st_size
+    return total, files
 
 
 def ensure_download(
@@ -91,13 +142,21 @@ def ensure_download(
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    if backend == "transformers":
-        snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
-    elif backend == "ct2":
-        from faster_whisper import WhisperModel
+    try:
+        if backend == "transformers":
+            snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
+        elif backend == "ct2":
+            from faster_whisper import WhisperModel
 
-        WhisperModel(model_id, device="cpu", compute_type=quant or "int8", download_root=str(local_dir))
-    else:
-        raise ValueError(f"Unknown backend: {backend}")
+            WhisperModel(
+                model_id,
+                device="cpu",
+                compute_type=quant or "int8",
+                download_root=str(local_dir),
+            )
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
+    except KeyboardInterrupt as exc:
+        raise DownloadCancelledError("Model download cancelled by user.") from exc
 
     return str(local_dir)

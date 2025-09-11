@@ -16,6 +16,10 @@ logging.info("VAD model path set to '%s'", MODEL_PATH)
 
 class VADManager:
     """Gerencia a detecção de voz usando o modelo Silero."""
+    @staticmethod
+    def is_model_available() -> bool:
+        """Verifica se o arquivo do modelo Silero VAD está presente."""
+        return MODEL_PATH.exists()
 
     def __init__(self, threshold: float = 0.5, sampling_rate: int = 16000):
         """Inicializa o VAD Manager."""
@@ -25,7 +29,7 @@ class VADManager:
         # Flag que indica se o VAD está pronto para uso
         self.enabled = False
 
-        if not MODEL_PATH.exists():
+        if not self.is_model_available():
             logging.error(
                 "VAD model file missing at '%s'. VAD feature disabled.",
                 MODEL_PATH,

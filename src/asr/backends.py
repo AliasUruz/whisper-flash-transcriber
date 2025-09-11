@@ -6,13 +6,19 @@ from typing import Protocol
 class ASRBackend(Protocol):
     """Minimal interface for ASR backends."""
 
-    def load(self, *args, **kwargs) -> None: ...
+    def load(self, *args, **kwargs) -> None:
+        ...
 
-    def warmup(self) -> None: ...
+    def warmup(self) -> None:
+        ...
 
-    def transcribe(self, audio: str | bytes | list[float] | None, **kwargs) -> dict: ...
+    def transcribe(
+        self, audio: str | bytes | list[float] | None, **kwargs
+    ) -> dict:
+        ...
 
-    def unload(self) -> None: ...
+    def unload(self) -> None:
+        ...
 
 
 def make_backend(name: str) -> ASRBackend:
@@ -21,7 +27,7 @@ def make_backend(name: str) -> ASRBackend:
     if normalized == "transformers":
         from .backend_transformers import TransformersBackend
         return TransformersBackend()
-    if normalized in {"faster-whisper", "faster_whisper"}:
+    if normalized in {"faster-whisper", "faster_whisper", "ct2", "ctranslate2"}:
         from .backend_faster_whisper import FasterWhisperBackend
         return FasterWhisperBackend()
     raise ValueError(f"Unknown ASR backend: {name}")
