@@ -595,7 +595,7 @@ class UIManager:
                     openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
                     gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
                     gemini_model_var.set(DEFAULT_CONFIG["gemini_model"])
-                    asr_model_id_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_model_var.set(DEFAULT_CONFIG["asr_model_id"])
                     gemini_prompt_correction_textbox.delete("1.0", "end")
                     gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG["gemini_prompt"])
                     agentico_prompt_textbox.delete("1.0", "end")
@@ -1052,10 +1052,17 @@ class UIManager:
 
                 def _install_model():
                     try:
+                        backend = asr_backend_var.get()
+                        if backend == "faster-whisper":
+                            backend = "ct2"
+                        elif backend == "auto":
+                            backend = "transformers"
+
                         model_manager.ensure_download(
                             asr_model_id_var.get(),
-                            asr_backend_var.get(),
+                            backend,
                             asr_cache_dir_var.get(),
+                            asr_ct2_compute_type_var.get() if backend == "ct2" else None,
                         )
                         installed_models[:] = model_manager.list_installed(asr_cache_dir_var.get())
                         self.config_manager.set_asr_installed_models(installed_models)
