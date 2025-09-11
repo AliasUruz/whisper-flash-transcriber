@@ -10,20 +10,18 @@ permissions:
 
 jobs:
   automerge:
-    # Filtra PRs cujo branch de origem começa com "codex/"
-    if: startsWith(github.event.pull_request.head.ref, 'codex/')
+    # Filtro para só pegar PRs abertos pelo Codex
+    if: github.event.pull_request.user.login == 'codex[bot]'
     runs-on: ubuntu-latest
     steps:
-      # 1) Aprova automaticamente o PR
       - name: Auto-approve
         uses: hmarr/auto-approve-action@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.AUTOMERGE_TOKEN }}
           review-message: "Auto-approved Codex PR"
 
-      # 2) Habilita o Auto-merge (GitHub fará o merge quando os checks exigidos passarem)
       - name: Enable auto-merge (squash)
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.AUTOMERGE_TOKEN }}
           merge-method: squash
