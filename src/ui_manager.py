@@ -317,25 +317,25 @@ class UIManager:
                 return
 
             self.settings_thread_running = True
+            ctk.set_appearance_mode("dark")
+            ctk.set_default_color_theme("blue")
+            settings_win = ctk.CTkToplevel(self.main_tk_root)
+            self.settings_window_instance = settings_win
+            settings_win.title("Whisper Recorder Settings")
+            settings_win.resizable(False, True)
+            settings_win.attributes("-topmost", True)
+
+            # Calculate Center Position
+            settings_win.update_idletasks()
+            window_width = int(SETTINGS_WINDOW_GEOMETRY.split('x')[0])
+            window_height = int(SETTINGS_WINDOW_GEOMETRY.split('x')[1])
+            screen_width = settings_win.winfo_screenwidth()
+            screen_height = settings_win.winfo_screenheight()
+            x_cordinate = int((screen_width / 2) - (window_width / 2))
+            y_cordinate = int((screen_height / 2) - (window_height / 2))
+            settings_win.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
+
             try:
-                ctk.set_appearance_mode("dark")
-                ctk.set_default_color_theme("blue")
-                settings_win = ctk.CTkToplevel(self.main_tk_root)
-                self.settings_window_instance = settings_win
-                settings_win.title("Whisper Recorder Settings")
-                settings_win.resizable(False, True)
-                settings_win.attributes("-topmost", True)
-
-                # Calculate Center Position
-                settings_win.update_idletasks()
-                window_width = int(SETTINGS_WINDOW_GEOMETRY.split('x')[0])
-                window_height = int(SETTINGS_WINDOW_GEOMETRY.split('x')[1])
-                screen_width = settings_win.winfo_screenwidth()
-                screen_height = settings_win.winfo_screenheight()
-                x_cordinate = int((screen_width / 2) - (window_width / 2))
-                y_cordinate = int((screen_height / 2) - (window_height / 2))
-                settings_win.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
-
                 # Variables (adjust to use self.config_manager.get)
                 auto_paste_var = ctk.BooleanVar(value=self.config_manager.get("auto_paste"))
                 mode_var = ctk.StringVar(value=self.config_manager.get("record_mode"))
@@ -960,7 +960,7 @@ class UIManager:
                 quant_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
                 quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
+                    quant_frame, variable=asr_ct2_compute_type_var, values=["float16", "int8", "int8_float16"]
                 )
                 quant_menu.pack(side="left", padx=5)
 
@@ -1086,32 +1086,34 @@ class UIManager:
                 )
                 reload_button.pack(pady=5)
 
-                # --- Action Buttons ---
-                button_frame = ctk.CTkFrame(settings_win) # Move outside scrollable_frame to keep fixed
-                button_frame.pack(side="bottom", fill="x", padx=10, pady=(20, 10))
-                
-                apply_button = ctk.CTkButton(button_frame, text="Apply and Close", command=apply_settings)
-                apply_button.pack(side="right", padx=5)
-                Tooltip(apply_button, "Save all settings and exit.")
-                close_button = ctk.CTkButton(button_frame, text="Cancel", command=self._close_settings_window, fg_color="gray50")
-                close_button.pack(side="right", padx=5)
-                Tooltip(close_button, "Discard changes and exit.")
-
-                restore_button = ctk.CTkButton(button_frame, text="Restore Defaults", command=restore_defaults)
-                restore_button.pack(side="left", padx=5)
-
-                force_reregister_button = ctk.CTkButton(button_frame, text="Force Hotkey Re-registration", command=self.core_instance_ref.force_reregister_hotkeys)
-                force_reregister_button.pack(side="left", padx=5)
-                Tooltip(force_reregister_button, "Re-register all global hotkeys.")
-
                 update_text_correction_fields()
-
-                settings_win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
 
             except Exception as e:
                 logging.error(f"Failed to create Toplevel for settings: {e}", exc_info=True)
-                self.settings_thread_running = False # Ensure flag is cleared in case of error
-                return
+            finally:
+                try:
+                    button_frame = ctk.CTkFrame(settings_win)  # Move outside scrollable_frame to keep fixed
+                    button_frame.pack(side="bottom", fill="x", padx=10, pady=(20, 10))
+
+                    apply_button = ctk.CTkButton(button_frame, text="Apply and Close", command=apply_settings)
+                    apply_button.pack(side="right", padx=5)
+                    Tooltip(apply_button, "Save all settings and exit.")
+                    close_button = ctk.CTkButton(button_frame, text="Cancel", command=self._close_settings_window, fg_color="gray50")
+                    close_button.pack(side="right", padx=5)
+                    Tooltip(close_button, "Discard changes and exit.")
+
+                    restore_button = ctk.CTkButton(button_frame, text="Restore Defaults", command=restore_defaults)
+                    restore_button.pack(side="left", padx=5)
+
+                    force_reregister_button = ctk.CTkButton(
+                        button_frame, text="Force Hotkey Re-registration", command=self.core_instance_ref.force_reregister_hotkeys
+                    )
+                    force_reregister_button.pack(side="left", padx=5)
+                    Tooltip(force_reregister_button, "Re-register all global hotkeys.")
+                except Exception as btn_err:
+                    logging.error(f"Failed to create action buttons: {btn_err}", exc_info=True)
+
+                settings_win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
 
     def setup_tray_icon(self):
         # Logic moved from global, adjusted to use self.
