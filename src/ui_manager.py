@@ -374,7 +374,6 @@ class UIManager:
                 record_storage_mode_var = ctk.StringVar(
                     value=self.config_manager.get("record_storage_mode", "auto")
                 )
-                ct2_quant_var = ctk.StringVar(value=self.config_manager.get("ct2_quantization"))
                 max_memory_seconds_mode_var = ctk.StringVar(
                     value=self.config_manager.get("max_memory_seconds_mode", "manual")
                 )
@@ -388,6 +387,7 @@ class UIManager:
                 enable_torch_compile_var = ctk.BooleanVar(value=self.config_manager.get_enable_torch_compile())
                 asr_backend_var = ctk.StringVar(value=self.config_manager.get_asr_backend())
                 asr_model_id_var = ctk.StringVar(value=self.config_manager.get_asr_model_id())
+                asr_model_var = asr_model_id_var
                 asr_compute_device_var = ctk.StringVar(value=self.config_manager.get_asr_compute_device())
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
@@ -476,7 +476,6 @@ class UIManager:
                     if max_memory_seconds_to_apply is None:
                         return
                     asr_backend_to_apply = asr_backend_var.get()
-                    ct2_quant_to_apply = ct2_quant_var.get()
                     asr_model_id_to_apply = asr_model_id_var.get()
                     asr_compute_device_to_apply = asr_compute_device_var.get()
                     asr_dtype_to_apply = asr_dtype_var.get()
@@ -605,8 +604,7 @@ class UIManager:
                     gemini_models_textbox.insert("1.0", "\n".join(DEFAULT_CONFIG["gemini_model_options"]))
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
                     asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
-                    ct2_quant_var.set(DEFAULT_CONFIG["ct2_quantization"])
-                    quant_menu.configure(state="normal" if DEFAULT_CONFIG["asr_backend"] == "ct2" else "disabled")
+                    asr_model_var.set(DEFAULT_CONFIG["asr_model_id"])
 
                     if DEFAULT_CONFIG["gpu_index"] == -1:
                         gpu_selection_var.set("Force CPU")
@@ -801,6 +799,12 @@ class UIManager:
                 gemini_models_textbox.insert("1.0", "\n".join(self.config_manager.get("gemini_model_options", [])))
                 Tooltip(gemini_models_textbox, "List of models to try, one per line.")
 
+                # --- ASR Settings ---
+                asr_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
+                asr_frame.pack(fill="x", padx=10, pady=5)
+                ctk.CTkLabel(asr_frame, text="ASR", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+
+                # Backend selection
                 # --- Transcription Settings (Advanced) Section ---
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 transcription_frame.pack(fill="x", padx=10, pady=5)
@@ -985,6 +989,32 @@ class UIManager:
                 )
                 asr_model_menu.pack(side="left", padx=5)
                 Tooltip(asr_model_menu, "Model identifier from curated catalog.")
+                model_size_label = ctk.CTkLabel(asr_model_frame, text="")
+                model_size_label.pack(side="left", padx=5)
+
+                def _update_model_info(choice: str) -> None:
+                    installed = {
+                        m.get("id", m) if isinstance(m, dict) else m
+                        for m in self.config_manager.get_asr_installed_models()
+                    }
+                    if choice in installed:
+                        text = "Installed"
+                    else:
+                        try:
+                            size = model_manager.get_model_download_size(choice)
+                            size_mb = size / (1024 * 1024)
+                            text = f"Download: {size_mb:.1f} MB"
+                        except Exception:
+                            text = "Download size: ?"
+                    model_size_label.configure(text=text)
+
+                def _on_model_change(choice: str) -> None:
+                    self.config_manager.set_asr_model_id(choice)
+                    self.config_manager.save_config()
+                    _update_model_info(choice)
+
+                asr_model_menu.configure(command=_on_model_change)
+                _update_model_info(asr_model_id_var.get())
 
                 info_label = ctk.CTkLabel(asr_model_frame, textvariable=model_info_var)
                 info_label.pack(side="left", padx=5)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List
 
-from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
 CURATED: List[Dict[str, str]] = [
     {"id": "openai/whisper-large-v3", "backend": "transformers"},
@@ -23,8 +23,11 @@ def list_catalog() -> List[Dict[str, str]]:
 
 
 def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
-    """List models already downloaded in ``cache_dir``."""
+    """List models already downloaded in ``cache_dir`` or in the shared HF cache."""
+
     installed: List[Dict[str, str]] = []
+    seen = set()
+
     cache_dir = Path(cache_dir)
     for backend in ("transformers", "ct2"):
         backend_path = cache_dir / backend
@@ -32,32 +35,33 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
             continue
         for model_dir in backend_path.iterdir():
             if model_dir.is_dir():
+                mid = model_dir.name
+                installed.append({"id": mid, "backend": backend, "path": str(model_dir)})
+                seen.add(mid)
+
+    try:
+        cache_info = scan_cache_dir()
+        for repo in cache_info.repos:
+            if repo.repo_id not in seen:
                 installed.append(
-                    {"id": model_dir.name, "backend": backend, "path": str(model_dir)}
+                    {
+                        "id": repo.repo_id,
+                        "backend": "transformers",
+                        "path": str(repo.repo_path),
+                    }
                 )
+    except Exception:  # pragma: no cover - best effort
+        pass
+
     return installed
 
 
-def get_model_size(model_id: str) -> int:
-    """Return the total download size for ``model_id`` in bytes.
-
-    If the model is not found or size information is unavailable, ``0`` is
-    returned. The implementation queries the Hugging Face Hub for metadata and
-    sums the reported file sizes.
-    """
+def get_model_download_size(model_id: str) -> int:
+    """Return the total download size in bytes for ``model_id``."""
 
     api = HfApi()
-    try:
-        info = api.model_info(model_id)
-    except Exception:
-        return 0
-
-    total = 0
-    for sibling in info.siblings:
-        size = getattr(sibling, "size", None)
-        if size is not None:
-            total += int(size)
-    return total
+    info = api.model_info(model_id)
+    return sum((s.size or 0) for s in getattr(info, "siblings", []))
 
 
 def ensure_download(
