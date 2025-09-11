@@ -100,6 +100,8 @@ class _AdapterBackend:
 backend_registry.update(
     {
         "transformers": lambda h: _AdapterBackend(h, "transformers"),
+        "ct2": lambda h: _AdapterBackend(h, "faster-whisper"),
+        "ctranslate2": lambda h: _AdapterBackend(h, "faster-whisper"),
         "faster-whisper": lambda h: _AdapterBackend(h, "faster-whisper"),
     }
 )

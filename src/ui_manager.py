@@ -964,7 +964,7 @@ class UIManager:
                 asr_backend_menu = ctk.CTkOptionMenu(
                     asr_backend_frame,
                     variable=asr_backend_var,
-                    values=["auto", "transformers", "faster-whisper", "ct2"],
+                    values=["auto", "transformers", "ct2"],
                     command=_on_backend_change,
                 )
                 asr_backend_menu.pack(side="left", padx=5)
@@ -1051,10 +1051,10 @@ class UIManager:
                 def _install_model():
                     try:
                         backend = asr_backend_var.get()
-                        if backend == "faster-whisper":
-                            backend = "ct2"
-                        elif backend == "auto":
+                        if backend == "auto":
                             backend = "transformers"
+                        elif backend in ("faster-whisper", "ctranslate2"):
+                            backend = "ct2"
 
                         model_manager.ensure_download(
                             asr_model_id_var.get(),
