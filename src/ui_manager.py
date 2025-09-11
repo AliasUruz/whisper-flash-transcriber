@@ -1162,11 +1162,11 @@ class UIManager:
         self.core_instance_ref.set_state_update_callback(self.update_tray_icon)
         self.core_instance_ref.set_segment_callback(self.update_live_transcription_threadsafe) # Connect segment callback
 
-        def run_tray_icon_in_thread(icon):
-            icon.run()
-
-        tray_thread = threading.Thread(target=run_tray_icon_in_thread, args=(self.tray_icon,), daemon=True, name="PystrayThread")
-        tray_thread.start()
+        # pystray's run() blocks the main thread. Since the application uses
+        # Tkinter's mainloop, run the tray icon in detached mode so both loops
+        # can coexist without relying on an extra thread that might terminate
+        # prematurely.
+        self.tray_icon.run_detached()
     
     def _close_settings_window(self):
         """Closes the settings window and resets the flag."""
