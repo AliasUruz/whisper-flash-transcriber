@@ -894,13 +894,17 @@ class UIManager:
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="Modelo:").pack(side="left", padx=(5, 10))
 
-                installed = (
-                    model_manager.asr_installed_models()
-                    if hasattr(model_manager, "asr_installed_models")
-                    else {}
+                def _as_dict(entries):
+                    """Normalize model entries to a mapping keyed by ``id``."""
+                    if isinstance(entries, list):
+                        return {m.get("id", f"model_{i}"): m for i, m in enumerate(entries)}
+                    return entries or {}
+
+                installed = _as_dict(
+                    self.config_manager.get("asr_installed_models", [])
                 )
-                curated = getattr(model_manager, "CURATED", {})
-                combined_models = {**installed, **curated}
+                curated = _as_dict(getattr(model_manager, "CURATED", []))
+                combined_models = {**curated, **installed}
                 asr_model_var = ctk.StringVar(
                     value=self.config_manager.get("asr_model", "")
                 )
