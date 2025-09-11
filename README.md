@@ -35,7 +35,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
     *   Quickly switch between Gemini models directly from the tray menu.
 *   **Auditory Feedback:** Optional sound cues for starting and stopping recording.
 *   **Automatically remove silent sections** using the Silero VAD. Initialization uses `onnxruntime` with automatic selection of `CUDAExecutionProvider` when available, falling back to `CPUExecutionProvider`.
-*   **Model awareness:** the settings UI shows the download size of each Whisper model and whether it is already installed.
+*   **Model awareness:** the settings UI shows the download size of each Whisper model and whether it is already installed, scanning the local cache, global Hugging Face cache, and custom model directories.
 *   **Robust and Stable:** Includes a background service to ensure hotkeys remain responsive, a common issue on Windows 11.
 *   **Launch at Startup Option:** Start the application automatically when Windows boots.
 *   **Unified `TRANSCRIBING` State:** recording, Whisper processing, and optional AI correction all occur while the application remains in this state. Once the final text is ready, the state returns to `IDLE`.

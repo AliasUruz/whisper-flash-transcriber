@@ -33,7 +33,7 @@ from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE a
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
-from .model_manager import DownloadCancelledError, ensure_download
+from .model_manager import ensure_download, list_installed
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -63,6 +63,15 @@ class AppCore:
 
         # --- Módulos ---
         self.config_manager = ConfigManager()
+
+        # Sincronizar modelos ASR já presentes no disco no início da aplicação
+        try:
+            cache_dir = self.config_manager.get("asr_cache_dir")
+            installed = list_installed(cache_dir)
+            self.config_manager.set_asr_installed_models(installed)
+        except Exception as e:
+            logging.warning(f"Failed to sync installed models: {e}")
+
         self.audio_handler = AudioHandler(
             config_manager=self.config_manager,
             on_audio_segment_ready_callback=self._on_audio_segment_ready,

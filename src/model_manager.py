@@ -27,20 +27,35 @@ def list_catalog() -> List[Dict[str, str]]:
 
 
 def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
-    """List models already downloaded in ``cache_dir`` or in the shared HF cache."""
+    """Discover models available on disk and in the shared HF cache.
+
+    Detection covers curated backends (``transformers`` and ``ct2``), custom
+    directory layouts (e.g., Silero VAD), single model files, and the global
+    Hugging Face cache. Any model found is returned with its backend (or
+    ``"custom"`` when unknown) and resolved path.
+    """
 
     installed: List[Dict[str, str]] = []
     seen = set()
 
     cache_dir = Path(cache_dir)
-    for backend in ("transformers", "ct2"):
-        backend_path = cache_dir / backend
-        if not backend_path.is_dir():
-            continue
-        for model_dir in backend_path.iterdir():
-            if model_dir.is_dir():
-                mid = model_dir.name
-                installed.append({"id": mid, "backend": backend, "path": str(model_dir)})
+    if cache_dir.is_dir():
+        for item in cache_dir.iterdir():
+            if item.is_dir():
+                subdirs = [p for p in item.iterdir() if p.is_dir()]
+                if subdirs:
+                    backend = item.name
+                    for model_dir in subdirs:
+                        mid = model_dir.name
+                        installed.append({"id": mid, "backend": backend, "path": str(model_dir)})
+                        seen.add(mid)
+                else:
+                    mid = item.name
+                    installed.append({"id": mid, "backend": "custom", "path": str(item)})
+                    seen.add(mid)
+            elif item.is_file():
+                mid = item.stem
+                installed.append({"id": mid, "backend": "custom", "path": str(item)})
                 seen.add(mid)
 
     try:
