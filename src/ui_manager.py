@@ -324,23 +324,30 @@ class UIManager:
                 return
 
             self.settings_thread_running = True
-            ctk.set_appearance_mode("dark")
-            ctk.set_default_color_theme("blue")
-            settings_win = ctk.CTkToplevel(self.main_tk_root)
-            self.settings_window_instance = settings_win
-            settings_win.title("Whisper Recorder Settings")
-            settings_win.resizable(False, True)
-            settings_win.attributes("-topmost", True)
+            try:
+                ctk.set_appearance_mode("dark")
+                ctk.set_default_color_theme("blue")
+                settings_win = ctk.CTkToplevel(self.main_tk_root)
+                self.settings_window_instance = settings_win
+                settings_win.title("Whisper Recorder Settings")
+                settings_win.resizable(False, True)
+                settings_win.attributes("-topmost", True)
 
-            # Calculate Center Position
-            settings_win.update_idletasks()
-            window_width = int(SETTINGS_WINDOW_GEOMETRY.split('x')[0])
-            window_height = int(SETTINGS_WINDOW_GEOMETRY.split('x')[1])
-            screen_width = settings_win.winfo_screenwidth()
-            screen_height = settings_win.winfo_screenheight()
-            x_cordinate = int((screen_width / 2) - (window_width / 2))
-            y_cordinate = int((screen_height / 2) - (window_height / 2))
-            settings_win.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
+                # Calculate Center Position
+                settings_win.update_idletasks()
+                window_width = int(SETTINGS_WINDOW_GEOMETRY.split('x')[0])
+                window_height = int(SETTINGS_WINDOW_GEOMETRY.split('x')[1])
+                screen_width = settings_win.winfo_screenwidth()
+                screen_height = settings_win.winfo_screenheight()
+                x_cordinate = int((screen_width / 2) - (window_width / 2))
+                y_cordinate = int((screen_height / 2) - (window_height / 2))
+                settings_win.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
+            except Exception as init_err:
+                logging.error("Failed to initialize settings UI", exc_info=True)
+                self.settings_thread_running = False
+                if self.settings_window_instance:
+                    self._close_settings_window()
+                return
 
             try:
                 # Variables (adjust to use self.config_manager.get)
