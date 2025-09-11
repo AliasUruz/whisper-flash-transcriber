@@ -974,20 +974,10 @@ class UIManager:
                 installed_models = model_manager.list_installed(asr_cache_dir_var.get())
                 all_ids = sorted({m["id"] for m in catalog} | {m["id"] for m in installed_models})
 
-                model_info_var = ctk.StringVar()
-
-                def _update_model_info(name: str) -> None:
-                    installed_ids = {m["id"] for m in installed_models}
-                    installed_text = "Yes" if name in installed_ids else "No"
-                    size_bytes = model_manager.get_model_size(name)
-                    size_mb = size_bytes / (1024 ** 2)
-                    model_info_var.set(f"{size_mb:.1f} MB | Installed: {installed_text}")
-
                 asr_model_menu = ctk.CTkOptionMenu(
                     asr_model_frame,
                     variable=asr_model_id_var,
                     values=all_ids,
-                    command=_update_model_info,
                 )
                 asr_model_menu.pack(side="left", padx=5)
                 Tooltip(asr_model_menu, "Model identifier from curated catalog.")
@@ -1016,11 +1006,6 @@ class UIManager:
                     _update_model_info(choice)
 
                 asr_model_menu.configure(command=_on_model_change)
-                _update_model_info(asr_model_id_var.get())
-
-                info_label = ctk.CTkLabel(asr_model_frame, textvariable=model_info_var)
-                info_label.pack(side="left", padx=5)
-
                 _update_model_info(asr_model_id_var.get())
                 _on_backend_change(asr_backend_var.get())
 
