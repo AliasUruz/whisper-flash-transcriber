@@ -7,6 +7,10 @@ from typing import Dict, List
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
+
+class DownloadCancelledError(Exception):
+    """Raised when a model download is cancelled by the user."""
+
 CURATED: List[Dict[str, str]] = [
     {"id": "openai/whisper-large-v3", "backend": "transformers"},
     {"id": "openai/whisper-large-v3-turbo", "backend": "transformers"},
@@ -91,13 +95,21 @@ def ensure_download(
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    if backend == "transformers":
-        snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
-    elif backend == "ct2":
-        from faster_whisper import WhisperModel
+    try:
+        if backend == "transformers":
+            snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
+        elif backend == "ct2":
+            from faster_whisper import WhisperModel
 
-        WhisperModel(model_id, device="cpu", compute_type=quant or "int8", download_root=str(local_dir))
-    else:
-        raise ValueError(f"Unknown backend: {backend}")
+            WhisperModel(
+                model_id,
+                device="cpu",
+                compute_type=quant or "int8",
+                download_root=str(local_dir),
+            )
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
+    except KeyboardInterrupt as exc:
+        raise DownloadCancelledError("Model download cancelled by user.") from exc
 
     return str(local_dir)

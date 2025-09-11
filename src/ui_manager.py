@@ -40,6 +40,12 @@ except Exception:  # pragma: no cover - fallback caso o módulo não exista
 
     model_manager = _DummyModelManager()
 
+try:
+    from .model_manager import DownloadCancelledError
+except Exception:  # pragma: no cover - fallback se a exceção não existir
+    class DownloadCancelledError(Exception):
+        pass
+
 def get_available_devices_for_ui():
     """Returns a list of devices for the settings interface."""
     devices = ["Auto-select (Recommended)"]
@@ -391,6 +397,7 @@ class UIManager:
                 asr_compute_device_var = ctk.StringVar(value=self.config_manager.get_asr_compute_device())
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
+                ct2_quant_var = ctk.StringVar(value=self.config_manager.get("ct2_quantization", "float16"))
                 asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
 
                 def update_text_correction_fields():
@@ -942,6 +949,13 @@ class UIManager:
                 asr_backend_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
 
+                quant_frame = ctk.CTkFrame(transcription_frame)
+                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
+                quant_menu = ctk.CTkOptionMenu(
+                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
+                )
+                quant_menu.pack(side="left", padx=5)
+
                 def _on_backend_change(choice: str) -> None:
                     asr_backend_var.set(choice)
                     quant_menu.configure(state="normal" if choice == "ct2" else "disabled")
@@ -956,7 +970,6 @@ class UIManager:
                 asr_backend_menu.pack(side="left", padx=5)
                 Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
 
-                quant_frame = ctk.CTkFrame(transcription_frame)
                 quant_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
                 quant_menu = ctk.CTkOptionMenu(
@@ -972,20 +985,10 @@ class UIManager:
                 installed_models = model_manager.list_installed(asr_cache_dir_var.get())
                 all_ids = sorted({m["id"] for m in catalog} | {m["id"] for m in installed_models})
 
-                model_info_var = ctk.StringVar()
-
-                def _update_model_info(name: str) -> None:
-                    installed_ids = {m["id"] for m in installed_models}
-                    installed_text = "Yes" if name in installed_ids else "No"
-                    size_bytes = model_manager.get_model_size(name)
-                    size_mb = size_bytes / (1024 ** 2)
-                    model_info_var.set(f"{size_mb:.1f} MB | Installed: {installed_text}")
-
                 asr_model_menu = ctk.CTkOptionMenu(
                     asr_model_frame,
                     variable=asr_model_id_var,
                     values=all_ids,
-                    command=_update_model_info,
                 )
                 asr_model_menu.pack(side="left", padx=5)
                 Tooltip(asr_model_menu, "Model identifier from curated catalog.")
@@ -1014,11 +1017,6 @@ class UIManager:
                     _update_model_info(choice)
 
                 asr_model_menu.configure(command=_on_model_change)
-                _update_model_info(asr_model_id_var.get())
-
-                info_label = ctk.CTkLabel(asr_model_frame, textvariable=model_info_var)
-                info_label.pack(side="left", padx=5)
-
                 _update_model_info(asr_model_id_var.get())
                 _on_backend_change(asr_backend_var.get())
 
@@ -1069,6 +1067,8 @@ class UIManager:
                         self.config_manager.save_config()
                         _update_model_info(asr_model_id_var.get())
                         messagebox.showinfo("Model", "Download completed.")
+                    except DownloadCancelledError:
+                        messagebox.showinfo("Model", "Download canceled.")
                     except Exception as e:
                         messagebox.showerror("Model", f"Download failed: {e}")
 
