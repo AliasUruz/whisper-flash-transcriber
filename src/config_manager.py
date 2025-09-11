@@ -5,6 +5,9 @@ import copy
 import hashlib
 from pathlib import Path
 from typing import List
+
+import requests
+
 from .model_manager import list_catalog, list_installed
 try:
     from distutils.util import strtobool
@@ -688,12 +691,6 @@ class ConfigManager:
         """Compatibilidade: define o ``asr_model_id``."""
         self.config[ASR_MODEL_ID_CONFIG_KEY] = model_id
 
-    def get_asr_installed_models(self) -> List[str]:
-        return self.config.get(ASR_INSTALLED_MODELS_CONFIG_KEY, [])
-
-    def set_asr_installed_models(self, models: List[str]):
-        self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = list(models)
-
     def get_api_key(self, provider: str) -> str:
         if provider == SERVICE_GEMINI:
             return self.get(GEMINI_API_KEY_CONFIG_KEY)
@@ -755,19 +752,19 @@ class ConfigManager:
     def set_asr_cache_dir(self, value: str):
         self.config[ASR_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
-    def get_asr_installed_models(self):
+    def get_asr_installed_models(self) -> List[str]:
         return self.config.get(
             ASR_INSTALLED_MODELS_CONFIG_KEY,
             self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY],
         )
 
-    def set_asr_installed_models(self, value: list):
+    def set_asr_installed_models(self, value: List[str]):
         if isinstance(value, list):
-            self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = value
+            self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = list(value)
         else:
-            self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = self.default_config[
-                ASR_INSTALLED_MODELS_CONFIG_KEY
-            ]
+            self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = list(
+                self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY]
+            )
 
     def get_asr_curated_catalog(self):
         return self.config.get(
@@ -799,10 +796,12 @@ class ConfigManager:
             response = requests.get(url, timeout=timeout)
             response.raise_for_status()
             data = response.json()
-            if (
-                isinstance(data, list)
-                and all(isinstance(item, dict) and "model_id" in item for item in data)
-            ):
+            is_list = isinstance(data, list)
+            all_have_ids = all(
+                isinstance(item, dict) and "model_id" in item
+                for item in data
+            )
+            if is_list and all_have_ids:
                 self.set_asr_curated_catalog(data)
                 try:
                     self.save_config()
@@ -975,64 +974,4 @@ class ConfigManager:
             self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = self.default_config[
                 MIN_RECORDING_DURATION_CONFIG_KEY
             ]
-        self.save_config()
-
-    def get_asr_model_id(self):
-        return self.config.get(
-            ASR_MODEL_ID_CONFIG_KEY,
-            self.default_config[ASR_MODEL_ID_CONFIG_KEY],
-        )
-
-    def set_asr_model_id(self, value: str):
-        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(value)
-        self.save_config()
-
-    def get_asr_backend(self):
-        return self.config.get(
-            ASR_BACKEND_CONFIG_KEY,
-            self.default_config[ASR_BACKEND_CONFIG_KEY],
-        )
-
-    def set_asr_backend(self, value: str):
-        self.config[ASR_BACKEND_CONFIG_KEY] = str(value)
-        self.save_config()
-
-    def get_asr_compute_device(self):
-        return self.config.get(
-            ASR_COMPUTE_DEVICE_CONFIG_KEY,
-            self.default_config[ASR_COMPUTE_DEVICE_CONFIG_KEY],
-        )
-
-    def set_asr_compute_device(self, value: str):
-        self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(value)
-        self.save_config()
-
-    def get_asr_dtype(self):
-        return self.config.get(
-            ASR_DTYPE_CONFIG_KEY,
-            self.default_config[ASR_DTYPE_CONFIG_KEY],
-        )
-
-    def set_asr_dtype(self, value: str):
-        self.config[ASR_DTYPE_CONFIG_KEY] = str(value)
-        self.save_config()
-
-    def get_asr_ct2_compute_type(self):
-        return self.config.get(
-            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-            self.default_config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY],
-        )
-
-    def set_asr_ct2_compute_type(self, value: str):
-        self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(value)
-        self.save_config()
-
-    def get_asr_cache_dir(self):
-        return self.config.get(
-            ASR_CACHE_DIR_CONFIG_KEY,
-            self.default_config[ASR_CACHE_DIR_CONFIG_KEY],
-        )
-
-    def set_asr_cache_dir(self, value: str):
-        self.config[ASR_CACHE_DIR_CONFIG_KEY] = str(value)
         self.save_config()
