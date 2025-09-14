@@ -267,7 +267,7 @@ To access and change settings:
 *   **Gemini Correction Prompt:** Customize the prompt sent to Gemini for text correction.
 *   **Agent Mode Prompt:** Customize the prompt sent to Gemini when using "Agent Mode".
 *   **Gemini Models (one per line):** Manage the list of available Gemini models in the dropdown.
-*   **Processing Device:** Select whether to use "Auto-select (Recommended)", a specific "GPU", or "Force CPU" for transcription.
+*   **ASR Compute Device:** Choose "Auto-select (Recommended)", "Force CPU", or a specific "GPU" for transcription.
 *   **Batch Size:** Configure the batch size for transcription.
 *   **Chunk Length (s):** Controls how long each audio segment sent to Whisper is. Smaller values reduce memory use but may slow processing.
 *   **Record Storage Mode:** Choose between always using memory, always using disk, or automatically selecting based on free RAM.
@@ -297,6 +297,10 @@ The speech recognition engine supports multiple backends. The following keys in 
 > **Note:** When loading settings, the application normalizes backend names.
 Values such as `faster-whisper` or `ctranslate2` are automatically mapped to
 `ct2`.
+
+> When `asr_backend` is set to `"auto"`, the loader prefers the `transformers`
+> backend and falls back to `ct2` if the first choice is unavailable or
+> incompatible.
 
 Examples:
 
