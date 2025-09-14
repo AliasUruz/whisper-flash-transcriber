@@ -975,15 +975,30 @@ class UIManager:
                 ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
 
                 quant_frame = ctk.CTkFrame(transcription_frame)
+                quant_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
                 quant_menu = ctk.CTkOptionMenu(
                     quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
                 )
                 quant_menu.pack(side="left", padx=5)
+                Tooltip(
+                    quant_menu,
+                    "float16: maior qualidade e mais memória.\n"
+                    "int8: menor memória com possível perda de precisão.\n"
+                    "int8_float16: pesos int8 e ativações fp16.",
+                )
+                quant_help_label = ctk.CTkLabel(
+                    quant_frame,
+                    text="float16: melhor qualidade | int8: menor memória | int8_float16: equilíbrio",
+                )
 
                 def _on_backend_change(choice: str) -> None:
                     asr_backend_var.set(choice)
                     quant_menu.configure(state="normal" if choice == "ct2" else "disabled")
+                    if choice == "ct2":
+                        quant_help_label.pack(fill="x", padx=5, pady=(2, 0), anchor="w")
+                    else:
+                        quant_help_label.pack_forget()
                     _update_model_info(asr_model_id_var.get())
 
                 asr_backend_menu = ctk.CTkOptionMenu(
@@ -994,13 +1009,6 @@ class UIManager:
                 )
                 asr_backend_menu.pack(side="left", padx=5)
                 Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
-
-                quant_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
-                quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=asr_ct2_compute_type_var, values=["float16", "int8", "int8_float16"]
-                )
-                quant_menu.pack(side="left", padx=5)
 
                 asr_model_frame = ctk.CTkFrame(transcription_frame)
                 asr_model_frame.pack(fill="x", pady=5)
