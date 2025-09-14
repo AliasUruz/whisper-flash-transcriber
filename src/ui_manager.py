@@ -404,7 +404,6 @@ class UIManager:
                 asr_backend_var = ctk.StringVar(value=self.config_manager.get_asr_backend())
                 asr_model_id_var = ctk.StringVar(value=self.config_manager.get_asr_model_id())
                 asr_model_var = asr_model_id_var
-                asr_compute_device_var = ctk.StringVar(value=self.config_manager.get_asr_compute_device())
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
                 ct2_quant_var = ctk.StringVar(value=self.config_manager.get("ct2_quantization", "float16"))
@@ -422,18 +421,19 @@ class UIManager:
                     agentico_prompt_textbox.configure(state=state)
                     gemini_models_textbox.configure(state=state)
 
-                # GPU selection variable
+                # Compute device selection variable
                 available_devices = get_available_devices_for_ui()
                 current_device_selection = "Auto-select (Recommended)"
-                if self.config_manager.get("gpu_index_specified"):
-                    if self.config_manager.get("gpu_index") >= 0:
-                        for dev in available_devices:
-                            if dev.startswith(f"GPU {self.config_manager.get('gpu_index')}"):
-                                current_device_selection = dev
-                                break
-                    elif self.config_manager.get("gpu_index") == -1:
-                        current_device_selection = "Force CPU"
-                gpu_selection_var = ctk.StringVar(value=current_device_selection)
+                compute_device_cfg = self.config_manager.get("asr_compute_device")
+                gpu_index_cfg = self.config_manager.get("gpu_index")
+                if compute_device_cfg == "cpu":
+                    current_device_selection = "Force CPU"
+                elif compute_device_cfg == "cuda" and gpu_index_cfg >= 0:
+                    for dev in available_devices:
+                        if dev.startswith(f"GPU {gpu_index_cfg}"):
+                            current_device_selection = dev
+                            break
+                asr_compute_device_var = ctk.StringVar(value=current_device_selection)
 
                 # Internal GUI functions (detect_key_task_internal, apply_settings, close_settings, etc.)
                 # Will need to be adapted to call methods of self.core_instance_ref and self.config_manager
@@ -494,22 +494,21 @@ class UIManager:
                         return
                     asr_backend_to_apply = asr_backend_var.get()
                     asr_model_id_to_apply = asr_model_id_var.get()
-                    asr_compute_device_to_apply = asr_compute_device_var.get()
-                    asr_dtype_to_apply = asr_dtype_var.get()
-                    asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
-                    asr_cache_dir_to_apply = asr_cache_dir_var.get()
-
-                    # Logic for converting UI to GPU index
-                    selected_device_str = gpu_selection_var.get()
-                    gpu_index_to_apply = -1 # Default to "Auto-select"
+                    selected_device_str = asr_compute_device_var.get()
+                    asr_compute_device_to_apply = "auto"
+                    gpu_index_to_apply = -1
                     if "Force CPU" in selected_device_str:
-                        gpu_index_to_apply = -1 # We use -1 for forced CPU
+                        asr_compute_device_to_apply = "cpu"
                     elif selected_device_str.startswith("GPU"):
+                        asr_compute_device_to_apply = "cuda"
                         try:
                             gpu_index_to_apply = int(selected_device_str.split(":")[0].replace("GPU", "").strip())
                         except (ValueError, IndexError):
                             messagebox.showerror("Valor inválido", "Índice de GPU inválido.", parent=settings_win)
                             return
+                    asr_dtype_to_apply = asr_dtype_var.get()
+                    asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
+                    asr_cache_dir_to_apply = asr_cache_dir_var.get()
 
                     models_text = gemini_models_textbox.get("1.0", "end-1c")
                     new_models_list = [line.strip() for line in models_text.split("\n") if line.strip()]
@@ -623,15 +622,17 @@ class UIManager:
                     asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
                     asr_model_var.set(DEFAULT_CONFIG["asr_model_id"])
 
-                    if DEFAULT_CONFIG["gpu_index"] == -1:
-                        gpu_selection_var.set("Force CPU")
-                    else:
+                    if DEFAULT_CONFIG["asr_compute_device"] == "cpu":
+                        asr_compute_device_var.set("Force CPU")
+                    elif DEFAULT_CONFIG["asr_compute_device"] == "cuda" and DEFAULT_CONFIG["gpu_index"] >= 0:
                         found = "Auto-select (Recommended)"
                         for dev in available_devices:
                             if dev.startswith(f"GPU {DEFAULT_CONFIG['gpu_index']}"):
                                 found = dev
                                 break
-                        gpu_selection_var.set(found)
+                        asr_compute_device_var.set(found)
+                    else:
+                        asr_compute_device_var.set("Auto-select (Recommended)")
 
                     use_vad_var.set(DEFAULT_CONFIG["use_vad"])
                     vad_threshold_var.set(DEFAULT_CONFIG["vad_threshold"])
@@ -826,13 +827,6 @@ class UIManager:
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 transcription_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(transcription_frame, text="Transcription Settings (Advanced)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
-
-                device_frame = ctk.CTkFrame(transcription_frame)
-                device_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(device_frame, text="Processing Device:").pack(side="left", padx=(5, 10))
-                device_menu = ctk.CTkOptionMenu(device_frame, variable=gpu_selection_var, values=available_devices)
-                device_menu.pack(side="left", padx=5)
-                Tooltip(device_menu, "Select CPU or GPU for processing.")
 
                 batch_size_frame = ctk.CTkFrame(transcription_frame)
                 batch_size_frame.pack(fill="x", pady=5)
@@ -1055,9 +1049,9 @@ class UIManager:
                 asr_device_frame = ctk.CTkFrame(transcription_frame)
                 asr_device_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_device_frame, text="ASR Compute Device:").pack(side="left", padx=(5, 10))
-                asr_device_menu = ctk.CTkOptionMenu(asr_device_frame, variable=asr_compute_device_var, values=["auto", "cuda", "cpu"])
+                asr_device_menu = ctk.CTkOptionMenu(asr_device_frame, variable=asr_compute_device_var, values=available_devices)
                 asr_device_menu.pack(side="left", padx=5)
-                Tooltip(asr_device_menu, "Execution device for ASR model.")
+                Tooltip(asr_device_menu, "Select compute device for ASR model.")
 
                 asr_dtype_frame = ctk.CTkFrame(transcription_frame)
                 asr_dtype_frame.pack(fill="x", pady=5)
