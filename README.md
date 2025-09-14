@@ -298,6 +298,13 @@ The speech recognition engine supports multiple backends. The following keys in 
 Values such as `faster-whisper` or `ctranslate2` are automatically mapped to
 `ct2`.
 
+#### Further reading
+
+- **ASR Backend:** [Transformers documentation](https://huggingface.co/docs/transformers/index) and [CTranslate2 documentation](https://opennmt.net/CTranslate2/).
+- **Quantization:** [CTranslate2 quantization guide](https://opennmt.net/CTranslate2/quantization.html).
+- **ASR DType:** [PyTorch tensor data types](https://pytorch.org/docs/stable/tensors.html#data-types).
+- **CT2 Compute Type:** [CTranslate2 compute type options](https://opennmt.net/CTranslate2/README.html#compute-types).
+
 Examples:
 
 ```json
