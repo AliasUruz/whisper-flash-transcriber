@@ -1019,6 +1019,29 @@ class UIManager:
                 )
                 asr_model_menu.pack(side="left", padx=5)
                 Tooltip(asr_model_menu, "Model identifier from curated catalog.")
+
+                def _reset_asr() -> None:
+                    asr_model_id_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
+                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
+                    asr_model_menu.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_backend_menu.set(DEFAULT_CONFIG["asr_backend"])
+                    asr_ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    _on_backend_change(asr_backend_var.get())
+                    _update_model_info(asr_model_id_var.get())
+                    self.config_manager.set_asr_model_id(DEFAULT_CONFIG["asr_model_id"])
+                    self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
+                    self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
+                    self.config_manager.save_config()
+
+                reset_asr_button = ctk.CTkButton(
+                    asr_model_frame, text="Reset ASR", command=_reset_asr
+                )
+                reset_asr_button.pack(side="left", padx=5)
+                Tooltip(reset_asr_button, "Restore default ASR settings.")
+
                 model_size_label = ctk.CTkLabel(asr_model_frame, text="")
                 model_size_label.pack(side="left", padx=5)
 
