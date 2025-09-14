@@ -6,6 +6,7 @@ import threading
 import time
 import pystray
 from PIL import Image, ImageDraw
+from pathlib import Path
 
 # Importar constantes de configuração
 from .config_manager import (
@@ -498,6 +499,11 @@ class UIManager:
                     asr_dtype_to_apply = asr_dtype_var.get()
                     asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
                     asr_cache_dir_to_apply = asr_cache_dir_var.get()
+                    try:
+                        Path(asr_cache_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as e:
+                        messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}", parent=settings_win)
+                        return
 
                     # Logic for converting UI to GPU index
                     selected_device_str = gpu_selection_var.get()
@@ -1081,6 +1087,12 @@ class UIManager:
                 Tooltip(asr_cache_entry, "Directory for cached ASR models.")
 
                 def _install_model():
+                    cache_dir = asr_cache_dir_var.get()
+                    try:
+                        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+                    except Exception as e:
+                        messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}")
+                        return
                     try:
                         backend = asr_backend_var.get()
                         if backend == "auto":
@@ -1091,10 +1103,10 @@ class UIManager:
                         model_manager.ensure_download(
                             asr_model_id_var.get(),
                             backend,
-                            asr_cache_dir_var.get(),
+                            cache_dir,
                             asr_ct2_compute_type_var.get() if backend == "ct2" else None,
                         )
-                        installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+                        installed_models = model_manager.list_installed(cache_dir)
                         self.config_manager.set_asr_installed_models(installed_models)
                         self.config_manager.save_config()
                         _update_model_info(asr_model_id_var.get())
