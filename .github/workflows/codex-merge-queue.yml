@@ -1,0 +1,197 @@
+name: Codex Merge Queue (oldest → newest)
+
+on:
+  # Roda sozinho de tempos em tempos e quando a base muda.
+  schedule:
+    - cron: "*/20 * * * *"   # a cada 20min
+  push:
+    branches: [ stable, main ]
+  # Você também pode rodar na mão em Actions → Run workflow
+  workflow_dispatch:
+    inputs:
+      head_prefix:
+        description: "Prefixo das branches do Codex"
+        default: "codex/"
+      label_name:
+        description: "OU label para identificar PRs do Codex (opcional)"
+        default: "codex"
+      base_branches:
+        description: "Bases válidas (separadas por vírgula)"
+        default: "stable,main"
+      batch_size:
+        description: "Quantos PRs processar por execução (1 mantém ordem estrita)"
+        default: "1"
+      merge_method:
+        description: "Método de merge: SQUASH | MERGE | REBASE"
+        default: "SQUASH"
+
+  # Mesmo arquivo cuida de apagar a branch após merge:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # ---------------------------
+  # 1) FILA: escolhe PRs (mais antigos primeiro)
+  # ---------------------------
+  choose_prs:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      prs: ${{ steps.pick.outputs.prs }}
+    steps:
+      - name: Selecionar PRs candidatos (mais antigos → mais novos)
+        id: pick
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const baseInput = core.getInput('base_branches') || 'stable,main';
+            const bases = baseInput.split(',').map(s => s.trim()).filter(Boolean);
+            const headPrefix = core.getInput('head_prefix') || 'codex/';
+            const labelName  = core.getInput('label_name') || 'codex';
+            const batchSize  = parseInt(core.getInput('batch_size') || '1', 10);
+
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', per_page: 100, sort: 'created', direction: 'asc'
+            });
+
+            const candidates = prs.filter(pr => {
+              const sameRepo = pr.head?.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`; // ignora forks
+              const baseOk   = bases.includes(pr.base.ref);
+              const looksCodex = (pr.head?.ref || '').startsWith(headPrefix) ||
+                                 (pr.labels || []).some(l => l.name === labelName);
+              const notDraft = !pr.draft;
+              return sameRepo && baseOk && looksCodex && notDraft;
+            });
+
+            const selected = candidates.slice(0, batchSize).map(pr => ({
+              number: pr.number,
+              head: pr.head.ref,
+              base: pr.base.ref,
+              id: pr.node_id
+            }));
+
+            core.info(`Selecionados: ${selected.map(x => '#'+x.number).join(', ') || 'nenhum'}`);
+            core.setOutput('prs', JSON.stringify(selected));
+
+  # ---------------------------
+  # 2) PROCESSO: resolve conflitos (preferindo Codex), faz push e liga auto-merge
+  # ---------------------------
+  process_queue:
+    needs: choose_prs
+    if: needs.choose_prs.outputs.prs != '' && needs.choose_prs.outputs.prs != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      # Serializa de verdade: 1 por vez e sem abortar a fila se um falhar.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.choose_prs.outputs.prs) }}
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Git
+        run: |
+          git config user.name  "codex-merge-queue"
+          git config user.email "codex-merge-queue@users.noreply.github.com"
+
+      - name: Buscar branches do PR e da base
+        run: |
+          git fetch origin ${{ matrix.pr.head }} ${{ matrix.pr.base }}
+
+      - name: Checkout no branch do PR
+        run: |
+          git checkout -B "${{ matrix.pr.head }}" "origin/${{ matrix.pr.head }}"
+
+      - name: Mesclar base preferindo o PR (Codex)
+        id: merge_try
+        env:
+          BASE: ${{ matrix.pr.base }}
+        run: |
+          set +e
+          # IMPORTANTE: "-X ours" mantém o que está no PR (branch atual).
+          git merge --no-commit --no-ff -X ours "origin/${BASE}"
+          code=$?
+          set -e
+          echo "code=$code" >> $GITHUB_OUTPUT
+
+          # Se ainda restar marcação de conflito (muito raro), aborta este PR e segue a fila
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo "Ainda há conflitos não triviais em ${{ matrix.pr.head }}. Pulando este PR."
+            exit 0
+          fi
+
+          git add -A
+          git commit -m "chore(codex): auto-resolve vs ${BASE} (preferindo PR)" || echo "Nada pra commitar"
+
+      - name: Push das resoluções (se houve)
+        run: git push origin HEAD:${{ matrix.pr.head }} || true
+
+      - name: Solicitar "update branch" (mantém PR fresco)
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              await github.graphql(
+                'mutation($id:ID!){ updatePullRequestBranch(input:{pullRequestId:$id}){ pullRequest{ number } } }',
+                { id: '${{ matrix.pr.id }}' }
+              );
+              core.info('Update-branch solicitado.');
+            } catch (e) {
+              core.info('Update-branch indisponível/ignorado: ' + e.message);
+            }
+
+      - name: Ligar Auto-merge
+        # Se sua proteção exigir aprovação humana, isso aqui só arma o auto-merge.
+        # Quando checks + aprovações estiverem OK, entra sozinho.
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pull-request-number: ${{ matrix.pr.number }}
+          merge-method: ${{ github.event.inputs.merge_method || 'SQUASH' }}
+
+      - name: Comentar no PR (status)
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: ${{ matrix.pr.number }},
+              body: "🤖 **Codex Merge Queue**: resolvi conflitos preferindo o PR e liguei o auto-merge. Fila processa do mais antigo pro mais novo."
+            });
+
+  # ---------------------------
+  # 3) LIMPEZA: apaga branch ao fechar PR (mesclado)
+  # ---------------------------
+  cleanup_branch:
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apagar branch de origem
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const ref = `heads/${{ github.event.pull_request.head.ref }}`;
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner, repo: context.repo.repo, ref
+              });
+              core.info(`Deleted ${ref}`);
+            } catch (e) {
+              core.warning(`Não consegui apagar ${ref}: ${e.message}`);
+            }
