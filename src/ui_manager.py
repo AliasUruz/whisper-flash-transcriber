@@ -993,7 +993,13 @@ class UIManager:
                     command=_on_backend_change,
                 )
                 asr_backend_menu.pack(side="left", padx=5)
-                Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
+                Tooltip(
+                    asr_backend_menu,
+                    (
+                        "Backend de ASR. Em 'auto', tenta primeiro 'transformers' e, "
+                        "se indisponível, cai para 'ct2'."
+                    ),
+                )
 
                 quant_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))

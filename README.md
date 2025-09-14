@@ -298,6 +298,10 @@ The speech recognition engine supports multiple backends. The following keys in 
 Values such as `faster-whisper` or `ctranslate2` are automatically mapped to
 `ct2`.
 
+> When `asr_backend` is set to `"auto"`, the loader prefers the `transformers`
+> backend and falls back to `ct2` if the first choice is unavailable or
+> incompatible.
+
 Examples:
 
 ```json
