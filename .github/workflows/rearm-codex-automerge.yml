@@ -1,0 +1,80 @@
+name: Rearm Codex Auto-merge (batch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: "Label para filtrar PRs"
+        default: "codex"
+      merge_method:
+        description: "SQUASH | MERGE | REBASE"
+        default: "SQUASH"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  rearm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Listar PRs abertos com a label (antigo → novo)
+        id: pick
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const label = core.getInput('label') || 'codex';
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', per_page: 100, sort: 'created', direction: 'asc'
+            });
+            const targets = prs.filter(pr =>
+              (pr.labels || []).some(l => l.name === label)
+            ).map(pr => ({ number: pr.number, id: pr.node_id }));
+            core.setOutput('prs', JSON.stringify(targets));
+
+      - name: Processar PRs
+        if: steps.pick.outputs.prs != '' && steps.pick.outputs.prs != '[]'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prs = JSON.parse(core.getInput('prs') || core.getState('prs') || '${{ steps.pick.outputs.prs }}');
+            const method = (core.getInput('merge_method') || 'SQUASH').toUpperCase();
+
+            async function enableAutoMerge(prId) {
+              const q = `
+                mutation($id:ID!,$m:PullRequestMergeMethod!){
+                  enablePullRequestAutoMerge(input:{pullRequestId:$id, mergeMethod:$m}) {
+                    pullRequest { number }
+                  }
+                }`;
+              return github.graphql(q, { id: prId, m: method });
+            }
+
+            for (const { number, id } of prs) {
+              try {
+                await enableAutoMerge(id);
+                core.info(`#${number}: auto-merge ligado`);
+              } catch (e) {
+                const msg = String(e.message || e);
+                if (msg.includes('Protected branch rules not configured')) {
+                  // Sem proteção suficiente → tenta mesclar já se estiver limpo
+                  const { data: pr } = await github.rest.pulls.get({
+                    owner: context.repo.owner, repo: context.repo.repo, pull_number: number
+                  });
+                  if (pr.mergeable && pr.mergeable_state === 'clean') {
+                    await github.rest.pulls.merge({
+                      owner: context.repo.owner, repo: context.repo.repo,
+                      pull_number: number, merge_method: method.toLowerCase()
+                    });
+                    core.info(`#${number}: mesclado (fallback)`);
+                  } else {
+                    core.info(`#${number}: não limpo (estado ${pr.mergeable_state}) — pulei`);
+                  }
+                } else {
+                  core.info(`#${number}: falha ao ligar auto-merge — ${msg}`);
+                }
+              }
+            }
