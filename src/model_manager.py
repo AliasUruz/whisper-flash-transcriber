@@ -11,13 +11,12 @@ from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 class DownloadCancelledError(Exception):
     """Raised when a model download is cancelled by the user."""
 
+# Curated catalog of officially supported ASR models.
+# Each entry maps a Hugging Face model id to the backend that powers it.
 CURATED: List[Dict[str, str]] = [
     {"id": "openai/whisper-large-v3", "backend": "transformers"},
     {"id": "openai/whisper-large-v3-turbo", "backend": "transformers"},
     {"id": "distil-whisper/distil-large-v3", "backend": "transformers"},
-    {"id": "Systran/faster-whisper-large-v3", "backend": "ct2"},
-    {"id": "h2oai/faster-whisper-large-v3-turbo", "backend": "ct2"},
-    {"id": "Systran/faster-distil-whisper-large-v3", "backend": "ct2"},
 ]
 
 
