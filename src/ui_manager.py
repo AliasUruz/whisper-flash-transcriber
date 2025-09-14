@@ -6,6 +6,7 @@ import threading
 import time
 import pystray
 from PIL import Image, ImageDraw
+import os
 
 # Importar constantes de configuração
 from .config_manager import (
@@ -408,7 +409,9 @@ class UIManager:
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
                 ct2_quant_var = ctk.StringVar(value=self.config_manager.get("ct2_quantization", "float16"))
-                asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
+                asr_cache_dir_var = ctk.StringVar(
+                    value=os.path.expanduser(self.config_manager.get_asr_cache_dir())
+                )
 
                 def update_text_correction_fields():
                     enabled = text_correction_enabled_var.get()
