@@ -819,7 +819,7 @@ class UIManager:
                 # --- ASR Settings ---
                 asr_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 asr_frame.pack(fill="x", padx=10, pady=5)
-                ctk.CTkLabel(asr_frame, text="ASR", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+                ctk.CTkLabel(asr_frame, text="ASR Settings", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
 
                 # Backend selection
                 # --- Transcription Settings (Advanced) Section ---
