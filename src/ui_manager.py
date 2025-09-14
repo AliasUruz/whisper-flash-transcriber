@@ -1007,9 +1007,16 @@ class UIManager:
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
                 catalog = model_manager.list_catalog()
-                installed_ids = {
-                    m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
-                }
+                try:
+                    installed_ids = {
+                        m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
+                    }
+                except OSError:
+                    messagebox.showerror(
+                        "Configuração",
+                        "Diretório de cache inválido. Verifique as configurações.",
+                    )
+                    installed_ids = set()
                 all_ids = sorted({m["id"] for m in catalog} | installed_ids)
 
                 asr_model_menu = ctk.CTkOptionMenu(
@@ -1030,7 +1037,14 @@ class UIManager:
                     except Exception:
                         download_text = "?"
 
-                    installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+                    try:
+                        installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+                    except OSError:
+                        messagebox.showerror(
+                            "Configuração",
+                            "Diretório de cache inválido. Verifique as configurações.",
+                        )
+                        installed_models = []
                     entry = next((m for m in installed_models if m["id"] == choice), None)
                     if entry:
                         i_bytes, i_files = model_manager.get_installed_size(entry["path"])
@@ -1101,6 +1115,11 @@ class UIManager:
                         messagebox.showinfo("Model", "Download completed.")
                     except DownloadCancelledError:
                         messagebox.showinfo("Model", "Download canceled.")
+                    except OSError:
+                        messagebox.showerror(
+                            "Model",
+                            "Diretório de cache inválido. Verifique as configurações.",
+                        )
                     except Exception as e:
                         messagebox.showerror("Model", f"Download failed: {e}")
 

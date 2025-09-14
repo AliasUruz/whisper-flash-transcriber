@@ -69,6 +69,11 @@ class AppCore:
             cache_dir = self.config_manager.get("asr_cache_dir")
             installed = list_installed(cache_dir)
             self.config_manager.set_asr_installed_models(installed)
+        except OSError:
+            messagebox.showerror(
+                "Configuração",
+                "Diretório de cache inválido. Verifique as configurações.",
+            )
         except Exception as e:
             logging.warning(f"Failed to sync installed models: {e}")
 
@@ -128,6 +133,12 @@ class AppCore:
                     logging.info("Model download cancelled by user.")
                     messagebox.showinfo("Model", "Download canceled.")
                     self._set_state(STATE_LOADING_MODEL)
+                except OSError:
+                    messagebox.showerror(
+                        "Model",
+                        "Diretório de cache inválido. Verifique as configurações.",
+                    )
+                    self._set_state(STATE_ERROR_MODEL)
                 except Exception as e:
                     logging.error(f"Model download failed: {e}")
                     messagebox.showerror("Model", f"Download failed: {e}")
