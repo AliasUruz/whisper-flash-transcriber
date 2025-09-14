@@ -983,7 +983,7 @@ class UIManager:
 
                 def _on_backend_change(choice: str) -> None:
                     asr_backend_var.set(choice)
-                    quant_menu.configure(state="normal" if choice == "ct2" else "disabled")
+                    _update_install_button_state()
                     _update_model_info(asr_model_id_var.get())
 
                 asr_backend_menu = ctk.CTkOptionMenu(
@@ -1043,14 +1043,55 @@ class UIManager:
                         text=f"Download: {download_text} | Installed: {installed_text}"
                     )
 
+                def _derive_backend_from_model(model_id: str) -> str | None:
+                    entry = next((m for m in catalog if m["id"] == model_id), None)
+                    if not entry:
+                        installed = model_manager.list_installed(asr_cache_dir_var.get())
+                        entry = next((m for m in installed if m["id"] == model_id), None)
+                    backend = entry.get("backend") if entry else None
+                    if backend in ("faster-whisper", "ctranslate2"):
+                        backend = "ct2"
+                    if backend not in ("transformers", "ct2"):
+                        return None
+                    return backend
+
+                def _install_model():
+                    try:
+                        backend = _derive_backend_from_model(asr_model_id_var.get())
+                        if backend is None:
+                            messagebox.showerror(
+                                "Model", "Unable to determine backend for selected model."
+                            )
+                            return
+
+                        model_manager.ensure_download(
+                            asr_model_id_var.get(),
+                            backend,
+                            asr_cache_dir_var.get(),
+                            asr_ct2_compute_type_var.get() if backend == "ct2" else None,
+                        )
+                        installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+                        self.config_manager.set_asr_installed_models(installed_models)
+                        self.config_manager.save_config()
+                        _update_model_info(asr_model_id_var.get())
+                        messagebox.showinfo("Model", "Download completed.")
+                    except DownloadCancelledError:
+                        messagebox.showinfo("Model", "Download canceled.")
+                    except Exception as e:
+                        messagebox.showerror("Model", f"Download failed: {e}")
+
+                def _update_install_button_state() -> None:
+                    backend = _derive_backend_from_model(asr_model_id_var.get())
+                    install_button.configure(state="normal" if backend else "disabled")
+                    quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
+
                 def _on_model_change(choice: str) -> None:
                     self.config_manager.set_asr_model_id(choice)
                     self.config_manager.save_config()
                     _update_model_info(choice)
+                    _update_install_button_state()
 
                 asr_model_menu.configure(command=_on_model_change)
-                _update_model_info(asr_model_id_var.get())
-                _on_backend_change(asr_backend_var.get())
 
                 asr_device_frame = ctk.CTkFrame(transcription_frame)
                 asr_device_frame.pack(fill="x", pady=5)
@@ -1080,30 +1121,6 @@ class UIManager:
                 asr_cache_entry.pack(side="left", padx=5)
                 Tooltip(asr_cache_entry, "Directory for cached ASR models.")
 
-                def _install_model():
-                    try:
-                        backend = asr_backend_var.get()
-                        if backend == "auto":
-                            backend = "transformers"
-                        elif backend in ("faster-whisper", "ctranslate2"):
-                            backend = "ct2"
-
-                        model_manager.ensure_download(
-                            asr_model_id_var.get(),
-                            backend,
-                            asr_cache_dir_var.get(),
-                            asr_ct2_compute_type_var.get() if backend == "ct2" else None,
-                        )
-                        installed_models = model_manager.list_installed(asr_cache_dir_var.get())
-                        self.config_manager.set_asr_installed_models(installed_models)
-                        self.config_manager.save_config()
-                        _update_model_info(asr_model_id_var.get())
-                        messagebox.showinfo("Model", "Download completed.")
-                    except DownloadCancelledError:
-                        messagebox.showinfo("Model", "Download canceled.")
-                    except Exception as e:
-                        messagebox.showerror("Model", f"Download failed: {e}")
-
                 def _reload_model():
                     handler = getattr(self.core_instance_ref, "transcription_handler", None)
                     if handler:
@@ -1117,6 +1134,10 @@ class UIManager:
                     transcription_frame, text="Reload Model", command=_reload_model
                 )
                 reload_button.pack(pady=5)
+
+                _update_model_info(asr_model_id_var.get())
+                _update_install_button_state()
+                _on_backend_change(asr_backend_var.get())
 
                 update_text_correction_fields()
 
