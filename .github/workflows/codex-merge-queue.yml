@@ -1,197 +1,142 @@
 name: Codex Merge Queue (oldest → newest)
 
 on:
-  # Roda sozinho de tempos em tempos e quando a base muda.
-  schedule:
-    - cron: "*/20 * * * *"   # a cada 20min
-  push:
-    branches: [ stable, main ]
-  # Você também pode rodar na mão em Actions → Run workflow
   workflow_dispatch:
     inputs:
-      head_prefix:
-        description: "Prefixo das branches do Codex"
-        default: "codex/"
-      label_name:
-        description: "OU label para identificar PRs do Codex (opcional)"
-        default: "codex"
-      base_branches:
-        description: "Bases válidas (separadas por vírgula)"
-        default: "stable,main"
-      batch_size:
-        description: "Quantos PRs processar por execução (1 mantém ordem estrita)"
-        default: "1"
-      merge_method:
-        description: "Método de merge: SQUASH | MERGE | REBASE"
-        default: "SQUASH"
+      target:
+        description: "Branch alvo para merge (ex.: stable)"
+        required: false
+        default: "stable"
 
-  # Mesmo arquivo cuida de apagar a branch após merge:
-  pull_request:
-    types: [closed]
+concurrency:
+  group: codex-merge-queue
+  cancel-in-progress: false
 
 permissions:
   contents: write
   pull-requests: write
+  checks: write
+  issues: write
+
+env:
+  PR_LABEL: codex
 
 jobs:
-  # ---------------------------
-  # 1) FILA: escolhe PRs (mais antigos primeiro)
-  # ---------------------------
-  choose_prs:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    outputs:
-      prs: ${{ steps.pick.outputs.prs }}
-    steps:
-      - name: Selecionar PRs candidatos (mais antigos → mais novos)
-        id: pick
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const baseInput = core.getInput('base_branches') || 'stable,main';
-            const bases = baseInput.split(',').map(s => s.trim()).filter(Boolean);
-            const headPrefix = core.getInput('head_prefix') || 'codex/';
-            const labelName  = core.getInput('label_name') || 'codex';
-            const batchSize  = parseInt(core.getInput('batch_size') || '1', 10);
-
-            const prs = await github.paginate(github.rest.pulls.list, {
-              owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', per_page: 100, sort: 'created', direction: 'asc'
-            });
-
-            const candidates = prs.filter(pr => {
-              const sameRepo = pr.head?.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`; // ignora forks
-              const baseOk   = bases.includes(pr.base.ref);
-              const looksCodex = (pr.head?.ref || '').startsWith(headPrefix) ||
-                                 (pr.labels || []).some(l => l.name === labelName);
-              const notDraft = !pr.draft;
-              return sameRepo && baseOk && looksCodex && notDraft;
-            });
-
-            const selected = candidates.slice(0, batchSize).map(pr => ({
-              number: pr.number,
-              head: pr.head.ref,
-              base: pr.base.ref,
-              id: pr.node_id
-            }));
-
-            core.info(`Selecionados: ${selected.map(x => '#'+x.number).join(', ') || 'nenhum'}`);
-            core.setOutput('prs', JSON.stringify(selected));
-
-  # ---------------------------
-  # 2) PROCESSO: resolve conflitos (preferindo Codex), faz push e liga auto-merge
-  # ---------------------------
   process_queue:
-    needs: choose_prs
-    if: needs.choose_prs.outputs.prs != '' && needs.choose_prs.outputs.prs != '[]'
     runs-on: ubuntu-latest
-    strategy:
-      # Serializa de verdade: 1 por vez e sem abortar a fila se um falhar.
-      max-parallel: 1
-      fail-fast: false
-      matrix:
-        pr: ${{ fromJSON(needs.choose_prs.outputs.prs) }}
+    timeout-minutes: 45
 
     steps:
-      - name: Checkout do repositório
+      - name: Checkout repo (full)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Configurar Git
+      - name: Install gh (if not present) and ensure auth
         run: |
-          git config user.name  "codex-merge-queue"
-          git config user.email "codex-merge-queue@users.noreply.github.com"
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "Installing gh CLI..."
+            sudo apt-get update -y
+            sudo apt-get install -y gh
+          fi
+          gh auth status || true
 
-      - name: Buscar branches do PR e da base
-        run: |
-          git fetch origin ${{ matrix.pr.head }} ${{ matrix.pr.base }}
-
-      - name: Checkout no branch do PR
-        run: |
-          git checkout -B "${{ matrix.pr.head }}" "origin/${{ matrix.pr.head }}"
-
-      - name: Mesclar base preferindo o PR (Codex)
-        id: merge_try
+      - name: Process PR queue (oldest → newest)
         env:
-          BASE: ${{ matrix.pr.base }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TARGET_BRANCH: ${{ github.event.inputs.target || 'stable' }}
+          PR_LABEL: ${{ env.PR_LABEL }}
         run: |
-          set +e
-          # IMPORTANTE: "-X ours" mantém o que está no PR (branch atual).
-          git merge --no-commit --no-ff -X ours "origin/${BASE}"
-          code=$?
-          set -e
-          echo "code=$code" >> $GITHUB_OUTPUT
+          set -euo pipefail
 
-          # Se ainda restar marcação de conflito (muito raro), aborta este PR e segue a fila
-          if git diff --name-only --diff-filter=U | grep -q .; then
-            echo "Ainda há conflitos não triviais em ${{ matrix.pr.head }}. Pulando este PR."
+          # Config Git identity para committer do action
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "Procurando PRs abertos com label '${PR_LABEL}' (antigo → novo)..."
+
+          # lista os números dos PRs (um por linha)
+          PRS="$(gh pr list --repo "$REPO" --label "$PR_LABEL" --state open --sort created --json number --jq '.[].number')"
+
+          if [ -z "$PRS" ]; then
+            echo "Nenhum PR encontrado com label '${PR_LABEL}'. Saindo."
             exit 0
           fi
 
-          git add -A
-          git commit -m "chore(codex): auto-resolve vs ${BASE} (preferindo PR)" || echo "Nada pra commitar"
+          echo "Fila de PRs:"
+          echo "$PRS"
 
-      - name: Push das resoluções (se houve)
-        run: git push origin HEAD:${{ matrix.pr.head }} || true
+          # processa cada PR em ordem (cada linha em PRS)
+          while IFS= read -r PR || [ -n "$PR" ]; do
+            [ -z "$PR" ] && continue
+            echo "----------------------------------------"
+            echo "Processando PR #$PR"
+            echo "----------------------------------------"
 
-      - name: Solicitar "update branch" (mantém PR fresco)
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            try {
-              await github.graphql(
-                'mutation($id:ID!){ updatePullRequestBranch(input:{pullRequestId:$id}){ pullRequest{ number } } }',
-                { id: '${{ matrix.pr.id }}' }
-              );
-              core.info('Update-branch solicitado.');
-            } catch (e) {
-              core.info('Update-branch indisponível/ignorado: ' + e.message);
-            }
+            # faz checkout do PR (cria ref local)
+            gh pr checkout "$PR" --repo "$REPO"
+            BRANCH="$(git rev-parse --abbrev-ref HEAD || true)"
+            echo "Branch do PR: ${BRANCH:-(unknown)}"
 
-      - name: Ligar Auto-merge
-        # Se sua proteção exigir aprovação humana, isso aqui só arma o auto-merge.
-        # Quando checks + aprovações estiverem OK, entra sozinho.
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ matrix.pr.number }}
-          merge-method: ${{ github.event.inputs.merge_method || 'SQUASH' }}
+            # atualiza target branch
+            git fetch origin "$TARGET_BRANCH" --depth=1 || true
 
-      - name: Comentar no PR (status)
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            await github.rest.issues.createComment({
-              owner: context.repo.owner, repo: context.repo.repo,
-              issue_number: ${{ matrix.pr.number }},
-              body: "🤖 **Codex Merge Queue**: resolvi conflitos preferindo o PR e liguei o auto-merge. Fila processa do mais antigo pro mais novo."
-            });
+            # tenta mesclar target na branch do PR preferindo as mudanças do PR (-X ours)
+            set +e
+            git merge -X ours --no-edit "origin/$TARGET_BRANCH"
+            MERGE_EXIT=$?
+            set -e
 
-  # ---------------------------
-  # 3) LIMPEZA: apaga branch ao fechar PR (mesclado)
-  # ---------------------------
-  cleanup_branch:
-    if: >
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    steps:
-      - name: Apagar branch de origem
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const ref = `heads/${{ github.event.pull_request.head.ref }}`;
-            try {
-              await github.rest.git.deleteRef({
-                owner: context.repo.owner, repo: context.repo.repo, ref
-              });
-              core.info(`Deleted ${ref}`);
-            } catch (e) {
-              core.warning(`Não consegui apagar ${ref}: ${e.message}`);
-            }
+            if [ $MERGE_EXIT -ne 0 ]; then
+              echo "Merge sinalizou conflitos. Vou resolver preferindo o PR (ours) arquivo a arquivo..."
+            fi
+
+            # se há conflitos, resolver preferindo o PR (ours)
+            CONFLICTS="$(git ls-files -u | awk '{print $4}' | sort -u || true)"
+            if [ -n "$CONFLICTS" ]; then
+              echo "Arquivos em conflito: $CONFLICTS"
+              for f in $CONFLICTS; do
+                echo "Resolving $f (preferring PR)..."
+                git checkout --ours -- "$f" 2>/dev/null || true
+                if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+                  git add -- "$f"
+                else
+                  git rm -f -- "$f" || true
+                fi
+              done
+
+              # commit se houver mudanças a commitar
+              if ! git diff --cached --quiet; then
+                git commit -m "chore(codex): auto-resolve conflicts preferring PR (ours)"
+                echo "Pushing resolutions to origin/$BRANCH..."
+                git push origin "HEAD:$BRANCH"
+              else
+                echo "Nada a commitar após auto-resolve."
+              fi
+            else
+              echo "Sem conflitos após tentativa de merge."
+            fi
+
+            # tenta habilitar auto-merge (squash). Se regras de proteção bloquearem, o comando retorna erro.
+            set +e
+            gh pr merge "$PR" --squash --auto --repo "$REPO"
+            GH_MERGE_EXIT=$?
+            set -e
+
+            if [ $GH_MERGE_EXIT -eq 0 ]; then
+              echo "Auto-merge habilitado para PR #$PR."
+            else
+              echo "Não foi possível habilitar auto-merge para PR #$PR (provavelmente regras de proteção)."
+            fi
+
+            # comente no PR informando o que foi feito
+            gh pr comment "$PR" --repo "$REPO" --body "Codex Merge Queue: mesclei 'origin/${TARGET_BRANCH}' no branch do PR preferindo o PR, resolvi conflitos remanescentes e tentei ligar auto-merge (squash)."
+
+            echo "Finalizado PR #$PR."
+            # opcional: pequena espera para deixar checks começarem
+            sleep 2
+          done <<< "$PRS"
+
+          echo "Processamento da fila concluído."
