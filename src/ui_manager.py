@@ -822,10 +822,9 @@ class UIManager:
                 ctk.CTkLabel(asr_frame, text="ASR", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
 
                 # Backend selection
-                # --- Transcription Settings (Advanced) Section ---
+                # --- Transcription Settings Section ---
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 transcription_frame.pack(fill="x", padx=10, pady=5)
-                ctk.CTkLabel(transcription_frame, text="Transcription Settings (Advanced)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
 
                 device_frame = ctk.CTkFrame(transcription_frame)
                 device_frame.pack(fill="x", pady=5)
@@ -970,20 +969,23 @@ class UIManager:
                 Tooltip(display_switch, "Print transcripts to the terminal window.")
 
                 # --- ASR Settings ---
-                asr_backend_frame = ctk.CTkFrame(transcription_frame)
+                asr_backend_frame = ctk.CTkFrame(asr_frame)
                 asr_backend_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
 
-                quant_frame = ctk.CTkFrame(transcription_frame)
-                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
-                quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
+                asr_ct2_frame = ctk.CTkFrame(asr_frame)
+                ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 10))
+                asr_ct2_menu = ctk.CTkOptionMenu(
+                    asr_ct2_frame,
+                    variable=asr_ct2_compute_type_var,
+                    values=["auto", "float16", "float32", "int8_float16", "int8_float32"],
                 )
-                quant_menu.pack(side="left", padx=5)
+                asr_ct2_menu.pack(side="left", padx=5)
+                Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
 
                 def _on_backend_change(choice: str) -> None:
                     asr_backend_var.set(choice)
-                    quant_menu.configure(state="normal" if choice == "ct2" else "disabled")
+                    asr_ct2_menu.configure(state="normal" if choice == "ct2" else "disabled")
                     _update_model_info(asr_model_id_var.get())
 
                 asr_backend_menu = ctk.CTkOptionMenu(
@@ -995,14 +997,9 @@ class UIManager:
                 asr_backend_menu.pack(side="left", padx=5)
                 Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
 
-                quant_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
-                quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=asr_ct2_compute_type_var, values=["float16", "int8", "int8_float16"]
-                )
-                quant_menu.pack(side="left", padx=5)
+                asr_ct2_frame.pack(fill="x", pady=5)
 
-                asr_model_frame = ctk.CTkFrame(transcription_frame)
+                asr_model_frame = ctk.CTkFrame(asr_frame)
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
@@ -1052,28 +1049,21 @@ class UIManager:
                 _update_model_info(asr_model_id_var.get())
                 _on_backend_change(asr_backend_var.get())
 
-                asr_device_frame = ctk.CTkFrame(transcription_frame)
+                asr_device_frame = ctk.CTkFrame(asr_frame)
                 asr_device_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_device_frame, text="ASR Compute Device:").pack(side="left", padx=(5, 10))
                 asr_device_menu = ctk.CTkOptionMenu(asr_device_frame, variable=asr_compute_device_var, values=["auto", "cuda", "cpu"])
                 asr_device_menu.pack(side="left", padx=5)
                 Tooltip(asr_device_menu, "Execution device for ASR model.")
 
-                asr_dtype_frame = ctk.CTkFrame(transcription_frame)
+                asr_dtype_frame = ctk.CTkFrame(asr_frame)
                 asr_dtype_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_dtype_frame, text="ASR DType:").pack(side="left", padx=(5, 10))
                 asr_dtype_menu = ctk.CTkOptionMenu(asr_dtype_frame, variable=asr_dtype_var, values=["auto", "float16", "float32"])
                 asr_dtype_menu.pack(side="left", padx=5)
                 Tooltip(asr_dtype_menu, "Torch dtype for ASR model.")
 
-                asr_ct2_frame = ctk.CTkFrame(transcription_frame)
-                asr_ct2_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 10))
-                asr_ct2_menu = ctk.CTkOptionMenu(asr_ct2_frame, variable=asr_ct2_compute_type_var, values=["auto", "float16", "float32", "int8_float16", "int8_float32"])
-                asr_ct2_menu.pack(side="left", padx=5)
-                Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
-
-                asr_cache_frame = ctk.CTkFrame(transcription_frame)
+                asr_cache_frame = ctk.CTkFrame(asr_frame)
                 asr_cache_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_cache_frame, text="ASR Cache Dir:").pack(side="left", padx=(5, 10))
                 asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
@@ -1110,11 +1100,11 @@ class UIManager:
                         handler.reload_asr()
 
                 install_button = ctk.CTkButton(
-                    transcription_frame, text="Install/Update", command=_install_model
+                    asr_frame, text="Install/Update", command=_install_model
                 )
                 install_button.pack(pady=5)
                 reload_button = ctk.CTkButton(
-                    transcription_frame, text="Reload Model", command=_reload_model
+                    asr_frame, text="Reload Model", command=_reload_model
                 )
                 reload_button.pack(pady=5)
 
