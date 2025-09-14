@@ -1075,10 +1075,14 @@ class UIManager:
 
                 asr_cache_frame = ctk.CTkFrame(transcription_frame)
                 asr_cache_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_cache_frame, text="ASR Cache Dir:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(
+                    asr_cache_frame,
+                    text="Diretório de Cache de ASR:",
+                    width=200,
+                ).pack(side="left", padx=(5, 10))
                 asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
                 asr_cache_entry.pack(side="left", padx=5)
-                Tooltip(asr_cache_entry, "Directory for cached ASR models.")
+                Tooltip(asr_cache_entry, "Diretório para modelos de ASR em cache.")
 
                 def _install_model():
                     try:
