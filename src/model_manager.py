@@ -11,6 +11,7 @@ from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 class DownloadCancelledError(Exception):
     """Raised when a model download is cancelled by the user."""
 
+
 CURATED: List[Dict[str, str]] = [
     {"id": "openai/whisper-large-v3", "backend": "transformers"},
     {"id": "openai/whisper-large-v3-turbo", "backend": "transformers"},
@@ -27,48 +28,56 @@ def list_catalog() -> List[Dict[str, str]]:
 
 
 def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
-    """Discover models available on disk and in the shared HF cache.
+    """Discover curated models available on disk and in the shared HF cache.
 
-    Detection covers curated backends (``transformers`` and ``ct2``), custom
-    directory layouts (e.g., Silero VAD), single model files, and the global
-    Hugging Face cache. Any model found is returned with its backend (or
-    ``"custom"`` when unknown) and resolved path.
+    Only models listed in :data:`CURATED` and containing essential files
+    (``config.json`` together with ``model.bin`` or ``model.onnx``) are
+    returned. Any other directories or isolated files found in ``cache_dir``
+    are ignored. The shared Hugging Face cache is queried as a fallback.
     """
 
+    curated_ids = {c["id"] for c in CURATED}
     installed: List[Dict[str, str]] = []
     seen = set()
 
     cache_dir = Path(cache_dir)
     if cache_dir.is_dir():
-        for item in cache_dir.iterdir():
-            if item.is_dir():
-                subdirs = [p for p in item.iterdir() if p.is_dir()]
-                if subdirs:
-                    backend = item.name
-                    for model_dir in subdirs:
-                        mid = model_dir.name
-                        installed.append({"id": mid, "backend": backend, "path": str(model_dir)})
-                        seen.add(mid)
-                else:
-                    mid = item.name
-                    installed.append({"id": mid, "backend": "custom", "path": str(item)})
-                    seen.add(mid)
-            elif item.is_file():
-                mid = item.stem
-                installed.append({"id": mid, "backend": "custom", "path": str(item)})
-                seen.add(mid)
+        for backend_dir in cache_dir.iterdir():
+            if not backend_dir.is_dir():
+                continue
+            backend = backend_dir.name
+            for model_dir in backend_dir.rglob("*"):
+                if not model_dir.is_dir():
+                    continue
+                rel_id = model_dir.relative_to(backend_dir).as_posix()
+                if rel_id in seen or rel_id not in curated_ids:
+                    continue
+                files_present = {f.name for f in model_dir.iterdir() if f.is_file()}
+                if "config.json" not in files_present or not (
+                    "model.bin" in files_present or "model.onnx" in files_present
+                ):
+                    continue
+                installed.append({"id": rel_id, "backend": backend, "path": str(model_dir)})
+                seen.add(rel_id)
 
     try:
         cache_info = scan_cache_dir()
         for repo in cache_info.repos:
-            if repo.repo_id not in seen:
-                installed.append(
-                    {
-                        "id": repo.repo_id,
-                        "backend": "transformers",
-                        "path": str(repo.repo_path),
-                    }
-                )
+            if repo.repo_id in seen or repo.repo_id not in curated_ids:
+                continue
+            repo_files = {p.name for p in Path(repo.repo_path).iterdir() if p.is_file()}
+            if "config.json" not in repo_files or not (
+                "model.bin" in repo_files or "model.onnx" in repo_files
+            ):
+                continue
+            installed.append(
+                {
+                    "id": repo.repo_id,
+                    "backend": "transformers",
+                    "path": str(repo.repo_path),
+                }
+            )
+            seen.add(repo.repo_id)
     except Exception:  # pragma: no cover - best effort
         pass
 
