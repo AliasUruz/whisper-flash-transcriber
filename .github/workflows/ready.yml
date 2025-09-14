@@ -1,0 +1,9 @@
+name: ready
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+jobs:
+  ready:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "ok"
