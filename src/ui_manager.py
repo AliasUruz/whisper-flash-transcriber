@@ -403,6 +403,7 @@ class UIManager:
                 enable_torch_compile_var = ctk.BooleanVar(value=self.config_manager.get_enable_torch_compile())
                 asr_backend_var = ctk.StringVar(value=self.config_manager.get_asr_backend())
                 asr_model_id_var = ctk.StringVar(value=self.config_manager.get_asr_model_id())
+                asr_model_display_var = ctk.StringVar()
                 asr_model_var = asr_model_id_var
                 asr_compute_device_var = ctk.StringVar(value=self.config_manager.get_asr_compute_device())
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
@@ -613,6 +614,12 @@ class UIManager:
                     gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
                     gemini_model_var.set(DEFAULT_CONFIG["gemini_model"])
                     asr_model_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_model_display_var.set(
+                        id_to_display.get(
+                            DEFAULT_CONFIG["asr_model_id"],
+                            DEFAULT_CONFIG["asr_model_id"],
+                        )
+                    )
                     gemini_prompt_correction_textbox.delete("1.0", "end")
                     gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG["gemini_prompt"])
                     agentico_prompt_textbox.delete("1.0", "end")
@@ -622,6 +629,12 @@ class UIManager:
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
                     asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
                     asr_model_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_model_display_var.set(
+                        id_to_display.get(
+                            DEFAULT_CONFIG["asr_model_id"],
+                            DEFAULT_CONFIG["asr_model_id"],
+                        )
+                    )
 
                     if DEFAULT_CONFIG["gpu_index"] == -1:
                         gpu_selection_var.set("Force CPU")
@@ -1007,15 +1020,21 @@ class UIManager:
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
                 catalog = model_manager.list_catalog()
+                catalog_display_map = {m["id"]: m["display_name"] for m in catalog}
                 installed_ids = {
                     m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
                 }
                 all_ids = sorted({m["id"] for m in catalog} | installed_ids)
+                id_to_display = {mid: catalog_display_map.get(mid, mid) for mid in all_ids}
+                display_to_id = {v: k for k, v in id_to_display.items()}
+                asr_model_display_var = ctk.StringVar(
+                    value=id_to_display.get(asr_model_id_var.get(), asr_model_id_var.get())
+                )
 
                 asr_model_menu = ctk.CTkOptionMenu(
                     asr_model_frame,
-                    variable=asr_model_id_var,
-                    values=all_ids,
+                    variable=asr_model_display_var,
+                    values=[id_to_display[mid] for mid in all_ids],
                 )
                 asr_model_menu.pack(side="left", padx=5)
                 Tooltip(asr_model_menu, "Model identifier from curated catalog.")
@@ -1044,9 +1063,11 @@ class UIManager:
                     )
 
                 def _on_model_change(choice: str) -> None:
-                    self.config_manager.set_asr_model_id(choice)
+                    mid = display_to_id.get(choice, choice)
+                    asr_model_id_var.set(mid)
+                    self.config_manager.set_asr_model_id(mid)
                     self.config_manager.save_config()
-                    _update_model_info(choice)
+                    _update_model_info(mid)
 
                 asr_model_menu.configure(command=_on_model_change)
                 _update_model_info(asr_model_id_var.get())

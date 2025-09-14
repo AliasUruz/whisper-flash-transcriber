@@ -11,6 +11,7 @@ from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 class DownloadCancelledError(Exception):
     """Raised when a model download is cancelled by the user."""
 
+
 CURATED: List[Dict[str, str]] = [
     {"id": "openai/whisper-large-v3", "backend": "transformers"},
     {"id": "openai/whisper-large-v3-turbo", "backend": "transformers"},
@@ -20,10 +21,22 @@ CURATED: List[Dict[str, str]] = [
     {"id": "Systran/faster-distil-whisper-large-v3", "backend": "ct2"},
 ]
 
+DISPLAY_NAMES: Dict[str, str] = {
+    "openai/whisper-large-v3": "Whisper Large v3",
+    "openai/whisper-large-v3-turbo": "Whisper Large v3 Turbo",
+    "distil-whisper/distil-large-v3": "Distil Whisper Large v3",
+    "Systran/faster-whisper-large-v3": "Faster Whisper Large v3",
+    "h2oai/faster-whisper-large-v3-turbo": "Faster Whisper Large v3 Turbo",
+    "Systran/faster-distil-whisper-large-v3": "Faster Distil Whisper Large v3",
+}
+
 
 def list_catalog() -> List[Dict[str, str]]:
-    """Return curated catalog entries."""
-    return CURATED
+    """Return curated catalog entries with display names."""
+    return [
+        {**entry, "display_name": DISPLAY_NAMES.get(entry["id"], entry["id"])}
+        for entry in CURATED
+    ]
 
 
 def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
