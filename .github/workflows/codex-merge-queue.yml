@@ -1,142 +1,80 @@
-name: Codex Merge Queue (oldest → newest)
+name: Codex Merge Queue
 
 on:
   workflow_dispatch:
-    inputs:
-      target:
-        description: "Branch alvo para merge (ex.: stable)"
-        required: false
-        default: "stable"
-
-concurrency:
-  group: codex-merge-queue
-  cancel-in-progress: false
-
-permissions:
-  contents: write
-  pull-requests: write
-  checks: write
-  issues: write
-
-env:
-  PR_LABEL: codex
+  push:
+    branches:
+      - stable
 
 jobs:
   process_queue:
+    name: Process PR queue (oldest → newest)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
-      - name: Checkout repo (full)
+      - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install gh (if not present) and ensure auth
+      - name: Install jq and gh if needed
         run: |
-          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y jq || true
           if ! command -v gh >/dev/null 2>&1; then
-            echo "Installing gh CLI..."
+            # install GitHub CLI from official repo
+            sudo apt-get install -y curl apt-transport-https ca-certificates gnupg lsb-release
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
+              sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | \
+              sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
             sudo apt-get update -y
             sudo apt-get install -y gh
           fi
-          gh auth status || true
 
-      - name: Process PR queue (oldest → newest)
+      - name: Authenticate gh (use builtin token)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | gh auth login --with-token
+
+      - name: Find PRs labeled "codex" (oldest → newest)
+        id: find_prs
+        run: |
+          REPO="${GITHUB_REPOSITORY}"
+          echo "Procurando PRs abertos com label 'codex'..."
+          # lista PRs em JSON e ordena por createdAt (antigo -> novo)
+          gh pr list --repo "$REPO" --label codex --state open --json number,createdAt,title,headRefName | \
+            jq -r 'sort_by(.createdAt) | .[]?.number' > pr_list.txt || true
+          # garantir arquivo existe
+          touch pr_list.txt
+          PR_COUNT=$(grep -cve '^\s*$' pr_list.txt || true)
+          echo "pr_count=$PR_COUNT" >> $GITHUB_OUTPUT
+          # exportar lista como CSV (pode não usar)
+          PRS_CSV=$(paste -sd, pr_list.txt || echo "")
+          echo "prs=$PRS_CSV" >> $GITHUB_OUTPUT
+
+      - name: Process PRs (try auto-merge)
+        if: steps.find_prs.outputs.pr_count != '0'
+        env:
           REPO: ${{ github.repository }}
-          TARGET_BRANCH: ${{ github.event.inputs.target || 'stable' }}
-          PR_LABEL: ${{ env.PR_LABEL }}
         run: |
           set -euo pipefail
-
-          # Config Git identity para committer do action
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          echo "Procurando PRs abertos com label '${PR_LABEL}' (antigo → novo)..."
-
-          # lista os números dos PRs (um por linha)
-          PRS="$(gh pr list --repo "$REPO" --label "$PR_LABEL" --state open --sort created --json number --jq '.[].number')"
-
-          if [ -z "$PRS" ]; then
-            echo "Nenhum PR encontrado com label '${PR_LABEL}'. Saindo."
-            exit 0
-          fi
-
-          echo "Fila de PRs:"
-          echo "$PRS"
-
-          # processa cada PR em ordem (cada linha em PRS)
-          while IFS= read -r PR || [ -n "$PR" ]; do
-            [ -z "$PR" ] && continue
-            echo "----------------------------------------"
-            echo "Processando PR #$PR"
-            echo "----------------------------------------"
-
-            # faz checkout do PR (cria ref local)
-            gh pr checkout "$PR" --repo "$REPO"
-            BRANCH="$(git rev-parse --abbrev-ref HEAD || true)"
-            echo "Branch do PR: ${BRANCH:-(unknown)}"
-
-            # atualiza target branch
-            git fetch origin "$TARGET_BRANCH" --depth=1 || true
-
-            # tenta mesclar target na branch do PR preferindo as mudanças do PR (-X ours)
-            set +e
-            git merge -X ours --no-edit "origin/$TARGET_BRANCH"
-            MERGE_EXIT=$?
-            set -e
-
-            if [ $MERGE_EXIT -ne 0 ]; then
-              echo "Merge sinalizou conflitos. Vou resolver preferindo o PR (ours) arquivo a arquivo..."
+          echo "Lendo pr_list.txt..."
+          while IFS= read -r pr || [ -n "$pr" ]; do
+            # pular linhas vazias
+            if [ -z "$pr" ]; then
+              continue
             fi
-
-            # se há conflitos, resolver preferindo o PR (ours)
-            CONFLICTS="$(git ls-files -u | awk '{print $4}' | sort -u || true)"
-            if [ -n "$CONFLICTS" ]; then
-              echo "Arquivos em conflito: $CONFLICTS"
-              for f in $CONFLICTS; do
-                echo "Resolving $f (preferring PR)..."
-                git checkout --ours -- "$f" 2>/dev/null || true
-                if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
-                  git add -- "$f"
-                else
-                  git rm -f -- "$f" || true
-                fi
-              done
-
-              # commit se houver mudanças a commitar
-              if ! git diff --cached --quiet; then
-                git commit -m "chore(codex): auto-resolve conflicts preferring PR (ours)"
-                echo "Pushing resolutions to origin/$BRANCH..."
-                git push origin "HEAD:$BRANCH"
-              else
-                echo "Nada a commitar após auto-resolve."
-              fi
+            echo "→ Processando PR #$pr"
+            # tenta auto-merge (squash when checks pass)
+            if gh pr merge "$pr" --repo "$REPO" --squash --auto --body "Auto-merged by Codex Merge Queue"; then
+              echo "  ✅ PR #$pr merged (auto)"
             else
-              echo "Sem conflitos após tentativa de merge."
+              echo "  ❌ Auto-merge falhou para PR #$pr — comentando e seguindo adiante"
+              gh pr comment "$pr" --repo "$REPO" --body "Codex Merge Queue tentou auto-merge neste PR mas falhou. Provavelmente regras de proteção (checks faltando / branch protegido) ou conflitos impediram o merge. Por favor verifique e/ou resolva conflitos e re-acionar a fila."
             fi
-
-            # tenta habilitar auto-merge (squash). Se regras de proteção bloquearem, o comando retorna erro.
-            set +e
-            gh pr merge "$PR" --squash --auto --repo "$REPO"
-            GH_MERGE_EXIT=$?
-            set -e
-
-            if [ $GH_MERGE_EXIT -eq 0 ]; then
-              echo "Auto-merge habilitado para PR #$PR."
-            else
-              echo "Não foi possível habilitar auto-merge para PR #$PR (provavelmente regras de proteção)."
-            fi
-
-            # comente no PR informando o que foi feito
-            gh pr comment "$PR" --repo "$REPO" --body "Codex Merge Queue: mesclei 'origin/${TARGET_BRANCH}' no branch do PR preferindo o PR, resolvi conflitos remanescentes e tentei ligar auto-merge (squash)."
-
-            echo "Finalizado PR #$PR."
-            # opcional: pequena espera para deixar checks começarem
-            sleep 2
-          done <<< "$PRS"
-
-          echo "Processamento da fila concluído."
+          done < pr_list.txt
+          echo "Processamento concluído."
