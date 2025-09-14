@@ -64,14 +64,6 @@ class AppCore:
         # --- Módulos ---
         self.config_manager = ConfigManager()
 
-        # Sincronizar modelos ASR já presentes no disco no início da aplicação
-        try:
-            cache_dir = self.config_manager.get("asr_cache_dir")
-            installed = list_installed(cache_dir)
-            self.config_manager.set_asr_installed_models(installed)
-        except Exception as e:
-            logging.warning(f"Failed to sync installed models: {e}")
-
         self.audio_handler = AudioHandler(
             config_manager=self.config_manager,
             on_audio_segment_ready_callback=self._on_audio_segment_ready,
@@ -110,6 +102,8 @@ class AppCore:
 
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
+
+        threading.Thread(target=self._sync_installed_models, daemon=True).start()
 
         cache_dir = self.config_manager.get("asr_cache_dir")
         model_id = self.asr_model_id
@@ -162,6 +156,15 @@ class AppCore:
         self.asr_model_id = self.config_manager.get("asr_model_id")
         self.ct2_quantization = self.config_manager.get("ct2_quantization")
         # ... e outras configurações que AppCore precisa diretamente
+
+    def _sync_installed_models(self):
+        """Atualiza o ConfigManager com os modelos ASR instalados."""
+        try:
+            cache_dir = self.config_manager.get("asr_cache_dir")
+            installed = list_installed(cache_dir)
+            self.config_manager.set_asr_installed_models(installed)
+        except Exception as e:  # pragma: no cover - operação auxiliar
+            logging.warning(f"Failed to sync installed models: {e}")
 
     # --- Callbacks de Módulos ---
     def set_state_update_callback(self, callback):
