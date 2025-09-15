@@ -983,19 +983,31 @@ class UIManager:
                 asr_backend_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
 
-                asr_ct2_frame = ctk.CTkFrame(asr_frame)
-                ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 10))
-                asr_ct2_menu = ctk.CTkOptionMenu(
-                    asr_ct2_frame,
-                    variable=asr_ct2_compute_type_var,
-                    values=["auto", "float16", "float32", "int8_float16", "int8_float32"],
+                quant_frame = ctk.CTkFrame(transcription_frame)
+                quant_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
+                quant_menu = ctk.CTkOptionMenu(
+                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
                 )
-                asr_ct2_menu.pack(side="left", padx=5)
-                Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
+                quant_menu.pack(side="left", padx=5)
+                Tooltip(
+                    quant_menu,
+                    "float16: maior qualidade e mais memória.\n"
+                    "int8: menor memória com possível perda de precisão.\n"
+                    "int8_float16: pesos int8 e ativações fp16.",
+                )
+                quant_help_label = ctk.CTkLabel(
+                    quant_frame,
+                    text="float16: melhor qualidade | int8: menor memória | int8_float16: equilíbrio",
+                )
 
                 def _on_backend_change(choice: str) -> None:
                     asr_backend_var.set(choice)
-                    asr_ct2_menu.configure(state="normal" if choice == "ct2" else "disabled")
+                    quant_menu.configure(state="normal" if choice == "ct2" else "disabled")
+                    if choice == "ct2":
+                        quant_help_label.pack(fill="x", padx=5, pady=(2, 0), anchor="w")
+                    else:
+                        quant_help_label.pack_forget()
                     _update_model_info(asr_model_id_var.get())
 
                 asr_backend_menu = ctk.CTkOptionMenu(
@@ -1005,17 +1017,9 @@ class UIManager:
                     command=_on_backend_change,
                 )
                 asr_backend_menu.pack(side="left", padx=5)
-                Tooltip(
-                    asr_backend_menu,
-                    (
-                        "Backend de ASR. Em 'auto', tenta primeiro 'transformers' e, "
-                        "se indisponível, cai para 'ct2'."
-                    ),
-                )
+                Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
 
-                asr_ct2_frame.pack(fill="x", pady=5)
-
-                asr_model_frame = ctk.CTkFrame(asr_frame)
+                asr_model_frame = ctk.CTkFrame(transcription_frame)
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
