@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 import requests
+import tkinter.messagebox as messagebox
 
 from .model_manager import list_catalog, list_installed
 try:
@@ -281,6 +282,10 @@ class ConfigManager:
         cfg["asr_curated_catalog"] = list_catalog()
         try:
             cfg["asr_installed_models"] = list_installed(ASR_CACHE_DIR)
+        except OSError:
+            messagebox.showerror("Erro", "Diretório de cache inválido.")
+            logging.warning("Falha ao listar modelos instalados: diretório de cache inválido.")
+            cfg["asr_installed_models"] = []
         except Exception as e:  # pragma: no cover - salvaguarda
             logging.warning(f"Falha ao listar modelos instalados: {e}")
             cfg["asr_installed_models"] = []

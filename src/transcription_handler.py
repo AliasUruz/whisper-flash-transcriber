@@ -611,6 +611,14 @@ class TranscriptionHandler:
 
             self._asr_loaded = True
             self.on_model_ready_callback()
+        except OSError:
+            error_message = "Diretório de cache inválido."
+            logging.error(error_message, exc_info=True)
+            try:
+                self.on_model_error_callback(error_message)
+            except Exception:
+                pass
+            return None, None
         except Exception as e:
             error_message = f"Falha ao carregar o modelo: {e}"
             logging.error(error_message, exc_info=True)
