@@ -988,14 +988,30 @@ class UIManager:
                 # --- ASR Settings ---
                 asr_backend_frame = ctk.CTkFrame(asr_frame)
                 asr_backend_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 0))
+                ctk.CTkButton(
+                    asr_backend_frame,
+                    text="?",
+                    width=20,
+                    command=lambda: messagebox.showinfo(
+                        "ASR Backend",
+                        "Selects the inference engine used for speech recognition.",
+                    ),
+                ).pack(side="left", padx=(0, 10))
 
                 quant_frame = ctk.CTkFrame(transcription_frame)
-                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
-                quant_menu = ctk.CTkOptionMenu(
+                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 0))
+                ctk.CTkButton(
                     quant_frame,
-                    variable=asr_ct2_compute_type_var,
-                    values=["float16", "int8", "int8_float16"],
+                    text="?",
+                    width=20,
+                    command=lambda: messagebox.showinfo(
+                        "Quantization",
+                        "Reduces model precision for faster inference (float16/int8).",
+                    ),
+                ).pack(side="left", padx=(0, 10))
+                quant_menu = ctk.CTkOptionMenu(
+                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
                 )
 
                 def _on_backend_change(choice: str) -> None:
@@ -1023,6 +1039,8 @@ class UIManager:
 
                 quant_frame.pack(fill="x", pady=5)
 
+                quant_frame.pack(fill="x", pady=5)
+
                 asr_model_frame = ctk.CTkFrame(transcription_frame)
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
@@ -1033,8 +1051,11 @@ class UIManager:
                         m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
                     }
                 except OSError:
+                    messagebox.showerror(
+                        "Configuração",
+                        "Diretório de cache inválido. Verifique as configurações.",
+                    )
                     installed_ids = set()
-                    messagebox.showerror("Erro", "Diretório de cache inválido.")
                 all_ids = sorted({m["id"] for m in catalog} | installed_ids)
                 id_to_display = {mid: catalog_display_map.get(mid, mid) for mid in all_ids}
                 display_to_id = {v: k for k, v in id_to_display.items()}
@@ -1086,8 +1107,11 @@ class UIManager:
                     try:
                         installed_models = model_manager.list_installed(asr_cache_dir_var.get())
                     except OSError:
+                        messagebox.showerror(
+                            "Configuração",
+                            "Diretório de cache inválido. Verifique as configurações.",
+                        )
                         installed_models = []
-                        messagebox.showerror("Erro", "Diretório de cache inválido.")
                     entry = next((m for m in installed_models if m["id"] == choice), None)
                     if entry:
                         i_bytes, i_files = model_manager.get_installed_size(entry["path"])
@@ -1171,12 +1195,43 @@ class UIManager:
 
                 asr_dtype_frame = ctk.CTkFrame(asr_frame)
                 asr_dtype_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_dtype_frame, text="ASR DType:").pack(side="left", padx=(5, 10))
-                asr_dtype_menu = ctk.CTkOptionMenu(asr_dtype_frame, variable=asr_dtype_var, values=["auto", "float16", "float32"])
+                ctk.CTkLabel(asr_dtype_frame, text="ASR DType:").pack(side="left", padx=(5, 0))
+                ctk.CTkButton(
+                    asr_dtype_frame,
+                    text="?",
+                    width=20,
+                    command=lambda: messagebox.showinfo(
+                        "ASR DType",
+                        "Torch tensor precision for ASR weights and activations.",
+                    ),
+                ).pack(side="left", padx=(0, 10))
+                asr_dtype_menu = ctk.CTkOptionMenu(
+                    asr_dtype_frame, variable=asr_dtype_var, values=["auto", "float16", "float32"]
+                )
                 asr_dtype_menu.pack(side="left", padx=5)
                 Tooltip(asr_dtype_menu, "Torch dtype for ASR model.")
 
-                asr_cache_frame = ctk.CTkFrame(asr_frame)
+                asr_ct2_frame = ctk.CTkFrame(transcription_frame)
+                asr_ct2_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 0))
+                ctk.CTkButton(
+                    asr_ct2_frame,
+                    text="?",
+                    width=20,
+                    command=lambda: messagebox.showinfo(
+                        "CT2 Compute Type",
+                        "Numeric precision mode for the CTranslate2 backend.",
+                    ),
+                ).pack(side="left", padx=(0, 10))
+                asr_ct2_menu = ctk.CTkOptionMenu(
+                    asr_ct2_frame,
+                    variable=asr_ct2_compute_type_var,
+                    values=["auto", "float16", "float32", "int8_float16", "int8_float32"],
+                )
+                asr_ct2_menu.pack(side="left", padx=5)
+                Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
+
+                asr_cache_frame = ctk.CTkFrame(transcription_frame)
                 asr_cache_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(
                     asr_cache_frame,
@@ -1186,6 +1241,41 @@ class UIManager:
                 asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
                 asr_cache_entry.pack(side="left", padx=5)
                 Tooltip(asr_cache_entry, "Diretório para modelos de ASR em cache.")
+
+                def _install_model():
+                    cache_dir = asr_cache_dir_var.get()
+                    try:
+                        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+                    except Exception as e:
+                        messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}")
+                        return
+                    try:
+                        backend = asr_backend_var.get()
+                        if backend == "auto":
+                            backend = "transformers"
+                        elif backend in ("faster-whisper", "ctranslate2"):
+                            backend = "ct2"
+
+                        model_manager.ensure_download(
+                            asr_model_id_var.get(),
+                            backend,
+                            cache_dir,
+                            asr_ct2_compute_type_var.get() if backend == "ct2" else None,
+                        )
+                        installed_models = model_manager.list_installed(cache_dir)
+                        self.config_manager.set_asr_installed_models(installed_models)
+                        self.config_manager.save_config()
+                        _update_model_info(asr_model_id_var.get())
+                        messagebox.showinfo("Model", "Download completed.")
+                    except DownloadCancelledError:
+                        messagebox.showinfo("Model", "Download canceled.")
+                    except OSError:
+                        messagebox.showerror(
+                            "Model",
+                            "Diretório de cache inválido. Verifique as configurações.",
+                        )
+                    except Exception as e:
+                        messagebox.showerror("Model", f"Download failed: {e}")
 
                 def _reload_model():
                     handler = getattr(self.core_instance_ref, "transcription_handler", None)

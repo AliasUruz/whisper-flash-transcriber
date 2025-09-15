@@ -658,7 +658,7 @@ class TranscriptionHandler:
             self._asr_loaded = True
             self.on_model_ready_callback()
         except OSError:
-            error_message = "Diretório de cache inválido."
+            error_message = "Diretório de cache inválido. Verifique as configurações."
             logging.error(error_message, exc_info=True)
             try:
                 self.on_model_error_callback(error_message)

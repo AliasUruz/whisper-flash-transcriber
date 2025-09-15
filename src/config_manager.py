@@ -290,15 +290,17 @@ class ConfigManager:
             logging.warning(f"Falha ao criar diretório de cache ASR '{asr_cache_dir}': {e}")
 
         cfg["asr_curated_catalog"] = list_catalog()
-        stored_models = cfg.get(ASR_INSTALLED_MODELS_CONFIG_KEY, [])
-        if not isinstance(stored_models, list):
-            stored_models = []
-        cleaned_models = [
-            m for m in stored_models if os.path.exists(m.get("path", ""))
-        ]
-        if len(cleaned_models) != len(stored_models):
-            logging.info("Removed entries for missing ASR model paths during load.")
-        cfg[ASR_INSTALLED_MODELS_CONFIG_KEY] = cleaned_models
+        try:
+            cfg["asr_installed_models"] = list_installed(ASR_CACHE_DIR)
+        except OSError:
+            messagebox.showerror(
+                "Configuração",
+                "Diretório de cache inválido. Verifique as configurações.",
+            )
+            cfg["asr_installed_models"] = []
+        except Exception as e:  # pragma: no cover - salvaguarda
+            logging.warning(f"Falha ao listar modelos instalados: {e}")
+            cfg["asr_installed_models"] = []
 
         self.config = cfg
         # Aplicar validação e conversão de tipo
