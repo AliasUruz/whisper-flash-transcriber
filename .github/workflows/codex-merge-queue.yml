@@ -1,0 +1,100 @@
+name: Codex Merge Queue (Oldest to Newest)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stable
+
+concurrency:
+  group: codex-merge-queue
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  process_queue:
+    name: Process PR Queue (Oldest → Newest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Process PR Queue
+        env:
+          REPO: ${{ github.repository }}
+          TARGET_BRANCH: stable
+          PR_LABEL: codex
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "Procurando PRs abertos com a label '${PR_LABEL}'..."
+          PRS=$(gh pr list --repo "$REPO" --label "$PR_LABEL" --state open --json number,createdAt \
+            | jq -r 'sort_by(.createdAt) | .[] | .number')
+
+          if [ -z "$PRS" ]; then
+            echo "Nenhum PR com a label '${PR_LABEL}' foi encontrado. Saindo."
+            exit 0
+          fi
+
+          echo "Fila de PRs (do mais antigo para o mais novo):"
+          echo "$PRS"
+
+          for PR in $PRS; do
+            echo "----------------------------------------"
+            echo "Processando PR #${PR}"
+            echo "----------------------------------------"
+
+            if ! gh pr checkout "$PR" --repo "$REPO"; then
+              echo "Falha ao fazer checkout do PR #${PR}. Pulando."
+              gh pr comment "$PR" --repo "$REPO" --body "❌ **Codex Merge Queue**: Não consegui fazer checkout deste PR." || true
+              continue
+            fi
+
+            BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD)"
+            
+            set +e
+            git merge -X ours "origin/${TARGET_BRANCH}"
+            MERGE_EXIT_CODE=$?
+            set -e
+
+            if [ $MERGE_EXIT_CODE -ne 0 ]; then
+              echo "Merge inicial sinalizou conflitos. Resolvendo..."
+              CONFLICTS=$(git ls-files -u | awk '{print $4}' | sort -u || true)
+              if [ -n "$CONFLICTS" ]; then
+                for FILE in $CONFLICTS; do
+                  git checkout --ours -- "$FILE"
+                  git add "$FILE"
+                done
+                git commit -m "chore(codex): auto-resolve conflicts preferring PR"
+              else
+                 # Se o merge falhou mas não achou conflitos, pode ser um estado estranho. Abortamos para segurança.
+                 git merge --abort
+              fi
+            fi
+
+            # --- MUDANÇA CRUCIAL AQUI ---
+            # Adiciona um commit vazio para garantir que haverá um push
+            # e que o workflow 'ready.yml' será acionado.
+            echo "Criando commit vazio para acionar os checks..."
+            git commit --allow-empty -m "chore: trigger CI checks"
+            
+            echo "Enviando push para acionar os checks..."
+            git push origin "HEAD:${BRANCH_NAME}"
+
+            echo "Tentando habilitar o auto-merge..."
+            if gh pr merge "$PR" --repo "$REPO" --squash --auto; then
+              gh pr comment "$PR" --repo "$REPO" --body "✅ **Codex Merge Queue**: Fila processada. Auto-merge habilitado e aguardando checks." || true
+            else
+              gh pr comment "$PR" --repo "$REPO" --body "⚠️ **Codex Merge Queue**: Tentei habilitar o auto-merge, mas falhou. Verifique as regras de proteção." || true
+            fi
+            
+            git checkout "${TARGET_BRANCH}"
+          done
+
+          echo "Processamento da fila concluído."

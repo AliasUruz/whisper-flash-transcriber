@@ -278,9 +278,20 @@ class ConfigManager:
             secrets_loaded = {}
             self._secrets_hash = None
 
+        # Validar caminho do cache de ASR
+        asr_cache_dir = cfg.get(ASR_CACHE_DIR_CONFIG_KEY, "")
+        asr_cache_dir = os.path.expanduser(str(asr_cache_dir)) if isinstance(asr_cache_dir, str) else ""
+        if not asr_cache_dir or not os.path.isdir(asr_cache_dir):
+            asr_cache_dir = os.path.expanduser(self.default_config[ASR_CACHE_DIR_CONFIG_KEY])
+            cfg[ASR_CACHE_DIR_CONFIG_KEY] = asr_cache_dir
+        try:
+            os.makedirs(asr_cache_dir, exist_ok=True)
+        except Exception as e:  # pragma: no cover - salvaguarda
+            logging.warning(f"Falha ao criar diretório de cache ASR '{asr_cache_dir}': {e}")
+
         cfg["asr_curated_catalog"] = list_catalog()
         try:
-            cfg["asr_installed_models"] = list_installed(ASR_CACHE_DIR)
+            cfg["asr_installed_models"] = list_installed(asr_cache_dir)
         except Exception as e:  # pragma: no cover - salvaguarda
             logging.warning(f"Falha ao listar modelos instalados: {e}")
             cfg["asr_installed_models"] = []
