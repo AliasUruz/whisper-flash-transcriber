@@ -173,6 +173,15 @@ class AppCore:
         self.ct2_quantization = self.config_manager.get("ct2_quantization")
         # ... e outras configurações que AppCore precisa diretamente
 
+    def _sync_installed_models(self):
+        """Atualiza o ConfigManager com os modelos ASR instalados."""
+        try:
+            cache_dir = self.config_manager.get("asr_cache_dir")
+            installed = list_installed(cache_dir)
+            self.config_manager.set_asr_installed_models(installed)
+        except Exception as e:  # pragma: no cover - operação auxiliar
+            logging.warning(f"Failed to sync installed models: {e}")
+
     # --- Callbacks de Módulos ---
     def set_state_update_callback(self, callback):
         self.state_update_callback = callback
