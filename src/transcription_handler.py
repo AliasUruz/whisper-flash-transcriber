@@ -8,7 +8,7 @@ import torch
 try:  # pragma: no cover - biblioteca opcional
     from whisper_flash import make_backend  # type: ignore
 except Exception:  # pragma: no cover
-    make_backend = None  # type: ignore
+    from .asr.backends import make_backend  # type: ignore
 
 try:  # pragma: no cover - transformers podem não estar instalados em testes
     from transformers import (
@@ -459,31 +459,77 @@ class TranscriptionHandler:
         try:
             if make_backend is not None:
                 asr_model_id = self.config_manager.get("asr_model_id")
-                asr_backend = self.config_manager.get("asr_backend")
-                asr_compute_device = self.config_manager.get("asr_compute_device")
+                asr_backend = (self.config_manager.get("asr_backend") or "transformers")
+                asr_compute_device = self.config_manager.get("asr_compute_device") or "auto"
                 asr_dtype = self.config_manager.get("asr_dtype")
                 asr_ct2_compute_type = self.config_manager.get("asr_ct2_compute_type")
                 asr_cache_dir = self.config_manager.get("asr_cache_dir")
 
-                self._asr_backend = make_backend(asr_backend)
+                backend_name = (asr_backend or "transformers").lower()
+                self.backend_resolved = backend_name
 
-                attn_impl = "sdpa"
+                gpu_index = self.gpu_index if isinstance(self.gpu_index, int) else -1
+                pref = asr_compute_device.lower() if isinstance(asr_compute_device, str) else "auto"
+                backend_device = "auto"
+                transformers_device = None
+                if pref == "cpu":
+                    backend_device = "cpu"
+                    transformers_device = -1
+                elif pref == "cuda":
+                    target_idx = gpu_index if gpu_index is not None and gpu_index >= 0 else 0
+                    backend_device = f"cuda:{target_idx}"
+                    transformers_device = f"cuda:{target_idx}"
+                    if self.gpu_index is None or self.gpu_index < 0:
+                        self.gpu_index = target_idx
+                else:
+                    backend_device = "auto"
+                    transformers_device = None
+
+                self._asr_backend = make_backend(backend_name)
+                if hasattr(self._asr_backend, "model_id"):
+                    try:
+                        self._asr_backend.model_id = asr_model_id
+                    except Exception:
+                        pass
+                if hasattr(self._asr_backend, "device"):
+                    try:
+                        self._asr_backend.device = backend_device
+                    except Exception:
+                        pass
+
+                load_kwargs = {}
+                if backend_name in {"transformers", "whisper"}:
+                    attn_impl = "sdpa"
+                    try:
+                        import importlib.util
+                        if importlib.util.find_spec("flash_attn") is not None:
+                            attn_impl = "flash_attn2"
+                    except Exception:
+                        pass
+                    load_kwargs = {
+                        "device": transformers_device,
+                        "dtype": asr_dtype,
+                        "cache_dir": asr_cache_dir,
+                        "attn_implementation": attn_impl,
+                    }
+                elif backend_name in {"ct2", "faster-whisper", "ctranslate2"}:
+                    load_kwargs = {
+                        "ct2_compute_type": asr_ct2_compute_type,
+                        "cache_dir": asr_cache_dir,
+                    }
+                else:
+                    load_kwargs = {"cache_dir": asr_cache_dir}
+
+                load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
+                if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
+                    load_kwargs["cache_dir"] = str(load_kwargs["cache_dir"])
+
+                self._asr_backend.load(**load_kwargs)
                 try:
-                    import importlib.util
-                    if importlib.util.find_spec("flash_attn") is not None:
-                        attn_impl = "flash_attn2"
-                except Exception:
-                    pass
-
-                self._asr_backend.load(
-                    model_id=asr_model_id,
-                    compute_device=asr_compute_device,
-                    dtype=asr_dtype,
-                    ct2_compute_type=asr_ct2_compute_type,
-                    cache_dir=asr_cache_dir,
-                    attn_implementation=attn_impl,
-                )
-                self._asr_backend.warmup()
+                    self._asr_backend.warmup()
+                except Exception as warmup_error:
+                    logging.debug(f"Falha no warmup do backend ASR: {warmup_error}")
+                self.pipe = getattr(self._asr_backend, "pipe", None)
                 self._asr_loaded = True
                 self.on_model_ready_callback()
                 return

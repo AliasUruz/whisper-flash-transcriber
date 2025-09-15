@@ -28,6 +28,9 @@ from .config_manager import (
     ASR_BACKEND_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+    ASR_COMPUTE_DEVICE_CONFIG_KEY,
+    ASR_DTYPE_CONFIG_KEY,
+    ASR_CACHE_DIR_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
@@ -683,6 +686,10 @@ class AppCore:
                 "new_gemini_model_options": "gemini_model_options",
                 "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
                 "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
+                "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
+                "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
+                "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+                "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
                 "new_use_vad": "use_vad",
                 "new_vad_threshold": "vad_threshold",
                 "new_vad_silence_duration": "vad_silence_duration",
@@ -830,6 +837,10 @@ class AppCore:
             "max_memory_seconds_mode",
             ASR_MODEL_ID_CONFIG_KEY,
             ASR_BACKEND_CONFIG_KEY,
+            ASR_COMPUTE_DEVICE_CONFIG_KEY,
+            ASR_DTYPE_CONFIG_KEY,
+            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            ASR_CACHE_DIR_CONFIG_KEY,
         ]:
             self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
             self.transcription_handler.update_config()
