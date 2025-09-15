@@ -1,9 +1,15 @@
+# .github/workflows/ready.yml
 name: ready
+
+# Este workflow deve ser acionado sempre que um PR for aberto ou atualizado
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+
 jobs:
+  # O nome deste job ("ready") é o que aparece no status check
   ready:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "ok"
+      # Este passo é trivial e sempre passa, acendendo a "luz verde"
+      - run: echo "Status check 'ready' is ok."
