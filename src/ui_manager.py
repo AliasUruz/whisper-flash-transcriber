@@ -408,10 +408,7 @@ class UIManager:
                 asr_model_var = asr_model_id_var
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
-                ct2_quant_var = ctk.StringVar(value=self.config_manager.get("ct2_quantization", "float16"))
-                asr_cache_dir_var = ctk.StringVar(
-                    value=os.path.expanduser(self.config_manager.get_asr_cache_dir())
-                )
+                asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
 
                 def update_text_correction_fields():
                     enabled = text_correction_enabled_var.get()
@@ -994,21 +991,11 @@ class UIManager:
                 ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
 
                 quant_frame = ctk.CTkFrame(transcription_frame)
-                quant_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
                 quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
-                )
-                quant_menu.pack(side="left", padx=5)
-                Tooltip(
-                    quant_menu,
-                    "float16: maior qualidade e mais memória.\n"
-                    "int8: menor memória com possível perda de precisão.\n"
-                    "int8_float16: pesos int8 e ativações fp16.",
-                )
-                quant_help_label = ctk.CTkLabel(
                     quant_frame,
-                    text="float16: melhor qualidade | int8: menor memória | int8_float16: equilíbrio",
+                    variable=asr_ct2_compute_type_var,
+                    values=["float16", "int8", "int8_float16"],
                 )
 
                 def _on_backend_change(choice: str) -> None:
@@ -1028,6 +1015,8 @@ class UIManager:
                 )
                 asr_backend_menu.pack(side="left", padx=5)
                 Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
+
+                quant_frame.pack(fill="x", pady=5)
 
                 asr_model_frame = ctk.CTkFrame(transcription_frame)
                 asr_model_frame.pack(fill="x", pady=5)
