@@ -1,0 +1,91 @@
+name: Codex Merge Queue (Oldest to Newest)
+
+on:
+  # Roda quando houver push na branch 'stable' ou manualmente
+  workflow_dispatch:
+  push:
+    branches:
+      - stable
+
+# Garante que apenas uma fila rode por vez
+concurrency:
+  group: codex-merge-queue
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  process_queue:
+    name: Process PR Queue (Oldest → Newest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          # Pega todo o histórico para permitir merges
+          fetch-depth: 0
+
+      - name: Process PR Queue
+        env:
+          REPO: ${{ github.repository }}
+          TARGET_BRANCH: stable
+          PR_LABEL: codex
+          # Token do GitHub já é fornecido automaticamente para o gh
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configura o Git para fazer commits como o bot do Actions
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "Buscando PRs abertos com a label '${PR_LABEL}'..."
+          # Lista, ordena e limpa a lista de PRs
+          PRS=$(gh pr list --repo "$REPO" --label "$PR_LABEL" --state open --json number,createdAt \
+            | jq -r 'sort_by(.createdAt) | .[] | .number' \
+            | tr -d '\r')
+
+          if [ -z "$PRS" ]; then
+            echo "Nenhum PR com a label '${PR_LABEL}' foi encontrado. Finalizando."
+            exit 0
+          fi
+
+          echo "Fila de PRs encontrada (do mais antigo para o mais novo): $PRS"
+          
+          # Itera sobre cada PR
+          for PR in $PRS; do
+            echo "----------------------------------------"
+            echo ">>> Processando PR #${PR}..."
+            
+            # Tenta fazer o checkout do branch do PR
+            if ! gh pr checkout "$PR" --repo "$REPO"; then
+              echo "!!! AVISO: Falha no checkout do PR #${PR}. Pulando."
+              continue
+            fi
+
+            BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
+            echo "Branch atual: ${BRANCH_NAME}"
+
+            # Faz o merge da branch 'stable' favorecendo as mudanças do PR e sem abrir editor
+            echo "Mesclando '${TARGET_BRANCH}' sem abrir o editor..."
+            git merge --no-edit -X ours "origin/${TARGET_BRANCH}" || true
+
+            # Cria um commit vazio para garantir que o workflow 'ready.yml' será acionado
+            echo "Criando commit vazio para acionar checks..."
+            git commit --allow-empty -m "chore(ci): trigger checks via merge queue"
+
+            # Envia o push com o merge e o commit vazio
+            echo "Enviando push para o branch '${BRANCH_NAME}'..."
+            git push origin "HEAD:${BRANCH_NAME}"
+            echo "Push concluído para o PR #${PR}!"
+
+            # Tenta habilitar o auto-merge como um passo final
+            echo "Tentando habilitar o auto-merge para o PR #${PR}..."
+            gh pr merge "$PR" --repo "$REPO" --squash --auto || echo "Não foi possível habilitar o auto-merge. Aguardando checks..."
+
+            # Volta para a branch principal para o próximo PR
+            echo "PR #${PR} processado. Voltando para '${TARGET_BRANCH}'."
+            git checkout "$TARGET_BRANCH"
+          done
+
+          echo "--- PROCESSAMENTO DA FILA CONCLUÍDO COM SUCESSO ---"

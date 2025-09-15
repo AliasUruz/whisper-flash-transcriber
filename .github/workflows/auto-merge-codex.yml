@@ -10,26 +10,16 @@ permissions:
 
 jobs:
   automerge:
+    # Dispara para branches codex/... ou PRs com label "codex"
     if: |
       startsWith(github.event.pull_request.head.ref, 'codex/') ||
       contains(github.event.pull_request.labels.*.name, 'codex')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-
-      # (opcional) auto-approve se você usar um PAT de uma conta-bot
-      # - name: Auto-approve (bot)
-      #   uses: hmarr/auto-approve-action@v4
-      #   with:
-      #     github-token: ${{ secrets.AUTOMERGE_TOKEN }}
-      #     review-message: "Auto-approved Codex PR"
-
       - name: Enable auto-merge (squash)
         uses: peter-evans/enable-pull-request-automerge@v3
         with:
+          # CORREÇÃO APLICADA AQUI:
+          pull-request-number: ${{ github.event.pull_request.number }}
           token: ${{ secrets.GITHUB_TOKEN }}
           merge-method: squash
