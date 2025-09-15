@@ -1,41 +1,31 @@
 name: Codex Merge Queue (Oldest to Newest)
 
 on:
-  # Permite que você rode manualmente pela aba Actions
   workflow_dispatch:
-  # Roda automaticamente quando a branch 'stable' é atualizada
   push:
     branches:
       - stable
 
-# Garante que apenas uma instância deste workflow rode por vez
 concurrency:
   group: codex-merge-queue
   cancel-in-progress: false
 
 permissions:
-  contents: write        # Para fazer commits e pushes com as resoluções
-  pull-requests: write   # Para habilitar o auto-merge e comentar nos PRs
+  contents: write
+  pull-requests: write
 
 jobs:
   process_queue:
     name: Process PR Queue (Oldest → Newest)
     runs-on: ubuntu-latest
     steps:
-      # 1. Faz o checkout do código para poder manipular o repositório
       - name: Checkout Repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Precisamos do histórico completo para merges
+          fetch-depth: 0
 
-      # 2. Autentica a ferramenta 'gh' para interagir com a API do GitHub
-      - name: Authenticate GitHub CLI
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "$GITHUB_TOKEN" | gh auth login --with-token
+      # O PASSO DE AUTENTICAÇÃO FOI REMOVIDO DAQUI
 
-      # 3. Processa a fila de PRs
       - name: Process PR Queue
         env:
           REPO: ${{ github.repository }}
