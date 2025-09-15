@@ -1,0 +1,62 @@
+name: Codex Conflict Resolver
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    name: Attempt to auto-resolve conflicts
+    if: startsWith(github.head_ref, 'codex/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Attempt Aggressive Merge (Strategy: Ours)
+        id: merge
+        run: |
+          git checkout ${{ github.head_ref }}
+          if git merge -X ours "origin/${{ github.base_ref }}" --no-edit; then
+            echo "Merge bem-sucedido usando a estratégia 'ours'.
+            echo "outcome=success" >> $GITHUB_OUTPUT
+          else
+            echo "Merge falhou mesmo com a estratégia 'ours'. Isso indica um conflito complexo/estrutural."
+            echo "outcome=failure" >> $GITHUB_OUTPUT
+            git merge --abort
+          fi
+
+      - name: Push Resolution on Success
+        if: steps.merge.outputs.outcome == 'success'
+        run: |
+          echo "Enviando a resolução para o branch do PR..."
+          git push origin HEAD:${{ github.head_ref }}
+
+      - name: Handle Failure by Tagging User
+        if: steps.merge.outputs.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '@AliasUruz 🤖: Não consegui resolver os conflitos neste PR automaticamente, mesmo com a estratégia agressiva. Por favor, resolva manualmente.'
+            });
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['needs-manual-resolution']
+            });
