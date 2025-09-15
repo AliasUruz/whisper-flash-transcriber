@@ -6,7 +6,7 @@ import threading
 import time
 import pystray
 from PIL import Image, ImageDraw
-import os
+from pathlib import Path
 
 # Importar constantes de configuração
 from .config_manager import (
@@ -498,9 +498,19 @@ class UIManager:
                         return
                     asr_backend_to_apply = asr_backend_var.get()
                     asr_model_id_to_apply = asr_model_id_var.get()
-                    selected_device_str = asr_compute_device_var.get()
-                    asr_compute_device_to_apply = "auto"
-                    gpu_index_to_apply = -1
+                    asr_compute_device_to_apply = asr_compute_device_var.get()
+                    asr_dtype_to_apply = asr_dtype_var.get()
+                    asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
+                    asr_cache_dir_to_apply = asr_cache_dir_var.get()
+                    try:
+                        Path(asr_cache_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as e:
+                        messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}", parent=settings_win)
+                        return
+
+                    # Logic for converting UI to GPU index
+                    selected_device_str = gpu_selection_var.get()
+                    gpu_index_to_apply = -1 # Default to "Auto-select"
                     if "Force CPU" in selected_device_str:
                         asr_compute_device_to_apply = "cpu"
                     elif selected_device_str.startswith("GPU"):
@@ -983,15 +993,23 @@ class UIManager:
                 asr_backend_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
 
-                asr_ct2_frame = ctk.CTkFrame(asr_frame)
-                ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 10))
-                asr_ct2_menu = ctk.CTkOptionMenu(
-                    asr_ct2_frame,
-                    variable=asr_ct2_compute_type_var,
-                    values=["auto", "float16", "float32", "int8_float16", "int8_float32"],
+                quant_frame = ctk.CTkFrame(transcription_frame)
+                quant_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
+                quant_menu = ctk.CTkOptionMenu(
+                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
                 )
-                asr_ct2_menu.pack(side="left", padx=5)
-                Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
+                quant_menu.pack(side="left", padx=5)
+                Tooltip(
+                    quant_menu,
+                    "float16: maior qualidade e mais memória.\n"
+                    "int8: menor memória com possível perda de precisão.\n"
+                    "int8_float16: pesos int8 e ativações fp16.",
+                )
+                quant_help_label = ctk.CTkLabel(
+                    quant_frame,
+                    text="float16: melhor qualidade | int8: menor memória | int8_float16: equilíbrio",
+                )
 
                 def _on_backend_change(choice: str) -> None:
                     asr_backend_var.set(choice)
@@ -1005,25 +1023,20 @@ class UIManager:
                     command=_on_backend_change,
                 )
                 asr_backend_menu.pack(side="left", padx=5)
-                Tooltip(
-                    asr_backend_menu,
-                    (
-                        "Backend de ASR. Em 'auto', tenta primeiro 'transformers' e, "
-                        "se indisponível, cai para 'ct2'."
-                    ),
-                )
+                Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
 
-                asr_ct2_frame.pack(fill="x", pady=5)
-
-                asr_model_frame = ctk.CTkFrame(asr_frame)
+                asr_model_frame = ctk.CTkFrame(transcription_frame)
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
                 catalog = model_manager.list_catalog()
-                catalog_display_map = {m["id"]: m["display_name"] for m in catalog}
-                installed_ids = {
-                    m["id"] for m in self.config_manager.get_asr_installed_models()
-                }
+                try:
+                    installed_ids = {
+                        m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
+                    }
+                except OSError:
+                    installed_ids = set()
+                    messagebox.showerror("Erro", "Diretório de cache inválido.")
                 all_ids = sorted({m["id"] for m in catalog} | installed_ids)
                 id_to_display = {mid: catalog_display_map.get(mid, mid) for mid in all_ids}
                 display_to_id = {v: k for k, v in id_to_display.items()}
@@ -1072,7 +1085,11 @@ class UIManager:
                     except Exception:
                         download_text = "?"
 
-                    installed_models = self.config_manager.get_asr_installed_models()
+                    try:
+                        installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+                    except OSError:
+                        installed_models = []
+                        messagebox.showerror("Erro", "Diretório de cache inválido.")
                     entry = next((m for m in installed_models if m["id"] == choice), None)
                     if entry:
                         i_bytes, i_files = model_manager.get_installed_size(entry["path"])
