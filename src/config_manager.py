@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 import requests
+import tkinter.messagebox as messagebox
 
 from .model_manager import list_catalog
 try:
