@@ -9,7 +9,7 @@ from typing import List
 import requests
 import tkinter.messagebox as messagebox
 
-from .model_manager import list_catalog, list_installed
+from .model_manager import list_catalog
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -188,7 +188,6 @@ def _normalize_asr_backend(name: str | None) -> str | None:
     return normalized
 
 
-ASR_CACHE_DIR = os.path.expanduser(DEFAULT_CONFIG["asr_cache_dir"])
 
 class ConfigManager:
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
@@ -637,7 +636,6 @@ class ConfigManager:
             "tray_menu_items",
             "hotkey_manager",
             "asr_curated_catalog",
-            "asr_installed_models",
         ]
         for key in keys_to_ignore:
             if key in config_to_save:
