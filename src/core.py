@@ -70,7 +70,10 @@ class AppCore:
             installed = list_installed(cache_dir)
             self.config_manager.set_asr_installed_models(installed)
         except OSError:
-            messagebox.showerror("Erro", "Diretório de cache inválido.")
+            messagebox.showerror(
+                "Configuração",
+                "Diretório de cache inválido. Verifique as configurações.",
+            )
         except Exception as e:
             logging.warning(f"Failed to sync installed models: {e}")
 
@@ -120,27 +123,33 @@ class AppCore:
             ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
             model_path = Path(cache_dir) / backend / model_id
 
-            if not (model_path.is_dir() and any(model_path.iterdir())):
-                if messagebox.askyesno(
-                    "Model Download",
-                    f"Model '{model_id}' is not installed. Download now?",
-                ):
-                    try:
-                        ensure_download(model_id, backend, cache_dir, quant=ct2_type)
-                    except DownloadCancelledError:
-                        logging.info("Model download cancelled by user.")
-                        messagebox.showinfo("Model", "Download canceled.")
-                        self._set_state(STATE_LOADING_MODEL)
-                    except OSError:
-                        logging.error("Invalid cache directory during model download.", exc_info=True)
-                        messagebox.showerror("Erro", "Diretório de cache inválido.")
-                        self._set_state(STATE_ERROR_MODEL)
-                    except Exception as e:
-                        logging.error(f"Model download failed: {e}")
-                        messagebox.showerror("Model", f"Download failed: {e}")
-                        self._set_state(STATE_ERROR_MODEL)
-                    else:
-                        self.transcription_handler.start_model_loading()
+        cache_dir = self.config_manager.get("asr_cache_dir")
+        model_id = self.asr_model_id
+        backend = self.asr_backend
+        ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+        model_path = Path(cache_dir) / backend / model_id
+
+        if not (model_path.is_dir() and any(model_path.iterdir())):
+            if messagebox.askyesno(
+                "Model Download",
+                f"Model '{model_id}' is not installed. Download now?",
+            ):
+                try:
+                    ensure_download(model_id, backend, cache_dir, quant=ct2_type)
+                except DownloadCancelledError:
+                    logging.info("Model download cancelled by user.")
+                    messagebox.showinfo("Model", "Download canceled.")
+                    self._set_state(STATE_LOADING_MODEL)
+                except OSError:
+                    messagebox.showerror(
+                        "Model",
+                        "Diretório de cache inválido. Verifique as configurações.",
+                    )
+                    self._set_state(STATE_ERROR_MODEL)
+                except Exception as e:
+                    logging.error(f"Model download failed: {e}")
+                    messagebox.showerror("Model", f"Download failed: {e}")
+                    self._set_state(STATE_ERROR_MODEL)
                 else:
                     logging.info("User skipped model download.")
                     messagebox.showinfo(
