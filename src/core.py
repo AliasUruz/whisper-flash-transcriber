@@ -116,7 +116,12 @@ class AppCore:
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
 
-        threading.Thread(target=self._sync_installed_models, daemon=True).start()
+        try:
+            cache_dir = self.config_manager.get("asr_cache_dir")
+            model_id = self.asr_model_id
+            backend = self.asr_backend
+            ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+            model_path = Path(cache_dir) / backend / model_id
 
         cache_dir = self.config_manager.get("asr_cache_dir")
         model_id = self.asr_model_id
@@ -146,16 +151,17 @@ class AppCore:
                     messagebox.showerror("Model", f"Download failed: {e}")
                     self._set_state(STATE_ERROR_MODEL)
                 else:
-                    self.transcription_handler.start_model_loading()
+                    logging.info("User skipped model download.")
+                    messagebox.showinfo(
+                        "Model",
+                        "No model installed. You can install one later in the settings.",
+                    )
+                    self._set_state(STATE_ERROR_MODEL)
             else:
-                logging.info("User skipped model download.")
-                messagebox.showinfo(
-                    "Model",
-                    "No model installed. You can install one later in the settings.",
-                )
-                self._set_state(STATE_ERROR_MODEL)
-        else:
-            self.transcription_handler.start_model_loading()
+                self.transcription_handler.start_model_loading()
+        except OSError:
+            messagebox.showerror("Erro", "Diretório de cache inválido.")
+            self._set_state(STATE_ERROR_MODEL)
 
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
@@ -265,7 +271,16 @@ class AppCore:
         self._log_status(f"Erro: Falha ao carregar o modelo. {error_msg}", error=True)
         # Exibir messagebox via UI Manager se disponível
         if self.ui_manager:
-            self.main_tk_root.after(0, lambda: messagebox.showerror("Erro de Carregamento do Modelo", f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\nPor favor, verifique sua conexão com a internet, o nome do modelo nas configurações ou a memória da sua GPU."))
+            if error_msg == "Diretório de cache inválido.":
+                self.main_tk_root.after(0, lambda: messagebox.showerror("Erro", "Diretório de cache inválido."))
+            else:
+                self.main_tk_root.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        "Erro de Carregamento do Modelo",
+                        f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\nPor favor, verifique sua conexão com a internet, o nome do modelo nas configurações ou a memória da sua GPU.",
+                    ),
+                )
 
     def _on_segment_transcribed_for_ui(self, text):
         """Callback para enviar texto de segmento para a UI ao vivo."""
