@@ -21,13 +21,14 @@ git pull origin "$TARGET_BRANCH"
 echo "----------------------------------------------------"
 
 echo "Buscando PRs abertos com a label '${PR_LABEL}'..."
-# Comando exato que está no workflow, para diagnóstico
+# --- MUDANÇA CRUCIAL AQUI ---
+# Adicionado "| tr -d '\r'" para remover o caractere de quebra de linha do Windows da lista de PRs
 PRS=$(gh pr list --repo "$REPO" --label "$PR_LABEL" --state open --json number,createdAt \
-  | jq -r 'sort_by(.createdAt) | .[] | .number')
+  | jq -r 'sort_by(.createdAt) | .[] | .number' \
+  | tr -d '\r')
 
 if [ -z "$PRS" ]; then
   echo "!!! ERRO DE DIAGNÓSTICO: Nenhum PR foi encontrado com a label '${PR_LABEL}'."
-  echo "Verifique se você está autenticado corretamente ('gh auth status') e se os PRs existem."
   exit 1
 fi
 
@@ -50,7 +51,6 @@ for PR in $PRS; do
   echo "Branch atual: ${BRANCH_NAME}"
 
   echo "Mesclando '${TARGET_BRANCH}' com estratégia '-X ours' (favorecendo o PR)..."
-  # Usamos '|| true' para não parar o script se o merge der conflito inicial
   git merge -X ours "origin/${TARGET_BRANCH}" || true
 
   echo "Verificando se ainda há conflitos..."
