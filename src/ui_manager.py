@@ -1010,7 +1010,16 @@ class UIManager:
                     command=_on_backend_change,
                 )
                 asr_backend_menu.pack(side="left", padx=5)
-                Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
+                Tooltip(
+                    asr_backend_menu,
+                    "Inference backend for speech recognition.\nDerived from selected model; override in advanced mode.",
+                )
+
+                quant_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
+                quant_menu = ctk.CTkOptionMenu(
+                    quant_frame, variable=asr_ct2_compute_type_var, values=["float16", "int8", "int8_float16"]
+                )
 
                 quant_frame.pack(fill="x", pady=5)
 
@@ -1134,14 +1143,24 @@ class UIManager:
                     quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
 
                 def _on_model_change(choice: str) -> None:
-                    mid = display_to_id.get(choice, choice)
-                    asr_model_id_var.set(mid)
-                    self.config_manager.set_asr_model_id(mid)
+                    self.config_manager.set_asr_model_id(choice)
+
+                    backend = next(
+                        (m["backend"] for m in catalog if m["id"] == choice),
+                        None,
+                    )
+                    if backend:
+                        asr_backend_var.set(backend)
+                        asr_backend_menu.configure(state="disabled")
+                    else:
+                        asr_backend_menu.configure(state="normal")
+                    self.config_manager.set_asr_backend(asr_backend_var.get())
                     self.config_manager.save_config()
+                    _on_backend_change(asr_backend_var.get())
                     _update_model_info(choice)
-                    _update_install_button_state()
 
                 asr_model_menu.configure(command=_on_model_change)
+                _on_model_change(asr_model_id_var.get())
 
                 asr_device_frame = ctk.CTkFrame(asr_frame)
                 asr_device_frame.pack(fill="x", pady=5)
