@@ -24,21 +24,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      # O PASSO DE AUTENTICAÇÃO FOI REMOVIDO DAQUI
-
       - name: Process PR Queue
         env:
           REPO: ${{ github.repository }}
           TARGET_BRANCH: stable
           PR_LABEL: codex
         run: |
-          # Configuração para que os commits sejam feitos pelo bot do Actions
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           echo "Procurando PRs abertos com a label '${PR_LABEL}'..."
-
-          # CORREÇÃO: Lista os PRs em JSON e usa 'jq' para ordenar por data de criação
           PRS=$(gh pr list --repo "$REPO" --label "$PR_LABEL" --state open --json number,createdAt \
             | jq -r 'sort_by(.createdAt) | .[] | .number')
 
@@ -50,64 +45,55 @@ jobs:
           echo "Fila de PRs (do mais antigo para o mais novo):"
           echo "$PRS"
 
-          # Itera sobre cada número de PR na lista ordenada
           for PR in $PRS; do
             echo "----------------------------------------"
             echo "Processando PR #${PR}"
             echo "----------------------------------------"
 
-            # Faz o checkout do branch do PR
             if ! gh pr checkout "$PR" --repo "$REPO"; then
               echo "Falha ao fazer checkout do PR #${PR}. Pulando."
-              gh pr comment "$PR" --repo "$REPO" --body "❌ **Codex Merge Queue**: Não consegui fazer checkout deste PR. Verifique se o branch ainda existe e se há permissões." || true
+              gh pr comment "$PR" --repo "$REPO" --body "❌ **Codex Merge Queue**: Não consegui fazer checkout deste PR." || true
               continue
             fi
 
             BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD)"
-            echo "Branch atual: ${BRANCH_NAME}"
-
-            # Tenta o merge da branch alvo, preferindo as mudanças do PR (ours)
-            echo "Mesclando '${TARGET_BRANCH}' em '${BRANCH_NAME}' com estratégia '-X ours'..."
-            set +e # Desativa o 'exit on error' temporariamente
-            git merge -X ours --no-commit "origin/${TARGET_BRANCH}"
+            
+            set +e
+            git merge -X ours "origin/${TARGET_BRANCH}"
             MERGE_EXIT_CODE=$?
-            set -e # Reativa o 'exit on error'
+            set -e
 
             if [ $MERGE_EXIT_CODE -ne 0 ]; then
-              echo "Merge inicial sinalizou conflitos. Tentando resolução forçada..."
-            fi
-            
-            # Força a resolução de qualquer conflito restante, sempre mantendo o lado do PR
-            CONFLICTS=$(git ls-files -u | awk '{print $4}' | sort -u || true)
-            if [ -n "$CONFLICTS" ]; then
-              echo "Arquivos com conflitos restantes: $CONFLICTS"
-              for FILE in $CONFLICTS; do
-                echo "Resolvendo '${FILE}' favorecendo o PR (ours)..."
-                git checkout --ours -- "$FILE"
-                git add "$FILE"
-              done
-              
-              # Cria um commit com a resolução
-              git commit -m "chore(codex): auto-resolve conflicts preferring PR (ours)"
-              echo "Enviando push com as resoluções de conflito..."
-              git push origin "HEAD:${BRANCH_NAME}"
-            else
-              echo "Nenhum conflito restante para resolver."
-              # Aborta o merge se não houver nada para commitar, limpando o estado
-              git merge --abort
+              echo "Merge inicial sinalizou conflitos. Resolvendo..."
+              CONFLICTS=$(git ls-files -u | awk '{print $4}' | sort -u || true)
+              if [ -n "$CONFLICTS" ]; then
+                for FILE in $CONFLICTS; do
+                  git checkout --ours -- "$FILE"
+                  git add "$FILE"
+                done
+                git commit -m "chore(codex): auto-resolve conflicts preferring PR"
+              else
+                 # Se o merge falhou mas não achou conflitos, pode ser um estado estranho. Abortamos para segurança.
+                 git merge --abort
+              fi
             fi
 
-            # Tenta habilitar o auto-merge
-            echo "Tentando habilitar o auto-merge para o PR #${PR}..."
+            # --- MUDANÇA CRUCIAL AQUI ---
+            # Adiciona um commit vazio para garantir que haverá um push
+            # e que o workflow 'ready.yml' será acionado.
+            echo "Criando commit vazio para acionar os checks..."
+            git commit --allow-empty -m "chore: trigger CI checks"
+            
+            echo "Enviando push para acionar os checks..."
+            git push origin "HEAD:${BRANCH_NAME}"
+
+            echo "Tentando habilitar o auto-merge..."
             if gh pr merge "$PR" --repo "$REPO" --squash --auto; then
-              echo "✅ Auto-merge habilitado com sucesso para o PR #${PR}."
-              gh pr comment "$PR" --repo "$REPO" --body "✅ **Codex Merge Queue**: Resolvi os conflitos e habilitei o auto-merge (squash). O merge ocorrerá assim que os checks passarem." || true
+              gh pr comment "$PR" --repo "$REPO" --body "✅ **Codex Merge Queue**: Fila processada. Auto-merge habilitado e aguardando checks." || true
             else
-              echo "❌ Não foi possível habilitar o auto-merge para o PR #${PR}."
-              gh pr comment "$PR" --repo "$REPO" --body "⚠️ **Codex Merge Queue**: Tentei habilitar o auto-merge, mas falhou. Isso geralmente acontece por causa de regras de proteção (ex: um 'status check' obrigatório está pendente ou falhou)." || true
+              gh pr comment "$PR" --repo "$REPO" --body "⚠️ **Codex Merge Queue**: Tentei habilitar o auto-merge, mas falhou. Verifique as regras de proteção." || true
             fi
             
-            # Volta para a branch principal para o próximo loop
             git checkout "${TARGET_BRANCH}"
           done
 
