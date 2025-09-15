@@ -1,83 +1,43 @@
-#!/bin/bash
+# Bloco único para RECRIAR o script 'processa_fila.sh' na versão correta
 
-# Encerra o script se qualquer comando falhar
-set -e
+echo "--- CONSTRUINDO O SCRIPT FINAL (VERSÃO SEM EDITOR) ---"
 
-# --- Configurações ---
-REPO="AliasUruz/whisper-flash-transcriber"
-PR_LABEL="codex"
-TARGET_BRANCH="stable"
+# Constrói o arquivo 'processa_fila.sh' do zero com a lógica correta
+echo '#!/bin/bash' > processa_fila.sh
+echo 'set -e' >> processa_fila.sh
+echo 'REPO="AliasUruz/whisper-flash-transcriber"' >> processa_fila.sh
+echo 'PR_LABEL="codex"' >> processa_fila.sh
+echo 'TARGET_BRANCH="stable"' >> processa_fila.sh
+echo 'echo "--- INICIANDO PROCESSAMENTO (VERSÃO FINAL) ---"' >> processa_fila.sh
+echo 'git merge --abort || echo "Nenhum merge para abortar. Repositório limpo."' >> processa_fila.sh
+echo 'git checkout "$TARGET_BRANCH"' >> processa_fila.sh
+echo 'git pull origin "$TARGET_BRANCH"' >> processa_fila.sh
+echo 'echo "----------------------------------------------------"' >> processa_fila.sh
+echo 'echo "Buscando PRs com a label '\''${PR_LABEL}'\''..."' >> processa_fila.sh
+echo "PRS=\$(gh pr list --repo \"\$REPO\" --label \"\$PR_LABEL\" --state open --json number,createdAt | jq -r 'sort_by(.createdAt) | .[] | .number' | tr -d '\r')" >> processa_fila.sh
+echo 'if [ -z "$PRS" ]; then echo "Nenhum PR encontrado."; exit 0; fi' >> processa_fila.sh
+echo 'echo "Fila de PRs encontrada: \$PRS"' >> processa_fila.sh
+echo 'echo "----------------------------------------------------"' >> processa_fila.sh
+echo 'for PR in $PRS; do' >> processa_fila.sh
+echo '  echo ""' >> processa_fila.sh
+echo '  echo ">>> Processando PR #${PR}..."' >> processa_fila.sh
+echo '  if ! gh pr checkout "$PR" --repo "$REPO"; then echo "!!! AVISO: Falha no checkout do PR #${PR}. Pulando."; continue; fi' >> processa_fila.sh
+echo '  BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)' >> processa_fila.sh
+echo '  echo "Branch atual: ${BRANCH_NAME}"' >> processa_fila.sh
+echo '  echo "Mesclando '\''${TARGET_BRANCH}'\'' sem abrir o editor..."' >> processa_fila.sh
+echo '  git merge --no-edit -X ours "origin/${TARGET_BRANCH}" || true' >> processa_fila.sh
+echo '  echo "Criando commit vazio para acionar checks..."' >> processa_fila.sh
+echo '  git commit --allow-empty -m "chore: trigger CI checks"' >> processa_fila.sh
+echo '  echo "Enviando push para o branch '\''${BRANCH_NAME}'\''..."' >> processa_fila.sh
+echo '  git push origin "HEAD:${BRANCH_NAME}"' >> processa_fila.sh
+echo '  echo "Push concluído para o PR #${PR}!"' >> processa_fila.sh
+echo '  echo "PR #${PR} processado. Voltando para '\''${TARGET_BRANCH}'\''."' >> processa_fila.sh
+echo '  git checkout "$TARGET_BRANCH"' >> processa_fila.sh
+echo 'done' >> processa_fila.sh
+echo 'echo ""' >> processa_fila.sh
+echo 'echo "--- PROCESSAMENTO CONCLUÍDO COM SUCESSO ---"' >> processa_fila.sh
 
-echo "--- INICIANDO PROCESSAMENTO DA FILA LOCALMENTE ---"
-echo "Repositório: $REPO"
-echo "Label dos PRs: $PR_LABEL"
-echo "Branch Alvo: $TARGET_BRANCH"
-echo "----------------------------------------------------"
+# Torna o script executável
+chmod +x processa_fila.sh
 
-# Garante que estamos na branch principal e com a versão mais recente
-echo "Atualizando a branch '$TARGET_BRANCH'..."
-git checkout "$TARGET_BRANCH"
-git pull origin "$TARGET_BRANCH"
-echo "----------------------------------------------------"
-
-echo "Buscando PRs abertos com a label '${PR_LABEL}'..."
-# --- MUDANÇA CRUCIAL AQUI ---
-# Adicionado "| tr -d '\r'" para remover o caractere de quebra de linha do Windows da lista de PRs
-PRS=$(gh pr list --repo "$REPO" --label "$PR_LABEL" --state open --json number,createdAt \
-  | jq -r 'sort_by(.createdAt) | .[] | .number' \
-  | tr -d '\r')
-
-if [ -z "$PRS" ]; then
-  echo "!!! ERRO DE DIAGNÓSTICO: Nenhum PR foi encontrado com a label '${PR_LABEL}'."
-  exit 1
-fi
-
-echo "Fila de PRs encontrada (do mais antigo para o mais novo):"
-echo "$PRS"
-echo "----------------------------------------------------"
-
-# Itera sobre cada PR encontrado
-for PR in $PRS; do
-  echo ""
-  echo ">>> Processando PR #${PR}..."
-
-  echo "Fazendo checkout do branch do PR..."
-  if ! gh pr checkout "$PR" --repo "$REPO"; then
-    echo "!!! AVISO: Falha ao fazer checkout do PR #${PR}. Pulando para o próximo."
-    continue
-  fi
-
-  BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
-  echo "Branch atual: ${BRANCH_NAME}"
-
-  echo "Mesclando '${TARGET_BRANCH}' com estratégia '-X ours' (favorecendo o PR)..."
-  git merge -X ours "origin/${TARGET_BRANCH}" || true
-
-  echo "Verificando se ainda há conflitos..."
-  CONFLICTS=$(git ls-files -u | awk '{print $4}' | sort -u || true)
-  if [ -n "$CONFLICTS" ]; then
-    echo "Conflitos encontrados. Resolvendo arquivo por arquivo..."
-    for FILE in $CONFLICTS; do
-      echo "   - Resolvendo '${FILE}' favorecendo o PR (ours)..."
-      git checkout --ours -- "$FILE"
-      git add "$FILE"
-    done
-    git commit -m "chore(codex): auto-resolve conflicts preferring PR (local script)"
-    echo "Commit de resolução de conflitos criado."
-  else
-    echo "Nenhum conflito restante."
-  fi
-
-  echo "Criando commit vazio para garantir o acionamento dos checks..."
-  git commit --allow-empty -m "chore: trigger CI checks (local script)"
-
-  echo "Enviando push para o branch '${BRANCH_NAME}'..."
-  git push origin "HEAD:${BRANCH_NAME}"
-  echo "Push concluído para o PR #${PR}!"
-
-  echo "PR #${PR} processado. Voltando para '${TARGET_BRANCH}' para o próximo."
-  git checkout "$TARGET_BRANCH"
-done
-
-echo ""
-echo "--- PROCESSAMENTO DA FILA LOCAL CONCLUÍDO ---"
+echo "✅ Script 'processa_fila.sh' recriado com sucesso!"
