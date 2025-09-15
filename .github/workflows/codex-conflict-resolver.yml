@@ -26,21 +26,23 @@ jobs:
 
       - name: Attempt Aggressive Merge (Strategy: Ours)
         id: merge
+        shell: bash
         run: |
-          git checkout ${{ github.head_ref }}
+          set -euo pipefail
+          git checkout "${{ github.head_ref }}"
           if git merge -X ours "origin/${{ github.base_ref }}" --no-edit; then
-            echo "Merge bem-sucedido usando a estratégia 'ours'.
-            echo "outcome=success" >> $GITHUB_OUTPUT
+            echo "Merge bem-sucedido usando a estrategia 'ours'."
+            echo "outcome=success" >> "$GITHUB_OUTPUT"
           else
-            echo "Merge falhou mesmo com a estratégia 'ours'. Isso indica um conflito complexo/estrutural."
-            echo "outcome=failure" >> $GITHUB_OUTPUT
+            echo "Merge falhou mesmo com a estrategia 'ours'. Isso indica um conflito complexo ou estrutural."
+            echo "outcome=failure" >> "$GITHUB_OUTPUT"
             git merge --abort
           fi
 
       - name: Push Resolution on Success
         if: steps.merge.outputs.outcome == 'success'
         run: |
-          echo "Enviando a resolução para o branch do PR..."
+          echo "Enviando a resolucao para o branch do PR..."
           git push origin HEAD:${{ github.head_ref }}
 
       - name: Handle Failure by Tagging User
@@ -52,7 +54,7 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '@AliasUruz 🤖: Não consegui resolver os conflitos neste PR automaticamente, mesmo com a estratégia agressiva. Por favor, resolva manualmente.'
+              body: '@AliasUruz: Nao consegui resolver os conflitos neste PR automaticamente, mesmo com a estrategia agressiva. Por favor, resolva manualmente.'
             });
             github.rest.issues.addLabels({
               issue_number: context.issue.number,
