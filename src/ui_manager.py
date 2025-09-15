@@ -6,6 +6,7 @@ import threading
 import time
 import pystray
 from PIL import Image, ImageDraw
+import os
 
 # Importar constantes de configuração
 from .config_manager import (
@@ -403,12 +404,14 @@ class UIManager:
                 enable_torch_compile_var = ctk.BooleanVar(value=self.config_manager.get_enable_torch_compile())
                 asr_backend_var = ctk.StringVar(value=self.config_manager.get_asr_backend())
                 asr_model_id_var = ctk.StringVar(value=self.config_manager.get_asr_model_id())
+                asr_model_display_var = ctk.StringVar()
                 asr_model_var = asr_model_id_var
-                asr_compute_device_var = ctk.StringVar(value=self.config_manager.get_asr_compute_device())
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
                 ct2_quant_var = ctk.StringVar(value=self.config_manager.get("ct2_quantization", "float16"))
-                asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
+                asr_cache_dir_var = ctk.StringVar(
+                    value=os.path.expanduser(self.config_manager.get_asr_cache_dir())
+                )
 
                 def update_text_correction_fields():
                     enabled = text_correction_enabled_var.get()
@@ -422,18 +425,19 @@ class UIManager:
                     agentico_prompt_textbox.configure(state=state)
                     gemini_models_textbox.configure(state=state)
 
-                # GPU selection variable
+                # Compute device selection variable
                 available_devices = get_available_devices_for_ui()
                 current_device_selection = "Auto-select (Recommended)"
-                if self.config_manager.get("gpu_index_specified"):
-                    if self.config_manager.get("gpu_index") >= 0:
-                        for dev in available_devices:
-                            if dev.startswith(f"GPU {self.config_manager.get('gpu_index')}"):
-                                current_device_selection = dev
-                                break
-                    elif self.config_manager.get("gpu_index") == -1:
-                        current_device_selection = "Force CPU"
-                gpu_selection_var = ctk.StringVar(value=current_device_selection)
+                compute_device_cfg = self.config_manager.get("asr_compute_device")
+                gpu_index_cfg = self.config_manager.get("gpu_index")
+                if compute_device_cfg == "cpu":
+                    current_device_selection = "Force CPU"
+                elif compute_device_cfg == "cuda" and gpu_index_cfg >= 0:
+                    for dev in available_devices:
+                        if dev.startswith(f"GPU {gpu_index_cfg}"):
+                            current_device_selection = dev
+                            break
+                asr_compute_device_var = ctk.StringVar(value=current_device_selection)
 
                 # Internal GUI functions (detect_key_task_internal, apply_settings, close_settings, etc.)
                 # Will need to be adapted to call methods of self.core_instance_ref and self.config_manager
@@ -494,22 +498,21 @@ class UIManager:
                         return
                     asr_backend_to_apply = asr_backend_var.get()
                     asr_model_id_to_apply = asr_model_id_var.get()
-                    asr_compute_device_to_apply = asr_compute_device_var.get()
-                    asr_dtype_to_apply = asr_dtype_var.get()
-                    asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
-                    asr_cache_dir_to_apply = asr_cache_dir_var.get()
-
-                    # Logic for converting UI to GPU index
-                    selected_device_str = gpu_selection_var.get()
-                    gpu_index_to_apply = -1 # Default to "Auto-select"
+                    selected_device_str = asr_compute_device_var.get()
+                    asr_compute_device_to_apply = "auto"
+                    gpu_index_to_apply = -1
                     if "Force CPU" in selected_device_str:
-                        gpu_index_to_apply = -1 # We use -1 for forced CPU
+                        asr_compute_device_to_apply = "cpu"
                     elif selected_device_str.startswith("GPU"):
+                        asr_compute_device_to_apply = "cuda"
                         try:
                             gpu_index_to_apply = int(selected_device_str.split(":")[0].replace("GPU", "").strip())
                         except (ValueError, IndexError):
                             messagebox.showerror("Valor inválido", "Índice de GPU inválido.", parent=settings_win)
                             return
+                    asr_dtype_to_apply = asr_dtype_var.get()
+                    asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
+                    asr_cache_dir_to_apply = asr_cache_dir_var.get()
 
                     models_text = gemini_models_textbox.get("1.0", "end-1c")
                     new_models_list = [line.strip() for line in models_text.split("\n") if line.strip()]
@@ -613,6 +616,12 @@ class UIManager:
                     gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
                     gemini_model_var.set(DEFAULT_CONFIG["gemini_model"])
                     asr_model_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_model_display_var.set(
+                        id_to_display.get(
+                            DEFAULT_CONFIG["asr_model_id"],
+                            DEFAULT_CONFIG["asr_model_id"],
+                        )
+                    )
                     gemini_prompt_correction_textbox.delete("1.0", "end")
                     gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG["gemini_prompt"])
                     agentico_prompt_textbox.delete("1.0", "end")
@@ -622,16 +631,24 @@ class UIManager:
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
                     asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
                     asr_model_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_model_display_var.set(
+                        id_to_display.get(
+                            DEFAULT_CONFIG["asr_model_id"],
+                            DEFAULT_CONFIG["asr_model_id"],
+                        )
+                    )
 
-                    if DEFAULT_CONFIG["gpu_index"] == -1:
-                        gpu_selection_var.set("Force CPU")
-                    else:
+                    if DEFAULT_CONFIG["asr_compute_device"] == "cpu":
+                        asr_compute_device_var.set("Force CPU")
+                    elif DEFAULT_CONFIG["asr_compute_device"] == "cuda" and DEFAULT_CONFIG["gpu_index"] >= 0:
                         found = "Auto-select (Recommended)"
                         for dev in available_devices:
                             if dev.startswith(f"GPU {DEFAULT_CONFIG['gpu_index']}"):
                                 found = dev
                                 break
-                        gpu_selection_var.set(found)
+                        asr_compute_device_var.set(found)
+                    else:
+                        asr_compute_device_var.set("Auto-select (Recommended)")
 
                     use_vad_var.set(DEFAULT_CONFIG["use_vad"])
                     vad_threshold_var.set(DEFAULT_CONFIG["vad_threshold"])
@@ -819,20 +836,12 @@ class UIManager:
                 # --- ASR Settings ---
                 asr_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 asr_frame.pack(fill="x", padx=10, pady=5)
-                ctk.CTkLabel(asr_frame, text="ASR", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+                ctk.CTkLabel(asr_frame, text="ASR Settings", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
 
                 # Backend selection
-                # --- Transcription Settings (Advanced) Section ---
+                # --- Transcription Settings Section ---
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 transcription_frame.pack(fill="x", padx=10, pady=5)
-                ctk.CTkLabel(transcription_frame, text="Transcription Settings (Advanced)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
-
-                device_frame = ctk.CTkFrame(transcription_frame)
-                device_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(device_frame, text="Processing Device:").pack(side="left", padx=(5, 10))
-                device_menu = ctk.CTkOptionMenu(device_frame, variable=gpu_selection_var, values=available_devices)
-                device_menu.pack(side="left", padx=5)
-                Tooltip(device_menu, "Select CPU or GPU for processing.")
 
                 batch_size_frame = ctk.CTkFrame(transcription_frame)
                 batch_size_frame.pack(fill="x", pady=5)
@@ -970,16 +979,19 @@ class UIManager:
                 Tooltip(display_switch, "Print transcripts to the terminal window.")
 
                 # --- ASR Settings ---
-                asr_backend_frame = ctk.CTkFrame(transcription_frame)
+                asr_backend_frame = ctk.CTkFrame(asr_frame)
                 asr_backend_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 10))
 
-                quant_frame = ctk.CTkFrame(transcription_frame)
-                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
-                quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
+                asr_ct2_frame = ctk.CTkFrame(asr_frame)
+                ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 10))
+                asr_ct2_menu = ctk.CTkOptionMenu(
+                    asr_ct2_frame,
+                    variable=asr_ct2_compute_type_var,
+                    values=["auto", "float16", "float32", "int8_float16", "int8_float32"],
                 )
-                quant_menu.pack(side="left", padx=5)
+                asr_ct2_menu.pack(side="left", padx=5)
+                Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
 
                 def _on_backend_change(choice: str) -> None:
                     asr_backend_var.set(choice)
@@ -993,32 +1005,62 @@ class UIManager:
                     command=_on_backend_change,
                 )
                 asr_backend_menu.pack(side="left", padx=5)
-                Tooltip(asr_backend_menu, "Inference backend for speech recognition.")
-
-                quant_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
-                quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=asr_ct2_compute_type_var, values=["float16", "int8", "int8_float16"]
+                Tooltip(
+                    asr_backend_menu,
+                    (
+                        "Backend de ASR. Em 'auto', tenta primeiro 'transformers' e, "
+                        "se indisponível, cai para 'ct2'."
+                    ),
                 )
-                quant_menu.pack(side="left", padx=5)
 
-                asr_model_frame = ctk.CTkFrame(transcription_frame)
+                asr_ct2_frame.pack(fill="x", pady=5)
+
+                asr_model_frame = ctk.CTkFrame(asr_frame)
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
                 catalog = model_manager.list_catalog()
+                catalog_display_map = {m["id"]: m["display_name"] for m in catalog}
                 installed_ids = {
-                    m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
+                    m["id"] for m in self.config_manager.get_asr_installed_models()
                 }
                 all_ids = sorted({m["id"] for m in catalog} | installed_ids)
+                id_to_display = {mid: catalog_display_map.get(mid, mid) for mid in all_ids}
+                display_to_id = {v: k for k, v in id_to_display.items()}
+                asr_model_display_var = ctk.StringVar(
+                    value=id_to_display.get(asr_model_id_var.get(), asr_model_id_var.get())
+                )
 
                 asr_model_menu = ctk.CTkOptionMenu(
                     asr_model_frame,
-                    variable=asr_model_id_var,
-                    values=all_ids,
+                    variable=asr_model_display_var,
+                    values=[id_to_display[mid] for mid in all_ids],
                 )
                 asr_model_menu.pack(side="left", padx=5)
                 Tooltip(asr_model_menu, "Model identifier from curated catalog.")
+
+                def _reset_asr() -> None:
+                    asr_model_id_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
+                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
+                    asr_model_menu.set(DEFAULT_CONFIG["asr_model_id"])
+                    asr_backend_menu.set(DEFAULT_CONFIG["asr_backend"])
+                    asr_ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    _on_backend_change(asr_backend_var.get())
+                    _update_model_info(asr_model_id_var.get())
+                    self.config_manager.set_asr_model_id(DEFAULT_CONFIG["asr_model_id"])
+                    self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
+                    self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
+                    self.config_manager.save_config()
+
+                reset_asr_button = ctk.CTkButton(
+                    asr_model_frame, text="Reset ASR", command=_reset_asr
+                )
+                reset_asr_button.pack(side="left", padx=5)
+                Tooltip(reset_asr_button, "Restore default ASR settings.")
+
                 model_size_label = ctk.CTkLabel(asr_model_frame, text="")
                 model_size_label.pack(side="left", padx=5)
 
@@ -1030,7 +1072,7 @@ class UIManager:
                     except Exception:
                         download_text = "?"
 
-                    installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+                    installed_models = self.config_manager.get_asr_installed_models()
                     entry = next((m for m in installed_models if m["id"] == choice), None)
                     if entry:
                         i_bytes, i_files = model_manager.get_installed_size(entry["path"])
@@ -1086,40 +1128,39 @@ class UIManager:
                     quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
 
                 def _on_model_change(choice: str) -> None:
-                    self.config_manager.set_asr_model_id(choice)
+                    mid = display_to_id.get(choice, choice)
+                    asr_model_id_var.set(mid)
+                    self.config_manager.set_asr_model_id(mid)
                     self.config_manager.save_config()
                     _update_model_info(choice)
                     _update_install_button_state()
 
                 asr_model_menu.configure(command=_on_model_change)
 
-                asr_device_frame = ctk.CTkFrame(transcription_frame)
+                asr_device_frame = ctk.CTkFrame(asr_frame)
                 asr_device_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_device_frame, text="ASR Compute Device:").pack(side="left", padx=(5, 10))
-                asr_device_menu = ctk.CTkOptionMenu(asr_device_frame, variable=asr_compute_device_var, values=["auto", "cuda", "cpu"])
+                asr_device_menu = ctk.CTkOptionMenu(asr_device_frame, variable=asr_compute_device_var, values=available_devices)
                 asr_device_menu.pack(side="left", padx=5)
-                Tooltip(asr_device_menu, "Execution device for ASR model.")
+                Tooltip(asr_device_menu, "Select compute device for ASR model.")
 
-                asr_dtype_frame = ctk.CTkFrame(transcription_frame)
+                asr_dtype_frame = ctk.CTkFrame(asr_frame)
                 asr_dtype_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_dtype_frame, text="ASR DType:").pack(side="left", padx=(5, 10))
                 asr_dtype_menu = ctk.CTkOptionMenu(asr_dtype_frame, variable=asr_dtype_var, values=["auto", "float16", "float32"])
                 asr_dtype_menu.pack(side="left", padx=5)
                 Tooltip(asr_dtype_menu, "Torch dtype for ASR model.")
 
-                asr_ct2_frame = ctk.CTkFrame(transcription_frame)
-                asr_ct2_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 10))
-                asr_ct2_menu = ctk.CTkOptionMenu(asr_ct2_frame, variable=asr_ct2_compute_type_var, values=["auto", "float16", "float32", "int8_float16", "int8_float32"])
-                asr_ct2_menu.pack(side="left", padx=5)
-                Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
-
-                asr_cache_frame = ctk.CTkFrame(transcription_frame)
+                asr_cache_frame = ctk.CTkFrame(asr_frame)
                 asr_cache_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_cache_frame, text="ASR Cache Dir:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(
+                    asr_cache_frame,
+                    text="Diretório de Cache de ASR:",
+                    width=200,
+                ).pack(side="left", padx=(5, 10))
                 asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
                 asr_cache_entry.pack(side="left", padx=5)
-                Tooltip(asr_cache_entry, "Directory for cached ASR models.")
+                Tooltip(asr_cache_entry, "Diretório para modelos de ASR em cache.")
 
                 def _reload_model():
                     handler = getattr(self.core_instance_ref, "transcription_handler", None)
@@ -1127,11 +1168,11 @@ class UIManager:
                         handler.reload_asr()
 
                 install_button = ctk.CTkButton(
-                    transcription_frame, text="Install/Update", command=_install_model
+                    asr_frame, text="Install/Update", command=_install_model
                 )
                 install_button.pack(pady=5)
                 reload_button = ctk.CTkButton(
-                    transcription_frame, text="Reload Model", command=_reload_model
+                    asr_frame, text="Reload Model", command=_reload_model
                 )
                 reload_button.pack(pady=5)
 
