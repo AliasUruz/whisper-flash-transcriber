@@ -1020,10 +1020,13 @@ class UIManager:
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
                 catalog = model_manager.list_catalog()
-                catalog_display_map = {m["id"]: m["display_name"] for m in catalog}
-                installed_ids = {
-                    m["id"] for m in self.config_manager.get_asr_installed_models()
-                }
+                try:
+                    installed_ids = {
+                        m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
+                    }
+                except OSError:
+                    installed_ids = set()
+                    messagebox.showerror("Erro", "Diretório de cache inválido.")
                 all_ids = sorted({m["id"] for m in catalog} | installed_ids)
                 id_to_display = {mid: catalog_display_map.get(mid, mid) for mid in all_ids}
                 display_to_id = {v: k for k, v in id_to_display.items()}
@@ -1072,7 +1075,11 @@ class UIManager:
                     except Exception:
                         download_text = "?"
 
-                    installed_models = self.config_manager.get_asr_installed_models()
+                    try:
+                        installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+                    except OSError:
+                        installed_models = []
+                        messagebox.showerror("Erro", "Diretório de cache inválido.")
                     entry = next((m for m in installed_models if m["id"] == choice), None)
                     if entry:
                         i_bytes, i_files = model_manager.get_installed_size(entry["path"])
@@ -1142,6 +1149,8 @@ class UIManager:
                         messagebox.showinfo("Model", "Download completed.")
                     except DownloadCancelledError:
                         messagebox.showinfo("Model", "Download canceled.")
+                    except OSError:
+                        messagebox.showerror("Erro", "Diretório de cache inválido.")
                     except Exception as e:
                         messagebox.showerror("Model", f"Download failed: {e}")
 

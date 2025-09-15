@@ -64,6 +64,16 @@ class AppCore:
         # --- Módulos ---
         self.config_manager = ConfigManager()
 
+        # Sincronizar modelos ASR já presentes no disco no início da aplicação
+        try:
+            cache_dir = self.config_manager.get("asr_cache_dir")
+            installed = list_installed(cache_dir)
+            self.config_manager.set_asr_installed_models(installed)
+        except OSError:
+            messagebox.showerror("Erro", "Diretório de cache inválido.")
+        except Exception as e:
+            logging.warning(f"Failed to sync installed models: {e}")
+
         self.audio_handler = AudioHandler(
             config_manager=self.config_manager,
             on_audio_segment_ready_callback=self._on_audio_segment_ready,
@@ -103,40 +113,46 @@ class AppCore:
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
 
-        threading.Thread(target=self._sync_installed_models, daemon=True).start()
+        try:
+            cache_dir = self.config_manager.get("asr_cache_dir")
+            model_id = self.asr_model_id
+            backend = self.asr_backend
+            ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+            model_path = Path(cache_dir) / backend / model_id
 
-        cache_dir = self.config_manager.get("asr_cache_dir")
-        model_id = self.asr_model_id
-        backend = self.asr_backend
-        ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
-        model_path = Path(cache_dir) / backend / model_id
-
-        if not (model_path.is_dir() and any(model_path.iterdir())):
-            if messagebox.askyesno(
-                "Model Download",
-                f"Model '{model_id}' is not installed. Download now?",
-            ):
-                try:
-                    ensure_download(model_id, backend, cache_dir, quant=ct2_type)
-                except DownloadCancelledError:
-                    logging.info("Model download cancelled by user.")
-                    messagebox.showinfo("Model", "Download canceled.")
-                    self._set_state(STATE_LOADING_MODEL)
-                except Exception as e:
-                    logging.error(f"Model download failed: {e}")
-                    messagebox.showerror("Model", f"Download failed: {e}")
-                    self._set_state(STATE_ERROR_MODEL)
+            if not (model_path.is_dir() and any(model_path.iterdir())):
+                if messagebox.askyesno(
+                    "Model Download",
+                    f"Model '{model_id}' is not installed. Download now?",
+                ):
+                    try:
+                        ensure_download(model_id, backend, cache_dir, quant=ct2_type)
+                    except DownloadCancelledError:
+                        logging.info("Model download cancelled by user.")
+                        messagebox.showinfo("Model", "Download canceled.")
+                        self._set_state(STATE_LOADING_MODEL)
+                    except OSError:
+                        logging.error("Invalid cache directory during model download.", exc_info=True)
+                        messagebox.showerror("Erro", "Diretório de cache inválido.")
+                        self._set_state(STATE_ERROR_MODEL)
+                    except Exception as e:
+                        logging.error(f"Model download failed: {e}")
+                        messagebox.showerror("Model", f"Download failed: {e}")
+                        self._set_state(STATE_ERROR_MODEL)
+                    else:
+                        self.transcription_handler.start_model_loading()
                 else:
-                    self.transcription_handler.start_model_loading()
+                    logging.info("User skipped model download.")
+                    messagebox.showinfo(
+                        "Model",
+                        "No model installed. You can install one later in the settings.",
+                    )
+                    self._set_state(STATE_ERROR_MODEL)
             else:
-                logging.info("User skipped model download.")
-                messagebox.showinfo(
-                    "Model",
-                    "No model installed. You can install one later in the settings.",
-                )
-                self._set_state(STATE_ERROR_MODEL)
-        else:
-            self.transcription_handler.start_model_loading()
+                self.transcription_handler.start_model_loading()
+        except OSError:
+            messagebox.showerror("Erro", "Diretório de cache inválido.")
+            self._set_state(STATE_ERROR_MODEL)
 
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
@@ -246,7 +262,16 @@ class AppCore:
         self._log_status(f"Erro: Falha ao carregar o modelo. {error_msg}", error=True)
         # Exibir messagebox via UI Manager se disponível
         if self.ui_manager:
-            self.main_tk_root.after(0, lambda: messagebox.showerror("Erro de Carregamento do Modelo", f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\nPor favor, verifique sua conexão com a internet, o nome do modelo nas configurações ou a memória da sua GPU."))
+            if error_msg == "Diretório de cache inválido.":
+                self.main_tk_root.after(0, lambda: messagebox.showerror("Erro", "Diretório de cache inválido."))
+            else:
+                self.main_tk_root.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        "Erro de Carregamento do Modelo",
+                        f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\nPor favor, verifique sua conexão com a internet, o nome do modelo nas configurações ou a memória da sua GPU.",
+                    ),
+                )
 
     def _on_segment_transcribed_for_ui(self, text):
         """Callback para enviar texto de segmento para a UI ao vivo."""
