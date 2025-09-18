@@ -71,6 +71,7 @@ class UIManager:
         self.core_instance_ref = core_instance_ref # Reference to the AppCore instance
 
         self.tray_icon = None
+        self._pending_tray_tooltip = None
         self.settings_window_instance = None
         self.settings_thread_running = False
         self.settings_window_lock = threading.Lock()
@@ -435,6 +436,7 @@ class UIManager:
                             current_device_selection = dev
                             break
                 asr_compute_device_var = ctk.StringVar(value=current_device_selection)
+                self._gpu_selection_var = asr_compute_device_var
 
                 # Internal GUI functions (detect_key_task_internal, apply_settings, close_settings, etc.)
                 # Will need to be adapted to call methods of self.core_instance_ref and self.config_manager
@@ -495,7 +497,7 @@ class UIManager:
                         return
                     asr_backend_to_apply = asr_backend_var.get()
                     asr_model_id_to_apply = asr_model_id_var.get()
-                    asr_compute_device_to_apply = asr_compute_device_var.get()
+                    asr_compute_device_to_apply = "auto"
                     asr_dtype_to_apply = asr_dtype_var.get()
                     asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
                     asr_cache_dir_to_apply = asr_cache_dir_var.get()
@@ -506,7 +508,7 @@ class UIManager:
                         return
 
                     # Logic for converting UI to GPU index
-                    selected_device_str = gpu_selection_var.get()
+                    selected_device_str = asr_compute_device_var.get()
                     gpu_index_to_apply = -1 # Default to "Auto-select"
                     if "Force CPU" in selected_device_str:
                         asr_compute_device_to_apply = "cpu"
@@ -1000,6 +1002,7 @@ class UIManager:
                 ).pack(side="left", padx=(0, 10))
 
                 quant_frame = ctk.CTkFrame(transcription_frame)
+                quant_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 0))
                 ctk.CTkButton(
                     quant_frame,
@@ -1011,8 +1014,12 @@ class UIManager:
                     ),
                 ).pack(side="left", padx=(0, 10))
                 quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=ct2_quant_var, values=["float16", "int8", "int8_float16"]
+                    quant_frame,
+                    variable=asr_ct2_compute_type_var,
+                    values=["float16", "int8", "int8_float16"],
                 )
+                quant_menu.pack(side="left", padx=5)
+                Tooltip(quant_menu, "Available compute types for the CTranslate2 backend.")
 
                 def _on_backend_change(choice: str) -> None:
                     asr_backend_var.set(choice)
@@ -1031,21 +1038,12 @@ class UIManager:
                     "Inference backend for speech recognition.\nDerived from selected model; override in advanced mode.",
                 )
 
-                quant_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 10))
-                quant_menu = ctk.CTkOptionMenu(
-                    quant_frame, variable=asr_ct2_compute_type_var, values=["float16", "int8", "int8_float16"]
-                )
-
-                quant_frame.pack(fill="x", pady=5)
-
-                quant_frame.pack(fill="x", pady=5)
-
                 asr_model_frame = ctk.CTkFrame(transcription_frame)
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
                 catalog = model_manager.list_catalog()
+                catalog_display_map = {entry["id"]: entry.get("display_name", entry["id"]) for entry in catalog}
                 try:
                     installed_ids = {
                         m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
@@ -1053,7 +1051,6 @@ class UIManager:
                 except OSError:
                     messagebox.showerror(
                         "Configuração",
-                        "Diretório de cache inválido. Verifique as configurações.",
                     )
                     installed_ids = set()
                 all_ids = sorted({m["id"] for m in catalog} | installed_ids)
@@ -1072,16 +1069,19 @@ class UIManager:
                 Tooltip(asr_model_menu, "Model identifier from curated catalog.")
 
                 def _reset_asr() -> None:
-                    asr_model_id_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    default_model_id = DEFAULT_CONFIG["asr_model_id"]
+                    default_display = id_to_display.get(default_model_id, default_model_id)
+                    asr_model_id_var.set(default_model_id)
+                    asr_model_display_var.set(default_display)
+                    asr_model_menu.set(default_display)
                     asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
-                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
-                    asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
-                    asr_model_menu.set(DEFAULT_CONFIG["asr_model_id"])
                     asr_backend_menu.set(DEFAULT_CONFIG["asr_backend"])
+                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
                     asr_ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
                     _on_backend_change(asr_backend_var.get())
-                    _update_model_info(asr_model_id_var.get())
-                    self.config_manager.set_asr_model_id(DEFAULT_CONFIG["asr_model_id"])
+                    _update_model_info(default_model_id)
+                    self.config_manager.set_asr_model_id(default_model_id)
                     self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
                     self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
                     self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
@@ -1096,9 +1096,10 @@ class UIManager:
                 model_size_label = ctk.CTkLabel(asr_model_frame, text="")
                 model_size_label.pack(side="left", padx=5)
 
-                def _update_model_info(choice: str) -> None:
+                def _update_model_info(model_ref: str) -> None:
+                    model_id = display_to_id.get(model_ref, model_ref)
                     try:
-                        d_bytes, d_files = model_manager.get_model_download_size(choice)
+                        d_bytes, d_files = model_manager.get_model_download_size(model_id)
                         d_mb = d_bytes / (1024 * 1024)
                         download_text = f"{d_mb:.1f} MB ({d_files} files)"
                     except Exception:
@@ -1109,10 +1110,9 @@ class UIManager:
                     except OSError:
                         messagebox.showerror(
                             "Configuração",
-                            "Diretório de cache inválido. Verifique as configurações.",
                         )
                         installed_models = []
-                    entry = next((m for m in installed_models if m["id"] == choice), None)
+                    entry = next((m for m in installed_models if m["id"] == model_id), None)
                     if entry:
                         i_bytes, i_files = model_manager.get_installed_size(entry["path"])
                         i_mb = i_bytes / (1024 * 1024)
@@ -1124,7 +1124,8 @@ class UIManager:
                         text=f"Download: {download_text} | Installed: {installed_text}"
                     )
 
-                def _derive_backend_from_model(model_id: str) -> str | None:
+                def _derive_backend_from_model(model_ref: str) -> str | None:
+                    model_id = display_to_id.get(model_ref, model_ref)
                     entry = next((m for m in catalog if m["id"] == model_id), None)
                     if not entry:
                         installed = model_manager.list_installed(asr_cache_dir_var.get())
@@ -1136,55 +1137,29 @@ class UIManager:
                         return None
                     return backend
 
-                def _install_model():
-                    try:
-                        backend = _derive_backend_from_model(asr_model_id_var.get())
-                        if backend is None:
-                            messagebox.showerror(
-                                "Model", "Unable to determine backend for selected model."
-                            )
-                            return
-
-                        model_manager.ensure_download(
-                            asr_model_id_var.get(),
-                            backend,
-                            asr_cache_dir_var.get(),
-                            asr_ct2_compute_type_var.get() if backend == "ct2" else None,
-                        )
-                        installed_models = model_manager.list_installed(asr_cache_dir_var.get())
-                        self.config_manager.set_asr_installed_models(installed_models)
-                        self.config_manager.save_config()
-                        _update_model_info(asr_model_id_var.get())
-                        messagebox.showinfo("Model", "Download completed.")
-                    except DownloadCancelledError:
-                        messagebox.showinfo("Model", "Download canceled.")
-                    except Exception as e:
-                        messagebox.showerror("Model", f"Download failed: {e}")
-
                 def _update_install_button_state() -> None:
                     backend = _derive_backend_from_model(asr_model_id_var.get())
                     install_button.configure(state="normal" if backend else "disabled")
                     quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
 
-                def _on_model_change(choice: str) -> None:
-                    self.config_manager.set_asr_model_id(choice)
-
-                    backend = next(
-                        (m["backend"] for m in catalog if m["id"] == choice),
-                        None,
-                    )
+                def _on_model_change(choice_display: str) -> None:
+                    model_id = display_to_id.get(choice_display, choice_display)
+                    asr_model_id_var.set(model_id)
+                    asr_model_display_var.set(id_to_display.get(model_id, model_id))
+                    backend = _derive_backend_from_model(model_id)
                     if backend:
                         asr_backend_var.set(backend)
                         asr_backend_menu.configure(state="disabled")
                     else:
                         asr_backend_menu.configure(state="normal")
+                    self.config_manager.set_asr_model_id(model_id)
                     self.config_manager.set_asr_backend(asr_backend_var.get())
                     self.config_manager.save_config()
                     _on_backend_change(asr_backend_var.get())
-                    _update_model_info(choice)
+                    _update_model_info(model_id)
 
                 asr_model_menu.configure(command=_on_model_change)
-                _on_model_change(asr_model_id_var.get())
+                _on_model_change(asr_model_display_var.get())
 
                 asr_device_frame = ctk.CTkFrame(asr_frame)
                 asr_device_frame.pack(fill="x", pady=5)
@@ -1249,15 +1224,31 @@ class UIManager:
                     except Exception as e:
                         messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}")
                         return
-                    try:
-                        backend = asr_backend_var.get()
-                        if backend == "auto":
-                            backend = "transformers"
-                        elif backend in ("faster-whisper", "ctranslate2"):
-                            backend = "ct2"
 
+                    model_id = asr_model_id_var.get()
+                    backend = _derive_backend_from_model(model_id)
+                    if backend is None:
+                        messagebox.showerror(
+                            "Model", "Unable to determine backend for selected model.",
+                        )
+                        return
+
+                    try:
+                        size_bytes, file_count = model_manager.get_model_download_size(model_id)
+                        size_gb = size_bytes / (1024 ** 3)
+                        detail = f"approximately {size_gb:.2f} GB ({file_count} files)"
+                    except Exception:
+                        detail = "an unspecified size"
+
+                    if not messagebox.askyesno(
+                        "Model Download",
+                        f"Model '{model_id}' will download {detail}.\nContinue?",
+                    ):
+                        return
+
+                    try:
                         model_manager.ensure_download(
-                            asr_model_id_var.get(),
+                            model_id,
                             backend,
                             cache_dir,
                             asr_ct2_compute_type_var.get() if backend == "ct2" else None,
@@ -1265,14 +1256,13 @@ class UIManager:
                         installed_models = model_manager.list_installed(cache_dir)
                         self.config_manager.set_asr_installed_models(installed_models)
                         self.config_manager.save_config()
-                        _update_model_info(asr_model_id_var.get())
+                        _update_model_info(model_id)
                         messagebox.showinfo("Model", "Download completed.")
                     except DownloadCancelledError:
                         messagebox.showinfo("Model", "Download canceled.")
                     except OSError:
                         messagebox.showerror(
                             "Model",
-                            "Diretório de cache inválido. Verifique as configurações.",
                         )
                     except Exception as e:
                         messagebox.showerror("Model", f"Download failed: {e}")
@@ -1281,6 +1271,7 @@ class UIManager:
                     handler = getattr(self.core_instance_ref, "transcription_handler", None)
                     if handler:
                         handler.reload_asr()
+
 
                 install_button = ctk.CTkButton(
                     asr_frame, text="Install/Update", command=_install_model
@@ -1324,12 +1315,22 @@ class UIManager:
 
                 settings_win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
 
+    def show_status_tooltip(self, message: str) -> None:
+        if not message:
+            return
+        if self.tray_icon:
+            self.tray_icon.title = message
+            logging.debug("UIManager: tooltip atualizada para: %s", message)
+        else:
+            self._pending_tray_tooltip = message
+            logging.debug("UIManager: tooltip pendente armazenada: %s", message)
+
     def setup_tray_icon(self):
         # Logic moved from global, adjusted to use self.
         initial_state = self.core_instance_ref.current_state
         color1, color2 = self.ICON_COLORS.get(initial_state, self.DEFAULT_ICON_COLOR)
         initial_image = self.create_image(64, 64, color1, color2)
-        initial_tooltip = f"Whisper Recorder ({initial_state})"
+        initial_tooltip = self._pending_tray_tooltip or f"Whisper Recorder ({initial_state})"
 
         self.tray_icon = pystray.Icon(
             "whisper_recorder",
@@ -1337,6 +1338,8 @@ class UIManager:
             initial_tooltip,
             menu=pystray.Menu(lambda: self.create_dynamic_menu())
         )
+        if self._pending_tray_tooltip:
+            self.tray_icon.title = self._pending_tray_tooltip
         # Set update callback in core_instance
         self.core_instance_ref.set_state_update_callback(self.update_tray_icon)
         self.core_instance_ref.set_segment_callback(self.update_live_transcription_threadsafe) # Connect segment callback
@@ -1448,3 +1451,4 @@ class UIManager:
                     messagebox.showerror("Erro de Entrada", "O Batch Size deve ser um número inteiro positivo.", parent=self.settings_window_instance)
             except ValueError:
                 messagebox.showerror("Erro de Entrada", "Entrada inválida. Por favor, insira um número inteiro.", parent=self.settings_window_instance)
+

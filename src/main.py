@@ -138,6 +138,7 @@ if __name__ == "__main__":
 
     # Configurar e iniciar o ícone da bandeja
     ui_manager_instance.setup_tray_icon()
+    app_core_instance.flush_pending_ui_notifications()
 
     # Sobrescrever a função on_exit_app original (para o menu do pystray)
     ui_manager_instance.on_exit_app = on_exit_app_enhanced

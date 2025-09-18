@@ -36,7 +36,7 @@ from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE a
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
-from .model_manager import ensure_download, list_installed
+from .model_manager import ensure_download, list_installed, DownloadCancelledError, get_model_download_size
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -66,19 +66,22 @@ class AppCore:
 
         # --- Módulos ---
         self.config_manager = ConfigManager()
+        self._pending_tray_tooltips: list[str] = []
 
         # Sincronizar modelos ASR já presentes no disco no início da aplicação
         try:
-            cache_dir = self.config_manager.get("asr_cache_dir")
-            installed = list_installed(cache_dir)
-            self.config_manager.set_asr_installed_models(installed)
+            self._refresh_installed_models("__init__", raise_errors=True)
         except OSError:
             messagebox.showerror(
                 "Configuração",
                 "Diretório de cache inválido. Verifique as configurações.",
             )
         except Exception as e:
-            logging.warning(f"Failed to sync installed models: {e}")
+            logging.warning(
+                "AppCore[__init__]: falha ao sincronizar modelos instalados: %r",
+                e,
+                exc_info=True,
+            )
 
         self.audio_handler = AudioHandler(
             config_manager=self.config_manager,
@@ -126,48 +129,70 @@ class AppCore:
             ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
             model_path = Path(cache_dir) / backend / model_id
 
-        cache_dir = self.config_manager.get("asr_cache_dir")
-        model_id = self.asr_model_id
-        backend = self.asr_backend
-        ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
-        model_path = Path(cache_dir) / backend / model_id
-
-        if not (model_path.is_dir() and any(model_path.iterdir())):
-            if messagebox.askyesno(
-                "Model Download",
-                f"Model '{model_id}' is not installed. Download now?",
-            ):
-                try:
-                    ensure_download(model_id, backend, cache_dir, quant=ct2_type)
-                except DownloadCancelledError:
-                    logging.info("Model download cancelled by user.")
-                    messagebox.showinfo("Model", "Download canceled.")
-                    self._set_state(STATE_LOADING_MODEL)
-                except OSError:
-                    messagebox.showerror(
-                        "Model",
-                        "Diretório de cache inválido. Verifique as configurações.",
-                    )
-                    self._set_state(STATE_ERROR_MODEL)
-                except Exception as e:
-                    logging.error(f"Model download failed: {e}")
-                    messagebox.showerror("Model", f"Download failed: {e}")
-                    self._set_state(STATE_ERROR_MODEL)
-                else:
-                    logging.info("User skipped model download.")
-                    messagebox.showinfo(
-                        "Model",
-                        "No model installed. You can install one later in the settings.",
-                    )
-                    self._set_state(STATE_ERROR_MODEL)
+            if not (model_path.is_dir() and any(model_path.iterdir())):
+                logging.warning("ASR model not found locally; waiting for user confirmation before downloading.")
+                self._set_state(STATE_ERROR_MODEL)
+                self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
             else:
                 self.transcription_handler.start_model_loading()
         except OSError:
             messagebox.showerror("Erro", "Diretório de cache inválido.")
             self._set_state(STATE_ERROR_MODEL)
 
+
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
+
+    def _prompt_model_install(self, model_id, backend, cache_dir, ct2_type):
+        """Agenda um prompt para download do modelo na thread principal."""
+        def _ask_user():
+            try:
+                try:
+                    size_bytes, file_count = get_model_download_size(model_id)
+                    size_gb = size_bytes / (1024 ** 3)
+                    download_msg = f"Download of approximately {size_gb:.2f} GB ({file_count} files)."
+                except Exception as size_error:
+                    logging.debug(f"Could not fetch download size for {model_id}: {size_error}")
+                    download_msg = "Download size unavailable."
+                prompt_text = (
+                    f"Model '{model_id}' is not installed.\n{download_msg}\nDownload now?"
+                )
+                if messagebox.askyesno("Model Download", prompt_text):
+                    self._start_model_download(model_id, backend, cache_dir, ct2_type)
+                else:
+                    logging.info("User declined model download prompt.")
+                    messagebox.showinfo(
+                        "Model",
+                        "No model installed. You can install one later in the settings.",
+                    )
+                    self._set_state(STATE_ERROR_MODEL)
+            except Exception as prompt_error:
+                logging.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
+                self._set_state(STATE_ERROR_MODEL)
+        self.main_tk_root.after(0, _ask_user)
+
+    def _start_model_download(self, model_id, backend, cache_dir, ct2_type):
+        """Inicia o download do modelo em uma thread separada."""
+        def _download():
+            try:
+                self._set_state(STATE_LOADING_MODEL)
+                ensure_download(model_id, backend, cache_dir, quant=ct2_type)
+            except DownloadCancelledError:
+                logging.info("Model download cancelled by user.")
+                self._set_state(STATE_ERROR_MODEL)
+                self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download canceled."))
+            except OSError:
+                logging.error("Invalid cache directory during model download.", exc_info=True)
+                self._set_state(STATE_ERROR_MODEL)
+                self.main_tk_root.after(0, lambda: messagebox.showerror("Model", "Diretório de cache inválido. Verifique as configurações."))
+            except Exception as e:
+                logging.error(f"Model download failed: {e}", exc_info=True)
+                self._set_state(STATE_ERROR_MODEL)
+                self.main_tk_root.after(0, lambda: messagebox.showerror("Model", f"Download failed: {e}"))
+            else:
+                logging.info("Model download completed successfully.")
+                self.main_tk_root.after(0, self.transcription_handler.start_model_loading)
+        threading.Thread(target=_download, daemon=True, name="ModelDownloadThread").start()
 
     def _apply_initial_config_to_core_attributes(self):
         # Mover a atribuição de self.record_key, self.record_mode, etc.
@@ -188,11 +213,106 @@ class AppCore:
     def _sync_installed_models(self):
         """Atualiza o ConfigManager com os modelos ASR instalados."""
         try:
-            cache_dir = self.config_manager.get("asr_cache_dir")
-            installed = list_installed(cache_dir)
-            self.config_manager.set_asr_installed_models(installed)
-        except Exception as e:  # pragma: no cover - operação auxiliar
-            logging.warning(f"Failed to sync installed models: {e}")
+            self._refresh_installed_models("_sync_installed_models", raise_errors=False)
+        except Exception as e:  # pragma: no cover - salvaguarda
+            logging.warning(
+                "AppCore[_sync_installed_models]: falha ao sincronizar modelos instalados: %r",
+                e,
+                exc_info=True,
+            )
+
+    def _refresh_installed_models(self, context: str, *, raise_errors: bool) -> None:
+        cache_dir_value = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+        cache_dir_raw = str(cache_dir_value).strip() if cache_dir_value is not None else ""
+        thread_name = threading.current_thread().name
+        resolved_path = Path(cache_dir_raw).expanduser() if cache_dir_raw else None
+
+        logging.debug(
+            "AppCore[%s]: preparando list_installed (cache_dir='%s', resolvido='%s', thread='%s')",
+            context,
+            cache_dir_raw or "<não configurado>",
+            resolved_path if resolved_path else "<sem caminho>",
+            thread_name,
+        )
+
+        if not cache_dir_raw:
+            self._handle_missing_cache_dir(None, context, "not_configured")
+            self.config_manager.set_asr_installed_models([])
+            return
+
+        if resolved_path is None or not resolved_path.exists():
+            self._handle_missing_cache_dir(resolved_path, context, "missing")
+            self.config_manager.set_asr_installed_models([])
+            return
+
+        try:
+            installed = list_installed(resolved_path)
+        except Exception as exc:  # pragma: no cover - defensivo
+            logging.warning(
+                "AppCore[%s]: list_installed falhou em '%s': %r",
+                context,
+                resolved_path,
+                exc,
+                exc_info=True,
+            )
+            self.config_manager.set_asr_installed_models([])
+            if raise_errors:
+                raise
+            return
+
+        logging.info(
+            "AppCore[%s]: list_installed retornou %d modelo(s) a partir de '%s' (thread='%s').",
+            context,
+            len(installed),
+            resolved_path,
+            thread_name,
+        )
+        self.config_manager.set_asr_installed_models(installed)
+
+    def _handle_missing_cache_dir(self, cache_dir, context: str, reason: str) -> None:
+        cache_repr = str(cache_dir) if cache_dir else "<não configurado>"
+        logging.warning(
+            "AppCore[%s]: diretório de cache de ASR indisponível (%s, motivo=%s).",
+            context,
+            cache_repr,
+            reason,
+        )
+        self._set_state(STATE_ERROR_MODEL)
+        tooltip = (
+            "Whisper Recorder - configure o diretório de modelos ASR"
+            if reason == "not_configured"
+            else f"Whisper Recorder - verifique o cache de modelos ASR ({cache_repr})"
+        )
+        self._queue_tooltip_update(tooltip)
+
+    def _queue_tooltip_update(self, message: str) -> None:
+        if not message:
+            return
+        ui_manager = getattr(self, "ui_manager", None)
+        tray_icon = getattr(ui_manager, "tray_icon", None) if ui_manager else None
+        if tray_icon and hasattr(ui_manager, "show_status_tooltip"):
+            self.main_tk_root.after(0, lambda: ui_manager.show_status_tooltip(message))
+        else:
+            if message not in self._pending_tray_tooltips:
+                self._pending_tray_tooltips.append(message)
+                logging.debug("AppCore: tooltip pendente armazenada: %s", message)
+
+    def flush_pending_ui_notifications(self) -> None:
+        if not self._pending_tray_tooltips:
+            return
+        ui_manager = getattr(self, "ui_manager", None)
+        tray_icon = getattr(ui_manager, "tray_icon", None) if ui_manager else None
+        if not tray_icon or not hasattr(ui_manager, "show_status_tooltip"):
+            logging.debug(
+                "AppCore: UI ainda não está pronta; %d tooltip(s) continuam pendentes.",
+                len(self._pending_tray_tooltips),
+            )
+            return
+
+        pending = list(self._pending_tray_tooltips)
+        self._pending_tray_tooltips.clear()
+        for message in pending:
+            self.main_tk_root.after(0, lambda msg=message: ui_manager.show_status_tooltip(msg))
 
     # --- Callbacks de Módulos ---
     def set_state_update_callback(self, callback):

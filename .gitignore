@@ -46,3 +46,5 @@ Whisper ADMIN.lnk
 .gitignore
 # Diretório de dados de sessão do navegador para automação web
 /user_data/
+codex.exe
+PLAN.md
