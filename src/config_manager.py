@@ -3,6 +3,7 @@ import json
 import logging
 import copy
 import hashlib
+import time
 from pathlib import Path
 from typing import List
 
@@ -1065,3 +1066,47 @@ class ConfigManager:
                 MIN_RECORDING_DURATION_CONFIG_KEY
             ]
         self.save_config()
+
+    def get_last_model_prompt_decision(self) -> dict:
+        decision = self.config.get(
+            LAST_MODEL_PROMPT_DECISION_CONFIG_KEY,
+            self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY],
+        )
+        if not isinstance(decision, dict):
+            decision = copy.deepcopy(
+                self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY]
+            )
+        return {
+            "model_id": str(decision.get("model_id", "") or ""),
+            "backend": str(decision.get("backend", "") or ""),
+            "decision": str(decision.get("decision", "") or "").strip().lower(),
+            "timestamp": float(decision.get("timestamp", 0.0) or 0.0),
+        }
+
+    def record_model_prompt_decision(
+        self,
+        decision: str,
+        model_id: str,
+        backend: str,
+        *,
+        save: bool = True,
+    ) -> None:
+        normalized_decision = str(decision or "").strip().lower()
+        if normalized_decision not in {"accept", "defer"}:
+            normalized_decision = ""
+        timestamp = time.time() if normalized_decision else 0.0
+        self.config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY] = {
+            "model_id": str(model_id or ""),
+            "backend": str(backend or ""),
+            "decision": normalized_decision,
+            "timestamp": timestamp,
+        }
+        if save:
+            self.save_config()
+
+    def reset_last_model_prompt_decision(self, *, save: bool = False) -> None:
+        self.config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY] = copy.deepcopy(
+            self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY]
+        )
+        if save:
+            self.save_config()
