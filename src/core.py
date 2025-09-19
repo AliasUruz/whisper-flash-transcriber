@@ -1116,8 +1116,286 @@ class AppCore:
         )
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
+    def validate_settings_inputs(self, **kwargs) -> tuple[bool, list[str]]:
+        friendly_names: dict[str, str] = {
+            "new_key": "Tecla de gravação",
+            "new_mode": "Modo de gravação",
+            "new_auto_paste": "Colar automático",
+            "new_sound_enabled": "Som de feedback",
+            "new_sound_frequency": "Frequência do som",
+            "new_sound_duration": "Duração do som",
+            "new_sound_volume": "Volume do som",
+            "new_agent_key": "Tecla do agente",
+            "new_text_correction_enabled": "Correção de texto",
+            "new_text_correction_service": "Serviço de correção de texto",
+            "new_openrouter_api_key": "Chave da OpenRouter",
+            "new_openrouter_model": "Modelo OpenRouter",
+            "new_gemini_api_key": "Chave da Gemini",
+            "new_gemini_model": "Modelo Gemini",
+            "new_gemini_prompt": "Prompt de correção Gemini",
+            "prompt_agentico": "Prompt agêntico",
+            "new_agent_model": "Modelo do agente",
+            "new_gemini_model_options": "Lista de modelos Gemini",
+            "new_batch_size": "Tamanho do lote",
+            "new_gpu_index": "Índice da GPU",
+            "new_hotkey_stability_service_enabled": "Serviço de estabilidade das hotkeys",
+            "new_min_transcription_duration": "Duração mínima da transcrição",
+            "new_min_record_duration": "Duração mínima da gravação",
+            "new_save_temp_recordings": "Salvar gravações temporárias",
+            "new_record_storage_mode": "Modo de armazenamento da gravação",
+            "new_record_storage_limit": "Limite de armazenamento da gravação",
+            "new_record_to_memory": "Armazenar gravação em memória",
+            "new_max_memory_seconds_mode": "Modo de retenção em memória",
+            "new_max_memory_seconds": "Tempo máximo em memória",
+            "new_use_vad": "VAD",
+            "new_vad_threshold": "Limiar do VAD",
+            "new_vad_silence_duration": "Duração do silêncio (VAD)",
+            "new_display_transcripts_in_terminal": "Exibir transcrições no terminal",
+            "new_launch_at_startup": "Executar ao iniciar",
+            "new_chunk_length_mode": "Modo do tamanho de chunk",
+            "new_chunk_length_sec": "Duração do chunk",
+            "new_enable_torch_compile": "Torch compile",
+            "new_asr_backend": "Backend de ASR",
+            "new_asr_model": "Modelo de ASR",
+            "new_asr_model_id": "Modelo de ASR",
+            "new_asr_compute_device": "Dispositivo de ASR",
+            "new_asr_dtype": "DType de ASR",
+            "new_asr_ct2_compute_type": "Quantização CT2",
+            "new_ct2_quantization": "Quantização CT2",
+            "new_asr_cache_dir": "Diretório de cache do ASR",
+        }
+
+        def _label(key: str) -> str:
+            return friendly_names.get(key, key)
+
+        problems: list[str] = []
+
+        def ensure_bool(key: str) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not isinstance(value, bool):
+                problems.append(f"{_label(key)} deve ser verdadeiro ou falso.")
+
+        def ensure_string(key: str, *, allow_empty: bool) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not isinstance(value, str):
+                problems.append(f"{_label(key)} deve ser um texto.")
+                return
+            if not allow_empty and not value.strip():
+                problems.append(f"{_label(key)} não pode ficar em branco.")
+
+        def ensure_int(
+            key: str,
+            *,
+            min_value: int | None = None,
+            max_value: int | None = None,
+        ) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not isinstance(value, int) or isinstance(value, bool):
+                problems.append(f"{_label(key)} deve ser um número inteiro.")
+                return
+            if min_value is not None and value < min_value:
+                problems.append(
+                    f"{_label(key)} deve ser maior ou igual a {min_value}."
+                )
+            if max_value is not None and value > max_value:
+                problems.append(
+                    f"{_label(key)} deve ser menor ou igual a {max_value}."
+                )
+
+        def ensure_number(
+            key: str,
+            *,
+            min_value: float | None = None,
+            max_value: float | None = None,
+            min_inclusive: bool = True,
+            max_inclusive: bool = True,
+        ) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not (isinstance(value, (int, float)) and not isinstance(value, bool)):
+                problems.append(f"{_label(key)} deve ser um número.")
+                return
+            if min_value is not None:
+                if (min_inclusive and value < min_value) or (
+                    not min_inclusive and value <= min_value
+                ):
+                    operador = "maior ou igual" if min_inclusive else "maior"
+                    problems.append(
+                        f"{_label(key)} deve ser {operador} que {min_value}."
+                    )
+            if max_value is not None:
+                if (max_inclusive and value > max_value) or (
+                    not max_inclusive and value >= max_value
+                ):
+                    operador = "menor ou igual" if max_inclusive else "menor"
+                    problems.append(
+                        f"{_label(key)} deve ser {operador} que {max_value}."
+                    )
+
+        def ensure_enum(key: str, allowed: set[str]) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not isinstance(value, str):
+                problems.append(f"{_label(key)} deve ser um texto.")
+                return
+            normalized = value.strip().lower()
+            if key == "new_asr_compute_device" and normalized.startswith("cuda"):
+                return
+            if normalized not in allowed:
+                opcoes = ", ".join(sorted(allowed))
+                problems.append(
+                    f"{_label(key)} possui um valor inválido. Opções permitidas: {opcoes}."
+                )
+
+        bool_fields = {
+            "new_auto_paste",
+            "new_sound_enabled",
+            "new_text_correction_enabled",
+            "new_hotkey_stability_service_enabled",
+            "new_save_temp_recordings",
+            "new_record_to_memory",
+            "new_use_vad",
+            "new_display_transcripts_in_terminal",
+            "new_launch_at_startup",
+            "new_enable_torch_compile",
+        }
+        for field in bool_fields:
+            ensure_bool(field)
+
+        for field in {
+            "new_openrouter_api_key",
+            "new_gemini_api_key",
+            "new_gemini_prompt",
+            "prompt_agentico",
+        }:
+            ensure_string(field, allow_empty=True)
+
+        for field in {
+            "new_key",
+            "new_agent_key",
+            "new_openrouter_model",
+            "new_gemini_model",
+            "new_agent_model",
+            "new_asr_model",
+            "new_asr_model_id",
+            "new_asr_cache_dir",
+        }:
+            ensure_string(field, allow_empty=False)
+
+        ensure_enum("new_mode", {"toggle", "press", "hold"})
+        ensure_enum(
+            "new_text_correction_service",
+            {"none", "openrouter", "gemini"},
+        )
+        ensure_enum(
+            "new_record_storage_mode",
+            {"auto", "disk", "memory", "hybrid"},
+        )
+        ensure_enum("new_max_memory_seconds_mode", {"auto", "manual"})
+        ensure_enum("new_chunk_length_mode", {"auto", "manual"})
+        ensure_enum(
+            "new_asr_backend",
+            {
+                "auto",
+                "transformers",
+                "ct2",
+                "ctranslate2",
+                "faster-whisper",
+                "faster_whisper",
+                "whisper",
+                "dummy",
+            },
+        )
+        ensure_enum(
+            "new_asr_compute_device",
+            {"auto", "cpu", "cuda", "mps", "rocm", "xpu", "openvino", "dml"},
+        )
+        ensure_enum(
+            "new_asr_dtype",
+            {"auto", "float16", "float32", "bfloat16"},
+        )
+        ensure_enum(
+            "new_asr_ct2_compute_type",
+            {"default", "float16", "int8", "int8_float16"},
+        )
+        ensure_enum(
+            "new_ct2_quantization",
+            {"default", "float16", "int8", "int8_float16"},
+        )
+
+        ensure_int("new_batch_size", min_value=1)
+        ensure_int("new_gpu_index", min_value=-1)
+        ensure_int("new_record_storage_limit", min_value=0)
+
+        ensure_number("new_sound_frequency", min_value=1, min_inclusive=True)
+        ensure_number("new_sound_duration", min_value=0.0, min_inclusive=False)
+        ensure_number("new_sound_volume", min_value=0.0, max_value=1.0)
+        ensure_number("new_min_transcription_duration", min_value=0.0)
+        ensure_number("new_min_record_duration", min_value=0.0)
+        ensure_number("new_max_memory_seconds", min_value=0.0, min_inclusive=False)
+        ensure_number("new_vad_threshold", min_value=0.0, max_value=1.0)
+        ensure_number("new_vad_silence_duration", min_value=0.0, min_inclusive=False)
+        ensure_number("new_chunk_length_sec", min_value=0.0, min_inclusive=False)
+
+        if "new_gemini_model_options" in kwargs:
+            options = kwargs["new_gemini_model_options"]
+            if not isinstance(options, (list, tuple)):
+                problems.append(
+                    f"{_label('new_gemini_model_options')} deve ser uma lista de textos."
+                )
+            else:
+                cleaned: list[str] = []
+                invalid_options = False
+                for item in options:
+                    if not isinstance(item, str):
+                        problems.append(
+                            f"{_label('new_gemini_model_options')} contém um item não textual."
+                        )
+                        invalid_options = True
+                        break
+                    stripped = item.strip()
+                    if not stripped:
+                        problems.append(
+                            f"{_label('new_gemini_model_options')} não pode ter entradas vazias."
+                        )
+                        invalid_options = True
+                        break
+                    cleaned.append(stripped)
+                if not invalid_options and not cleaned:
+                    problems.append(
+                        f"{_label('new_gemini_model_options')} deve possuir ao menos um modelo válido."
+                    )
+
+        return (len(problems) == 0, problems)
+
     def apply_settings_from_external(self, **kwargs):
         logging.info("AppCore: Applying new configuration from external source.")
+        valid_inputs, validation_errors = self.validate_settings_inputs(**kwargs)
+        if not valid_inputs:
+            summary = "\n".join(f"• {msg}" for msg in validation_errors)
+            message = (
+                "Não foi possível aplicar as configurações devido aos seguintes "
+                f"problemas:\n\n{summary}"
+            )
+            logging.error(
+                "AppCore: configuração rejeitada por validação: %s",
+                "; ".join(validation_errors),
+            )
+            self._set_state(STATE_ERROR_SETTINGS)
+
+            def _show_error():
+                messagebox.showerror("Configurações inválidas", message)
+
+            self.main_tk_root.after(0, _show_error)
+            return
         config_changed = False
 
         # Atualizar ConfigManager e verificar se houve mudanças
