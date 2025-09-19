@@ -301,7 +301,7 @@ class ConfigManager:
 
         cfg["asr_curated_catalog"] = list_catalog()
         try:
-            cfg["asr_installed_models"] = list_installed(ASR_CACHE_DIR)
+            cfg["asr_installed_models"] = list_installed(asr_cache_dir)
         except OSError:
             messagebox.showerror(
                 "Configuração",
