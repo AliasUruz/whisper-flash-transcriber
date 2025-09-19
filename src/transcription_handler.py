@@ -756,114 +756,86 @@ class TranscriptionHandler:
                 if not backend_candidate:
                     backend_candidate = "transformers"
 
-                self.backend_resolved = None
-                self._asr_backend = None
                 backend_name = backend_candidate
-                backend_instance = None
+                selected_gpu_index: int | None = None
                 try:
-                    backend_instance = make_backend(backend_name)
+                    self._asr_backend = make_backend(backend_name)
                 except Exception as backend_error:
-                    logging.error(
-                        "Falha ao instanciar backend '%s': %s",
-                        backend_name,
-                        backend_error,
-                        exc_info=True,
-                    )
+                    if backend_name != "transformers":
+                        logging.warning(
+                            "Falha ao instanciar backend '%s': %s. Aplicando fallback 'transformers'.",
+                            backend_name,
+                            backend_error,
+                        )
+                        backend_name = "transformers"
+                        self._asr_backend = make_backend(backend_name)
+                    else:
+                        raise
+                self.backend_resolved = backend_name
 
-                if backend_instance is not None:
-                    self._asr_backend = backend_instance
-                    self.backend_resolved = backend_name
-
-                    available_cuda = torch.cuda.is_available()
-                    gpu_count = torch.cuda.device_count() if available_cuda else 0
-                    configured_gpu_index = (
-                        self.gpu_index if isinstance(self.gpu_index, int) else -1
-                    )
-                    pref = (
-                        asr_compute_device.lower()
-                        if isinstance(asr_compute_device, str)
-                        else "auto"
-                    )
+                available_cuda = torch.cuda.is_available()
+                gpu_count = torch.cuda.device_count() if available_cuda else 0
+                gpu_index = self.gpu_index if isinstance(self.gpu_index, int) else -1
+                pref = asr_compute_device.lower() if isinstance(asr_compute_device, str) else "auto"
+                backend_device = "auto"
+                transformers_device = None
+                self.device_in_use = "cpu"
 
                     backend_device = "cpu"
                     transformers_device = -1
-                    selected_gpu_index = -1
+                    selected_gpu_index = None
                     self.device_in_use = "cpu"
-
-                    if pref == "cpu":
-                        logging.info(
-                            "Dispositivo de ASR fixado em CPU conforme configuração explícita."
-                        )
-                    elif pref == "cuda":
-                        if not available_cuda or gpu_count == 0:
-                            reason = (
-                                "CUDA indisponível"
-                                if not available_cuda
-                                else "Nenhuma GPU detectada"
+                    logging.info("Dispositivo de ASR fixado em CPU conforme configuração explícita.")
+                elif pref == "cuda":
+                    if not available_cuda or gpu_count == 0:
+                        reason = "CUDA indisponível" if not available_cuda else "Nenhuma GPU detectada"
+                        selected_gpu_index = None
+                        self.device_in_use = "cpu"
+                        self._emit_device_warning("cuda", "cpu", reason)
+                        backend_device = "cpu"
+                        transformers_device = -1
+                    else:
+                        target_idx = gpu_index if (gpu_index is not None and 0 <= gpu_index < gpu_count) else 0
+                        if target_idx != gpu_index:
+                            logging.warning(
+                                "Índice de GPU %s inválido; usando GPU %s para carregamento.",
+                                gpu_index,
+                                target_idx,
                             )
-                            self._emit_device_warning("cuda", "cpu", reason)
-                        else:
-                            target_idx = (
-                                configured_gpu_index
-                                if 0 <= configured_gpu_index < gpu_count
-                                else 0
-                            )
-                            if target_idx != configured_gpu_index:
-                                logging.warning(
-                                    "Índice de GPU %s inválido; usando GPU %s para carregamento.",
-                                    configured_gpu_index,
-                                    target_idx,
-                                )
-                            selected_gpu_index = target_idx
-                            backend_device = f"cuda:{target_idx}"
-                            transformers_device = f"cuda:{target_idx}"
-                            self.device_in_use = backend_device
+                        backend_device = f"cuda:{target_idx}"
+                        transformers_device = f"cuda:{target_idx}"
+                        selected_gpu_index = target_idx
+                        self.device_in_use = backend_device
+                        logging.info("Dispositivo de ASR configurado em %s.", self.device_in_use)
+                else:
+                    if available_cuda and gpu_count > 0:
+                        target_idx = gpu_index if (gpu_index is not None and 0 <= gpu_index < gpu_count) else 0
+                        if target_idx != gpu_index and isinstance(gpu_index, int) and gpu_index >= 0:
                             logging.info(
                                 "Dispositivo de ASR configurado em %s.",
                                 self.device_in_use,
                             )
+                        backend_device = f"cuda:{target_idx}"
+                        transformers_device = f"cuda:{target_idx}"
+                        selected_gpu_index = target_idx
+                        self.device_in_use = backend_device
+                        logging.info("Modo auto selecionou %s para ASR.", self.device_in_use)
                     else:
-                        if available_cuda and gpu_count > 0:
-                            target_idx = (
-                                configured_gpu_index
-                                if 0 <= configured_gpu_index < gpu_count
-                                else 0
-                            )
-                            if target_idx != configured_gpu_index and configured_gpu_index >= 0:
-                                logging.info(
-                                    "Modo auto: índice de GPU %s fora do intervalo; usando GPU %s.",
-                                    configured_gpu_index,
-                                    target_idx,
-                                )
-                            selected_gpu_index = target_idx
-                            backend_device = f"cuda:{target_idx}"
-                            transformers_device = f"cuda:{target_idx}"
-                            self.device_in_use = backend_device
-                            logging.info(
-                                "Modo auto selecionou %s para ASR.",
-                                self.device_in_use,
-                            )
-                        else:
-                            reason = (
-                                "CUDA indisponível"
-                                if not available_cuda
-                                else "Nenhuma GPU detectada"
-                            )
-                            self._emit_device_warning("auto", "cpu", reason, level="info")
+                        reason = "CUDA indisponível" if not available_cuda else "Nenhuma GPU detectada"
+                        selected_gpu_index = None
+                        self.device_in_use = "cpu"
+                        self._emit_device_warning("auto", "cpu", reason, level="info")
+                        backend_device = "cpu"
+                        transformers_device = -1
 
-                    self.gpu_index = selected_gpu_index
-                    effective_dtype = self._resolve_effective_dtype(asr_dtype)
+                if backend_device == "auto":
+                    backend_device = self.device_in_use or "cpu"
+                if transformers_device is None and backend_device == "cpu":
+                    transformers_device = -1
 
-                    if hasattr(self._asr_backend, "model_id"):
-                        try:
-                            self._asr_backend.model_id = asr_model_id
-                        except Exception:
-                            pass
-                    if hasattr(self._asr_backend, "device"):
-                        try:
-                            self._asr_backend.device = backend_device
-                        except Exception:
-                            pass
+                effective_dtype = self._resolve_effective_dtype(asr_dtype)
+
+                self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
 
                     load_kwargs = {}
                     if backend_name in {"transformers", "whisper"}:
