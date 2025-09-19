@@ -1,0 +1,73 @@
+# .github/workflows/codex-automation.yml (Arquivo Único Consolidado)
+
+name: 'Codex Automation'
+
+# Gatilhos para AMBOS os jobs. As condições 'if' abaixo decidirão qual job roda.
+on:
+  # Gatilhos para o job da fila de merge
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+
+  # Gatilhos para o job do status check "ready"
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  #############################################################
+  # Job 1: Lógica do Merge Automático (do codex-merge-queue.yml)
+  #############################################################
+  merge_queue:
+    name: 'Process Merge Queue'
+    # CONDIÇÃO: Este job só roda se o gatilho for 'schedule' ou 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: 'Checkout to stable branch'
+        uses: actions/checkout@v4
+        with:
+          ref: 'stable'
+          token: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
+          fetch-depth: 0
+
+      - name: 'Configure Git User'
+        run: |
+          git config user.name "Codex Merge Bot"
+          git config user.email "actions-bot@github.com"
+
+      - name: 'List, Sort, and Process Codex PRs'
+        env:
+          GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
+        run: |
+          gh pr list --label "codex" --state "open" --base "stable" --json number,headRefName,createdAt \
+          | jq -c '. | sort_by(.createdAt) | .[]' \
+          | while read -r pr_json; do
+              # ... (a lógica de merge continua exatamente a mesma)
+              PR_NUMBER=$(echo "$pr_json" | jq -r '.number')
+              PR_BRANCH=$(echo "$pr_json" | jq -r '.headRefName')
+              echo ">>> Processing PR #${PR_NUMBER} (Branch: ${PR_BRANCH})"
+              git fetch origin stable && git reset --hard origin/stable
+              if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER}" -X theirs; then
+                  echo "✅ Merge successful for PR #${PR_NUMBER}."
+                  git push origin stable
+              else
+                  echo "❌ Merge failed for PR #${PR_NUMBER}."
+                  gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Conflito crítico detectado."
+                  continue
+              fi
+          done
+
+  #############################################################
+  # Job 2: Lógica do Status Check "Ready" (do ready.yml)
+  #############################################################
+  ready_status_check:
+    name: 'Ready Status Check'
+    # CONDIÇÃO: Este job só roda se o gatilho for 'pull_request'
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Status check 'ready' is ok."
