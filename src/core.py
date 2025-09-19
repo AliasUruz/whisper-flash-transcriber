@@ -38,6 +38,9 @@ from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from .model_manager import ensure_download, list_installed, DownloadCancelledError, get_model_download_size
 
+
+MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
+
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
 STATE_LOADING_MODEL = "LOADING_MODEL"
@@ -130,7 +133,7 @@ class AppCore:
             model_path = Path(cache_dir) / backend / model_id
 
             if not (model_path.is_dir() and any(model_path.iterdir())):
-                logging.warning("ASR model not found locally; waiting for user confirmation before downloading.")
+                MODEL_LOGGER.warning("ASR model not found locally; waiting for user confirmation before downloading.")
                 self._set_state(STATE_ERROR_MODEL)
                 self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
             else:
@@ -152,7 +155,7 @@ class AppCore:
                     size_gb = size_bytes / (1024 ** 3)
                     download_msg = f"Download of approximately {size_gb:.2f} GB ({file_count} files)."
                 except Exception as size_error:
-                    logging.debug(f"Could not fetch download size for {model_id}: {size_error}")
+                    MODEL_LOGGER.debug(f"Could not fetch download size for {model_id}: {size_error}")
                     download_msg = "Download size unavailable."
                 prompt_text = (
                     f"Model '{model_id}' is not installed.\n{download_msg}\nDownload now?"
@@ -160,14 +163,14 @@ class AppCore:
                 if messagebox.askyesno("Model Download", prompt_text):
                     self._start_model_download(model_id, backend, cache_dir, ct2_type)
                 else:
-                    logging.info("User declined model download prompt.")
+                    MODEL_LOGGER.info("User declined model download prompt.")
                     messagebox.showinfo(
                         "Model",
                         "No model installed. You can install one later in the settings.",
                     )
                     self._set_state(STATE_ERROR_MODEL)
             except Exception as prompt_error:
-                logging.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
+                MODEL_LOGGER.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
         self.main_tk_root.after(0, _ask_user)
 
@@ -178,19 +181,19 @@ class AppCore:
                 self._set_state(STATE_LOADING_MODEL)
                 ensure_download(model_id, backend, cache_dir, quant=ct2_type)
             except DownloadCancelledError:
-                logging.info("Model download cancelled by user.")
+                MODEL_LOGGER.info("Model download cancelled by user.")
                 self._set_state(STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download canceled."))
             except OSError:
-                logging.error("Invalid cache directory during model download.", exc_info=True)
+                MODEL_LOGGER.error("Invalid cache directory during model download.", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", "Diretório de cache inválido. Verifique as configurações."))
             except Exception as e:
-                logging.error(f"Model download failed: {e}", exc_info=True)
+                MODEL_LOGGER.error(f"Model download failed: {e}", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", f"Download failed: {e}"))
             else:
-                logging.info("Model download completed successfully.")
+                MODEL_LOGGER.info("Model download completed successfully.")
                 self.main_tk_root.after(0, self.transcription_handler.start_model_loading)
         threading.Thread(target=_download, daemon=True, name="ModelDownloadThread").start()
 

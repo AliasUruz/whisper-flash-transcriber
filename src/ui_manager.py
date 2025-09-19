@@ -168,6 +168,17 @@ class UIManager:
             messagebox.showerror("Valor inválido", f"Valor inválido para {field_name}.", parent=parent)
             return None
 
+    def apply_settings_payload(self, payload: dict) -> None:
+        """Apply settings in headless mode or via unit tests."""
+
+        if not isinstance(payload, dict):  # Salvaguarda para chamadas incorretas
+            raise TypeError("payload must be a dict of keyword arguments")
+        if not self.core_instance_ref:
+            raise RuntimeError("core_instance_ref is not configured")
+
+        logging.info("UIManager: forwarding settings payload to AppCore (%d keys).", len(payload))
+        self.core_instance_ref.apply_settings_from_external(**payload)
+
     def _recording_tooltip_updater(self):
         """Atualiza a tooltip com a duração da gravação a cada segundo."""
         while not self.stop_recording_timer_event.is_set():
@@ -530,51 +541,53 @@ class UIManager:
                         return
 
                     # Call AppCore method to apply settings
-                    self.core_instance_ref.apply_settings_from_external(
-                        new_key=key_to_apply,
-                        new_mode=mode_to_apply,
-                        new_auto_paste=auto_paste_to_apply,
-                        new_sound_enabled=sound_enabled_to_apply,
-                        new_sound_frequency=sound_freq_to_apply,
-                        new_sound_duration=sound_duration_to_apply,
-                        new_sound_volume=sound_volume_to_apply,
-                        new_agent_key=agent_key_to_apply,
-                        new_text_correction_enabled=text_correction_enabled_to_apply,
-                        new_text_correction_service=text_correction_service_to_apply,
-                        new_openrouter_api_key=openrouter_api_key_to_apply,
-                        new_openrouter_model=openrouter_model_to_apply,
-                        new_gemini_api_key=gemini_api_key_to_apply,
-                        new_gemini_model=gemini_model_to_apply,
-                        new_gemini_prompt=gemini_prompt_correction_to_apply,
-                        prompt_agentico=agentico_prompt_to_apply,
-                        new_agent_model=model_to_apply,
-                        new_gemini_model_options=new_models_list,
-                        new_batch_size=batch_size_to_apply,
-                        new_gpu_index=gpu_index_to_apply,
-                        new_hotkey_stability_service_enabled=hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
-                        new_min_transcription_duration=min_transcription_duration_to_apply,
-                        new_min_record_duration=min_record_duration_to_apply,
-                        new_save_temp_recordings=save_temp_recordings_to_apply,
-                        new_record_storage_mode=record_storage_mode_var.get(),
-                        new_record_to_memory=(record_storage_mode_var.get() == "memory"),
-                        new_max_memory_seconds_mode=max_memory_seconds_mode_to_apply,
-                        new_max_memory_seconds=max_memory_seconds_to_apply,
-                        new_use_vad=use_vad_to_apply,
-                        new_vad_threshold=vad_threshold_to_apply,
-                        new_vad_silence_duration=vad_silence_duration_to_apply,
-                        new_display_transcripts_in_terminal=display_transcripts_to_apply,
-                        new_launch_at_startup=launch_at_startup_var.get(),
-                        # New chunk settings
-                        new_chunk_length_mode=chunk_length_mode_var.get(),
-                        new_chunk_length_sec=float(chunk_length_sec_var.get()),
-                        # New: torch compile setting
-                        new_enable_torch_compile=bool(enable_torch_compile_var.get()),
-                        new_asr_backend=asr_backend_to_apply,
-                        new_asr_model_id=asr_model_id_to_apply,
-                        new_asr_compute_device=asr_compute_device_to_apply,
-                        new_asr_dtype=asr_dtype_to_apply,
-                        new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
-                        new_asr_cache_dir=asr_cache_dir_to_apply
+                    self.apply_settings_payload(
+                        {
+                            "new_key": key_to_apply,
+                            "new_mode": mode_to_apply,
+                            "new_auto_paste": auto_paste_to_apply,
+                            "new_sound_enabled": sound_enabled_to_apply,
+                            "new_sound_frequency": sound_freq_to_apply,
+                            "new_sound_duration": sound_duration_to_apply,
+                            "new_sound_volume": sound_volume_to_apply,
+                            "new_agent_key": agent_key_to_apply,
+                            "new_text_correction_enabled": text_correction_enabled_to_apply,
+                            "new_text_correction_service": text_correction_service_to_apply,
+                            "new_openrouter_api_key": openrouter_api_key_to_apply,
+                            "new_openrouter_model": openrouter_model_to_apply,
+                            "new_gemini_api_key": gemini_api_key_to_apply,
+                            "new_gemini_model": gemini_model_to_apply,
+                            "new_gemini_prompt": gemini_prompt_correction_to_apply,
+                            "prompt_agentico": agentico_prompt_to_apply,
+                            "new_agent_model": model_to_apply,
+                            "new_gemini_model_options": new_models_list,
+                            "new_batch_size": batch_size_to_apply,
+                            "new_gpu_index": gpu_index_to_apply,
+                            "new_hotkey_stability_service_enabled": hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
+                            "new_min_transcription_duration": min_transcription_duration_to_apply,
+                            "new_min_record_duration": min_record_duration_to_apply,
+                            "new_save_temp_recordings": save_temp_recordings_to_apply,
+                            "new_record_storage_mode": record_storage_mode_var.get(),
+                            "new_record_to_memory": (record_storage_mode_var.get() == "memory"),
+                            "new_max_memory_seconds_mode": max_memory_seconds_mode_to_apply,
+                            "new_max_memory_seconds": max_memory_seconds_to_apply,
+                            "new_use_vad": use_vad_to_apply,
+                            "new_vad_threshold": vad_threshold_to_apply,
+                            "new_vad_silence_duration": vad_silence_duration_to_apply,
+                            "new_display_transcripts_in_terminal": display_transcripts_to_apply,
+                            "new_launch_at_startup": launch_at_startup_var.get(),
+                            # New chunk settings
+                            "new_chunk_length_mode": chunk_length_mode_var.get(),
+                            "new_chunk_length_sec": float(chunk_length_sec_var.get()),
+                            # New: torch compile setting
+                            "new_enable_torch_compile": bool(enable_torch_compile_var.get()),
+                            "new_asr_backend": asr_backend_to_apply,
+                            "new_asr_model_id": asr_model_id_to_apply,
+                            "new_asr_compute_device": asr_compute_device_to_apply,
+                            "new_asr_dtype": asr_dtype_to_apply,
+                            "new_asr_ct2_compute_type": asr_ct2_compute_type_to_apply,
+                            "new_asr_cache_dir": asr_cache_dir_to_apply,
+                        }
                     )
                     self._close_settings_window() # Call class method
 
