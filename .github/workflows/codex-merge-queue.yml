@@ -1,91 +1,84 @@
-name: Codex Merge Queue (Oldest to Newest)
+# .github/workflows/codex-merge-queue.yml
+
+name: 'Codex Merge Queue (Oldest to Newest)'
 
 on:
-  # Roda quando houver push na branch 'stable' ou manualmente
-  workflow_dispatch:
-  push:
-    branches:
-      - stable
-
-# Garante que apenas uma fila rode por vez
-concurrency:
-  group: codex-merge-queue
-  cancel-in-progress: false
-
-permissions:
-  contents: write
-  pull-requests: write
+  workflow_dispatch: # Permite que você rode este workflow manualmente pela aba "Actions"
+  schedule:
+    - cron: '*/15 * * * *' # Roda automaticamente a cada 15 minutos
 
 jobs:
   process_queue:
-    name: Process PR Queue (Oldest → Newest)
+    name: 'Process PR Queue (Oldest → Newest)'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
     steps:
-      - name: Checkout Repo
+      - name: 'Checkout to stable branch'
         uses: actions/checkout@v4
         with:
-          # Pega todo o histórico para permitir merges
-          fetch-depth: 0
+          ref: 'stable'
+          token: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
 
-      - name: Process PR Queue
-        env:
-          REPO: ${{ github.repository }}
-          TARGET_BRANCH: stable
-          PR_LABEL: codex
-          # Token do GitHub já é fornecido automaticamente para o gh
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 'Install GitHub CLI'
+        uses: crazy-max/gh-cli-tools-action@v3
+        with:
+          version: latest
+
+      - name: 'Configure Git User'
         run: |
-          # Configura o Git para fazer commits como o bot do Actions
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "Codex Merge Bot"
+          git config user.email "actions-bot@github.com"
 
-          echo "Buscando PRs abertos com a label '${PR_LABEL}'..."
-          # Lista, ordena e limpa a lista de PRs
-          PRS=$(gh pr list --repo "$REPO" --label "$PR_LABEL" --state open --json number,createdAt \
-            | jq -r 'sort_by(.createdAt) | .[] | .number' \
-            | tr -d '\r')
+      - name: 'List, Sort, and Process Codex PRs'
+        env:
+          GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
+        run: |
+          # Lista todos os PRs do Codex, extrai número, branch e data de criação em formato JSON.
+          # Em seguida, usa 'jq' para ordenar os PRs do mais antigo para o mais novo.
+          # O 'read' dentro do 'while' processa cada PR, um por um, na ordem correta.
+          gh pr list --author "Codex" --state "open" --base "stable" --json number,headRefName,createdAt \
+          | jq -c '. | sort_by(.createdAt) | .[]' \
+          | while read -r pr_json; do
+              PR_NUMBER=$(echo "$pr_json" | jq -r '.number')
+              PR_BRANCH=$(echo "$pr_json" | jq -r '.headRefName')
 
-          if [ -z "$PRS" ]; then
-            echo "Nenhum PR com a label '${PR_LABEL}' foi encontrado. Finalizando."
-            exit 0
-          fi
+              echo " "
+              echo "================================================================="
+              echo ">>> Processing PR #${PR_NUMBER} (Branch: ${PR_BRANCH})"
+              echo "================================================================="
 
-          echo "Fila de PRs encontrada (do mais antigo para o mais novo): $PRS"
-          
-          # Itera sobre cada PR
-          for PR in $PRS; do
-            echo "----------------------------------------"
-            echo ">>> Processando PR #${PR}..."
-            
-            # Tenta fazer o checkout do branch do PR
-            if ! gh pr checkout "$PR" --repo "$REPO"; then
-              echo "!!! AVISO: Falha no checkout do PR #${PR}. Pulando."
-              continue
-            fi
+              # Sincroniza a branch 'stable' local para garantir que está atualizada
+              git fetch origin stable
+              git reset --hard origin/stable
 
-            BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
-            echo "Branch atual: ${BRANCH_NAME}"
+              # Tenta fazer o merge da branch do PR. A flag -Xours resolve conflitos automaticamente,
+              # sempre favorecendo as mudanças que vêm do PR do Codex.
+              echo "Attempting to merge ${PR_BRANCH} into stable..."
+              if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER} from ${PR_BRANCH}" -X ours; then
+                  echo "✅ Merge successful (with potential automatic conflict resolution)."
+                  
+                  # Empurra a 'stable' atualizada para o repositório remoto
+                  echo "Pushing updated stable branch to origin..."
+                  git push origin stable
+                  
+                  echo "PR #${PR_NUMBER} merged and pushed successfully."
 
-            # Faz o merge da branch 'stable' favorecendo as mudanças do PR e sem abrir editor
-            echo "Mesclando '${TARGET_BRANCH}' sem abrir o editor..."
-            git merge --no-edit -X ours "origin/${TARGET_BRANCH}" || true
-
-            # Cria um commit vazio para garantir que o workflow 'ready.yml' será acionado
-            echo "Criando commit vazio para acionar checks..."
-            git commit --allow-empty -m "chore(ci): trigger checks via merge queue"
-
-            # Envia o push com o merge e o commit vazio
-            echo "Enviando push para o branch '${BRANCH_NAME}'..."
-            git push origin "HEAD:${BRANCH_NAME}"
-            echo "Push concluído para o PR #${PR}!"
-
-            # Tenta habilitar o auto-merge como um passo final
-            echo "Tentando habilitar o auto-merge para o PR #${PR}..."
-            gh pr merge "$PR" --repo "$REPO" --squash --auto || echo "Não foi possível habilitar o auto-merge. Aguardando checks..."
-
-            # Volta para a branch principal para o próximo PR
-            echo "PR #${PR} processado. Voltando para '${TARGET_BRANCH}'."
-            git checkout "$TARGET_BRANCH"
+              else
+                  # Se o merge falhar mesmo com -Xours (o que é raro), reporta o erro e para.
+                  echo "❌ CRITICAL: Merge of PR #${PR_NUMBER} failed despite '-X ours' strategy."
+                  echo "Manual intervention is required for branch ${PR_BRANCH}."
+                  
+                  # Adiciona um comentário no PR informando sobre a falha crítica
+                  gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Ocorreu um conflito de merge crítico que a estratégia automática não conseguiu resolver. Intervenção manual é necessária."
+                  
+                  # Reseta a branch local para evitar contaminação na próxima iteração do loop
+                  git reset --hard origin/stable
+                  continue # Pula para o próximo PR da fila
+              fi
           done
 
-          echo "--- PROCESSAMENTO DA FILA CONCLUÍDO COM SUCESSO ---"
+      - name: 'Final Status Check'
+        run: echo "Workflow finished. All open PRs in the queue have been processed."
