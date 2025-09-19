@@ -63,6 +63,16 @@ STATE_ERROR_AUDIO = "ERROR_AUDIO"
 STATE_ERROR_TRANSCRIPTION = "ERROR_TRANSCRIPTION"
 STATE_ERROR_SETTINGS = "ERROR_SETTINGS"
 
+LEGACY_STATE_DEFAULT_DETAILS: dict[str, str] = {
+    STATE_IDLE: "State transitioned to IDLE",
+    STATE_LOADING_MODEL: "State transitioned to LOADING_MODEL",
+    STATE_RECORDING: "State transitioned to RECORDING",
+    STATE_TRANSCRIBING: "State transitioned to TRANSCRIBING",
+    STATE_ERROR_MODEL: "State transitioned to ERROR_MODEL",
+    STATE_ERROR_AUDIO: "State transitioned to ERROR_AUDIO",
+    STATE_ERROR_TRANSCRIPTION: "State transitioned to ERROR_TRANSCRIPTION",
+    STATE_ERROR_SETTINGS: "State transitioned to ERROR_SETTINGS",
+}
 
 @unique
 class StateEvent(Enum):
@@ -97,7 +107,7 @@ class StateEvent(Enum):
 class StateNotification:
     """Mensagem estruturada propagada para assinantes de mudanças de estado."""
 
-    event: StateEvent
+    event: StateEvent | None
     state: str
     previous_state: str | None = None
     details: str | None = None
@@ -864,34 +874,45 @@ class AppCore:
         threading.Thread(target=detect_key_task, daemon=True, name="KeyDetectionThread").start()
 
     # --- Gerenciamento de Estado e Logs ---
-    def _set_state(self, event: StateEvent, *, details: str | None = None, source: str | None = None):
-        """Aplica uma transição de estado baseada em ``StateEvent``."""
+    def _set_state(self, event: StateEvent | str, *, details: str | None = None, source: str | None = None):
+        """Aplica uma transição de estado baseada em ``StateEvent`` ou nome de estado legado."""
 
-        if not isinstance(event, StateEvent):
+        event_obj: StateEvent | None
+        mapped_state: str
+        message: str | None
+
+        if isinstance(event, StateEvent):
+            event_obj = event
+            try:
+                mapped_state = STATE_FOR_EVENT[event_obj]
+            except KeyError as exc:
+                raise ValueError(f"No state mapping defined for event {event_obj!r}") from exc
+            message = details or EVENT_DEFAULT_DETAILS.get(event_obj)
+        elif isinstance(event, str):
+            normalized = event.strip().upper()
+            if normalized not in LEGACY_STATE_DEFAULT_DETAILS:
+                raise ValueError(f"Unsupported state event payload: {event!r}")
+            event_obj = None
+            mapped_state = normalized
+            message = details or LEGACY_STATE_DEFAULT_DETAILS.get(normalized)
+        else:
             raise ValueError(f"Unsupported state event payload: {event!r}")
-
-        try:
-            mapped_state = STATE_FOR_EVENT[event]
-        except KeyError as exc:
-            raise ValueError(f"No state mapping defined for event {event!r}") from exc
-
-        message = details or EVENT_DEFAULT_DETAILS.get(event)
 
         with self.state_lock:
             previous_state = self.current_state
             last_event = self._last_notification.event if self._last_notification else None
             last_state = self._last_notification.state if self._last_notification else None
-            if last_event == event and last_state == mapped_state:
+            if last_event == event_obj and last_state == mapped_state:
                 logging.debug(
                     "Duplicate state event %s suppressed (state=%s, source=%s).",
-                    event.name,
+                    event_obj.name if event_obj else mapped_state,
                     mapped_state,
                     source,
                 )
                 return
 
             notification = StateNotification(
-                event=event,
+                event=event_obj,
                 state=mapped_state,
                 previous_state=previous_state,
                 details=message,
@@ -900,7 +921,8 @@ class AppCore:
             self.current_state = mapped_state
             self._last_notification = notification
 
-        transition_log = f"State transition via {event.name}: {previous_state} -> {mapped_state}"
+        origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
+        transition_log = f"State transition via {origin_label}: {previous_state} -> {mapped_state}"
         if message:
             transition_log += f" ({message})"
         if source:
@@ -917,7 +939,7 @@ class AppCore:
             except Exception as exc:  # pragma: no cover - proteção defensiva
                 logging.error(
                     "State update callback failed for %s: %s",
-                    event.name,
+                    origin_label,
                     exc,
                     exc_info=True,
                 )
