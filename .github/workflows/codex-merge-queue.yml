@@ -1,4 +1,4 @@
-# .github/workflows/codex-merge-queue.yml (Correção Final: Histórico Completo)
+# .github/workflows/codex-merge-queue.yml (Correção Final do Typo no Nome do Segredo)
 
 name: 'Codex Merge Queue (Oldest to Newest)'
 
@@ -20,8 +20,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: 'stable'
-          token: ${{ secrets.CODEX_WORK_TOKEN }}
-          # AQUI ESTÁ A CORREÇÃO FINAL: fetch-depth: 0 baixa todo o histórico do Git
+          # CORREÇÃO DO ERRO DE DIGITAÇÃO:
+          token: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
           fetch-depth: 0
 
       - name: 'Configure Git User'
@@ -31,7 +31,8 @@ jobs:
 
       - name: 'List, Sort, and Process Codex PRs'
         env:
-          GH_TOKEN: ${{ secrets.CODEX_WORK_TOKEN }}
+          # CORREÇÃO DO ERRO DE DIGITAÇÃO:
+          GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
         run: |
           gh pr list --label "codex" --state "open" --base "stable" --json number,headRefName,createdAt \
           | jq -c '. | sort_by(.createdAt) | .[]' \
