@@ -104,6 +104,7 @@ class TranscriptionHandler:
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY) # Novo
         self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY) # Novo
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
+        self.gpu_index_requested = self.gpu_index
         self.batch_size_specified = self.config_manager.get("batch_size_specified") # Ainda usado para validação
         self.gpu_index_specified = self.config_manager.get("gpu_index_specified") # Ainda usado para validação
 
@@ -137,6 +138,48 @@ class TranscriptionHandler:
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
 
         self._init_api_clients()
+
+    def _report_adjustment(self, message: str, *, level: int = logging.WARNING) -> None:
+        """Loga um aviso e envia a mensagem para a UI quando disponível."""
+        if not message:
+            return
+        core = getattr(self, "core_instance_ref", None)
+        if core and hasattr(core, "report_runtime_notice"):
+            core.report_runtime_notice(message, level=level)
+        else:
+            logging.log(level, message)
+
+    def _build_backend_load_kwargs(
+        self,
+        backend_name: str,
+        *,
+        asr_dtype,
+        asr_ct2_compute_type,
+        asr_cache_dir,
+        transformers_device,
+    ) -> dict:
+        """Constroi os parâmetros de ``load`` para o backend escolhido."""
+        if backend_name in {"transformers", "whisper"}:
+            attn_impl = "sdpa"
+            try:
+                import importlib.util
+
+                if importlib.util.find_spec("flash_attn") is not None:
+                    attn_impl = "flash_attn2"
+            except Exception:
+                pass
+            return {
+                "device": transformers_device,
+                "dtype": asr_dtype,
+                "cache_dir": asr_cache_dir,
+                "attn_implementation": attn_impl,
+            }
+        if backend_name in {"ct2", "faster-whisper", "ctranslate2"}:
+            return {
+                "ct2_compute_type": asr_ct2_compute_type,
+                "cache_dir": asr_cache_dir,
+            }
+        return {"cache_dir": asr_cache_dir}
 
     def _init_api_clients(self):
         # Lógica de inicialização de OpenRouterAPI e GeminiAPI
@@ -200,6 +243,7 @@ class TranscriptionHandler:
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY)
         self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
+        self.gpu_index_requested = self.gpu_index
         self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
         self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
         self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
@@ -561,27 +605,122 @@ class TranscriptionHandler:
                 asr_ct2_compute_type = self.config_manager.get("asr_ct2_compute_type")
                 asr_cache_dir = self.config_manager.get("asr_cache_dir")
 
-                backend_name = (asr_backend or "transformers").lower()
-                self.backend_resolved = backend_name
+                requested_backend_display = (
+                    asr_backend.strip() if isinstance(asr_backend, str) else "transformers"
+                )
+                backend_candidate = (
+                    requested_backend_display.lower() if requested_backend_display else "transformers"
+                )
+                if not backend_candidate:
+                    backend_candidate = "transformers"
 
-                gpu_index = self.gpu_index if isinstance(self.gpu_index, int) else -1
-                pref = asr_compute_device.lower() if isinstance(asr_compute_device, str) else "auto"
-                backend_device = "auto"
-                transformers_device = None
-                if pref == "cpu":
+                try:
+                    backend_instance = make_backend(backend_candidate)
+                except Exception as backend_exc:
+                    logging.debug(
+                        "Falha ao instanciar backend '%s': %s",
+                        backend_candidate,
+                        backend_exc,
+                        exc_info=True,
+                    )
+                    if backend_candidate != "transformers":
+                        self._report_adjustment(
+                            f"Backend de ASR '{requested_backend_display}' indisponível; alternando para 'transformers'."
+                        )
+                        backend_candidate = "transformers"
+                        backend_instance = make_backend(backend_candidate)
+                    else:
+                        raise
+
+                if backend_instance is None:
+                    raise RuntimeError(f"Falha ao inicializar backend '{backend_candidate}'.")
+
+                self.backend_resolved = backend_candidate
+                self._asr_backend = backend_instance
+
+                compute_pref = (
+                    asr_compute_device.strip().lower()
+                    if isinstance(asr_compute_device, str)
+                    else "auto"
+                )
+                if compute_pref not in {"auto", "cpu", "cuda"}:
+                    self._report_adjustment(
+                        f"Dispositivo '{asr_compute_device}' não é suportado; usando seleção automática."
+                    )
+                    compute_pref = "auto"
+
+                cuda_available = False
+                gpu_count = 0
+                try:
+                    cuda_available = bool(torch.cuda.is_available())
+                    if cuda_available:
+                        gpu_count = int(torch.cuda.device_count())
+                        if gpu_count <= 0:
+                            cuda_available = False
+                except Exception as cuda_err:
+                    logging.debug("Falha ao consultar GPUs disponíveis: %s", cuda_err, exc_info=True)
+                    cuda_available = False
+                    gpu_count = 0
+
+                requested_gpu_index = (
+                    self.gpu_index_requested
+                    if isinstance(getattr(self, "gpu_index_requested", None), int)
+                    else None
+                )
+                configured_gpu_index = (
+                    self.gpu_index if isinstance(self.gpu_index, int) else None
+                )
+                candidate_gpu_index = (
+                    requested_gpu_index
+                    if requested_gpu_index is not None
+                    else configured_gpu_index
+                )
+                user_explicit_gpu = bool(
+                    self.gpu_index_specified
+                    and requested_gpu_index is not None
+                    and requested_gpu_index >= 0
+                )
+                prefers_cuda = compute_pref == "cuda"
+
+                use_cuda = False
+                selected_gpu_index = None
+                backend_device = "cpu"
+                transformers_device = -1
+
+                if compute_pref == "cpu":
+                    pass
+                elif cuda_available:
+                    original_candidate = (
+                        candidate_gpu_index if candidate_gpu_index is not None else 0
+                    )
+                    normalized_candidate = original_candidate
+                    if normalized_candidate < 0:
+                        normalized_candidate = 0
+                    if normalized_candidate >= gpu_count:
+                        fallback_idx = 0
+                        if user_explicit_gpu or prefers_cuda:
+                            self._report_adjustment(
+                                f"GPU solicitada (índice {original_candidate}) não está disponível; usando cuda:{fallback_idx}."
+                            )
+                        normalized_candidate = fallback_idx
+                    selected_gpu_index = normalized_candidate
+                    backend_device = f"cuda:{selected_gpu_index}"
+                    transformers_device = backend_device
+                    use_cuda = True
+                else:
+                    if prefers_cuda or user_explicit_gpu:
+                        self._report_adjustment(
+                            "CUDA não está disponível neste sistema; executando o modelo na CPU."
+                        )
+
+                if not use_cuda:
+                    selected_gpu_index = -1
                     backend_device = "cpu"
                     transformers_device = -1
-                elif pref == "cuda":
-                    target_idx = gpu_index if gpu_index is not None and gpu_index >= 0 else 0
-                    backend_device = f"cuda:{target_idx}"
-                    transformers_device = f"cuda:{target_idx}"
-                    if self.gpu_index is None or self.gpu_index < 0:
-                        self.gpu_index = target_idx
-                else:
-                    backend_device = "auto"
-                    transformers_device = None
 
-                self._asr_backend = make_backend(backend_name)
+                self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
+                self.device_in_use = backend_device
+
                 if hasattr(self._asr_backend, "model_id"):
                     try:
                         self._asr_backend.model_id = asr_model_id
@@ -593,29 +732,13 @@ class TranscriptionHandler:
                     except Exception:
                         pass
 
-                load_kwargs = {}
-                if backend_name in {"transformers", "whisper"}:
-                    attn_impl = "sdpa"
-                    try:
-                        import importlib.util
-                        if importlib.util.find_spec("flash_attn") is not None:
-                            attn_impl = "flash_attn2"
-                    except Exception:
-                        pass
-                    load_kwargs = {
-                        "device": transformers_device,
-                        "dtype": asr_dtype,
-                        "cache_dir": asr_cache_dir,
-                        "attn_implementation": attn_impl,
-                    }
-                elif backend_name in {"ct2", "faster-whisper", "ctranslate2"}:
-                    load_kwargs = {
-                        "ct2_compute_type": asr_ct2_compute_type,
-                        "cache_dir": asr_cache_dir,
-                    }
-                else:
-                    load_kwargs = {"cache_dir": asr_cache_dir}
-
+                load_kwargs = self._build_backend_load_kwargs(
+                    backend_candidate,
+                    asr_dtype=asr_dtype,
+                    asr_ct2_compute_type=asr_ct2_compute_type,
+                    asr_cache_dir=asr_cache_dir,
+                    transformers_device=transformers_device,
+                )
                 load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
                 if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
                     load_kwargs["cache_dir"] = str(load_kwargs["cache_dir"])
@@ -693,6 +816,11 @@ class TranscriptionHandler:
                 )
                 self._model_load_started_at = None
                 self.pipe = getattr(self._asr_backend, "pipe", None)
+                logging.info(
+                    "Backend '%s' inicializado no dispositivo %s.",
+                    self.backend_resolved,
+                    self.device_in_use,
+                )
                 self._asr_loaded = True
                 self.on_model_ready_callback()
                 return
@@ -750,6 +878,7 @@ class TranscriptionHandler:
                         self.gpu_index = -1
 
             device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
+            self.device_in_use = device
             torch_dtype_local = torch.float16 if device.startswith("cuda") else torch.float32
             resolved_device = device
             resolved_dtype_label = str(torch_dtype_local).replace("torch.", "")
