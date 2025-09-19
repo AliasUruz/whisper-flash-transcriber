@@ -1,4 +1,4 @@
-# .github/workflows/codex-merge-queue.yml (Versão Corrigida com Filtro por Label)
+# .github/workflows/codex-merge-queue.yml (Correção Final da Estratégia de Merge)
 
 name: 'Codex Merge Queue (Oldest to Newest)'
 
@@ -31,7 +31,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
         run: |
-          # AQUI ESTÁ A MUDANÇA: trocamos --author "Codex" por --label "codex"
           gh pr list --label "codex" --state "open" --base "stable" --json number,headRefName,createdAt \
           | jq -c '. | sort_by(.createdAt) | .[]' \
           | while read -r pr_json; do
@@ -47,7 +46,8 @@ jobs:
               git reset --hard origin/stable
 
               echo "Attempting to merge ${PR_BRANCH} into stable..."
-              if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER} from ${PR_BRANCH}" -X ours; then
+              # CORREÇÃO FINAL: Trocamos -X ours por -X theirs para sempre aceitar as mudanças do PR
+              if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER} from ${PR_BRANCH}" -X theirs; then
                   echo "✅ Merge successful (with potential automatic conflict resolution)."
                   
                   echo "Pushing updated stable branch to origin..."
@@ -56,7 +56,7 @@ jobs:
                   echo "PR #${PR_NUMBER} merged and pushed successfully."
 
               else
-                  echo "❌ CRITICAL: Merge of PR #${PR_NUMBER} failed despite '-X ours' strategy."
+                  echo "❌ CRITICAL: Merge of PR #${PR_NUMBER} failed despite '-X theirs' strategy."
                   echo "Manual intervention is required for branch ${PR_BRANCH}."
                   
                   gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Ocorreu um conflito de merge crítico que a estratégia automática não conseguiu resolver. Intervenção manual é necessária."
