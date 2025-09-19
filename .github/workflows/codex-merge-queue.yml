@@ -1,16 +1,15 @@
-# .github/workflows/codex-merge-queue.yml (Com Controle de Concorrência)
+# .github/workflows/codex-merge-queue.yml (Versão Final com Gatilho Robusto)
 
 name: 'Codex Merge Queue'
 
-# MELHORIA 1: Garante que apenas uma execução do workflow rode por vez para a branch stable.
-# Se um novo PR for criado enquanto um merge antigo está em progresso, o antigo será cancelado.
 concurrency:
   group: ${{ github.workflow }}-stable
   cancel-in-progress: true
 
+# MELHORIA: Gatilho mais robusto para cobrir mais casos de uso.
 on:
   pull_request:
-    types: [opened, labeled]
+    types: [opened, labeled, reopened, synchronize, ready_for_review]
 
 jobs:
   process_queue:
@@ -47,16 +46,11 @@ jobs:
           echo "Attempting to merge ${PR_BRANCH} into stable..."
           if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER} from ${PR_BRANCH}" -X theirs; then
               echo "✅ Merge successful (with potential automatic conflict resolution)."
-              
               echo "Pushing updated stable branch to origin..."
               git push origin stable
-              
               echo "PR #${PR_NUMBER} merged and pushed successfully."
-
           else
               echo "❌ CRITICAL: Merge of PR #${PR_NUMBER} failed despite '-X theirs' strategy."
-              
               gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Ocorreu um conflito de merge crítico que a estratégia automática não conseguiu resolver. Intervenção manual é necessária."
-              
               exit 1
           fi
