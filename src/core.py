@@ -358,18 +358,39 @@ class AppCore:
             try:
                 self._set_state(STATE_LOADING_MODEL)
                 self.model_manager.ensure_download(model_id, backend, cache_dir, quant=ct2_type)
-            except self._download_cancelled_error:
-                logging.info("Model download cancelled by user.")
+            except self._download_cancelled_error as cancel_exc:
+                by_user = bool(getattr(cancel_exc, "by_user", False))
+                timed_out = bool(getattr(cancel_exc, "timed_out", False))
+                reason = str(cancel_exc).strip()
+                if not reason:
+                    if timed_out:
+                        reason = "Model download timed out."
+                    elif by_user:
+                        reason = "Model download cancelled by user."
+                    else:
+                        reason = "Model download cancelled."
+                context_flags = []
+                if by_user:
+                    context_flags.append("by_user=True")
+                if timed_out:
+                    context_flags.append("timed_out=True")
+                context_suffix = f" ({', '.join(context_flags)})" if context_flags else ""
+                MODEL_LOGGER.info(
+                    "Model download cancelled%s: backend=%s model_id=%s reason=%s",
+                    context_suffix,
+                    backend,
+                    model_id,
+                    reason,
+                )
                 self._set_state(
                     StateEvent.MODEL_DOWNLOAD_CANCELLED,
-                    details=f"Download for '{model_id}' cancelled by user",
+                    details=f"Download for '{model_id}' cancelled: {reason}",
                     source="model_download",
                 )
-                ensure_download(model_id, backend, cache_dir, quant=ct2_type)
-            except DownloadCancelledError:
-                MODEL_LOGGER.info("Model download cancelled by user.")
-                self._set_state(STATE_ERROR_MODEL)
-                self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download canceled."))
+                self.main_tk_root.after(
+                    0,
+                    lambda msg=reason: messagebox.showinfo("Model", msg),
+                )
             except OSError:
                 MODEL_LOGGER.error("Invalid cache directory during model download.", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
