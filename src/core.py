@@ -367,7 +367,17 @@ class AppCore:
         def _download():
             try:
                 self._set_state(STATE_LOADING_MODEL)
-                self.model_manager.ensure_download(model_id, backend, cache_dir, quant=ct2_type)
+                ensure_kwargs = {
+                    "quant": ct2_type,
+                    "timeout": timeout,
+                    "cancel_event": cancel_event,
+                }
+                self.model_manager.ensure_download(
+                    model_id,
+                    backend,
+                    cache_dir,
+                    **ensure_kwargs,
+                )
             except self._download_cancelled_error as cancel_exc:
                 by_user = bool(getattr(cancel_exc, "by_user", False))
                 timed_out = bool(getattr(cancel_exc, "timed_out", False))
@@ -401,6 +411,7 @@ class AppCore:
                     0,
                     lambda msg=reason: messagebox.showinfo("Model", msg),
                 )
+                return
             except OSError:
                 MODEL_LOGGER.error("Invalid cache directory during model download.", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
@@ -412,6 +423,10 @@ class AppCore:
             else:
                 MODEL_LOGGER.info("Model download completed successfully.")
                 self.main_tk_root.after(0, self.transcription_handler.start_model_loading)
+            finally:
+                active_event = getattr(self, "_active_model_download_event", None)
+                if active_event is cancel_event:
+                    self._active_model_download_event = None
         threading.Thread(target=_download, daemon=True, name="ModelDownloadThread").start()
 
     def _start_model_loading_with_synced_config(self):
