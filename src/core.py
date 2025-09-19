@@ -240,6 +240,9 @@ class AppCore:
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
 
+        self._active_model_download_event: threading.Event | None = None
+        self.model_download_timeout = self._resolve_model_download_timeout()
+
         try:
             cache_dir = self.config_manager.get("asr_cache_dir")
             model_id = self.asr_model_id
@@ -256,7 +259,7 @@ class AppCore:
                 )
                 self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
             else:
-                self.transcription_handler.start_model_loading()
+                self._start_model_loading_with_synced_config()
         except OSError:
             messagebox.showerror("Erro", "Diretório de cache inválido.")
             self._set_state(
@@ -268,6 +271,16 @@ class AppCore:
 
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
+
+    def _resolve_model_download_timeout(self) -> float | None:
+        """Return configured timeout (seconds) for ASR downloads."""
+        raw_timeout = self.config_manager.get("asr_download_timeout_seconds", 0)
+        try:
+            timeout_value = float(raw_timeout)
+        except (TypeError, ValueError):
+            logging.debug("Invalid ASR download timeout %r. Ignoring.", raw_timeout)
+            return None
+        return timeout_value if timeout_value > 0 else None
 
     def _prompt_model_install(self, model_id, backend, cache_dir, ct2_type):
         """Agenda um prompt para download do modelo na thread principal."""
@@ -292,8 +305,16 @@ class AppCore:
                     f"Model '{model_id}' is not installed.\n{download_msg}\nDownload now?"
                 )
                 if messagebox.askyesno("Model Download", prompt_text):
-                    self.config_manager.record_model_prompt_decision("accept", model_id, backend)
-                    self._start_model_download(model_id, backend, cache_dir, ct2_type)
+                    cancel_event = threading.Event()
+                    self._active_model_download_event = cancel_event
+                    self._start_model_download(
+                        model_id,
+                        backend,
+                        cache_dir,
+                        ct2_type,
+                        timeout=self.model_download_timeout,
+                        cancel_event=cancel_event,
+                    )
                 else:
                     self.config_manager.record_model_prompt_decision("defer", model_id, backend)
                     logging.info("User declined model download prompt.")
@@ -324,15 +345,21 @@ class AppCore:
                 self.model_prompt_active = False
             self._set_state(STATE_ERROR_MODEL)
 
-    @staticmethod
-    def _format_decision_timestamp(ts: float | int) -> str:
-        try:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(ts)))
-        except Exception:
-            return "unknown"
-
-    def _start_model_download(self, model_id, backend, cache_dir, ct2_type):
+    def _start_model_download(
+        self,
+        model_id,
+        backend,
+        cache_dir,
+        ct2_type,
+        *,
+        timeout: float | None = None,
+        cancel_event: threading.Event | None = None,
+    ):
         """Inicia o download do modelo em uma thread separada."""
+
+        if cancel_event is not None:
+            cancel_event.clear()
+
         def _download():
             try:
                 self._set_state(STATE_LOADING_MODEL)
@@ -363,13 +390,46 @@ class AppCore:
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", f"Download failed: {e}"))
             else:
                 logging.info("Model download completed successfully.")
-
-                def _after_download():
-                    self._set_state(STATE_IDLE)
-                    self.transcription_handler.start_model_loading()
-
-                self.main_tk_root.after(0, _after_download)
+                self.main_tk_root.after(0, self._start_model_loading_with_synced_config)
         threading.Thread(target=_download, daemon=True, name="ModelDownloadThread").start()
+
+    def _start_model_loading_with_synced_config(self):
+        """Start model loading after asserting the ConfigManager linkage.
+
+        A sincronização explícita garante que ``TranscriptionHandler`` use a
+        mesma instância de ``ConfigManager`` do núcleo antes de delegar o
+        carregamento do modelo. Este passo deve ser verificado manualmente em
+        cenários de recarga de modelo após alterações de configuração.
+        """
+        handler = getattr(self, "transcription_handler", None)
+        if handler is None:
+            logging.error("Cannot start model loading: transcription handler missing.")
+            self._set_state(STATE_ERROR_MODEL)
+            return
+
+        handler.config_manager = self.config_manager
+
+        try:
+            assert handler.config_manager is self.config_manager
+        except AssertionError:
+            logging.error(
+                "ConfigManager mismatch detected before model loading; aborting to avoid stale settings."
+            )
+            self._set_state(STATE_ERROR_SETTINGS)
+            return
+
+        logging.debug(
+            "ConfigManager synchronized before model loading (id=%s).",
+            id(self.config_manager),
+        )
+
+        handler.start_model_loading()
+
+    def cancel_model_download(self) -> None:
+        """Solicita o cancelamento do download de modelo em andamento."""
+        event = getattr(self, "_active_model_download_event", None)
+        if event is not None:
+            event.set()
 
     def _apply_initial_config_to_core_attributes(self):
         # Mover a atribuição de self.record_key, self.record_mode, etc.
@@ -506,6 +566,37 @@ class AppCore:
         self._pending_tray_tooltips.clear()
         for message in pending:
             self.main_tk_root.after(0, lambda msg=message: ui_manager.show_status_tooltip(msg))
+
+    def emit_state_warning(
+        self,
+        code: str,
+        details: dict | None = None,
+        *,
+        message: str | None = None,
+        level: str = "warning",
+    ) -> None:
+        """Encaminha avisos para a UI usando o callback de estado."""
+        payload = {
+            "code": code,
+            "details": details or {},
+            "level": level,
+        }
+        if message:
+            payload["message"] = message
+        callback = self.state_update_callback
+        if callback:
+            try:
+                event = {"state": self.current_state, "warning": payload}
+                self.main_tk_root.after(0, lambda evt=event: callback(evt))
+            except Exception as error:
+                logging.error(
+                    "Falha ao propagar aviso de estado (%s): %s",
+                    code,
+                    error,
+                    exc_info=True,
+                )
+        if message:
+            self._queue_tooltip_update(message)
 
     # --- Callbacks de Módulos ---
     def set_state_update_callback(self, callback: StateUpdateCallback | None) -> None:
@@ -1497,7 +1588,7 @@ class AppCore:
                 self.audio_handler.update_config()
             self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
             if reload_required:
-                self.transcription_handler.start_model_loading()
+                self._start_model_loading_with_synced_config()
             if launch_changed:
                 from .utils.autostart import set_launch_at_startup
                 set_launch_at_startup(self.config_manager.get("launch_at_startup"))
@@ -1675,6 +1766,8 @@ class AppCore:
         if self.shutting_down: return
         self.shutting_down = True
         logging.info("Shutdown sequence initiated.")
+
+        self.cancel_model_download()
 
         self.stop_reregister_event.set()
         self.stop_health_check_event.set()
