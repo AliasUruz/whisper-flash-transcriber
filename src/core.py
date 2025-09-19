@@ -970,17 +970,62 @@ class AppCore:
             _notify()
 
     def _ensure_idle_state_notification(self):
+        """Propaga uma notificação estruturada representando o estado *idle*."""
+
+        notification: StateNotification | None = None
+        callback_to_call: StateUpdateCallback | None = None
+        should_emit_idle = False
+        should_publish_recovered = False
+
         with self.state_lock:
-            is_idle = self.current_state == STATE_IDLE
             callback_to_call = self.state_update_callback
-        if is_idle:
-            if callback_to_call:
-                try:
-                    self.main_tk_root.after(0, lambda: callback_to_call(STATE_IDLE))
-                except Exception as e:
-                    logging.error(f"Error notifying idle state: {e}")
-        else:
-            self._set_state(STATE_IDLE)
+            if self.current_state == STATE_IDLE:
+                should_emit_idle = True
+                last_notification = self._last_notification
+                previous_state = (
+                    last_notification.state if last_notification else self.current_state
+                )
+                notification = StateNotification(
+                    event=None,
+                    state=STATE_IDLE,
+                    previous_state=previous_state,
+                    details=LEGACY_STATE_DEFAULT_DETAILS.get(STATE_IDLE),
+                    source="settings",
+                )
+                self._last_notification = notification
+            else:
+                should_publish_recovered = True
+
+        if should_publish_recovered:
+            self._set_state(
+                StateEvent.SETTINGS_RECOVERED,
+                details="Configurações aplicadas; mantendo estado IDLE.",
+                source="settings",
+            )
+            return
+
+        if not (should_emit_idle and notification and callback_to_call):
+            return
+
+        def _dispatch_idle(notification_to_emit: StateNotification = notification):
+            try:
+                assert callback_to_call is not None
+                callback_to_call(notification_to_emit)
+            except Exception as exc:  # pragma: no cover - proteção defensiva
+                logging.error(
+                    "State update callback failed while confirming idle state: %s",
+                    exc,
+                    exc_info=True,
+                )
+
+        try:
+            self.main_tk_root.after(0, _dispatch_idle)
+        except Exception:  # pragma: no cover - fallback quando Tk não estiver disponível
+            logging.debug(
+                "Tkinter scheduling failed for idle state notification; calling callback directly.",
+                exc_info=True,
+            )
+            _dispatch_idle()
 
     def is_state_transcribing(self) -> bool:
         """Indica se o estado atual é TRANSCRIBING."""

@@ -1291,7 +1291,12 @@ class UIManager:
     def update_tray_icon(self, state):
         # Logic moved from global, ajustado para lidar com payloads estruturados
         warning_payload = None
-        if isinstance(state, dict):
+        notification_payload = None
+
+        if hasattr(state, "state") and hasattr(state, "event") and hasattr(state, "previous_state"):
+            notification_payload = state
+            state = getattr(notification_payload, "state", None)
+        elif isinstance(state, dict):
             warning_payload = state.get("warning")
             state = state.get(
                 "state",
@@ -1401,7 +1406,11 @@ class UIManager:
 
             self.tray_icon.title = tooltip
             self.tray_icon.update_menu()
-            logging.debug(f"Tray icon updated for state: {state}")
+            if notification_payload and getattr(notification_payload, "event", None):
+                event_name = getattr(notification_payload.event, "name", str(notification_payload.event))
+                logging.debug("Tray icon updated for state: %s (event=%s)", state, event_name)
+            else:
+                logging.debug(f"Tray icon updated for state: {state}")
 
         if warning_payload:
             warning_level = str(warning_payload.get("level", "info")).lower()
