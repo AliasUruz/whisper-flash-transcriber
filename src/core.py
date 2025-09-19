@@ -25,11 +25,20 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
+    MIN_RECORDING_DURATION_CONFIG_KEY,
+    USE_VAD_CONFIG_KEY,
+    VAD_THRESHOLD_CONFIG_KEY,
+    VAD_SILENCE_DURATION_CONFIG_KEY,
+    RECORD_STORAGE_MODE_CONFIG_KEY,
+    RECORD_STORAGE_LIMIT_CONFIG_KEY,
+    LAUNCH_AT_STARTUP_CONFIG_KEY,
+    CLEAR_GPU_CACHE_CONFIG_KEY,
     ASR_BACKEND_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
     ASR_DTYPE_CONFIG_KEY,
+    ASR_CT2_CPU_THREADS_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
@@ -544,6 +553,19 @@ class AppCore:
             except Exception as e:
                 logging.error(f"Error calling state update callback for state {current_state_for_callback}: {e}")
 
+    def _ensure_idle_state_notification(self):
+        with self.state_lock:
+            is_idle = self.current_state == STATE_IDLE
+            callback_to_call = self.state_update_callback
+        if is_idle:
+            if callback_to_call:
+                try:
+                    self.main_tk_root.after(0, lambda: callback_to_call(STATE_IDLE))
+                except Exception as e:
+                    logging.error(f"Error notifying idle state: {e}")
+        else:
+            self._set_state(STATE_IDLE)
+
     def is_state_transcribing(self) -> bool:
         """Indica se o estado atual é TRANSCRIBING."""
         with self.state_lock:
@@ -782,153 +804,193 @@ class AppCore:
     def apply_settings_from_external(self, **kwargs):
         logging.info("AppCore: Applying new configuration from external source.")
         config_changed = False
+        changed_mapped_keys: set[str] = set()
 
-        # Atualizar ConfigManager e verificar se houve mudanças
-        launch_changed = False
-        reload_required = False
-        reload_keys = {
-            ASR_BACKEND_CONFIG_KEY,
-            ASR_MODEL_ID_CONFIG_KEY,
-            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-            "asr_model",
+        config_key_map = {
+            "new_key": "record_key",
+            "new_mode": "record_mode",
+            "new_auto_paste": "auto_paste",
+            "new_sound_enabled": "sound_enabled",
+            "new_sound_frequency": "sound_frequency",
+            "new_sound_duration": "sound_duration",
+            "new_sound_volume": "sound_volume",
+            "new_agent_key": "agent_key",
+            "new_text_correction_enabled": "text_correction_enabled",
+            "new_text_correction_service": "text_correction_service",
+            "new_openrouter_api_key": "openrouter_api_key",
+            "new_openrouter_model": "openrouter_model",
+            "new_gemini_api_key": "gemini_api_key",
+            "new_gemini_model": "gemini_model",
+            "new_agent_model": "gemini_agent_model",
+            "new_gemini_prompt": GEMINI_PROMPT_CONFIG_KEY,
+            "new_batch_size": "batch_size",
+            "new_gpu_index": "gpu_index",
+            "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled",
+            "new_min_transcription_duration": "min_transcription_duration",
+            "new_min_record_duration": "min_record_duration",
+            "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+            "new_record_to_memory": "record_to_memory",
+            "new_max_memory_seconds_mode": "max_memory_seconds_mode",
+            "new_max_memory_seconds": "max_memory_seconds",
+            "new_gemini_model_options": "gemini_model_options",
+            "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
+            "new_asr_model_id": ASR_MODEL_ID_CONFIG_KEY,
+            "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
+            "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
+            "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
+            "new_ct2_cpu_threads": ASR_CT2_CPU_THREADS_CONFIG_KEY,
+            "new_clear_gpu_cache": CLEAR_GPU_CACHE_CONFIG_KEY,
+            "new_use_vad": USE_VAD_CONFIG_KEY,
+            "new_vad_threshold": VAD_THRESHOLD_CONFIG_KEY,
+            "new_vad_silence_duration": VAD_SILENCE_DURATION_CONFIG_KEY,
+            "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
+            "new_record_storage_mode": RECORD_STORAGE_MODE_CONFIG_KEY,
+            "new_record_storage_limit": RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            "new_launch_at_startup": LAUNCH_AT_STARTUP_CONFIG_KEY,
+            "new_chunk_length_mode": "chunk_length_mode",
+            "new_chunk_length_sec": "chunk_length_sec",
+            "new_enable_torch_compile": "enable_torch_compile",
         }
-        for key, value in kwargs.items():
-            # Mapear nomes de kwargs para chaves de config_manager se necessário
-            config_key_map = {
-                "new_key": "record_key", "new_mode": "record_mode", "new_auto_paste": "auto_paste",
-                "new_sound_enabled": "sound_enabled", "new_sound_frequency": "sound_frequency",
-                "new_sound_duration": "sound_duration", "new_sound_volume": "sound_volume",
-                "new_agent_key": "agent_key", "new_text_correction_enabled": "text_correction_enabled",
-                "new_text_correction_service": "text_correction_service",
-                "new_openrouter_api_key": "openrouter_api_key", "new_openrouter_model": "openrouter_model",
-                "new_gemini_api_key": "gemini_api_key", "new_gemini_model": "gemini_model",
-                "new_agent_model": "gemini_agent_model",
-                "new_gemini_prompt": GEMINI_PROMPT_CONFIG_KEY,
-                "new_batch_size": "batch_size", "new_gpu_index": "gpu_index",
-                "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
-                "new_min_transcription_duration": "min_transcription_duration",
-                "new_min_record_duration": "min_record_duration",
-                "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
-                "new_record_to_memory": "record_to_memory",
-                "new_max_memory_seconds_mode": "max_memory_seconds_mode",
-                "new_max_memory_seconds": "max_memory_seconds",
-                "new_gemini_model_options": "gemini_model_options",
-                "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
-                "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
-                "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
-                "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
-                "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-                "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
-                "new_use_vad": "use_vad",
-                "new_vad_threshold": "vad_threshold",
-                "new_vad_silence_duration": "vad_silence_duration",
-                "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
-                "new_record_storage_mode": "record_storage_mode",
-                "new_record_storage_limit": "record_storage_limit",
-                "new_launch_at_startup": "launch_at_startup",
-                # Novas chaves para opções de chunk e recurso experimental
-                "new_chunk_length_mode": "chunk_length_mode",
-                "new_chunk_length_sec": "chunk_length_sec",
-                "new_enable_torch_compile": "enable_torch_compile",
-                "new_asr_model": "asr_model",
-                "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
-                "new_asr_model_id": ASR_MODEL_ID_CONFIG_KEY,
-                "new_ct2_quantization": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-            }
-            mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
+        legacy_key_aliases = {
+            "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
+            "asr_model": ASR_MODEL_ID_CONFIG_KEY,
+            "new_ct2_quantization": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+        }
+
+        normalized_updates: dict[str, object] = {}
+        sentinel = object()
+        for raw_key, value in kwargs.items():
+            if value is None:
+                logging.debug("Ignoring None value for configuration key '%s'.", raw_key)
+                continue
+            mapped_key = config_key_map.get(raw_key)
+            if mapped_key is None:
+                mapped_key = legacy_key_aliases.get(raw_key, raw_key)
+            previous_value = normalized_updates.get(mapped_key, sentinel)
+            if previous_value is not sentinel and previous_value != value:
+                logging.debug(
+                    "Configuration key '%s' was provided multiple times; using latest value %r.",
+                    mapped_key,
+                    value,
+                )
+            normalized_updates[mapped_key] = value
+
+        for mapped_key, value in normalized_updates.items():
             current_value = self.config_manager.get(mapped_key)
             if current_value != value:
                 self.config_manager.set(mapped_key, value)
                 config_changed = True
-                if mapped_key in reload_keys:
-                    reload_required = True
-                if mapped_key == "launch_at_startup":
-                    launch_changed = True
+                changed_mapped_keys.add(mapped_key)
                 logging.info(f"Configuração '{mapped_key}' alterada para: {value}")
-        
-        # Lógica para unificar auto_paste: se new_auto_paste foi passado, ele se aplica a ambos
-        if "new_auto_paste" in kwargs:
-            new_auto_paste_value = kwargs["new_auto_paste"]
-            if self.config_manager.get("auto_paste") != new_auto_paste_value:
-                self.config_manager.set("auto_paste", new_auto_paste_value)
-                config_changed = True
-                logging.info(f"Configuração 'auto_paste' alterada para: {new_auto_paste_value}")
-            # Garantir que agent_auto_paste seja sempre igual a auto_paste
+
+        if "auto_paste" in normalized_updates:
+            new_auto_paste_value = normalized_updates["auto_paste"]
             if self.config_manager.get("agent_auto_paste") != new_auto_paste_value:
                 self.config_manager.set("agent_auto_paste", new_auto_paste_value)
                 config_changed = True
-                logging.info(f"Configuração 'agent_auto_paste' (unificada) alterada para: {new_auto_paste_value}")
-        
-        if config_changed:
-            self.config_manager.save_config()
-            self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
+                changed_mapped_keys.add("agent_auto_paste")
+                logging.info(
+                    "Configuração 'agent_auto_paste' (unificada) alterada para: %s",
+                    new_auto_paste_value,
+                )
 
-            self.audio_handler.config_manager = self.config_manager # Atualizar referência
-            self.transcription_handler.config_manager = self.config_manager # Atualizar referência
-            if any(
-                key in kwargs
-                for key in [
-                    "new_use_vad",
-                    "new_vad_threshold",
-                    "new_vad_silence_duration",
-                    "new_record_storage_mode",
-                    "new_record_storage_limit",
-                    "new_min_record_duration",
-                ]
-            ):
+        if config_changed:
+            reload_keys = {
+                ASR_BACKEND_CONFIG_KEY,
+                ASR_MODEL_ID_CONFIG_KEY,
+                ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+                ASR_COMPUTE_DEVICE_CONFIG_KEY,
+                ASR_DTYPE_CONFIG_KEY,
+                ASR_CT2_CPU_THREADS_CONFIG_KEY,
+                ASR_CACHE_DIR_CONFIG_KEY,
+            }
+            reload_required = bool(changed_mapped_keys & reload_keys)
+            launch_changed = LAUNCH_AT_STARTUP_CONFIG_KEY in changed_mapped_keys
+
+            self.config_manager.save_config()
+            self._apply_initial_config_to_core_attributes()
+
+            self.audio_handler.config_manager = self.config_manager
+            self.transcription_handler.config_manager = self.config_manager
+
+            audio_related_keys = {
+                USE_VAD_CONFIG_KEY,
+                VAD_THRESHOLD_CONFIG_KEY,
+                VAD_SILENCE_DURATION_CONFIG_KEY,
+                RECORD_STORAGE_MODE_CONFIG_KEY,
+                RECORD_STORAGE_LIMIT_CONFIG_KEY,
+                MIN_RECORDING_DURATION_CONFIG_KEY,
+            }
+            if audio_related_keys & changed_mapped_keys:
                 self.audio_handler.update_config()
-            self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
+
+            try:
+                reload_needed = self.transcription_handler.update_config(trigger_reload=False)
+            except Exception as exc:
+                logging.error("Erro ao atualizar configurações do TranscriptionHandler: %s", exc, exc_info=True)
+                self._set_state(STATE_ERROR_MODEL)
+                self._log_status("Erro: Falha ao aplicar configurações do modelo.", error=True)
+                return
+
+            reload_required = reload_required or reload_needed
+
             if reload_required:
-                self.transcription_handler.start_model_loading()
+                self._set_state(STATE_LOADING_MODEL)
+                try:
+                    self.transcription_handler.start_model_loading()
+                except Exception as exc:
+                    logging.error("Falha ao iniciar recarregamento do modelo ASR: %s", exc, exc_info=True)
+                    self._set_state(STATE_ERROR_MODEL)
+                    self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
+                    return
+            else:
+                self._ensure_idle_state_notification()
+
             if launch_changed:
                 from .utils.autostart import set_launch_at_startup
-                set_launch_at_startup(self.config_manager.get("launch_at_startup"))
-            # Re-inicializar clientes API existentes em vez de recriá-los
-            self.gemini_api.reinitialize_client() # Re-inicializar cliente principal
+
+                set_launch_at_startup(self.config_manager.get(LAUNCH_AT_STARTUP_CONFIG_KEY))
+
+            self.gemini_api.reinitialize_client()
             if self.transcription_handler.gemini_client:
-                self.transcription_handler.gemini_client.reinitialize_client() # Re-inicializar cliente Gemini do TranscriptionHandler
+                self.transcription_handler.gemini_client.reinitialize_client()
             if self.transcription_handler.openrouter_client:
                 self.transcription_handler.openrouter_client.reinitialize_client(
                     api_key=self.config_manager.get("openrouter_api_key"),
-                    model_id=self.config_manager.get("openrouter_model")
-                ) # Re-inicializar cliente OpenRouter do TranscriptionHandler
-            
-            # Re-registrar hotkeys se as chaves ou modo mudaram
-            if kwargs.get("new_key") is not None or kwargs.get("new_mode") is not None or kwargs.get("new_agent_key") is not None:
+                    model_id=self.config_manager.get("openrouter_model"),
+                )
+
+            hotkey_related_keys = {"record_key", "record_mode", "agent_key"}
+            if hotkey_related_keys & changed_mapped_keys:
                 self.register_hotkeys()
-            
-            # Reiniciar/parar serviços de estabilidade de hotkey se a configuração mudou
-            if kwargs.get("new_hotkey_stability_service_enabled") is not None:
-                if kwargs["new_hotkey_stability_service_enabled"]:
-                    # Iniciar thread de re-registro periódico
+
+            if "hotkey_stability_service_enabled" in changed_mapped_keys:
+                if self.config_manager.get("hotkey_stability_service_enabled"):
                     if not self.reregister_timer_thread or not self.reregister_timer_thread.is_alive():
                         self.stop_reregister_event.clear()
-                        self.reregister_timer_thread = threading.Thread(target=self._periodic_reregister_task, daemon=True, name="PeriodicHotkeyReregister")
+                        self.reregister_timer_thread = threading.Thread(
+                            target=self._periodic_reregister_task,
+                            daemon=True,
+                            name="PeriodicHotkeyReregister",
+                        )
                         self.reregister_timer_thread.start()
                         logging.info("Periodic hotkey re-registration thread launched via settings update.")
-                    
-                    # Iniciar thread de verificação de saúde
+
                     if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
                         self.stop_health_check_event.clear()
-                        self.health_check_thread = threading.Thread(target=self._hotkey_health_check_task, daemon=True, name="HotkeyHealthThread")
+                        self.health_check_thread = threading.Thread(
+                            target=self._hotkey_health_check_task,
+                            daemon=True,
+                            name="HotkeyHealthThread",
+                        )
                         self.health_check_thread.start()
                         logging.info("Hotkey health monitoring thread launched via settings update.")
                 else:
                     self.stop_reregister_event.set()
                     self.stop_health_check_event.set()
                     logging.info("Hotkey stability services stopped via settings update.")
-
-            # Atualizar min_transcription_duration
-            if kwargs.get('new_min_transcription_duration') is not None:
-                if self.config_manager.get('min_transcription_duration') != kwargs['new_min_transcription_duration']:
-                    self.config_manager.set('min_transcription_duration', kwargs['new_min_transcription_duration'])
-                    logging.info(f"Configuração 'min_transcription_duration' alterada para: {kwargs['new_min_transcription_duration']}")
-
-            if kwargs.get('new_min_record_duration') is not None:
-                if self.config_manager.get('min_record_duration') != kwargs['new_min_record_duration']:
-                    self.config_manager.set('min_record_duration', kwargs['new_min_record_duration'])
-                    logging.info(f"Configuração 'min_record_duration' alterada para: {kwargs['new_min_record_duration']}")
 
             self._log_status("Configurações atualizadas.")
         else:
@@ -971,9 +1033,23 @@ class AppCore:
             ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             ASR_CACHE_DIR_CONFIG_KEY,
         ]:
-            self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
-            self.transcription_handler.update_config()
+            self.transcription_handler.config_manager = self.config_manager  # Garantir que a referência esteja atualizada
+            reload_needed = self.transcription_handler.update_config(trigger_reload=False)
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
+            if reload_needed:
+                self._set_state(STATE_LOADING_MODEL)
+                try:
+                    self.transcription_handler.start_model_loading()
+                except Exception as exc:
+                    logging.error(
+                        "Falha ao iniciar recarregamento do modelo após update_setting (%s): %s",
+                        key,
+                        exc,
+                        exc_info=True,
+                    )
+                    self._set_state(STATE_ERROR_MODEL)
+                    self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
+                    return
 
         if key in ["min_record_duration", "use_vad", "vad_threshold", "vad_silence_duration", "record_storage_mode", "record_storage_limit"]:
             self.audio_handler.config_manager = self.config_manager
