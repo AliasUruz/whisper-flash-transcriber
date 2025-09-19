@@ -36,6 +36,7 @@ from .config_manager import (
     DEFAULT_CONFIG,
 )
 
+from .utils.form_validation import safe_get_float, safe_get_int
 from .utils.tooltip import Tooltip
 from .vad_manager import VADManager
 
@@ -891,21 +892,331 @@ class UIManager:
             dc.rectangle((width // 4, height // 4, width * 3 // 4, height * 3 // 4), fill=color2)
         return image
 
-    def _safe_get_int(self, var, field_name, parent):
-        """Converte o valor de uma StringVar para int com validação."""
-        try:
-            return int(var.get())
-        except (TypeError, ValueError):
-            messagebox.showerror("Valor inválido", f"Valor inválido para {field_name}.", parent=parent)
-            return None
+    def _build_asr_section(
+        self,
+        *,
+        settings_win,
+        asr_frame,
+        transcription_frame,
+        available_devices,
+        asr_backend_var,
+        asr_model_id_var,
+        asr_compute_device_var,
+        asr_dtype_var,
+        asr_ct2_compute_type_var,
+        asr_cache_dir_var,
+    ):
+        """Construct the ASR configuration widgets.
 
-    def _safe_get_float(self, var, field_name, parent):
-        """Converte o valor de uma StringVar para float com validação."""
+        Returns a dictionary with UI references needed by the caller.
+        """
+
+        asr_backend_frame = ctk.CTkFrame(asr_frame)
+        asr_backend_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 0))
+        ctk.CTkButton(
+            asr_backend_frame,
+            text="?",
+            width=20,
+            command=lambda: messagebox.showinfo(
+                "ASR Backend",
+                "Selects the inference engine used for speech recognition.",
+            ),
+        ).pack(side="left", padx=(0, 10))
+
+        def _on_backend_change(choice: str) -> None:
+            asr_backend_var.set(choice)
+            _update_install_button_state()
+            _update_model_info(asr_model_id_var.get())
+
+        asr_backend_menu = ctk.CTkOptionMenu(
+            asr_backend_frame,
+            variable=asr_backend_var,
+            values=["auto", "transformers", "ct2"],
+            command=_on_backend_change,
+        )
+        asr_backend_menu.pack(side="left", padx=5)
+        Tooltip(
+            asr_backend_menu,
+            "Inference backend for speech recognition.\nDerived from selected model; override in advanced mode.",
+        )
+
+        quant_frame = ctk.CTkFrame(transcription_frame)
+        quant_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 0))
+        ctk.CTkButton(
+            quant_frame,
+            text="?",
+            width=20,
+            command=lambda: messagebox.showinfo(
+                "Quantization",
+                "Reduces model precision for faster inference (float16/int8).",
+            ),
+        ).pack(side="left", padx=(0, 10))
+        quant_menu = ctk.CTkOptionMenu(
+            quant_frame,
+            variable=asr_ct2_compute_type_var,
+            values=["float16", "int8", "int8_float16"],
+        )
+        quant_menu.pack(side="left", padx=5)
+        Tooltip(quant_menu, "Available compute types for the CTranslate2 backend.")
+
+        catalog = model_manager.list_catalog()
+        catalog_display_map = {entry["id"]: entry.get("display_name", entry["id"]) for entry in catalog}
         try:
-            return float(var.get())
-        except (TypeError, ValueError):
-            messagebox.showerror("Valor inválido", f"Valor inválido para {field_name}.", parent=parent)
-            return None
+            installed_ids = {
+                m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
+            }
+        except OSError:
+            messagebox.showerror(
+                "Configuração",
+            )
+            installed_ids = set()
+        all_ids = sorted({m["id"] for m in catalog} | installed_ids)
+        id_to_display = {mid: catalog_display_map.get(mid, mid) for mid in all_ids}
+        display_to_id = {v: k for k, v in id_to_display.items()}
+        asr_model_display_var = ctk.StringVar(
+            value=id_to_display.get(asr_model_id_var.get(), asr_model_id_var.get())
+        )
+
+        asr_model_frame = ctk.CTkFrame(asr_frame)
+        asr_model_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
+        asr_model_menu = ctk.CTkOptionMenu(
+            asr_model_frame,
+            variable=asr_model_display_var,
+            values=[id_to_display[mid] for mid in all_ids],
+        )
+        asr_model_menu.pack(side="left", padx=5)
+        Tooltip(asr_model_menu, "Model identifier from curated catalog.")
+
+        model_size_label = ctk.CTkLabel(asr_model_frame, text="")
+        model_size_label.pack(side="left", padx=5)
+
+        def _derive_backend_from_model(model_ref: str) -> str | None:
+            model_id = display_to_id.get(model_ref, model_ref)
+            entry = next((m for m in catalog if m["id"] == model_id), None)
+            if not entry:
+                installed = model_manager.list_installed(asr_cache_dir_var.get())
+                entry = next((m for m in installed if m["id"] == model_id), None)
+            backend = entry.get("backend") if entry else None
+            if backend in ("faster-whisper", "ctranslate2"):
+                backend = "ct2"
+            if backend not in ("transformers", "ct2"):
+                return None
+            return backend
+
+        def _update_model_info(model_ref: str) -> None:
+            model_id = display_to_id.get(model_ref, model_ref)
+            try:
+                d_bytes, d_files = model_manager.get_model_download_size(model_id)
+                d_mb = d_bytes / (1024 * 1024)
+                download_text = f"{d_mb:.1f} MB ({d_files} files)"
+            except Exception:
+                download_text = "?"
+
+            try:
+                installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+            except OSError:
+                messagebox.showerror(
+                    "Configuração",
+                )
+                installed_models = []
+            entry = next((m for m in installed_models if m["id"] == model_id), None)
+            if entry:
+                i_bytes, i_files = model_manager.get_installed_size(entry["path"])
+                i_mb = i_bytes / (1024 * 1024)
+                installed_text = f"{i_mb:.1f} MB ({i_files} files)"
+            else:
+                installed_text = "-"
+
+            model_size_label.configure(
+                text=f"Download: {download_text} | Installed: {installed_text}"
+            )
+
+        def _update_install_button_state() -> None:
+            backend = _derive_backend_from_model(asr_model_id_var.get())
+            install_button.configure(state="normal" if backend else "disabled")
+            quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
+
+        def _on_model_change(choice_display: str) -> None:
+            model_id = display_to_id.get(choice_display, choice_display)
+            asr_model_id_var.set(model_id)
+            asr_model_display_var.set(id_to_display.get(model_id, model_id))
+            backend = _derive_backend_from_model(model_id)
+            if backend:
+                asr_backend_var.set(backend)
+                asr_backend_menu.configure(state="disabled")
+            else:
+                asr_backend_menu.configure(state="normal")
+            self.config_manager.set_asr_model_id(model_id)
+            self.config_manager.set_asr_backend(asr_backend_var.get())
+            self.config_manager.save_config()
+            _on_backend_change(asr_backend_var.get())
+            _update_model_info(model_id)
+
+        asr_model_menu.configure(command=_on_model_change)
+
+        def _reset_asr() -> None:
+            default_model_id = DEFAULT_CONFIG["asr_model_id"]
+            default_display = id_to_display.get(default_model_id, default_model_id)
+            asr_model_id_var.set(default_model_id)
+            asr_model_display_var.set(default_display)
+            asr_model_menu.set(default_display)
+            asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
+            asr_backend_menu.set(DEFAULT_CONFIG["asr_backend"])
+            asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+            asr_ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+            asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
+            _on_backend_change(asr_backend_var.get())
+            _update_model_info(default_model_id)
+            self.config_manager.set_asr_model_id(default_model_id)
+            self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
+            self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
+            self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
+            self.config_manager.save_config()
+
+        reset_asr_button = ctk.CTkButton(
+            asr_model_frame, text="Reset ASR", command=_reset_asr
+        )
+        reset_asr_button.pack(side="left", padx=5)
+        Tooltip(reset_asr_button, "Restore default ASR settings.")
+
+        asr_device_frame = ctk.CTkFrame(asr_frame)
+        asr_device_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(asr_device_frame, text="ASR Compute Device:").pack(side="left", padx=(5, 10))
+        asr_device_menu = ctk.CTkOptionMenu(asr_device_frame, variable=asr_compute_device_var, values=available_devices)
+        asr_device_menu.pack(side="left", padx=5)
+        Tooltip(asr_device_menu, "Select compute device for ASR model.")
+
+        asr_dtype_frame = ctk.CTkFrame(asr_frame)
+        asr_dtype_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(asr_dtype_frame, text="ASR DType:").pack(side="left", padx=(5, 0))
+        ctk.CTkButton(
+            asr_dtype_frame,
+            text="?",
+            width=20,
+            command=lambda: messagebox.showinfo(
+                "ASR DType",
+                "Torch tensor precision for ASR weights and activations.",
+            ),
+        ).pack(side="left", padx=(0, 10))
+        asr_dtype_menu = ctk.CTkOptionMenu(
+            asr_dtype_frame, variable=asr_dtype_var, values=["auto", "float16", "float32"]
+        )
+        asr_dtype_menu.pack(side="left", padx=5)
+        Tooltip(asr_dtype_menu, "Torch dtype for ASR model.")
+
+        asr_ct2_frame = ctk.CTkFrame(transcription_frame)
+        asr_ct2_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 0))
+        ctk.CTkButton(
+            asr_ct2_frame,
+            text="?",
+            width=20,
+            command=lambda: messagebox.showinfo(
+                "CT2 Compute Type",
+                "Numeric precision mode for the CTranslate2 backend.",
+            ),
+        ).pack(side="left", padx=(0, 10))
+        asr_ct2_menu = ctk.CTkOptionMenu(
+            asr_ct2_frame,
+            variable=asr_ct2_compute_type_var,
+            values=["auto", "float16", "float32", "int8_float16", "int8_float32"],
+        )
+        asr_ct2_menu.pack(side="left", padx=5)
+        Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
+
+        asr_cache_frame = ctk.CTkFrame(transcription_frame)
+        asr_cache_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(
+            asr_cache_frame,
+            text="Diretório de Cache de ASR:",
+            width=200,
+        ).pack(side="left", padx=(5, 10))
+        asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
+        asr_cache_entry.pack(side="left", padx=5)
+        Tooltip(asr_cache_entry, "Diretório para modelos de ASR em cache.")
+
+        def _install_model():
+            cache_dir = asr_cache_dir_var.get()
+            try:
+                Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}")
+                return
+
+            model_id = asr_model_id_var.get()
+            backend = _derive_backend_from_model(model_id)
+            if backend is None:
+                messagebox.showerror(
+                    "Model", "Unable to determine backend for selected model.",
+                )
+                return
+
+            try:
+                size_bytes, file_count = model_manager.get_model_download_size(model_id)
+                size_gb = size_bytes / (1024 ** 3)
+                detail = f"approximately {size_gb:.2f} GB ({file_count} files)"
+            except Exception:
+                detail = "an unspecified size"
+
+            if not messagebox.askyesno(
+                "Model Download",
+                f"Model '{model_id}' will download {detail}.\nContinue?",
+            ):
+                return
+
+            try:
+                model_manager.ensure_download(
+                    model_id,
+                    backend,
+                    cache_dir,
+                    asr_ct2_compute_type_var.get() if backend == "ct2" else None,
+                )
+                installed_models = model_manager.list_installed(cache_dir)
+                self.config_manager.set_asr_installed_models(installed_models)
+                self.config_manager.save_config()
+                _update_model_info(model_id)
+                messagebox.showinfo("Model", "Download completed.")
+            except DownloadCancelledError:
+                messagebox.showinfo("Model", "Download canceled.")
+            except OSError:
+                messagebox.showerror(
+                    "Model",
+                )
+            except Exception as e:
+                messagebox.showerror("Model", f"Download failed: {e}")
+
+        def _reload_model():
+            handler = getattr(self.core_instance_ref, "transcription_handler", None)
+            if handler:
+                handler.reload_asr()
+
+        install_button = ctk.CTkButton(
+            asr_frame, text="Install/Update", command=_install_model
+        )
+        install_button.pack(pady=5)
+        reload_button = ctk.CTkButton(
+            asr_frame, text="Reload Model", command=_reload_model
+        )
+        reload_button.pack(pady=5)
+
+        _on_model_change(asr_model_display_var.get())
+        _update_model_info(asr_model_id_var.get())
+        _update_install_button_state()
+        _on_backend_change(asr_backend_var.get())
+
+        return {
+            "asr_backend_menu": asr_backend_menu,
+            "asr_ct2_menu": asr_ct2_menu,
+            "asr_model_menu": asr_model_menu,
+            "asr_model_display_var": asr_model_display_var,
+            "id_to_display": id_to_display,
+            "on_backend_change": _on_backend_change,
+            "update_model_info": _update_model_info,
+            "update_install_button_state": _update_install_button_state,
+        }
 
     def _resolve_initial_value(
         self,
@@ -1562,7 +1873,13 @@ class UIManager:
                         coerce=str,
                     )
                 )
-                asr_model_display_var = ctk.StringVar()
+                # New: Chunk length controls
+                chunk_length_mode_var = ctk.StringVar(value=self.config_manager.get_chunk_length_mode())
+                chunk_length_sec_var = ctk.DoubleVar(value=self.config_manager.get_chunk_length_sec())
+                # New: Torch compile switch variable
+                enable_torch_compile_var = ctk.BooleanVar(value=self.config_manager.get_enable_torch_compile())
+                asr_backend_var = ctk.StringVar(value=self.config_manager.get_asr_backend())
+                asr_model_id_var = ctk.StringVar(value=self.config_manager.get_asr_model_id())
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
                 asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
@@ -1634,6 +1951,262 @@ class UIManager:
                 asr_compute_device_var = ctk.StringVar(value=current_device_selection)
                 self._set_settings_var("asr_compute_device_var", asr_compute_device_var)
                 self._gpu_selection_var = asr_compute_device_var
+
+                # Internal GUI functions (detect_key_task_internal, apply_settings, close_settings, etc.)
+                # Will need to be adapted to call methods of self.core_instance_ref and self.config_manager
+                # Example of adapted apply_settings:
+                def apply_settings():
+                    """Aplica as configurações respeitando as dependências do pipeline de ASR.
+
+                    A sequência explicitamente segue ``backend → modelo → device → quantização``
+                    porque o ``TranscriptionHandler`` depende do backend correto antes de
+                    aceitar um modelo e, por consequência, o dispositivo informado precisa
+                    estar sincronizado com as opções de quantização (ex.: ``ct2`` habilita
+                    perfis diferentes). Toda a persistência é delegada para
+                    ``AppCore.apply_settings_from_external``, que repassa os valores ao
+                    ``ConfigManager`` e notifica os subsistemas correspondentes. Fluxo
+                    validado com as frentes de UX e engenharia para preservar a coerência
+                    entre a experiência da janela de ajustes e os requisitos técnicos de
+                    carregamento de modelo.
+                    """
+                    logging.info("Apply settings clicked (in Tkinter thread).")
+                    # State validations (moved to AppCore or handled via callbacks)
+                    if self.core_instance_ref.current_state in ["RECORDING", "TRANSCRIBING", "LOADING_MODEL"]:
+                        messagebox.showwarning("Apply Settings", "Cannot apply while recording/transcribing/loading model.", parent=settings_win)
+                        return
+
+                    # Collect UI values
+                    key_to_apply = detected_key_var.get().lower() if detected_key_var.get() != "PRESS KEY..." else self.config_manager.get("record_key")
+                    mode_to_apply = mode_var.get()
+                    auto_paste_to_apply = auto_paste_var.get() # Now unified
+                    agent_key_to_apply = agent_key_var.get().lower() if agent_key_var.get() != "PRESS KEY..." else self.config_manager.get("agent_key")
+                    model_to_apply = agent_model_var.get()
+                    hotkey_stability_service_enabled_to_apply = hotkey_stability_service_enabled_var.get() # Coleta o valor da nova variável
+                    sound_enabled_to_apply = sound_enabled_var.get()
+                    sound_freq_to_apply = safe_get_int(sound_frequency_var, "Frequência do Som", settings_win)
+                    if sound_freq_to_apply is None:
+                        return
+                    sound_duration_to_apply = safe_get_float(sound_duration_var, "Duração do Som", settings_win)
+                    if sound_duration_to_apply is None:
+                        return
+                    sound_volume_to_apply = safe_get_float(sound_volume_var, "Volume do Som", settings_win)
+                    if sound_volume_to_apply is None:
+                        return
+                    text_correction_enabled_to_apply = text_correction_enabled_var.get()
+                    text_correction_service_to_apply = text_correction_service_var.get()
+                    openrouter_api_key_to_apply = openrouter_api_key_var.get()
+                    openrouter_model_to_apply = openrouter_model_var.get()
+                    gemini_api_key_to_apply = gemini_api_key_var.get()
+                    gemini_model_to_apply = gemini_model_var.get()
+                    gemini_prompt_correction_to_apply = gemini_prompt_correction_textbox.get("1.0", "end-1c")
+                    agentico_prompt_to_apply = agentico_prompt_textbox.get("1.0", "end-1c")
+                    batch_size_to_apply = safe_get_int(batch_size_var, "Batch Size", settings_win)
+                    if batch_size_to_apply is None:
+                        return
+                    min_transcription_duration_to_apply = safe_get_float(min_transcription_duration_var, "Duração Mínima", settings_win)
+                    if min_transcription_duration_to_apply is None:
+                        return
+                    min_record_duration_to_apply = safe_get_float(min_record_duration_var, "Duração Mínima da Gravação", settings_win)
+                    if min_record_duration_to_apply is None:
+                        return
+                    use_vad_to_apply = use_vad_var.get()
+                    vad_threshold_to_apply = safe_get_float(vad_threshold_var, "Limiar do VAD", settings_win)
+                    if vad_threshold_to_apply is None:
+                        return
+                    vad_silence_duration_to_apply = safe_get_float(vad_silence_duration_var, "Duração do Silêncio", settings_win)
+                    if vad_silence_duration_to_apply is None:
+                        return
+                    save_temp_recordings_to_apply = save_temp_recordings_var.get()
+                    display_transcripts_to_apply = display_transcripts_var.get()
+                    max_memory_seconds_mode_to_apply = max_memory_seconds_mode_var.get()
+                    max_memory_seconds_to_apply = safe_get_float(max_memory_seconds_var, "Max Memory Retention", settings_win)
+                    if max_memory_seconds_to_apply is None:
+                        return
+                    asr_backend_to_apply = asr_backend_var.get()
+                    asr_model_id_to_apply = asr_model_id_var.get()
+                    asr_compute_device_to_apply = "auto"
+                    asr_dtype_to_apply = asr_dtype_var.get()
+                    asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
+                    asr_cache_dir_to_apply = asr_cache_dir_var.get()
+                    try:
+                        Path(asr_cache_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as e:
+                        messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}", parent=settings_win)
+                        return
+
+                    # Logic for converting UI to GPU index
+                    selected_device_str = asr_compute_device_var.get()
+                    gpu_index_to_apply = -1 # Default to "Auto-select"
+                    if "Force CPU" in selected_device_str:
+                        asr_compute_device_to_apply = "cpu"
+                    elif selected_device_str.startswith("GPU"):
+                        asr_compute_device_to_apply = "cuda"
+                        try:
+                            gpu_index_to_apply = int(selected_device_str.split(":")[0].replace("GPU", "").strip())
+                        except (ValueError, IndexError):
+                            messagebox.showerror("Valor inválido", "Índice de GPU inválido.", parent=settings_win)
+                            return
+                    asr_dtype_to_apply = asr_dtype_var.get()
+                    asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
+                    asr_cache_dir_to_apply = asr_cache_dir_var.get()
+
+                    models_text = gemini_models_textbox.get("1.0", "end-1c")
+                    new_models_list = [line.strip() for line in models_text.split("\n") if line.strip()]
+                    if not new_models_list:
+                        messagebox.showwarning("Invalid Value", "The model list cannot be empty. Please add at least one model.", parent=settings_win)
+                        return
+
+                    # Call AppCore method to apply settings
+                    self.core_instance_ref.apply_settings_from_external(
+                        new_key=key_to_apply,
+                        new_mode=mode_to_apply,
+                        new_auto_paste=auto_paste_to_apply,
+                        new_sound_enabled=sound_enabled_to_apply,
+                        new_sound_frequency=sound_freq_to_apply,
+                        new_sound_duration=sound_duration_to_apply,
+                        new_sound_volume=sound_volume_to_apply,
+                        new_agent_key=agent_key_to_apply,
+                        new_text_correction_enabled=text_correction_enabled_to_apply,
+                        new_text_correction_service=text_correction_service_to_apply,
+                        new_openrouter_api_key=openrouter_api_key_to_apply,
+                        new_openrouter_model=openrouter_model_to_apply,
+                        new_gemini_api_key=gemini_api_key_to_apply,
+                        new_gemini_model=gemini_model_to_apply,
+                        new_gemini_prompt=gemini_prompt_correction_to_apply,
+                        prompt_agentico=agentico_prompt_to_apply,
+                        new_agent_model=model_to_apply,
+                        new_gemini_model_options=new_models_list,
+                        new_batch_size=batch_size_to_apply,
+                        new_gpu_index=gpu_index_to_apply,
+                        new_hotkey_stability_service_enabled=hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
+                        new_min_transcription_duration=min_transcription_duration_to_apply,
+                        new_min_record_duration=min_record_duration_to_apply,
+                        new_save_temp_recordings=save_temp_recordings_to_apply,
+                        new_record_storage_mode=record_storage_mode_var.get(),
+                        new_record_to_memory=(record_storage_mode_var.get() == "memory"),
+                        new_max_memory_seconds_mode=max_memory_seconds_mode_to_apply,
+                        new_max_memory_seconds=max_memory_seconds_to_apply,
+                        new_use_vad=use_vad_to_apply,
+                        new_vad_threshold=vad_threshold_to_apply,
+                        new_vad_silence_duration=vad_silence_duration_to_apply,
+                        new_display_transcripts_in_terminal=display_transcripts_to_apply,
+                        new_launch_at_startup=launch_at_startup_var.get(),
+                        # New chunk settings
+                        new_chunk_length_mode=chunk_length_mode_var.get(),
+                        new_chunk_length_sec=float(chunk_length_sec_var.get()),
+                        # New: torch compile setting
+                        new_enable_torch_compile=bool(enable_torch_compile_var.get()),
+                        new_asr_backend=asr_backend_to_apply,
+                        new_asr_model_id=asr_model_id_to_apply,
+                        new_asr_compute_device=asr_compute_device_to_apply,
+                        new_asr_dtype=asr_dtype_to_apply,
+                        new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
+                        new_asr_cache_dir=asr_cache_dir_to_apply
+                    )
+                    self._close_settings_window() # Call class method
+
+                def restore_defaults():
+                    if not messagebox.askyesno(
+                        "Restore Defaults",
+                        "Are you sure you want to restore all settings to their default values?",
+                        parent=settings_win,
+                    ):
+                        return
+
+                    self.core_instance_ref.apply_settings_from_external(**DEFAULT_CONFIG)
+
+                    auto_paste_var.set(DEFAULT_CONFIG["auto_paste"])
+                    mode_var.set(DEFAULT_CONFIG["record_mode"])
+                    detected_key_var.set(DEFAULT_CONFIG["record_key"].upper())
+                    agent_key_var.set(DEFAULT_CONFIG["agent_key"].upper())
+                    agent_model_var.set(DEFAULT_CONFIG[GEMINI_AGENT_MODEL_CONFIG_KEY])
+                    hotkey_stability_service_enabled_var.set(DEFAULT_CONFIG["hotkey_stability_service_enabled"])
+                    min_transcription_duration_var.set(DEFAULT_CONFIG["min_transcription_duration"])
+                    min_record_duration_var.set(DEFAULT_CONFIG["min_record_duration"])
+                    sound_enabled_var.set(DEFAULT_CONFIG["sound_enabled"])
+                    sound_frequency_var.set(str(DEFAULT_CONFIG["sound_frequency"]))
+                    sound_duration_var.set(str(DEFAULT_CONFIG["sound_duration"]))
+                    sound_volume_var.set(DEFAULT_CONFIG["sound_volume"])
+                    text_correction_enabled_var.set(DEFAULT_CONFIG["text_correction_enabled"])
+                    text_correction_service_var.set(DEFAULT_CONFIG[TEXT_CORRECTION_SERVICE_CONFIG_KEY])
+                    text_correction_service_label_var.set(
+                        next(
+                            (
+                                label
+                                for label, val in service_display_map.items()
+                                if val == DEFAULT_CONFIG[TEXT_CORRECTION_SERVICE_CONFIG_KEY]
+                            ),
+                            "None",
+                        )
+                    )
+                    # Sincroniza os campos de correção de texto caso os widgets existam
+                    try:
+                        service_menu  # Verifica se os widgets foram criados
+                    except NameError:
+                        pass
+                    else:
+                        service_menu.set(text_correction_service_label_var.get())
+                        update_text_correction_fields()
+                    openrouter_api_key_var.set(DEFAULT_CONFIG["openrouter_api_key"])
+                    openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
+                    gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
+                    gemini_model_var.set(DEFAULT_CONFIG["gemini_model"])
+                    asr_model_id_var.set(DEFAULT_CONFIG["asr_model_id"])
+                    default_model_display = id_to_display.get(
+                        DEFAULT_CONFIG["asr_model_id"],
+                        DEFAULT_CONFIG["asr_model_id"],
+                    )
+                    asr_model_display_var.set(default_model_display)
+                    asr_model_menu.set(default_model_display)
+                    gemini_prompt_correction_textbox.delete("1.0", "end")
+                    gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG[GEMINI_PROMPT_CONFIG_KEY])
+                    agentico_prompt_textbox.delete("1.0", "end")
+                    agentico_prompt_textbox.insert("1.0", DEFAULT_CONFIG[GEMINI_AGENT_PROMPT_CONFIG_KEY])
+                    gemini_models_textbox.delete("1.0", "end")
+                    gemini_models_textbox.insert(
+                        "1.0",
+                        "\n".join(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY]),
+                    )
+                    batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
+                    asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
+                    asr_backend_menu.set(DEFAULT_CONFIG["asr_backend"])
+                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    asr_ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                    asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
+                    update_model_info(DEFAULT_CONFIG["asr_model_id"])
+                    on_backend_change(asr_backend_var.get())
+
+                    if DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY] == "cpu":
+                        asr_compute_device_var.set("Force CPU")
+                    elif (
+                        DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY] == "cuda"
+                        and DEFAULT_CONFIG[GPU_INDEX_CONFIG_KEY] >= 0
+                    ):
+                        found = "Auto-select (Recommended)"
+                        for dev in available_devices:
+                            if dev.startswith(f"GPU {DEFAULT_CONFIG[GPU_INDEX_CONFIG_KEY]}"):
+                                found = dev
+                                break
+                        asr_compute_device_var.set(found)
+                    else:
+                        asr_compute_device_var.set("Auto-select (Recommended)")
+
+                    use_vad_var.set(DEFAULT_CONFIG["use_vad"])
+                    vad_threshold_var.set(DEFAULT_CONFIG["vad_threshold"])
+                    vad_silence_duration_var.set(DEFAULT_CONFIG["vad_silence_duration"])
+                    save_temp_recordings_var.set(DEFAULT_CONFIG[SAVE_TEMP_RECORDINGS_CONFIG_KEY])
+                    display_transcripts_var.set(DEFAULT_CONFIG[DISPLAY_TRANSCRIPTS_KEY])
+                    record_storage_mode_var.set(DEFAULT_CONFIG["record_storage_mode"])
+                    max_memory_seconds_var.set(DEFAULT_CONFIG["max_memory_seconds"])
+                    max_memory_seconds_mode_var.set(DEFAULT_CONFIG["max_memory_seconds_mode"])
+                    launch_at_startup_var.set(DEFAULT_CONFIG["launch_at_startup"])
+                    asr_backend_var.set(DEFAULT_CONFIG[ASR_BACKEND_CONFIG_KEY])
+                    asr_compute_device_var.set(DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY])
+                    asr_dtype_var.set(DEFAULT_CONFIG[ASR_DTYPE_CONFIG_KEY])
+                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY])
+                    asr_cache_dir_var.set(DEFAULT_CONFIG[ASR_CACHE_DIR_CONFIG_KEY])
+
+                    self.config_manager.save_config()
 
                 scrollable_frame = ctk.CTkScrollableFrame(settings_win, fg_color="transparent")
                 scrollable_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -1816,33 +2389,25 @@ class UIManager:
                 self._set_settings_var("gemini_models_textbox", gemini_models_textbox)
                 Tooltip(gemini_models_textbox, "List of models to try, one per line.")
 
-                # --- ASR Settings ---
-                asr_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
-                asr_frame.pack(fill="x", padx=10, pady=5)
-                ctk.CTkLabel(asr_frame, text="ASR Settings", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
-
-                # Backend selection
-                # --- Transcription Settings Section ---
-                transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
-                transcription_frame.pack(fill="x", padx=10, pady=5)
-
-                batch_size_frame = ctk.CTkFrame(transcription_frame)
-                batch_size_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(batch_size_frame, text="Batch Size:").pack(side="left", padx=(5, 10))
-                batch_entry = ctk.CTkEntry(batch_size_frame, textvariable=batch_size_var, width=60)
-                batch_entry.pack(side="left", padx=5)
-                Tooltip(batch_entry, "Number of segments processed together.")
-
-                # New: Torch Compile
-                torch_compile_frame = ctk.CTkFrame(transcription_frame)
-                torch_compile_frame.pack(fill="x", pady=5)
-                torch_compile_switch = ctk.CTkSwitch(
-                    torch_compile_frame,
-                    text="Enable Torch Compile (Experimental)",
-                    variable=enable_torch_compile_var
+                asr_helpers = self._build_asr_section(
+                    settings_win=settings_win,
+                    asr_frame=asr_frame,
+                    transcription_frame=transcription_frame,
+                    available_devices=available_devices,
+                    asr_backend_var=asr_backend_var,
+                    asr_model_id_var=asr_model_id_var,
+                    asr_compute_device_var=asr_compute_device_var,
+                    asr_dtype_var=asr_dtype_var,
+                    asr_ct2_compute_type_var=asr_ct2_compute_type_var,
+                    asr_cache_dir_var=asr_cache_dir_var,
                 )
-                torch_compile_switch.pack(side="left", padx=5)
-                Tooltip(torch_compile_switch, "Enable PyTorch compile (may improve performance on supported GPUs).")
+                asr_backend_menu = asr_helpers["asr_backend_menu"]
+                asr_ct2_menu = asr_helpers["asr_ct2_menu"]
+                asr_model_menu = asr_helpers["asr_model_menu"]
+                asr_model_display_var = asr_helpers["asr_model_display_var"]
+                id_to_display = asr_helpers["id_to_display"]
+                on_backend_change = asr_helpers["on_backend_change"]
+                update_model_info = asr_helpers["update_model_info"]
 
                 # New: Chunk Length Mode
                 chunk_mode_frame = ctk.CTkFrame(transcription_frame)
