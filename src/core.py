@@ -176,6 +176,7 @@ class AppCore:
         self.state_lock = RLock()
         self.keyboard_lock = RLock()
         self.agent_mode_lock = RLock() # Adicionado para o modo agente
+        self.model_prompt_lock = RLock()
 
         # --- Callbacks para UI (definidos externamente pelo UIManager) ---
         self.state_update_callback: StateUpdateCallback | None = None
@@ -226,6 +227,7 @@ class AppCore:
         self.full_transcription = "" # Acumula transcrição completa
         self.agent_mode_active = False # Adicionado para controle do modo agente
         self.key_detection_active = False # Flag para controle da detecção de tecla
+        self.model_prompt_active = False
 
         # --- Hotkey Manager ---
         self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
@@ -271,32 +273,13 @@ class AppCore:
 
     def _prompt_model_install(self, model_id, backend, cache_dir, ct2_type):
         """Agenda um prompt para download do modelo na thread principal."""
-        decision_data = self.config_manager.get_last_model_prompt_decision()
-        if (
-            decision_data.get("model_id") == model_id
-            and decision_data.get("backend") == backend
-        ):
-            decision = decision_data.get("decision")
-            timestamp = decision_data.get("timestamp", 0.0)
-            formatted = self._format_decision_timestamp(timestamp)
-            if decision == "defer":
+        with self.model_prompt_lock:
+            if self.model_prompt_active:
                 logging.info(
-                    "Skipping model installation prompt for %s/%s due to prior deferral at %s.",
-                    backend,
-                    model_id,
-                    formatted,
+                    "Model install prompt suppressed because another prompt is already active."
                 )
                 return
-            if decision == "accept":
-                logging.info(
-                    "Automatically starting model download for %s/%s based on acceptance recorded at %s.",
-                    backend,
-                    model_id,
-                    formatted,
-                )
-                self.config_manager.record_model_prompt_decision("accept", model_id, backend)
-                self._start_model_download(model_id, backend, cache_dir, ct2_type)
-                return
+            self.model_prompt_active = True
 
         def _ask_user():
             try:
@@ -327,12 +310,21 @@ class AppCore:
                     )
             except Exception as prompt_error:
                 logging.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
-                self._set_state(
-                    StateEvent.MODEL_PROMPT_FAILED,
-                    details=f"Prompt failure for '{model_id}': {prompt_error}",
-                    source="model_prompt",
-                )
-        self.main_tk_root.after(0, _ask_user)
+                self._set_state(STATE_ERROR_MODEL)
+            finally:
+                with self.model_prompt_lock:
+                    self.model_prompt_active = False
+        try:
+            self.main_tk_root.after(0, _ask_user)
+        except Exception as schedule_error:
+            logging.error(
+                "Failed to schedule model install prompt: %s",
+                schedule_error,
+                exc_info=True,
+            )
+            with self.model_prompt_lock:
+                self.model_prompt_active = False
+            self._set_state(STATE_ERROR_MODEL)
 
     @staticmethod
     def _format_decision_timestamp(ts: float | int) -> str:
