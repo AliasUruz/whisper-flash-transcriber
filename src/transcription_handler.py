@@ -781,6 +781,7 @@ class TranscriptionHandler:
                 transformers_device = None
                 self.device_in_use = "cpu"
 
+                if pref == "cpu":
                     backend_device = "cpu"
                     transformers_device = -1
                     selected_gpu_index = None
@@ -837,47 +838,62 @@ class TranscriptionHandler:
 
                 self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
 
-                    load_kwargs = {}
-                    if backend_name in {"transformers", "whisper"}:
-                        attn_impl = "sdpa"
-                        try:
-                            import importlib.util
+                load_kwargs = {}
+                if backend_name in {"transformers", "whisper"}:
+                    attn_impl = "sdpa"
+                    try:
+                        import importlib.util
 
-                            if importlib.util.find_spec("flash_attn") is not None:
-                                attn_impl = "flash_attn2"
-                        except Exception:
-                            pass
-                        load_kwargs = {
-                            "device": transformers_device,
-                            "dtype": effective_dtype,
-                            "cache_dir": asr_cache_dir,
-                            "attn_implementation": attn_impl,
-                        }
-                    elif backend_name in {"ct2", "faster-whisper", "ctranslate2"}:
-                        load_kwargs = {
-                            "ct2_compute_type": asr_ct2_compute_type,
-                            "cache_dir": asr_cache_dir,
-                        }
-                    else:
-                        load_kwargs = {"cache_dir": asr_cache_dir}
+                        if importlib.util.find_spec("flash_attn") is not None:
+                            attn_impl = "flash_attn2"
+                    except Exception:
+                        pass
+                    load_kwargs = {
+                        "device": transformers_device,
+                        "dtype": effective_dtype,
+                        "cache_dir": asr_cache_dir,
+                        "attn_implementation": attn_impl,
+                    }
+                elif backend_name in {"ct2", "faster-whisper", "ctranslate2"}:
+                    load_kwargs = {
+                        "ct2_compute_type": asr_ct2_compute_type,
+                        "cache_dir": asr_cache_dir,
+                    }
+                else:
+                    load_kwargs = {"cache_dir": asr_cache_dir}
 
-                    load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
-                    if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
-                        load_kwargs["cache_dir"] = str(load_kwargs["cache_dir"])
+                load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
+                if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
+                    load_kwargs["cache_dir"] = str(load_kwargs["cache_dir"])
 
-                    self._update_model_log_context(
-                        backend=backend_name,
-                        model=asr_model_id,
-                        device=backend_device,
-                        dtype=load_kwargs.get("dtype", asr_dtype),
-                        compute_type=load_kwargs.get("ct2_compute_type", asr_ct2_compute_type),
-                        chunk_length_s=float(self.chunk_length_sec),
-                        batch_size=self.batch_size,
-                    )
-                    load_started_at = time.perf_counter()
-                    self._model_load_started_at = load_started_at
+                self._update_model_log_context(
+                    backend=backend_name,
+                    model=asr_model_id,
+                    device=backend_device,
+                    dtype=load_kwargs.get("dtype", asr_dtype),
+                    compute_type=load_kwargs.get("ct2_compute_type", asr_ct2_compute_type),
+                    chunk_length_s=float(self.chunk_length_sec),
+                    batch_size=self.batch_size,
+                )
+                load_started_at = time.perf_counter()
+                self._model_load_started_at = load_started_at
+                self._log_model_event(
+                    "load_start",
+                    backend=backend_name,
+                    model_id=asr_model_id,
+                    device=backend_device,
+                    dtype=load_kwargs.get("dtype", asr_dtype),
+                    compute_type=load_kwargs.get("ct2_compute_type", asr_ct2_compute_type),
+                    chunk_length_s=float(self.chunk_length_sec),
+                    batch_size=self.batch_size,
+                )
+                try:
+                    self._asr_backend.load(**load_kwargs)
+                except Exception as load_error:
+                    duration_ms = (time.perf_counter() - load_started_at) * 1000.0
                     self._log_model_event(
-                        "load_start",
+                        "load_failure",
+                        level=logging.ERROR,
                         backend=backend_name,
                         model_id=asr_model_id,
                         device=backend_device,
@@ -885,67 +901,52 @@ class TranscriptionHandler:
                         compute_type=load_kwargs.get("ct2_compute_type", asr_ct2_compute_type),
                         chunk_length_s=float(self.chunk_length_sec),
                         batch_size=self.batch_size,
-                    )
-                    try:
-                        self._asr_backend.load(**load_kwargs)
-                    except Exception as load_error:
-                        duration_ms = (time.perf_counter() - load_started_at) * 1000.0
-                        self._log_model_event(
-                            "load_failure",
-                            level=logging.ERROR,
-                            backend=backend_name,
-                            model_id=asr_model_id,
-                            device=backend_device,
-                            dtype=load_kwargs.get("dtype", asr_dtype),
-                            compute_type=load_kwargs.get("ct2_compute_type", asr_ct2_compute_type),
-                            chunk_length_s=float(self.chunk_length_sec),
-                            batch_size=self.batch_size,
-                            duration_ms=duration_ms,
-                            error=str(load_error),
-                        )
-                        self._model_load_started_at = None
-                        raise
-
-                    warmup_failed = None
-                    try:
-                        self._asr_backend.warmup()
-                    except Exception as warmup_error:
-                        warmup_failed = warmup_error
-                        logging.debug(f"Falha no warmup do backend ASR: {warmup_error}")
-
-                    duration_ms = (time.perf_counter() - load_started_at) * 1000.0
-                    resolved_device = getattr(self._asr_backend, "device", backend_device)
-                    resolved_model = getattr(self._asr_backend, "model_id", asr_model_id)
-                    resolved_dtype = load_kwargs.get("dtype", asr_dtype)
-                    resolved_compute = load_kwargs.get("ct2_compute_type", asr_ct2_compute_type)
-                    self._update_model_log_context(
-                        backend=backend_name,
-                        model=resolved_model,
-                        device=resolved_device,
-                        dtype=resolved_dtype,
-                        compute_type=resolved_compute,
-                        chunk_length_s=float(self.chunk_length_sec),
-                        batch_size=self.batch_size,
-                    )
-                    self._log_model_event(
-                        "load_success",
-                        backend=backend_name,
-                        device=resolved_device,
-                        dtype=resolved_dtype,
-                        compute_type=resolved_compute,
                         duration_ms=duration_ms,
-                        status="warmup_failed" if warmup_failed else "ready",
+                        error=str(load_error),
                     )
                     self._model_load_started_at = None
-                    self.pipe = getattr(self._asr_backend, "pipe", None)
-                    logging.info(
-                        "Backend '%s' inicializado no dispositivo %s.",
-                        self.backend_resolved,
-                        self.device_in_use,
-                    )
-                    self._asr_loaded = True
-                    self.on_model_ready_callback()
-                    return
+                    raise
+
+                warmup_failed = None
+                try:
+                    self._asr_backend.warmup()
+                except Exception as warmup_error:
+                    warmup_failed = warmup_error
+                    logging.debug(f"Falha no warmup do backend ASR: {warmup_error}")
+
+                duration_ms = (time.perf_counter() - load_started_at) * 1000.0
+                resolved_device = getattr(self._asr_backend, "device", backend_device)
+                resolved_model = getattr(self._asr_backend, "model_id", asr_model_id)
+                resolved_dtype = load_kwargs.get("dtype", asr_dtype)
+                resolved_compute = load_kwargs.get("ct2_compute_type", asr_ct2_compute_type)
+                self._update_model_log_context(
+                    backend=backend_name,
+                    model=resolved_model,
+                    device=resolved_device,
+                    dtype=resolved_dtype,
+                    compute_type=resolved_compute,
+                    chunk_length_s=float(self.chunk_length_sec),
+                    batch_size=self.batch_size,
+                )
+                self._log_model_event(
+                    "load_success",
+                    backend=backend_name,
+                    device=resolved_device,
+                    dtype=resolved_dtype,
+                    compute_type=resolved_compute,
+                    duration_ms=duration_ms,
+                    status="warmup_failed" if warmup_failed else "ready",
+                )
+                self._model_load_started_at = None
+                self.pipe = getattr(self._asr_backend, "pipe", None)
+                logging.info(
+                    "Backend '%s' inicializado no dispositivo %s.",
+                    self.backend_resolved,
+                    self.device_in_use,
+                )
+                self._asr_loaded = True
+                self.on_model_ready_callback()
+                return
 
             # --- Fallback sem whisper_flash ---
             model_id = self.asr_model_id
