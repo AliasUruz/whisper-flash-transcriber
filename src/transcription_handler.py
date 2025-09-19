@@ -438,6 +438,13 @@ class TranscriptionHandler:
         )
 
     def start_model_loading(self):
+        core = getattr(self, "core_instance_ref", None)
+        if core is not None:
+            try:
+                if getattr(core, "current_state", None) != "LOADING_MODEL":
+                    core.notify_model_loading_started()
+            except AttributeError:
+                core._set_state("LOADING_MODEL")
         threading.Thread(target=self._load_model_task, daemon=True, name="ModelLoadThread").start()
 
     def is_transcription_running(self) -> bool:
