@@ -233,6 +233,9 @@ class AppCore:
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
 
+        self._active_model_download_event: threading.Event | None = None
+        self.model_download_timeout = self._resolve_model_download_timeout()
+
         try:
             cache_dir = self.config_manager.get("asr_cache_dir")
             model_id = self.asr_model_id
@@ -262,6 +265,16 @@ class AppCore:
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
 
+    def _resolve_model_download_timeout(self) -> float | None:
+        """Return configured timeout (seconds) for ASR downloads."""
+        raw_timeout = self.config_manager.get("asr_download_timeout_seconds", 0)
+        try:
+            timeout_value = float(raw_timeout)
+        except (TypeError, ValueError):
+            logging.debug("Invalid ASR download timeout %r. Ignoring.", raw_timeout)
+            return None
+        return timeout_value if timeout_value > 0 else None
+
     def _prompt_model_install(self, model_id, backend, cache_dir, ct2_type):
         """Agenda um prompt para download do modelo na thread principal."""
         with self.model_prompt_lock:
@@ -285,8 +298,16 @@ class AppCore:
                     f"Model '{model_id}' is not installed.\n{download_msg}\nDownload now?"
                 )
                 if messagebox.askyesno("Model Download", prompt_text):
-                    self.config_manager.record_model_prompt_decision("accept", model_id, backend)
-                    self._start_model_download(model_id, backend, cache_dir, ct2_type)
+                    cancel_event = threading.Event()
+                    self._active_model_download_event = cancel_event
+                    self._start_model_download(
+                        model_id,
+                        backend,
+                        cache_dir,
+                        ct2_type,
+                        timeout=self.model_download_timeout,
+                        cancel_event=cancel_event,
+                    )
                 else:
                     self.config_manager.record_model_prompt_decision("defer", model_id, backend)
                     logging.info("User declined model download prompt.")
@@ -317,31 +338,45 @@ class AppCore:
                 self.model_prompt_active = False
             self._set_state(STATE_ERROR_MODEL)
 
-    @staticmethod
-    def _format_decision_timestamp(ts: float | int) -> str:
-        try:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(ts)))
-        except Exception:
-            return "unknown"
-
-    def _start_model_download(self, model_id, backend, cache_dir, ct2_type):
+    def _start_model_download(
+        self,
+        model_id,
+        backend,
+        cache_dir,
+        ct2_type,
+        *,
+        timeout: float | None = None,
+        cancel_event: threading.Event | None = None,
+    ):
         """Inicia o download do modelo em uma thread separada."""
+
+        if cancel_event is not None:
+            cancel_event.clear()
+
         def _download():
             try:
-                self._set_state(
-                    StateEvent.MODEL_DOWNLOAD_STARTED,
-                    details=f"Downloading '{model_id}' with backend '{backend}'",
-                    source="model_download",
+                self._set_state(STATE_LOADING_MODEL)
+                ensure_download(
+                    model_id,
+                    backend,
+                    cache_dir,
+                    quant=ct2_type,
+                    timeout=timeout,
+                    cancel_event=cancel_event,
                 )
-                ensure_download(model_id, backend, cache_dir, quant=ct2_type)
-            except DownloadCancelledError:
-                logging.info("Model download cancelled by user.")
-                self._set_state(
-                    StateEvent.MODEL_DOWNLOAD_CANCELLED,
-                    details=f"Download for '{model_id}' cancelled by user",
-                    source="model_download",
-                )
-                self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download canceled."))
+            except DownloadCancelledError as err:
+                reason = "timeout" if err.timed_out else "cancel"
+                logging.info("Model download interrupted (%s): %s", reason, err)
+                self._set_state(STATE_ERROR_MODEL)
+
+                def _notify():
+                    message = str(err) or "Download canceled."
+                    if err.timed_out:
+                        messagebox.showwarning("Model", message)
+                    else:
+                        messagebox.showinfo("Model", message)
+
+                self.main_tk_root.after(0, _notify)
             except OSError:
                 logging.error("Invalid cache directory during model download.", exc_info=True)
                 self._set_state(
@@ -394,6 +429,12 @@ class AppCore:
         )
 
         handler.start_model_loading()
+
+    def cancel_model_download(self) -> None:
+        """Solicita o cancelamento do download de modelo em andamento."""
+        event = getattr(self, "_active_model_download_event", None)
+        if event is not None:
+            event.set()
 
     def _apply_initial_config_to_core_attributes(self):
         # Mover a atribuição de self.record_key, self.record_mode, etc.
@@ -1699,6 +1740,8 @@ class AppCore:
         if self.shutting_down: return
         self.shutting_down = True
         logging.info("Shutdown sequence initiated.")
+
+        self.cancel_model_download()
 
         self.stop_reregister_event.set()
         self.stop_health_check_event.set()
