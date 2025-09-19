@@ -218,6 +218,118 @@ class UIManager:
         self.core_instance_ref.set_key_detection_callback(self._handle_detected_key)
         self.core_instance_ref.start_key_detection_thread()
 
+    def _safe_get_int(self, var, field_name: str, parent):
+        """Wrapper em torno de :func:`safe_get_int` para manter logs centralizados."""
+
+        return safe_get_int(var, field_name, parent)
+
+    def _safe_get_float(self, var, field_name: str, parent):
+        """Wrapper em torno de :func:`safe_get_float` para manter logs centralizados."""
+
+        return safe_get_float(var, field_name, parent)
+
+    def _resolve_initial_value(
+        self,
+        config_key: str,
+        *,
+        var_name: str | None = None,
+        getter: Callable[[], Any] | None = None,
+        default: Any | None = None,
+        coerce: Callable[[Any], Any] | None = None,
+        transform: Callable[[Any], Any] | None = None,
+        allowed: Iterable[Any] | None = None,
+        sensitive: bool = False,
+    ) -> Any:
+        """Resolve o valor inicial de um campo de configuração.
+
+        A função consulta o ``ConfigManager`` (ou um ``getter`` explícito), aplica
+        coerção, validação por conjunto permitido e qualquer transformação
+        opcional. Em caso de erro, o valor retornado recai para o default definido
+        no ``DEFAULT_CONFIG``.
+        """
+
+        label = var_name or config_key
+
+        def _mask(value: Any) -> Any:
+            if not sensitive:
+                return value
+            if isinstance(value, str):
+                return "" if value == "" else "<hidden>"
+            if value in (None, 0):
+                return value
+            return "<hidden>"
+
+        fallback = default if default is not None else DEFAULT_CONFIG.get(config_key)
+
+        try:
+            value = getter() if getter is not None else self.config_manager.get(config_key)
+        except Exception as exc:  # pragma: no cover - salvaguarda defensiva
+            logging.warning(
+                "UIManager: failed to read config '%s': %s. Using fallback.",
+                label,
+                exc,
+                exc_info=True,
+            )
+            value = fallback
+
+        if value is None and fallback is not None:
+            value = fallback
+
+        if coerce is not None:
+            try:
+                value = coerce(value)
+            except Exception as exc:
+                logging.warning(
+                    "UIManager: invalid value for '%s': %r (%s). Using fallback %r.",
+                    label,
+                    _mask(value),
+                    exc,
+                    _mask(fallback),
+                )
+                value = fallback
+                if value is not None:
+                    try:
+                        value = coerce(value)
+                    except Exception:
+                        pass
+
+        if allowed is not None and value not in allowed:
+            logging.warning(
+                "UIManager: unexpected value for '%s': %r (allowed=%s). Using fallback %r.",
+                label,
+                _mask(value),
+                allowed,
+                _mask(fallback),
+            )
+            value = fallback
+            if coerce is not None and value is not None:
+                try:
+                    value = coerce(value)
+                except Exception:
+                    pass
+
+        if transform is not None:
+            try:
+                value = transform(value)
+            except Exception as exc:
+                logging.warning(
+                    "UIManager: transform failed for '%s' with %r: %s. Using fallback.",
+                    label,
+                    _mask(value),
+                    exc,
+                )
+                value = fallback
+                if transform is not None and value is not None:
+                    try:
+                        value = transform(value)
+                    except Exception:
+                        pass
+
+        if var_name:
+            self._set_settings_meta(f"initial_{var_name}", value)
+
+        return value
+
     def _update_text_correction_fields(self) -> None:
         enabled_var = self._get_settings_var("text_correction_enabled_var")
         if enabled_var is None:
@@ -288,7 +400,7 @@ class UIManager:
             cache_var = self._get_settings_var("asr_cache_dir_var")
             cache_dir = cache_var.get() if cache_var is not None else ""
             try:
-                installed = model_manager.list_installed(cache_dir)
+                installed = self.model_manager.list_installed(cache_dir)
             except OSError:
                 installed = []
             entry = next((m for m in installed if m.get("id") == model_id), None)
@@ -324,7 +436,7 @@ class UIManager:
             return
         model_id = display_to_id.get(model_ref, model_ref)
         try:
-            d_bytes, d_files = model_manager.get_model_download_size(model_id)
+            d_bytes, d_files = self.model_manager.get_model_download_size(model_id)
             d_mb = d_bytes / (1024 * 1024)
             download_text = f"{d_mb:.1f} MB ({d_files} files)"
         except Exception:
@@ -333,7 +445,7 @@ class UIManager:
         installed_models = []
         if cache_var is not None:
             try:
-                installed_models = model_manager.list_installed(cache_var.get())
+                installed_models = self.model_manager.list_installed(cache_var.get())
             except OSError:
                 messagebox.showerror(
                     "Settings",
@@ -341,7 +453,7 @@ class UIManager:
                 )
         entry = next((m for m in installed_models if m.get("id") == model_id), None)
         if entry:
-            i_bytes, i_files = model_manager.get_installed_size(entry.get("path"))
+            i_bytes, i_files = self.model_manager.get_installed_size(entry.get("path"))
             i_mb = i_bytes / (1024 * 1024)
             installed_text = f"{i_mb:.1f} MB ({i_files} files)"
         else:
@@ -440,7 +552,7 @@ class UIManager:
             messagebox.showerror("Model", "Unable to determine backend for selected model.")
             return
         try:
-            size_bytes, file_count = model_manager.get_model_download_size(model_id)
+            size_bytes, file_count = self.model_manager.get_model_download_size(model_id)
             size_gb = size_bytes / (1024 ** 3)
             detail = f"approximately {size_gb:.2f} GB ({file_count} files)"
         except Exception:
@@ -453,13 +565,13 @@ class UIManager:
         try:
             compute_type_var = self._get_settings_var("asr_ct2_compute_type_var")
             quant = compute_type_var.get() if compute_type_var is not None else None
-            model_manager.ensure_download(
+            self.model_manager.ensure_download(
                 model_id,
                 backend,
                 cache_dir,
                 quant if backend == "ct2" else None,
             )
-            installed_models = model_manager.list_installed(cache_dir)
+            installed_models = self.model_manager.list_installed(cache_dir)
             self.config_manager.set_asr_installed_models(installed_models)
             self.config_manager.save_config()
             self._update_model_info(model_id)
@@ -1576,6 +1688,9 @@ class UIManager:
             try:
                 self._clear_settings_context()
                 self._set_settings_var("window", settings_win)
+                model_manager = self.model_manager
+                service_values_allowed = {SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI}
+                self._set_settings_meta("service_values_allowed", service_values_allowed)
 
                 # Variables (adjust to use self.config_manager.get)
                 auto_paste_var = ctk.BooleanVar(value=self.config_manager.get("auto_paste"))

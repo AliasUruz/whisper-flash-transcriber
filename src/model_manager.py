@@ -197,7 +197,22 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
     total = 0
     files = 0
     for sibling in getattr(info, "siblings", []):
-        total += sibling.size or 0
+        size_value = getattr(sibling, "size", None)
+        if size_value is None:
+            lfs_meta = getattr(sibling, "lfs", None)
+            if hasattr(lfs_meta, "size"):
+                size_value = getattr(lfs_meta, "size")
+            elif isinstance(lfs_meta, dict):
+                size_value = lfs_meta.get("size")
+        try:
+            total += int(size_value) if size_value is not None else 0
+        except (TypeError, ValueError):
+            MODEL_LOGGER.debug(
+                "Ignoring non-numeric size for %s/%s: %r",
+                model_id,
+                getattr(sibling, "rfilename", ""),
+                size_value,
+            )
         files += 1
     MODEL_LOGGER.debug(
         "Computed download size for model %s: %.2f GB across %s files",
