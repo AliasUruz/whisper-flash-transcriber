@@ -314,6 +314,37 @@ class AppCore:
         for message in pending:
             self.main_tk_root.after(0, lambda msg=message: ui_manager.show_status_tooltip(msg))
 
+    def emit_state_warning(
+        self,
+        code: str,
+        details: dict | None = None,
+        *,
+        message: str | None = None,
+        level: str = "warning",
+    ) -> None:
+        """Encaminha avisos para a UI usando o callback de estado."""
+        payload = {
+            "code": code,
+            "details": details or {},
+            "level": level,
+        }
+        if message:
+            payload["message"] = message
+        callback = self.state_update_callback
+        if callback:
+            try:
+                event = {"state": self.current_state, "warning": payload}
+                self.main_tk_root.after(0, lambda evt=event: callback(evt))
+            except Exception as error:
+                logging.error(
+                    "Falha ao propagar aviso de estado (%s): %s",
+                    code,
+                    error,
+                    exc_info=True,
+                )
+        if message:
+            self._queue_tooltip_update(message)
+
     # --- Callbacks de Módulos ---
     def set_state_update_callback(self, callback):
         self.state_update_callback = callback
