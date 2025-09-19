@@ -1418,6 +1418,16 @@ class UIManager:
 
         return f" — {' | '.join(parts)}" if parts else ""
 
+    def _clamp_tray_tooltip(self, text: str) -> str:
+        """Assegura que o texto da tooltip caiba no limite imposto pelo sistema."""
+
+        max_len = 128
+        if len(text) > max_len:
+            truncated = text[: max_len - 1].rstrip()
+            text = f"{truncated}…"
+            logging.debug("Tray tooltip truncated to %d characters: %s", max_len, text)
+        return text
+
     def _recording_tooltip_updater(self):
         """Atualiza a tooltip com a duração da gravação a cada segundo."""
         while not self.stop_recording_timer_event.is_set():
@@ -1429,7 +1439,7 @@ class UIManager:
             suffix = getattr(self, "_state_context_suffix", "")
             if suffix:
                 tooltip = f"{tooltip}{suffix}"
-            self.tray_icon.title = tooltip
+            self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
             time.sleep(1)
 
     def _format_elapsed(self, seconds: float) -> str:
@@ -1475,7 +1485,7 @@ class UIManager:
                 if suffix:
                     tooltip = f"{tooltip}{suffix}"
                 if self.tray_icon:
-                    self.tray_icon.title = tooltip
+                    self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
             except Exception:
                 # Em caso de falha, mantém somente o tempo
                 elapsed = time.time() - start_ts
@@ -1484,7 +1494,7 @@ class UIManager:
                     suffix = getattr(self, "_state_context_suffix", "")
                     if suffix:
                         tooltip = f"{tooltip}{suffix}"
-                    self.tray_icon.title = tooltip
+                    self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
             time.sleep(1)
 
     def update_tray_icon(self, state):
@@ -1576,13 +1586,16 @@ class UIManager:
                             bs = getattr(th, "last_dynamic_batch_size", None)
                             if bs is None:
                                 bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
-                            self.tray_icon.title = _apply_suffix(
+                            rich_tooltip = _apply_suffix(
                                 f"Whisper Recorder (TRANSCRIBING) [{device} {dtype} | {attn_impl} | chunk={chunk}s | batch={bs}]"
                             )
+                            self.tray_icon.title = self._clamp_tray_tooltip(rich_tooltip)
                         else:
-                            self.tray_icon.title = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
+                            fallback = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
+                            self.tray_icon.title = self._clamp_tray_tooltip(fallback)
                     except Exception:
-                        self.tray_icon.title = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
+                        fallback = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
+                        self.tray_icon.title = self._clamp_tray_tooltip(fallback)
                     self.transcribing_timer_thread = threading.Thread(
                         target=self._transcribing_tooltip_updater,
                         daemon=True,
@@ -1614,7 +1627,7 @@ class UIManager:
                 tooltip = "Whisper Recorder (LOADING_MODEL)"
 
             tooltip_with_context = _apply_suffix(tooltip)
-            self.tray_icon.title = tooltip_with_context
+            self.tray_icon.title = self._clamp_tray_tooltip(tooltip_with_context)
             self.tray_icon.update_menu()
 
             event_name = getattr(event_obj, "name", None) if event_obj is not None else None
@@ -2517,6 +2530,24 @@ class UIManager:
                 self._set_settings_var("gemini_models_textbox", gemini_models_textbox)
                 Tooltip(gemini_models_textbox, "List of models to try, one per line.")
 
+                transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
+                transcription_frame.pack(fill="x", padx=10, pady=5)
+                ctk.CTkLabel(
+                    transcription_frame,
+                    text="Transcription Settings",
+                    font=ctk.CTkFont(weight="bold"),
+                ).pack(pady=(5, 10), anchor="w")
+
+                asr_frame = ctk.CTkFrame(transcription_frame, fg_color="transparent")
+                asr_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(
+                    asr_frame,
+                    text="ASR Model",
+                    font=ctk.CTkFont(weight="bold"),
+                ).pack(anchor="w", pady=(5, 10))
+                self._set_settings_var("transcription_frame", transcription_frame)
+                self._set_settings_var("asr_frame", asr_frame)
+
                 asr_helpers = self._build_asr_section(
                     settings_win=settings_win,
                     asr_frame=asr_frame,
@@ -3206,7 +3237,7 @@ class UIManager:
         if not message:
             return
         if self.tray_icon:
-            self.tray_icon.title = message
+            self.tray_icon.title = self._clamp_tray_tooltip(message)
             logging.debug("UIManager: tooltip atualizada para: %s", message)
         else:
             self._pending_tray_tooltip = message
@@ -3226,7 +3257,7 @@ class UIManager:
             menu=pystray.Menu(lambda: self.create_dynamic_menu())
         )
         if self._pending_tray_tooltip:
-            self.tray_icon.title = self._pending_tray_tooltip
+            self.tray_icon.title = self._clamp_tray_tooltip(self._pending_tray_tooltip)
         # Set update callback in core_instance
         self.core_instance_ref.set_state_update_callback(self.update_tray_icon)
         self.core_instance_ref.set_segment_callback(self.update_live_transcription_threadsafe) # Connect segment callback
