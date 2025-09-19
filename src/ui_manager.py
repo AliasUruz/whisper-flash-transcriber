@@ -165,6 +165,10 @@ class UIManager:
         self.transcribing_timer_thread = None
         self.stop_transcribing_timer_event = threading.Event()
 
+        # Contexto do último estado recebido (para tooltips dinâmicas)
+        self._last_state_notification: Any = None
+        self._state_context_suffix: str = ""
+
     # ------------------------------------------------------------------
     # Utilidades para gerenciamento da janela de configurações
     # ------------------------------------------------------------------
@@ -1229,6 +1233,79 @@ class UIManager:
         logging.info("UIManager: forwarding settings payload to AppCore (%d keys).", len(payload))
         self.core_instance_ref.apply_settings_from_external(**payload)
 
+    # ------------------------------------------------------------------
+    # Normalização de notificações de estado
+    # ------------------------------------------------------------------
+    def _coerce_state_notification(self, payload: Any) -> Any:
+        """Tenta identificar ``StateNotification`` sem importar ``core``."""
+
+        if payload is None:
+            return None
+
+        try:
+            has_dataclass_fields = bool(getattr(payload, "__dataclass_fields__", None))
+        except Exception:
+            has_dataclass_fields = False
+
+        required_attrs = ("state", "event")
+        if has_dataclass_fields and all(hasattr(payload, attr) for attr in required_attrs):
+            return payload
+
+        try:
+            cls = payload.__class__
+            if cls.__name__ == "StateNotification" and all(hasattr(payload, attr) for attr in required_attrs):
+                return payload
+        except Exception:
+            return None
+
+        return None
+
+    def _normalize_state_payload(self, payload: Any) -> tuple[Any, Any, dict[str, Any] | None]:
+        """Extrai ``state``, payloads de aviso e metadados contextuais."""
+
+        notification = self._coerce_state_notification(payload)
+        if notification is not None:
+            context = {
+                "notification": notification,
+                "state": getattr(notification, "state", None),
+                "event": getattr(notification, "event", None),
+                "details": getattr(notification, "details", None),
+                "source": getattr(notification, "source", None),
+                "previous_state": getattr(notification, "previous_state", None),
+            }
+            return context["state"], None, context
+
+        if isinstance(payload, dict):
+            return payload.get("state"), payload.get("warning"), None
+
+        return payload, None, None
+
+    def _build_state_context_suffix(self, state: str, context: dict[str, Any] | None) -> str:
+        """Gera sufixo textual com detalhes do estado para tooltips."""
+
+        if not context:
+            return ""
+
+        parts: list[str] = []
+        details = context.get("details")
+        if details:
+            parts.append(str(details))
+
+        source = context.get("source")
+        if source:
+            parts.append(f"source={source}")
+
+        event_obj = context.get("event")
+        event_name = None
+        if event_obj is not None:
+            event_name = getattr(event_obj, "name", None)
+            if not event_name:
+                event_name = str(event_obj)
+        if event_name:
+            parts.append(f"event={event_name}")
+
+        return f" — {' | '.join(parts)}" if parts else ""
+
     def _recording_tooltip_updater(self):
         """Atualiza a tooltip com a duração da gravação a cada segundo."""
         while not self.stop_recording_timer_event.is_set():
@@ -1237,6 +1314,9 @@ class UIManager:
                 break
             elapsed = time.time() - start_time
             tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
+            suffix = getattr(self, "_state_context_suffix", "")
+            if suffix:
+                tooltip = f"{tooltip}{suffix}"
             self.tray_icon.title = tooltip
             time.sleep(1)
 
@@ -1279,35 +1359,57 @@ class UIManager:
                     tech = f" [{device} {dtype} | {attn_impl} | chunk={chunk}s | batch={bs}]"
                 elapsed = time.time() - start_ts
                 tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)}){tech}"
+                suffix = getattr(self, "_state_context_suffix", "")
+                if suffix:
+                    tooltip = f"{tooltip}{suffix}"
                 if self.tray_icon:
                     self.tray_icon.title = tooltip
             except Exception:
                 # Em caso de falha, mantém somente o tempo
                 elapsed = time.time() - start_ts
                 if self.tray_icon:
-                    self.tray_icon.title = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
+                    tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
+                    suffix = getattr(self, "_state_context_suffix", "")
+                    if suffix:
+                        tooltip = f"{tooltip}{suffix}"
+                    self.tray_icon.title = tooltip
             time.sleep(1)
 
     def update_tray_icon(self, state):
         # Logic moved from global, ajustado para lidar com payloads estruturados
-        warning_payload = None
-        if isinstance(state, dict):
-            warning_payload = state.get("warning")
-            state = state.get(
-                "state",
-                getattr(self.core_instance_ref, "current_state", "IDLE") if self.core_instance_ref else "IDLE",
-            )
-        if state is None:
-            state = getattr(self.core_instance_ref, "current_state", "IDLE") if self.core_instance_ref else "IDLE"
+        normalized_state, warning_payload, context = self._normalize_state_payload(state)
+
+        fallback_state = (
+            getattr(self.core_instance_ref, "current_state", "IDLE")
+            if self.core_instance_ref
+            else "IDLE"
+        )
+        resolved_state = normalized_state if normalized_state is not None else fallback_state
+        if resolved_state is None:
+            resolved_state = "IDLE"
+        state_str = str(resolved_state)
+
+        event_obj = context.get("event") if context else None
+        if context:
+            self._last_state_notification = context.get("notification")
+            self._state_context_suffix = self._build_state_context_suffix(state_str, context)
+        else:
+            self._last_state_notification = None
+            self._state_context_suffix = ""
+
+        suffix = self._state_context_suffix
+
+        def _apply_suffix(text: str) -> str:
+            return f"{text}{suffix}" if suffix else text
 
         if self.tray_icon:
-            color1, color2 = self.ICON_COLORS.get(state, self.DEFAULT_ICON_COLOR)
+            color1, color2 = self.ICON_COLORS.get(state_str, self.DEFAULT_ICON_COLOR)
             icon_image = self.create_image(64, 64, color1, color2)
             self.tray_icon.icon = icon_image
-            tooltip = f"Whisper Recorder ({state})"
+            tooltip = f"Whisper Recorder ({state_str})"
 
             # Controle de threads de tooltip por estado
-            if state == "RECORDING":
+            if state_str == "RECORDING":
                 # Parar contador de TRANSCRIBING se estiver ativo
                 if self.transcribing_timer_thread and self.transcribing_timer_thread.is_alive():
                     self.stop_transcribing_timer_event.set()
@@ -1326,7 +1428,7 @@ class UIManager:
                     elapsed = time.time() - start_time
                     tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
 
-            elif state == "TRANSCRIBING":
+            elif state_str == "TRANSCRIBING":
                 # Parar contador de RECORDING se estiver ativo
                 if self.recording_timer_thread and self.recording_timer_thread.is_alive():
                     self.stop_recording_timer_event.set()
@@ -1362,11 +1464,13 @@ class UIManager:
                             bs = getattr(th, "last_dynamic_batch_size", None)
                             if bs is None:
                                 bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
-                            self.tray_icon.title = f"Whisper Recorder (TRANSCRIBING) [{device} {dtype} | {attn_impl} | chunk={chunk}s | batch={bs}]"
+                            self.tray_icon.title = _apply_suffix(
+                                f"Whisper Recorder (TRANSCRIBING) [{device} {dtype} | {attn_impl} | chunk={chunk}s | batch={bs}]"
+                            )
                         else:
-                            self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
+                            self.tray_icon.title = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
                     except Exception:
-                        self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
+                        self.tray_icon.title = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
                     self.transcribing_timer_thread = threading.Thread(
                         target=self._transcribing_tooltip_updater,
                         daemon=True,
@@ -1383,25 +1487,29 @@ class UIManager:
                     self.stop_transcribing_timer_event.set()
                     self.transcribing_timer_thread.join(timeout=1)
 
-                if state == "IDLE" and self.core_instance_ref:
+                if state_str == "IDLE" and self.core_instance_ref:
                     tooltip += f" - Record: {self.core_instance_ref.record_key.upper()} - Agent: {self.core_instance_ref.agent_key.upper()}"
-                elif state.startswith("ERROR") and self.core_instance_ref:
+                elif state_str.startswith("ERROR") and self.core_instance_ref:
                     tooltip += " - Check Logs/Settings"
 
             # Ajusta tooltip final conforme estado atual para evitar mensagens inconsistentes
-            if state == "TRANSCRIBING":
+            if state_str == "TRANSCRIBING":
                 # Garante que o texto base esteja correto mesmo antes do primeiro tick
                 tooltip = "Whisper Recorder (TRANSCRIBING)"
-            elif state == "RECORDING":
+            elif state_str == "RECORDING":
                 tooltip = "Whisper Recorder (RECORDING)"
-            elif state == "LOADING_MODEL":
+            elif state_str == "LOADING_MODEL":
                 tooltip = "Whisper Recorder (LOADING_MODEL)"
-            else:
-                tooltip = tooltip
 
-            self.tray_icon.title = tooltip
+            tooltip_with_context = _apply_suffix(tooltip)
+            self.tray_icon.title = tooltip_with_context
             self.tray_icon.update_menu()
-            logging.debug(f"Tray icon updated for state: {state}")
+
+            event_name = getattr(event_obj, "name", None) if event_obj is not None else None
+            if event_name:
+                logging.debug("Tray icon updated for state: %s (event=%s)", state_str, event_name)
+            else:
+                logging.debug("Tray icon updated for state: %s", state_str)
 
         if warning_payload:
             warning_level = str(warning_payload.get("level", "info")).lower()
