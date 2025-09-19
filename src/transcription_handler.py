@@ -225,6 +225,17 @@ class TranscriptionHandler:
 
     def reload_asr(self):
         """Recarrega o backend de ASR e o modelo associado."""
+        core_ref = getattr(self, "core_instance_ref", None)
+        if core_ref is not None:
+            try:
+                core_ref._set_state("LOADING_MODEL")
+            except Exception as state_error:
+                logging.debug(
+                    "Falha ao sinalizar estado LOADING_MODEL durante reload: %s",
+                    state_error,
+                    exc_info=True,
+                )
+
         if self._asr_backend is not None:
             try:
                 self._asr_backend.unload()
@@ -235,11 +246,46 @@ class TranscriptionHandler:
             torch.cuda.empty_cache()
 
         backend_cls = backend_registry.get(self._asr_backend_name, WhisperBackend)
-        self._asr_backend = backend_cls(self)
-        self._asr_backend.load()
+        try:
+            self._asr_backend = backend_cls(self)
+            self._asr_backend.load()
+        except Exception as exc:
+            logging.error("Falha ao recarregar backend ASR: %s", exc, exc_info=True)
+            self._asr_backend = None
+            if core_ref is not None:
+                try:
+                    core_ref._set_state("ERROR_MODEL")
+                except Exception as state_error:
+                    logging.debug(
+                        "Falha ao sinalizar estado ERROR_MODEL após erro no reload: %s",
+                        state_error,
+                        exc_info=True,
+                    )
+            if self.on_model_error_callback:
+                try:
+                    self.on_model_error_callback(str(exc))
+                except Exception as callback_error:
+                    logging.error(
+                        "Erro ao notificar falha de recarregamento do modelo: %s",
+                        callback_error,
+                        exc_info=True,
+                    )
+            raise
 
-    def update_config(self):
-        """Atualiza as configurações do handler a partir do config_manager."""
+    def update_config(self, *, trigger_reload: bool = True) -> bool:
+        """Atualiza as configurações do handler a partir do ``config_manager``.
+
+        Parameters
+        ----------
+        trigger_reload:
+            Quando ``True`` (padrão), dispara o recarregamento imediato do
+            backend caso algum parâmetro crítico tenha sido alterado.
+
+        Returns
+        -------
+        bool
+            Indica se parâmetros que exigem recarregamento foram modificados.
+        """
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY)
         self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)
@@ -256,13 +302,59 @@ class TranscriptionHandler:
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
         self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
-        self.asr_backend = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
-        self.asr_model_id = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
-        self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
-        self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
-        self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
-        self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+
+        previous_backend = self._asr_backend_name
+        previous_model_id = self._asr_model_id
+        previous_device = getattr(self, "asr_compute_device", None)
+        previous_dtype = getattr(self, "asr_dtype", None)
+        previous_ct2_type = getattr(self, "asr_ct2_compute_type", None)
+        previous_ct2_threads = getattr(self, "asr_ct2_cpu_threads", None)
+        previous_cache_dir = getattr(self, "asr_cache_dir", None)
+
+        backend_value = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
+        model_value = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
+        device_value = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
+        dtype_value = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
+        ct2_type_value = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+        ct2_threads_value = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
+        cache_dir_value = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+
+        backend_changed = backend_value != previous_backend
+        model_changed = model_value != previous_model_id
+        device_changed = device_value != previous_device
+        dtype_changed = dtype_value != previous_dtype
+        ct2_type_changed = ct2_type_value != previous_ct2_type
+        ct2_threads_changed = ct2_threads_value != previous_ct2_threads
+        cache_dir_changed = cache_dir_value != previous_cache_dir
+
+        reload_needed = (
+            backend_changed
+            or model_changed
+            or device_changed
+            or dtype_changed
+            or ct2_type_changed
+            or ct2_threads_changed
+            or cache_dir_changed
+        )
+
+        # Atualiza internamente sem acionar recarga automática; o caller decide
+        # quando reconstruir o backend.
+        self._asr_backend_name = backend_value
+        self._asr_model_id = model_value
+        self.asr_compute_device = device_value
+        self.asr_dtype = dtype_value
+        self.asr_ct2_compute_type = ct2_type_value
+        self.asr_ct2_cpu_threads = ct2_threads_value
+        self.asr_cache_dir = cache_dir_value
+
+        if reload_needed and trigger_reload:
+            logging.info(
+                "TranscriptionHandler: parâmetros críticos alterados; recarregando backend ASR.",
+            )
+            self.reload_asr()
+
         logging.info("TranscriptionHandler: Configurações atualizadas.")
+        return reload_needed
 
     def _resolve_asr_settings(self):
         """Determina backend, modelo e parâmetros de ASR conforme hardware."""
