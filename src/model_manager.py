@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
+import time
 from pathlib import Path
+from threading import Event
 from typing import Dict, List
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
 
-class DownloadCancelledError(Exception):
-    """Raised when a model download is cancelled by the user."""
+class DownloadCancelledError(RuntimeError):
+    """Raised when a model download is aborted by the caller."""
+
+    def __init__(self, message: str, *, timed_out: bool = False, by_user: bool = False) -> None:
+        super().__init__(message)
+        self.timed_out = bool(timed_out)
+        self.by_user = bool(by_user)
 
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
@@ -139,6 +148,9 @@ def ensure_download(
     backend: str,
     cache_dir: str | Path,
     quant: str | None = None,
+    *,
+    timeout: float | int | None = None,
+    cancel_event: Event | None = None,
 ) -> str:
     """Ensure that the given model is present locally.
 
@@ -152,6 +164,10 @@ def ensure_download(
         Root directory where models are cached.
     quant: str | None
         Quantization branch for CT2 models. Ignored for Transformers.
+    timeout: float | int | None, optional
+        Maximum number of seconds to wait before aborting the download. ``None`` disables the timeout.
+    cancel_event: Event | None, optional
+        When provided, the download is aborted if the event is set.
     """
 
     cache_dir = Path(cache_dir)
@@ -161,21 +177,75 @@ def ensure_download(
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        if backend == "transformers":
-            snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
-        elif backend == "ct2":
-            from faster_whisper import WhisperModel
+    deadline = None
+    timeout_value: float | None
+    if timeout is None:
+        timeout_value = None
+    else:
+        try:
+            timeout_value = float(timeout)
+        except (TypeError, ValueError):
+            timeout_value = None
+    if timeout_value and timeout_value > 0:
+        deadline = time.monotonic() + timeout_value
 
-            WhisperModel(
-                model_id,
-                device="cpu",
-                compute_type=quant or "int8",
-                download_root=str(local_dir),
+    def _check_abort() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise DownloadCancelledError(
+                f"Model download timed out after {timeout_value:.0f} seconds.", timed_out=True
+            )
+
+    def _cleanup_partial() -> None:
+        try:
+            if local_dir.exists():
+                shutil.rmtree(local_dir)
+        except Exception:  # pragma: no cover - best effort cleanup
+            logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
+
+    _check_abort()
+
+    progress_class = None
+    if cancel_event is not None or deadline is not None:
+        progress_class = _make_cancellable_progress(_check_abort)
+
+    try:
+        if backend in {"transformers", "ct2"}:
+            snapshot_download(
+                repo_id=model_id,
+                local_dir=str(local_dir),
+                allow_patterns=None,
+                tqdm_class=progress_class,
             )
         else:
             raise ValueError(f"Unknown backend: {backend}")
+        _check_abort()
+    except DownloadCancelledError:
+        _cleanup_partial()
+        raise
     except KeyboardInterrupt as exc:
-        raise DownloadCancelledError("Model download cancelled by user.") from exc
+        _cleanup_partial()
+        raise DownloadCancelledError("Model download cancelled by user.", by_user=True) from exc
+    except Exception:
+        _cleanup_partial()
+        raise
 
     return str(local_dir)
+
+
+def _make_cancellable_progress(check_abort):
+    from tqdm.auto import tqdm
+
+    class _Progress(tqdm):
+        def update(self, n=1):
+            check_abort()
+            result = super().update(n)
+            check_abort()
+            return result
+
+        def refresh(self, *args, **kwargs):
+            check_abort()
+            return super().refresh(*args, **kwargs)
+
+    return _Progress

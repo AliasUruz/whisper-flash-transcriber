@@ -46,7 +46,10 @@ try:
     from .model_manager import DownloadCancelledError
 except Exception:  # pragma: no cover - fallback se a exceção não existir
     class DownloadCancelledError(Exception):
-        pass
+        def __init__(self, message="", *, timed_out: bool = False, by_user: bool = False):
+            super().__init__(message)
+            self.timed_out = bool(timed_out)
+            self.by_user = bool(by_user)
 
 def get_available_devices_for_ui():
     """Returns a list of devices for the settings interface."""
@@ -1247,19 +1250,32 @@ class UIManager:
                         return
 
                     try:
+                        raw_timeout = self.config_manager.get("asr_download_timeout_seconds", 0)
+                        try:
+                            timeout_seconds = float(raw_timeout)
+                        except (TypeError, ValueError):
+                            logging.debug("Invalid ASR download timeout configured: %r", raw_timeout)
+                            timeout_seconds = 0.0
+                        timeout_arg = timeout_seconds if timeout_seconds > 0 else None
+
                         model_manager.ensure_download(
                             model_id,
                             backend,
                             cache_dir,
                             asr_ct2_compute_type_var.get() if backend == "ct2" else None,
+                            timeout=timeout_arg,
                         )
                         installed_models = model_manager.list_installed(cache_dir)
                         self.config_manager.set_asr_installed_models(installed_models)
                         self.config_manager.save_config()
                         _update_model_info(model_id)
                         messagebox.showinfo("Model", "Download completed.")
-                    except DownloadCancelledError:
-                        messagebox.showinfo("Model", "Download canceled.")
+                    except DownloadCancelledError as err:
+                        message = str(err) or ("Download timed out." if err.timed_out else "Download canceled.")
+                        if err.timed_out:
+                            messagebox.showwarning("Model", message)
+                        else:
+                            messagebox.showinfo("Model", message)
                     except OSError:
                         messagebox.showerror(
                             "Model",
