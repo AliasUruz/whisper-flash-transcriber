@@ -4,6 +4,7 @@ from tkinter import simpledialog # Adicionado para askstring
 import logging
 import threading
 import time
+from datetime import datetime
 import pystray
 from PIL import Image, ImageDraw
 from pathlib import Path
@@ -1096,6 +1097,155 @@ class UIManager:
                 model_size_label = ctk.CTkLabel(asr_model_frame, text="")
                 model_size_label.pack(side="left", padx=5)
 
+                status_banner = ctk.CTkLabel(
+                    asr_frame,
+                    text="",
+                    anchor="w",
+                    justify="left",
+                    fg_color="gray25",
+                    text_color="#f0f0f0",
+                    corner_radius=6,
+                    padx=10,
+                    pady=6,
+                    wraplength=480,
+                )
+                status_banner.pack(fill="x", padx=5, pady=(5, 10))
+
+                install_button = None
+                install_button_tooltip = None
+
+                status_styles = {
+                    "success": ("#0f3620", "#d5f5dd"),
+                    "running": ("#122a44", "#dbe9ff"),
+                    "cancelled": ("#3a2d16", "#ffe6c3"),
+                    "error": ("#451c1c", "#ffd6d6"),
+                    "failed": ("#451c1c", "#ffd6d6"),
+                    "unknown": ("#2b2b2b", "#f0f0f0"),
+                }
+
+                def _normalize_download_status(data):
+                    base = {
+                        "status": "unknown",
+                        "timestamp": "",
+                        "model_id": "",
+                        "backend": "",
+                        "message": "",
+                        "details": "",
+                    }
+                    if isinstance(data, dict):
+                        for key, value in data.items():
+                            base[key] = "" if value is None else str(value)
+                    if not base.get("status"):
+                        base["status"] = "unknown"
+                    return base
+
+                def _format_download_timestamp(raw: str) -> str:
+                    if not raw:
+                        return "Unknown time"
+                    normalized = raw
+                    if raw.endswith("Z"):
+                        normalized = raw[:-1] + "+00:00"
+                    try:
+                        parsed = datetime.fromisoformat(normalized)
+                    except ValueError:
+                        return raw
+                    return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+                def _build_status_text(status_data, selected_model: str) -> str:
+                    status_value = status_data.get("status", "unknown").lower()
+                    model_id = status_data.get("model_id", "")
+                    timestamp_display = _format_download_timestamp(
+                        status_data.get("timestamp", "")
+                    )
+                    lines = []
+                    if status_value in {"unknown", ""} or not model_id:
+                        lines.append("No ASR model download attempts recorded yet.")
+                        if selected_model:
+                            lines.append(
+                                f"Select '{selected_model}' and use Install/Update to download it."
+                            )
+                        return "\n".join(lines)
+
+                    state_labels = {
+                        "success": "Download completed",
+                        "running": "Download in progress",
+                        "cancelled": "Download cancelled",
+                        "error": "Download failed",
+                        "failed": "Download failed",
+                    }
+                    summary = state_labels.get(status_value, status_value.title())
+                    summary_line = f"{summary} for '{model_id}'"
+                    if timestamp_display and timestamp_display != "Unknown time":
+                        summary_line += f" at {timestamp_display}"
+                    lines.append(summary_line)
+
+                    backend_label = status_data.get("backend")
+                    if backend_label:
+                        lines.append(f"Backend: {backend_label}")
+
+                    message_text = status_data.get("message")
+                    if message_text:
+                        lines.append(message_text)
+
+                    detail_text = status_data.get("details")
+                    if detail_text:
+                        lines.append(detail_text)
+
+                    if selected_model and selected_model != model_id:
+                        lines.append(f"Currently selected model: '{selected_model}'.")
+
+                    return "\n".join(lines)
+
+                def _apply_post_download_ui(status_override=None):
+                    status_data = (
+                        _normalize_download_status(status_override)
+                        if status_override is not None
+                        else _normalize_download_status(
+                            self.config_manager.get_last_asr_download_status()
+                        )
+                    )
+                    status_key = status_data.get("status", "unknown").lower()
+                    if status_key == "failed":
+                        status_key = "error"
+                    style_bg, style_fg = status_styles.get(
+                        status_key, status_styles["unknown"]
+                    )
+                    selected_model = asr_model_id_var.get()
+                    status_banner.configure(
+                        text=_build_status_text(status_data, selected_model),
+                        fg_color=style_bg,
+                        text_color=style_fg,
+                    )
+
+                    button_text = "Install/Update"
+                    tooltip_text = "Install or update the selected ASR model."
+                    target_model = status_data.get("model_id", "")
+                    if status_key == "success" and target_model == selected_model:
+                        button_text = "Reinstall"
+                        tooltip_text = (
+                            "Reinstall or repair the selected ASR model using the cached files."
+                        )
+                    elif status_key == "error" and target_model == selected_model:
+                        button_text = "Retry Download"
+                        tooltip_text = (
+                            "Retry downloading the selected ASR model. Check the logs for diagnostics."
+                        )
+                    elif status_key == "cancelled" and target_model == selected_model:
+                        button_text = "Resume Download"
+                        tooltip_text = (
+                            "Restart the ASR model download when you are ready."
+                        )
+                    elif status_key == "running" and target_model == selected_model:
+                        button_text = "Downloading..."
+                        tooltip_text = (
+                            "Downloading the selected ASR model. Please wait until it completes."
+                        )
+
+                    if install_button is not None:
+                        install_button.configure(text=button_text)
+                    if install_button_tooltip is not None:
+                        install_button_tooltip.text = tooltip_text
+
                 def _update_model_info(model_ref: str) -> None:
                     model_id = display_to_id.get(model_ref, model_ref)
                     try:
@@ -1139,8 +1289,11 @@ class UIManager:
 
                 def _update_install_button_state() -> None:
                     backend = _derive_backend_from_model(asr_model_id_var.get())
-                    install_button.configure(state="normal" if backend else "disabled")
+                    if install_button is not None:
+                        install_button.configure(state="normal" if backend else "disabled")
                     quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
+                    if install_button is not None:
+                        _apply_post_download_ui()
 
                 def _on_model_change(choice_display: str) -> None:
                     model_id = display_to_id.get(choice_display, choice_display)
@@ -1157,6 +1310,8 @@ class UIManager:
                     self.config_manager.save_config()
                     _on_backend_change(asr_backend_var.get())
                     _update_model_info(model_id)
+                    _update_install_button_state()
+                    _apply_post_download_ui()
 
                 asr_model_menu.configure(command=_on_model_change)
                 _on_model_change(asr_model_display_var.get())
@@ -1246,8 +1401,20 @@ class UIManager:
                     ):
                         return
 
+                    progress_status = {
+                        "status": "running",
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "model_id": model_id,
+                        "backend": backend or "",
+                        "message": "Downloading the selected ASR model...",
+                        "details": f"Target directory: {cache_dir}",
+                    }
+                    _apply_post_download_ui(progress_status)
+                    if install_button is not None:
+                        install_button.configure(state="disabled")
+
                     try:
-                        model_manager.ensure_download(
+                        local_path = model_manager.ensure_download(
                             model_id,
                             backend,
                             cache_dir,
@@ -1255,17 +1422,89 @@ class UIManager:
                         )
                         installed_models = model_manager.list_installed(cache_dir)
                         self.config_manager.set_asr_installed_models(installed_models)
+                        success_status = {
+                            "status": "success",
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "model_id": model_id,
+                            "backend": backend or "",
+                            "message": "Download completed successfully.",
+                            "details": f"Stored at: {local_path}",
+                        }
+                        self.config_manager.set_last_asr_download_status(success_status)
                         self.config_manager.save_config()
                         _update_model_info(model_id)
-                        messagebox.showinfo("Model", "Download completed.")
-                    except DownloadCancelledError:
-                        messagebox.showinfo("Model", "Download canceled.")
-                    except OSError:
-                        messagebox.showerror(
-                            "Model",
+                        _apply_post_download_ui(success_status)
+                        logging.info(
+                            "ASR model '%s' downloaded successfully to %s (backend=%s)",
+                            model_id,
+                            local_path,
+                            backend,
                         )
+                        messagebox.showinfo(
+                            "Model",
+                            f"Download completed successfully.\nStored at: {local_path}",
+                        )
+                    except DownloadCancelledError:
+                        cancel_message = (
+                            "Download canceled. Retry later or check your internet connection "
+                            "and disk space before trying again."
+                        )
+                        cancel_status = {
+                            "status": "cancelled",
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "model_id": model_id,
+                            "backend": backend or "",
+                            "message": cancel_message,
+                            "details": f"Cache directory: {cache_dir}",
+                        }
+                        self.config_manager.set_last_asr_download_status(cancel_status)
+                        self.config_manager.save_config()
+                        _apply_post_download_ui(cancel_status)
+                        logging.info("ASR model '%s' download cancelled by user.", model_id)
+                        messagebox.showinfo("Model", cancel_message)
+                    except OSError as exc:
+                        logging.exception(
+                            "ASR model '%s' download failed due to filesystem error.",
+                            model_id,
+                        )
+                        error_message = (
+                            "Download failed due to a filesystem error. Check the logs for diagnostics "
+                            "and ensure the cache directory is writable."
+                        )
+                        error_status = {
+                            "status": "error",
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "model_id": model_id,
+                            "backend": backend or "",
+                            "message": error_message,
+                            "details": str(exc),
+                        }
+                        self.config_manager.set_last_asr_download_status(error_status)
+                        self.config_manager.save_config()
+                        _apply_post_download_ui(error_status)
+                        messagebox.showerror("Model", f"{error_message}\n\n{exc}")
                     except Exception as e:
-                        messagebox.showerror("Model", f"Download failed: {e}")
+                        logging.exception(
+                            "ASR model '%s' download failed due to an unexpected error.",
+                            model_id,
+                        )
+                        failure_message = (
+                            "Download failed. Check the logs for diagnostics."
+                        )
+                        failure_status = {
+                            "status": "error",
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "model_id": model_id,
+                            "backend": backend or "",
+                            "message": failure_message,
+                            "details": str(e),
+                        }
+                        self.config_manager.set_last_asr_download_status(failure_status)
+                        self.config_manager.save_config()
+                        _apply_post_download_ui(failure_status)
+                        messagebox.showerror("Model", f"{failure_message}\n\n{e}")
+                    finally:
+                        _update_install_button_state()
 
                 def _reload_model():
                     handler = getattr(self.core_instance_ref, "transcription_handler", None)
@@ -1277,14 +1516,21 @@ class UIManager:
                     asr_frame, text="Install/Update", command=_install_model
                 )
                 install_button.pack(pady=5)
+                install_button_tooltip = Tooltip(
+                    install_button,
+                    "Install or update the selected ASR model.",
+                )
                 reload_button = ctk.CTkButton(
                     asr_frame, text="Reload Model", command=_reload_model
                 )
                 reload_button.pack(pady=5)
+                Tooltip(reload_button, "Reload the ASR model from disk.")
 
                 _update_model_info(asr_model_id_var.get())
                 _update_install_button_state()
                 _on_backend_change(asr_backend_var.get())
+
+                _apply_post_download_ui()
 
                 update_text_correction_fields()
 

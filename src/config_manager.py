@@ -108,6 +108,14 @@ DEFAULT_CONFIG = {
     "asr_installed_models": [],
     "asr_curated_catalog": [],
     "asr_curated_catalog_url": "",
+    "asr_last_download_status": {
+        "status": "unknown",
+        "timestamp": "",
+        "model_id": "",
+        "backend": "",
+        "message": "",
+        "details": "",
+    },
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -171,6 +179,7 @@ ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
 ASR_CURATED_CATALOG_URL_CONFIG_KEY = "asr_curated_catalog_url"
+ASR_LAST_DOWNLOAD_STATUS_KEY = "asr_last_download_status"
 
 
 def _normalize_asr_backend(name: str | None) -> str | None:
@@ -613,6 +622,25 @@ class ConfigManager:
             curated = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
         self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = curated
 
+        default_download_status = copy.deepcopy(
+            self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})
+        )
+        stored_status = self.config.get(
+            ASR_LAST_DOWNLOAD_STATUS_KEY,
+            default_download_status,
+        )
+        if not isinstance(stored_status, dict):
+            stored_status = default_download_status
+        sanitized_status = copy.deepcopy(default_download_status)
+        if isinstance(stored_status, dict):
+            for key, value in stored_status.items():
+                if key not in sanitized_status:
+                    sanitized_status[key] = ""
+                sanitized_status[key] = "" if value is None else str(value)
+        if not sanitized_status.get("status"):
+            sanitized_status["status"] = default_download_status.get("status", "unknown")
+        self.config[ASR_LAST_DOWNLOAD_STATUS_KEY] = sanitized_status
+
         safe_config = self.config.copy()
         safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
         safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
@@ -803,6 +831,30 @@ class ConfigManager:
             self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = list(
                 self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY]
             )
+
+    def get_last_asr_download_status(self) -> dict:
+        status = self.config.get(
+            ASR_LAST_DOWNLOAD_STATUS_KEY,
+            copy.deepcopy(self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})),
+        )
+        if not isinstance(status, dict):
+            return copy.deepcopy(
+                self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})
+            )
+        return copy.deepcopy(status)
+
+    def set_last_asr_download_status(self, value: dict):
+        default_status = copy.deepcopy(
+            self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})
+        )
+        sanitized = copy.deepcopy(default_status)
+        if isinstance(value, dict):
+            for key, raw in value.items():
+                normalized = "" if raw is None else str(raw)
+                sanitized[key] = normalized
+        if not sanitized.get("status"):
+            sanitized["status"] = default_status.get("status", "unknown")
+        self.config[ASR_LAST_DOWNLOAD_STATUS_KEY] = sanitized
 
     def get_asr_curated_catalog(self):
         return self.config.get(
