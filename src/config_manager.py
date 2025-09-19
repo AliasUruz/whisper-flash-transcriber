@@ -3,6 +3,7 @@ import json
 import logging
 import copy
 import hashlib
+import time
 from pathlib import Path
 from typing import List
 
@@ -108,6 +109,12 @@ DEFAULT_CONFIG = {
     "asr_installed_models": [],
     "asr_curated_catalog": [],
     "asr_curated_catalog_url": "",
+    "last_model_prompt_decision": {
+        "model_id": "",
+        "backend": "",
+        "decision": "",
+        "timestamp": 0.0,
+    },
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
@@ -171,6 +178,7 @@ ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
 ASR_CURATED_CATALOG_URL_CONFIG_KEY = "asr_curated_catalog_url"
+LAST_MODEL_PROMPT_DECISION_CONFIG_KEY = "last_model_prompt_decision"
 
 
 def _normalize_asr_backend(name: str | None) -> str | None:
@@ -613,6 +621,28 @@ class ConfigManager:
             curated = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
         self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = curated
 
+        prompt_decision = self.config.get(
+            LAST_MODEL_PROMPT_DECISION_CONFIG_KEY,
+            self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY],
+        )
+        if not isinstance(prompt_decision, dict):
+            prompt_decision = copy.deepcopy(
+                self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY]
+            )
+        decision_value = str(prompt_decision.get("decision", "")).strip().lower()
+        if decision_value not in {"accept", "defer"}:
+            decision_value = ""
+        try:
+            timestamp_value = float(prompt_decision.get("timestamp", 0.0))
+        except (TypeError, ValueError):
+            timestamp_value = 0.0
+        self.config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY] = {
+            "model_id": str(prompt_decision.get("model_id", "") or ""),
+            "backend": str(prompt_decision.get("backend", "") or ""),
+            "decision": decision_value,
+            "timestamp": timestamp_value,
+        }
+
         safe_config = self.config.copy()
         safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
         safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
@@ -1013,3 +1043,47 @@ class ConfigManager:
                 MIN_RECORDING_DURATION_CONFIG_KEY
             ]
         self.save_config()
+
+    def get_last_model_prompt_decision(self) -> dict:
+        decision = self.config.get(
+            LAST_MODEL_PROMPT_DECISION_CONFIG_KEY,
+            self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY],
+        )
+        if not isinstance(decision, dict):
+            decision = copy.deepcopy(
+                self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY]
+            )
+        return {
+            "model_id": str(decision.get("model_id", "") or ""),
+            "backend": str(decision.get("backend", "") or ""),
+            "decision": str(decision.get("decision", "") or "").strip().lower(),
+            "timestamp": float(decision.get("timestamp", 0.0) or 0.0),
+        }
+
+    def record_model_prompt_decision(
+        self,
+        decision: str,
+        model_id: str,
+        backend: str,
+        *,
+        save: bool = True,
+    ) -> None:
+        normalized_decision = str(decision or "").strip().lower()
+        if normalized_decision not in {"accept", "defer"}:
+            normalized_decision = ""
+        timestamp = time.time() if normalized_decision else 0.0
+        self.config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY] = {
+            "model_id": str(model_id or ""),
+            "backend": str(backend or ""),
+            "decision": normalized_decision,
+            "timestamp": timestamp,
+        }
+        if save:
+            self.save_config()
+
+    def reset_last_model_prompt_decision(self, *, save: bool = False) -> None:
+        self.config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY] = copy.deepcopy(
+            self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY]
+        )
+        if save:
+            self.save_config()

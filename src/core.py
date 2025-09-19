@@ -145,6 +145,33 @@ class AppCore:
 
     def _prompt_model_install(self, model_id, backend, cache_dir, ct2_type):
         """Agenda um prompt para download do modelo na thread principal."""
+        decision_data = self.config_manager.get_last_model_prompt_decision()
+        if (
+            decision_data.get("model_id") == model_id
+            and decision_data.get("backend") == backend
+        ):
+            decision = decision_data.get("decision")
+            timestamp = decision_data.get("timestamp", 0.0)
+            formatted = self._format_decision_timestamp(timestamp)
+            if decision == "defer":
+                logging.info(
+                    "Skipping model installation prompt for %s/%s due to prior deferral at %s.",
+                    backend,
+                    model_id,
+                    formatted,
+                )
+                return
+            if decision == "accept":
+                logging.info(
+                    "Automatically starting model download for %s/%s based on acceptance recorded at %s.",
+                    backend,
+                    model_id,
+                    formatted,
+                )
+                self.config_manager.record_model_prompt_decision("accept", model_id, backend)
+                self._start_model_download(model_id, backend, cache_dir, ct2_type)
+                return
+
         def _ask_user():
             try:
                 try:
@@ -158,8 +185,10 @@ class AppCore:
                     f"Model '{model_id}' is not installed.\n{download_msg}\nDownload now?"
                 )
                 if messagebox.askyesno("Model Download", prompt_text):
+                    self.config_manager.record_model_prompt_decision("accept", model_id, backend)
                     self._start_model_download(model_id, backend, cache_dir, ct2_type)
                 else:
+                    self.config_manager.record_model_prompt_decision("defer", model_id, backend)
                     logging.info("User declined model download prompt.")
                     messagebox.showinfo(
                         "Model",
@@ -170,6 +199,13 @@ class AppCore:
                 logging.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
         self.main_tk_root.after(0, _ask_user)
+
+    @staticmethod
+    def _format_decision_timestamp(ts: float | int) -> str:
+        try:
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(ts)))
+        except Exception:
+            return "unknown"
 
     def _start_model_download(self, model_id, backend, cache_dir, ct2_type):
         """Inicia o download do modelo em uma thread separada."""
@@ -786,6 +822,7 @@ class AppCore:
         # Atualizar ConfigManager e verificar se houve mudanças
         launch_changed = False
         reload_required = False
+        model_prompt_reset_required = False
         reload_keys = {
             ASR_BACKEND_CONFIG_KEY,
             ASR_MODEL_ID_CONFIG_KEY,
@@ -843,6 +880,8 @@ class AppCore:
                 config_changed = True
                 if mapped_key in reload_keys:
                     reload_required = True
+                if mapped_key in {ASR_BACKEND_CONFIG_KEY, ASR_MODEL_ID_CONFIG_KEY, "asr_model"}:
+                    model_prompt_reset_required = True
                 if mapped_key == "launch_at_startup":
                     launch_changed = True
                 logging.info(f"Configuração '{mapped_key}' alterada para: {value}")
@@ -860,6 +899,10 @@ class AppCore:
                 config_changed = True
                 logging.info(f"Configuração 'agent_auto_paste' (unificada) alterada para: {new_auto_paste_value}")
         
+        if model_prompt_reset_required:
+            self.config_manager.reset_last_model_prompt_decision()
+            config_changed = True
+
         if config_changed:
             self.config_manager.save_config()
             self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
@@ -945,6 +988,8 @@ class AppCore:
             return
 
         self.config_manager.set(key, value)
+        if key in {ASR_BACKEND_CONFIG_KEY, ASR_MODEL_ID_CONFIG_KEY, "asr_model"}:
+            self.config_manager.reset_last_model_prompt_decision()
         self.config_manager.save_config()
         logging.info(f"Configuração '{key}' alterada para: {value}")
 
