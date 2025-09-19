@@ -47,29 +47,49 @@ if TYPE_CHECKING:  # pragma: no cover - hints only
 # Para este plano, vamos movê-lo para cá.
 import torch # Necessário para get_available_devices_for_ui
 
+try:
+    from .model_manager import DownloadCancelledError as _DefaultDownloadCancelledError
+except Exception:  # pragma: no cover - fallback se a exceção não existir
+    class _DefaultDownloadCancelledError(Exception):
+        """Fallback exception when model_manager is unavailable."""
+
+        pass
+
 # Importar gerenciador de modelos de ASR
 try:
-    from . import model_manager
+    from . import model_manager as _default_model_manager
 except Exception:  # pragma: no cover - fallback caso o módulo não exista
     class _DummyModelManager:
-        CURATED = {}
+        """Fallback com operações inertes quando o model_manager não está disponível."""
 
-        def asr_installed_models(self):
-            return {}
+        DownloadCancelledError = _DefaultDownloadCancelledError
 
-        def ensure_download(self, *_args, **_kwargs):
+        @staticmethod
+        def list_catalog():
             logging.warning("model_manager module not available.")
+            return []
 
-    model_manager = _DummyModelManager()
+        @staticmethod
+        def list_installed(*_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+            return []
 
-try:
-    from .model_manager import DownloadCancelledError
-except Exception:  # pragma: no cover - fallback se a exceção não existir
-    class DownloadCancelledError(Exception):
-        def __init__(self, message="", *, timed_out: bool = False, by_user: bool = False):
-            super().__init__(message)
-            self.timed_out = bool(timed_out)
-            self.by_user = bool(by_user)
+        @staticmethod
+        def ensure_download(*_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+            return ""
+
+        @staticmethod
+        def get_model_download_size(*_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+            return 0, 0
+
+        @staticmethod
+        def get_installed_size(*_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+            return 0, 0
+
+    _default_model_manager = _DummyModelManager()
 
 def get_available_devices_for_ui():
     """Returns a list of devices for the settings interface."""
@@ -88,10 +108,17 @@ def get_available_devices_for_ui():
     return devices
 
 class UIManager:
-    def __init__(self, main_tk_root, config_manager, core_instance_ref):
+    def __init__(self, main_tk_root, config_manager, core_instance_ref, model_manager=None):
         self.main_tk_root = main_tk_root
         self.config_manager = config_manager
         self.core_instance_ref = core_instance_ref # Reference to the AppCore instance
+
+        self.model_manager = model_manager if model_manager is not None else _default_model_manager
+        self._download_cancelled_error = getattr(
+            self.model_manager,
+            "DownloadCancelledError",
+            _DefaultDownloadCancelledError,
+        )
 
         self.tray_icon = None
         self._pending_tray_tooltip = None
@@ -1975,12 +2002,11 @@ class UIManager:
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
-                catalog = model_manager.list_catalog()
-                self._set_settings_meta("catalog", catalog)
+                catalog = self.model_manager.list_catalog()
                 catalog_display_map = {entry["id"]: entry.get("display_name", entry["id"]) for entry in catalog}
                 try:
                     installed_ids = {
-                        m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
+                        m["id"] for m in self.model_manager.list_installed(asr_cache_dir_var.get())
                     }
                 except OSError:
                     messagebox.showerror(

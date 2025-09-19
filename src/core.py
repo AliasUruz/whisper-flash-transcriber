@@ -39,7 +39,7 @@ from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE a
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
-from .model_manager import ensure_download, list_installed, DownloadCancelledError, get_model_download_size
+from . import model_manager as model_manager_module
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -177,6 +177,13 @@ class AppCore:
         self.config_manager = ConfigManager()
         self._pending_tray_tooltips: list[str] = []
 
+        self.model_manager = model_manager_module
+        self._download_cancelled_error = getattr(
+            self.model_manager,
+            "DownloadCancelledError",
+            Exception,
+        )
+
         # Sincronizar modelos ASR já presentes no disco no início da aplicação
         try:
             self._refresh_installed_models("__init__", raise_errors=True)
@@ -288,7 +295,7 @@ class AppCore:
         def _ask_user():
             try:
                 try:
-                    size_bytes, file_count = get_model_download_size(model_id)
+                    size_bytes, file_count = self.model_manager.get_model_download_size(model_id)
                     size_gb = size_bytes / (1024 ** 3)
                     download_msg = f"Download of approximately {size_gb:.2f} GB ({file_count} files)."
                 except Exception as size_error:
@@ -356,27 +363,15 @@ class AppCore:
         def _download():
             try:
                 self._set_state(STATE_LOADING_MODEL)
-                ensure_download(
-                    model_id,
-                    backend,
-                    cache_dir,
-                    quant=ct2_type,
-                    timeout=timeout,
-                    cancel_event=cancel_event,
+                self.model_manager.ensure_download(model_id, backend, cache_dir, quant=ct2_type)
+            except self._download_cancelled_error:
+                logging.info("Model download cancelled by user.")
+                self._set_state(
+                    StateEvent.MODEL_DOWNLOAD_CANCELLED,
+                    details=f"Download for '{model_id}' cancelled by user",
+                    source="model_download",
                 )
-            except DownloadCancelledError as err:
-                reason = "timeout" if err.timed_out else "cancel"
-                logging.info("Model download interrupted (%s): %s", reason, err)
-                self._set_state(STATE_ERROR_MODEL)
-
-                def _notify():
-                    message = str(err) or "Download canceled."
-                    if err.timed_out:
-                        messagebox.showwarning("Model", message)
-                    else:
-                        messagebox.showinfo("Model", message)
-
-                self.main_tk_root.after(0, _notify)
+                self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download canceled."))
             except OSError:
                 logging.error("Invalid cache directory during model download.", exc_info=True)
                 self._set_state(
@@ -488,7 +483,7 @@ class AppCore:
             return
 
         try:
-            installed = list_installed(resolved_path)
+            installed = self.model_manager.list_installed(resolved_path)
         except Exception as exc:  # pragma: no cover - defensivo
             logging.warning(
                 "AppCore[%s]: list_installed falhou em '%s': %r",
