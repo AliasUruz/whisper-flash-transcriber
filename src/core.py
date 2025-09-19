@@ -252,7 +252,7 @@ class AppCore:
                 )
                 self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
             else:
-                self.transcription_handler.start_model_loading()
+                self._start_model_loading_with_synced_config()
         except OSError:
             messagebox.showerror("Erro", "Diretório de cache inválido.")
             self._set_state(
@@ -395,12 +395,40 @@ class AppCore:
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", f"Download failed: {e}"))
             else:
                 logging.info("Model download completed successfully.")
-                self.main_tk_root.after(0, self.transcription_handler.start_model_loading)
-            finally:
-                if cancel_event is not None and cancel_event is self._active_model_download_event:
-                    self._active_model_download_event = None
-
+                self.main_tk_root.after(0, self._start_model_loading_with_synced_config)
         threading.Thread(target=_download, daemon=True, name="ModelDownloadThread").start()
+
+    def _start_model_loading_with_synced_config(self):
+        """Start model loading after asserting the ConfigManager linkage.
+
+        A sincronização explícita garante que ``TranscriptionHandler`` use a
+        mesma instância de ``ConfigManager`` do núcleo antes de delegar o
+        carregamento do modelo. Este passo deve ser verificado manualmente em
+        cenários de recarga de modelo após alterações de configuração.
+        """
+        handler = getattr(self, "transcription_handler", None)
+        if handler is None:
+            logging.error("Cannot start model loading: transcription handler missing.")
+            self._set_state(STATE_ERROR_MODEL)
+            return
+
+        handler.config_manager = self.config_manager
+
+        try:
+            assert handler.config_manager is self.config_manager
+        except AssertionError:
+            logging.error(
+                "ConfigManager mismatch detected before model loading; aborting to avoid stale settings."
+            )
+            self._set_state(STATE_ERROR_SETTINGS)
+            return
+
+        logging.debug(
+            "ConfigManager synchronized before model loading (id=%s).",
+            id(self.config_manager),
+        )
+
+        handler.start_model_loading()
 
     def cancel_model_download(self) -> None:
         """Solicita o cancelamento do download de modelo em andamento."""
@@ -1534,7 +1562,7 @@ class AppCore:
                 self.audio_handler.update_config()
             self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
             if reload_required:
-                self.transcription_handler.start_model_loading()
+                self._start_model_loading_with_synced_config()
             if launch_changed:
                 from .utils.autostart import set_launch_at_startup
                 set_launch_at_startup(self.config_manager.get("launch_at_startup"))
