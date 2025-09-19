@@ -660,7 +660,7 @@ class UIManager:
         sound_freq_to_apply = self._safe_get_int(sound_frequency_var, "Frequência do Som", settings_win)
         if sound_freq_to_apply is None:
             return
-        sound_duration_to_apply = self._safe_get_float(sound_duration_var, "Duração do Som", settings_win)
+        sound_duration_to_apply = self._safe_get_float(sound_duration_var, "Sound Duration", settings_win)
         if sound_duration_to_apply is None:
             return
         sound_volume_to_apply = self._safe_get_float(sound_volume_var, "Volume do Som", settings_win)
@@ -683,10 +683,10 @@ class UIManager:
         batch_size_to_apply = self._safe_get_int(batch_size_var, "Batch Size", settings_win)
         if batch_size_to_apply is None:
             return
-        min_transcription_duration_to_apply = self._safe_get_float(min_transcription_duration_var, "Duração Mínima", settings_win)
+        min_transcription_duration_to_apply = self._safe_get_float(min_transcription_duration_var, "Minimum Transcription Duration", settings_win)
         if min_transcription_duration_to_apply is None:
             return
-        min_record_duration_to_apply = self._safe_get_float(min_record_duration_var, "Duração Mínima da Gravação", settings_win)
+        min_record_duration_to_apply = self._safe_get_float(min_record_duration_var, "Minimum Recording Duration", settings_win)
         if min_record_duration_to_apply is None:
             return
 
@@ -694,7 +694,7 @@ class UIManager:
         vad_threshold_to_apply = self._safe_get_float(vad_threshold_var, "Limiar do VAD", settings_win)
         if vad_threshold_to_apply is None:
             return
-        vad_silence_duration_to_apply = self._safe_get_float(vad_silence_duration_var, "Duração do Silêncio", settings_win)
+        vad_silence_duration_to_apply = self._safe_get_float(vad_silence_duration_var, "Silence Duration", settings_win)
         if vad_silence_duration_to_apply is None:
             return
 
@@ -732,7 +732,7 @@ class UIManager:
             try:
                 gpu_index_to_apply = int(selected_device_str.split(":")[0].replace("GPU", "").strip())
             except (ValueError, IndexError):
-                messagebox.showerror("Valor inválido", "Índice de GPU inválido.", parent=settings_win)
+                messagebox.showerror("Invalid Value", "Invalid GPU index.", parent=settings_win)
                 return
 
         models_text = gemini_models_textbox.get("1.0", "end-1c") if gemini_models_textbox else ""
@@ -1077,6 +1077,7 @@ class UIManager:
         quant_menu.pack(side="left", padx=5)
         Tooltip(quant_menu, "Available compute types for the CTranslate2 backend.")
 
+        model_manager = self.model_manager
         catalog = model_manager.list_catalog()
         catalog_display_map = {entry["id"]: entry.get("display_name", entry["id"]) for entry in catalog}
         try:
@@ -1085,7 +1086,8 @@ class UIManager:
             }
         except OSError:
             messagebox.showerror(
-                "Configuração",
+                "Configuration",
+                "Unable to access the model cache directory. Please review the path in Settings.",
             )
             installed_ids = set()
         all_ids = sorted({m["id"] for m in catalog} | installed_ids)
@@ -1106,7 +1108,7 @@ class UIManager:
         asr_model_menu.pack(side="left", padx=5)
         Tooltip(asr_model_menu, "Model identifier from curated catalog.")
 
-        model_size_label = ctk.CTkLabel(asr_model_frame, text="")
+        model_size_label = ctk.CTkLabel(asr_model_frame, text="Download: calculating... | Installed: -")
         model_size_label.pack(side="left", padx=5)
 
         def _derive_backend_from_model(model_ref: str) -> str | None:
@@ -1123,6 +1125,7 @@ class UIManager:
             return backend
 
         def _update_model_info(model_ref: str) -> None:
+            model_size_label.configure(text="Download: calculating... | Installed: -")
             model_id = display_to_id.get(model_ref, model_ref)
             try:
                 d_bytes, d_files = model_manager.get_model_download_size(model_id)
@@ -1135,7 +1138,8 @@ class UIManager:
                 installed_models = model_manager.list_installed(asr_cache_dir_var.get())
             except OSError:
                 messagebox.showerror(
-                    "Configuração",
+                    "Configuration",
+                    "Unable to access the model cache directory. Please review the path in Settings.",
                 )
                 installed_models = []
             entry = next((m for m in installed_models if m["id"] == model_id), None)
@@ -1172,6 +1176,7 @@ class UIManager:
             _update_model_info(model_id)
 
         asr_model_menu.configure(command=_on_model_change)
+        _update_model_info(asr_model_display_var.get())
 
         def _reset_asr() -> None:
             default_model_id = DEFAULT_CONFIG["asr_model_id"]
@@ -1247,12 +1252,12 @@ class UIManager:
         asr_cache_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(
             asr_cache_frame,
-            text="Diretório de Cache de ASR:",
+            text="ASR Cache Directory:",
             width=200,
         ).pack(side="left", padx=(5, 10))
         asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
         asr_cache_entry.pack(side="left", padx=5)
-        Tooltip(asr_cache_entry, "Diretório para modelos de ASR em cache.")
+        Tooltip(asr_cache_entry, "Directory used to cache ASR models.")
 
         def _install_model():
             cache_dir = asr_cache_dir_var.get()
@@ -2116,7 +2121,7 @@ class UIManager:
                     sound_freq_to_apply = self._safe_get_int(sound_frequency_var, "Frequência do Som", settings_win)
                     if sound_freq_to_apply is None:
                         return
-                    sound_duration_to_apply = self._safe_get_float(sound_duration_var, "Duração do Som", settings_win)
+                    sound_duration_to_apply = self._safe_get_float(sound_duration_var, "Sound Duration", settings_win)
                     if sound_duration_to_apply is None:
                         return
                     sound_volume_to_apply = self._safe_get_float(sound_volume_var, "Volume do Som", settings_win)
@@ -2133,17 +2138,17 @@ class UIManager:
                     batch_size_to_apply = self._safe_get_int(batch_size_var, "Batch Size", settings_win)
                     if batch_size_to_apply is None:
                         return
-                    min_transcription_duration_to_apply = self._safe_get_float(min_transcription_duration_var, "Duração Mínima", settings_win)
+                    min_transcription_duration_to_apply = self._safe_get_float(min_transcription_duration_var, "Minimum Transcription Duration", settings_win)
                     if min_transcription_duration_to_apply is None:
                         return
-                    min_record_duration_to_apply = self._safe_get_float(min_record_duration_var, "Duração Mínima da Gravação", settings_win)
+                    min_record_duration_to_apply = self._safe_get_float(min_record_duration_var, "Minimum Recording Duration", settings_win)
                     if min_record_duration_to_apply is None:
                         return
                     use_vad_to_apply = use_vad_var.get()
                     vad_threshold_to_apply = self._safe_get_float(vad_threshold_var, "Limiar do VAD", settings_win)
                     if vad_threshold_to_apply is None:
                         return
-                    vad_silence_duration_to_apply = self._safe_get_float(vad_silence_duration_var, "Duração do Silêncio", settings_win)
+                    vad_silence_duration_to_apply = self._safe_get_float(vad_silence_duration_var, "Silence Duration", settings_win)
                     if vad_silence_duration_to_apply is None:
                         return
                     save_temp_recordings_to_apply = save_temp_recordings_var.get()
@@ -2174,7 +2179,7 @@ class UIManager:
                         try:
                             gpu_index_to_apply = int(selected_device_str.split(":")[0].replace("GPU", "").strip())
                         except (ValueError, IndexError):
-                            messagebox.showerror("Valor inválido", "Índice de GPU inválido.", parent=settings_win)
+                            messagebox.showerror("Invalid Value", "Invalid GPU index.", parent=settings_win)
                             return
                     asr_dtype_to_apply = asr_dtype_var.get()
                     asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
@@ -2516,7 +2521,7 @@ class UIManager:
                 self._set_settings_var("gemini_prompt_correction_textbox", gemini_prompt_correction_textbox)
                 Tooltip(gemini_prompt_correction_textbox, "Prompt used to refine text.")
 
-                ctk.CTkLabel(gemini_prompt_frame, text="Prompt do Modo Agêntico:").pack(anchor="w", pady=(5,0))
+                ctk.CTkLabel(gemini_prompt_frame, text="Agent Mode Prompt:").pack(anchor="w", pady=(5,0))
                 agentico_prompt_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
                 agentico_prompt_textbox.pack(fill="x", expand=True, pady=5)
                 agentico_prompt_textbox.insert("1.0", self.config_manager.get("prompt_agentico"))
@@ -2632,7 +2637,7 @@ class UIManager:
                 vad_threshold_entry = ctk.CTkEntry(vad_params_frame, textvariable=vad_threshold_var, width=60)
                 vad_threshold_entry.pack(side="left", padx=5)
                 Tooltip(vad_threshold_entry, "Voice probability to trigger splitting.")
-                ctk.CTkLabel(vad_params_frame, text="Duração do silêncio (s):").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(vad_params_frame, text="Silence Duration (s):").pack(side="left", padx=(5, 10))
                 vad_silence_entry = ctk.CTkEntry(vad_params_frame, textvariable=vad_silence_duration_var, width=60)
                 vad_silence_entry.pack(side="left", padx=5)
                 Tooltip(vad_silence_entry, "Length of silence before a cut.")
@@ -2764,7 +2769,7 @@ class UIManager:
                 reset_asr_button.pack(side="left", padx=5)
                 Tooltip(reset_asr_button, "Restore default ASR settings.")
 
-                model_size_label = ctk.CTkLabel(asr_model_frame, text="")
+                model_size_label = ctk.CTkLabel(asr_model_frame, text="Download: calculating... | Installed: -")
                 model_size_label.pack(side="left", padx=5)
 
                 status_banner = ctk.CTkLabel(
@@ -2917,6 +2922,7 @@ class UIManager:
                         install_button_tooltip.text = tooltip_text
 
                 def _update_model_info(model_ref: str) -> None:
+                    model_size_label.configure(text="Download: calculating... | Installed: -")
                     model_id = display_to_id.get(model_ref, model_ref)
                     try:
                         d_bytes, d_files = model_manager.get_model_download_size(model_id)
@@ -2929,7 +2935,8 @@ class UIManager:
                         installed_models = model_manager.list_installed(asr_cache_dir_var.get())
                     except OSError:
                         messagebox.showerror(
-                            "Configuração",
+                            "Configuration",
+                            "Unable to access the model cache directory. Please review the path in Settings.",
                         )
                         installed_models = []
                     entry = next((m for m in installed_models if m["id"] == model_id), None)
@@ -3036,12 +3043,12 @@ class UIManager:
                 asr_cache_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(
                     asr_cache_frame,
-                    text="Diretório de Cache de ASR:",
+                    text="ASR Cache Directory:",
                     width=200,
                 ).pack(side="left", padx=(5, 10))
                 asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
                 asr_cache_entry.pack(side="left", padx=5)
-                Tooltip(asr_cache_entry, "Diretório para modelos de ASR em cache.")
+                Tooltip(asr_cache_entry, "Directory used to cache ASR models.")
 
                 def _install_model():
                     cache_dir = asr_cache_dir_var.get()
@@ -3316,7 +3323,7 @@ class UIManager:
                 'Batch Size',
                 pystray.Menu(
                     pystray.MenuItem(
-                        'Automático (VRAM)',
+                        'Auto (VRAM)',
                         lambda icon, item: self.core_instance_ref.update_setting('batch_size_mode', 'auto'),
                         radio=True,
                         checked=lambda item: self.config_manager.get('batch_size_mode') == 'auto'
@@ -3367,7 +3374,7 @@ class UIManager:
                     )
                     logging.info(f"Batch Size manual definido para: {new_batch_size}")
                 else:
-                    messagebox.showerror("Erro de Entrada", "O Batch Size deve ser um número inteiro positivo.", parent=self.settings_window_instance)
+                    messagebox.showerror("Input Error", "Batch size must be a positive integer.", parent=self.settings_window_instance)
             except ValueError:
-                messagebox.showerror("Erro de Entrada", "Entrada inválida. Por favor, insira um número inteiro.", parent=self.settings_window_instance)
+                messagebox.showerror("Input Error", "Invalid entry. Please provide an integer.", parent=self.settings_window_instance)
 

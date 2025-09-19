@@ -241,7 +241,8 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
             fallback_total = 0
             fallback_files = 0
             for item in tree_items:
-                if getattr(item, "type", None) != "file":
+                item_type = getattr(item, "type", None)
+                if item_type not in (None, "file", "blob"):
                     continue
                 normalized = _normalize_size(getattr(item, "size", None))
                 if normalized is None:
