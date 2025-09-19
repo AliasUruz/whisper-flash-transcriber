@@ -2985,7 +2985,7 @@ class UIManager:
                     self.config_manager.set_asr_model_id(model_id)
                     self.config_manager.set_asr_backend(asr_backend_var.get())
                     self.config_manager.save_config()
-                    _on_backend_change(asr_backend_var.get())
+                    on_backend_change(asr_backend_var.get())
                     _update_model_info(model_id)
                     _update_install_button_state()
                     _apply_post_download_ui()
@@ -3207,7 +3207,7 @@ class UIManager:
 
                 _update_model_info(asr_model_id_var.get())
                 _update_install_button_state()
-                _on_backend_change(asr_backend_var.get())
+                on_backend_change(asr_backend_var.get())
 
                 _apply_post_download_ui()
 

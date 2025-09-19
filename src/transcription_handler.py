@@ -1216,6 +1216,7 @@ class TranscriptionHandler:
                     error=str(transcribe_error),
                 )
                 logging.error(f"Erro durante a transcrição via backend unificado: {transcribe_error}", exc_info=True)
+                return
             else:
                 duration_ms = (time.perf_counter() - start_ts) * 1000.0
                 text_result = result.get("text", "").strip() or "[No speech detected]"

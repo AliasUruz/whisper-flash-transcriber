@@ -390,8 +390,8 @@ class AudioHandler:
                     self.temp_file_path = str(source_path)
             self.on_audio_segment_ready_callback(self.temp_file_path)
 
-        if not self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
-            self._cleanup_temp_file()
+        # Cleanup happens downstream after transcription completes when temporary
+        # recordings are not being kept on disk.
 
         # Clear in-memory data; temporary file is kept for downstream processing
         self._audio_frames = []

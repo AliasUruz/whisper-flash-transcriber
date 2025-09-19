@@ -7,7 +7,7 @@
     "sound_frequency": 400,
     "sound_duration": 0.3,
     "sound_volume": 0.5,
-    "agent_key": "F4",
+    "agent_key": "f4",
     "keyboard_library": "win32",
     "text_correction_enabled": false,
     "text_correction_service": "none",
@@ -23,7 +23,7 @@
     "manual_batch_size": 8,
     "gpu_index": -1,
     "hotkey_stability_service_enabled": true,
-    "use_vad": false,
+    "use_vad": true,
     "vad_threshold": 0.5,
     "vad_silence_duration": 1.0,
     "display_transcripts_in_terminal": false,
@@ -62,6 +62,7 @@
         "details": ""
     },
     "agent_auto_paste": true,
-    "batch_size_specified": false,
-    "gpu_index_specified": false
+    "batch_size_specified": true,
+    "gpu_index_specified": true,
+    "record_to_memory": false
 }
