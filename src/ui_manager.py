@@ -339,8 +339,16 @@ class UIManager:
                 th = getattr(self.core_instance_ref, "transcription_handler", None)
                 if th is not None:
                     import torch
-                    device = f"cuda:{getattr(th, 'gpu_index', -1)}" if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0 else "cpu"
-                    dtype = "fp16" if (torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0) else "fp32"
+                    device_in_use = getattr(th, "device_in_use", None)
+                    if device_in_use:
+                        device = str(device_in_use)
+                    else:
+                        device = (
+                            f"cuda:{getattr(th, 'gpu_index', -1)}"
+                            if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0
+                            else "cpu"
+                        )
+                    dtype = "fp16" if str(device).startswith("cuda") else "fp32"
                     try:
                         import importlib.util as _spec_util
                         attn_impl = "FA2" if _spec_util.find_spec("flash_attn") is not None else "SDPA"
@@ -361,28 +369,17 @@ class UIManager:
                     self.tray_icon.title = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
             time.sleep(1)
 
-    def update_tray_icon(self, state_update: "StateNotification | str | None") -> None:
-        """Atualiza o ícone da bandeja com ``StateNotification`` ou carga legada."""
-
-        state = "UNKNOWN"
-        if hasattr(state_update, "state") and hasattr(state_update, "event"):
-            state = getattr(state_update, "state", None) or "UNKNOWN"
-            event_obj = getattr(state_update, "event", None)
-            event_name = getattr(event_obj, "name", str(event_obj))
-            previous_state = getattr(state_update, "previous_state", None)
-            details = getattr(state_update, "details", None)
-            source = getattr(state_update, "source", None)
-            logging.info(
-                "Tray received state update: event=%s state=%s prev=%s source=%s details=%s",
-                event_name,
-                state,
-                previous_state,
-                source,
-                details,
+    def update_tray_icon(self, state):
+        # Logic moved from global, ajustado para lidar com payloads estruturados
+        warning_payload = None
+        if isinstance(state, dict):
+            warning_payload = state.get("warning")
+            state = state.get(
+                "state",
+                getattr(self.core_instance_ref, "current_state", "IDLE") if self.core_instance_ref else "IDLE",
             )
-        else:
-            state = str(state_update) if state_update is not None else "UNKNOWN"
-            logging.info("Tray received legacy state update: state=%s", state)
+        if state is None:
+            state = getattr(self.core_instance_ref, "current_state", "IDLE") if self.core_instance_ref else "IDLE"
 
         if self.tray_icon:
             color1, color2 = self.ICON_COLORS.get(state, self.DEFAULT_ICON_COLOR)
@@ -426,8 +423,16 @@ class UIManager:
                         th = getattr(self.core_instance_ref, "transcription_handler", None)
                         if th is not None:
                             import torch
-                            device = f"cuda:{getattr(th, 'gpu_index', -1)}" if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0 else "cpu"
-                            dtype = "fp16" if (torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0) else "fp32"
+                            device_in_use = getattr(th, "device_in_use", None)
+                            if device_in_use:
+                                device = str(device_in_use)
+                            else:
+                                device = (
+                                    f"cuda:{getattr(th, 'gpu_index', -1)}"
+                                    if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0
+                                    else "cpu"
+                                )
+                            dtype = "fp16" if str(device).startswith("cuda") else "fp32"
                             # Determinar attn_impl conforme detecção feita no handler
                             try:
                                 import importlib.util as _spec_util
@@ -435,8 +440,9 @@ class UIManager:
                             except Exception:
                                 attn_impl = "SDPA"
                             chunk = getattr(th, "chunk_length_sec", None)
-                            # batch_size dinâmico só é conhecido no runtime; mostrar o valor padrão/configurado
-                            bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
+                            bs = getattr(th, "last_dynamic_batch_size", None)
+                            if bs is None:
+                                bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
                             self.tray_icon.title = f"Whisper Recorder (TRANSCRIBING) [{device} {dtype} | {attn_impl} | chunk={chunk}s | batch={bs}]"
                         else:
                             self.tray_icon.title = "Whisper Recorder (TRANSCRIBING - 00:00)"
@@ -477,6 +483,30 @@ class UIManager:
             self.tray_icon.title = tooltip
             self.tray_icon.update_menu()
             logging.debug(f"Tray icon updated for state: {state}")
+
+        if warning_payload:
+            warning_level = str(warning_payload.get("level", "info")).lower()
+            warning_message = warning_payload.get("message")
+            if not warning_message:
+                details = warning_payload.get("details", {}) or {}
+                preferred = details.get("preferred")
+                actual = details.get("actual")
+                reason = details.get("reason")
+                if preferred and actual and reason:
+                    warning_message = f"Fallback de dispositivo: {preferred} → {actual} ({reason})."
+                elif reason:
+                    warning_message = str(reason)
+            if warning_message:
+                log_level = logging.WARNING if warning_level == "warning" else logging.INFO
+                logging.log(log_level, "Aviso de estado recebido: %s", warning_message)
+                try:
+                    self.show_status_tooltip(warning_message)
+                except Exception as tooltip_err:
+                    logging.error(
+                        "Falha ao atualizar tooltip com aviso: %s",
+                        tooltip_err,
+                        exc_info=True,
+                    )
 
     def run_settings_gui(self):
         # Logic moved from global, adjusted to use self.
