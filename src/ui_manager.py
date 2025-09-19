@@ -865,6 +865,19 @@ class UIManager:
                 # Will need to be adapted to call methods of self.core_instance_ref and self.config_manager
                 # Example of adapted apply_settings:
                 def apply_settings():
+                    """Aplica as configurações respeitando as dependências do pipeline de ASR.
+
+                    A sequência explicitamente segue ``backend → modelo → device → quantização``
+                    porque o ``TranscriptionHandler`` depende do backend correto antes de
+                    aceitar um modelo e, por consequência, o dispositivo informado precisa
+                    estar sincronizado com as opções de quantização (ex.: ``ct2`` habilita
+                    perfis diferentes). Toda a persistência é delegada para
+                    ``AppCore.apply_settings_from_external``, que repassa os valores ao
+                    ``ConfigManager`` e notifica os subsistemas correspondentes. Fluxo
+                    validado com as frentes de UX e engenharia para preservar a coerência
+                    entre a experiência da janela de ajustes e os requisitos técnicos de
+                    carregamento de modelo.
+                    """
                     logging.info("Apply settings clicked (in Tkinter thread).")
                     # State validations (moved to AppCore or handled via callbacks)
                     if self.core_instance_ref.current_state in ["RECORDING", "TRANSCRIBING", "LOADING_MODEL"]:
