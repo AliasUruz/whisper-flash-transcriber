@@ -95,12 +95,16 @@ class TranscriptionHandler:
         )
         # Evento para sinalizar cancelamento de transcrição em andamento
         self.transcription_cancel_event = threading.Event()
+        # Contexto reutilizado para logs padronizados sobre o backend/modelo
+        self._model_log_context: dict[str, object] = {}
+        self._model_load_started_at: float | None = None
 
         # Configurações de modelo e API (carregadas do config_manager)
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY) # Novo
         self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY) # Novo
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
+        self.gpu_index_requested = self.gpu_index
         self.batch_size_specified = self.config_manager.get("batch_size_specified") # Ainda usado para validação
         self.gpu_index_specified = self.config_manager.get("gpu_index_specified") # Ainda usado para validação
 
@@ -134,6 +138,48 @@ class TranscriptionHandler:
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
 
         self._init_api_clients()
+
+    def _report_adjustment(self, message: str, *, level: int = logging.WARNING) -> None:
+        """Loga um aviso e envia a mensagem para a UI quando disponível."""
+        if not message:
+            return
+        core = getattr(self, "core_instance_ref", None)
+        if core and hasattr(core, "report_runtime_notice"):
+            core.report_runtime_notice(message, level=level)
+        else:
+            logging.log(level, message)
+
+    def _build_backend_load_kwargs(
+        self,
+        backend_name: str,
+        *,
+        asr_dtype,
+        asr_ct2_compute_type,
+        asr_cache_dir,
+        transformers_device,
+    ) -> dict:
+        """Constroi os parâmetros de ``load`` para o backend escolhido."""
+        if backend_name in {"transformers", "whisper"}:
+            attn_impl = "sdpa"
+            try:
+                import importlib.util
+
+                if importlib.util.find_spec("flash_attn") is not None:
+                    attn_impl = "flash_attn2"
+            except Exception:
+                pass
+            return {
+                "device": transformers_device,
+                "dtype": asr_dtype,
+                "cache_dir": asr_cache_dir,
+                "attn_implementation": attn_impl,
+            }
+        if backend_name in {"ct2", "faster-whisper", "ctranslate2"}:
+            return {
+                "ct2_compute_type": asr_ct2_compute_type,
+                "cache_dir": asr_cache_dir,
+            }
+        return {"cache_dir": asr_cache_dir}
 
     def _init_api_clients(self):
         # Lógica de inicialização de OpenRouterAPI e GeminiAPI
@@ -243,6 +289,7 @@ class TranscriptionHandler:
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY)
         self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
+        self.gpu_index_requested = self.gpu_index
         self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
         self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
         self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
@@ -330,6 +377,92 @@ class TranscriptionHandler:
             model_id = default_gpu_model if compute_device.startswith("cuda") else default_cpu_model
 
         return backend, model_id, compute_device, dtype
+
+    def _update_model_log_context(self, **entries: object) -> None:
+        filtered = {k: v for k, v in entries.items() if v not in (None, "")}
+        if filtered:
+            self._model_log_context.update(filtered)
+
+    @staticmethod
+    def _format_log_value(value: object) -> str:
+        if isinstance(value, float):
+            magnitude = abs(value)
+            if magnitude == 0:
+                return "0.00"
+            return f"{value:.2f}" if magnitude >= 0.01 else f"{value:.4f}"
+        if isinstance(value, bool):
+            return str(value).lower()
+        return str(value)
+
+    def _log_model_event(self, event: str, *, level: int = logging.INFO, **fields: object) -> None:
+        context: dict[str, object] = {}
+        context.update(self._model_log_context)
+        context.update({k: v for k, v in fields.items() if v not in (None, "")})
+
+        backend = context.get("backend") or self.backend_resolved or self.asr_backend
+        if backend:
+            context["backend"] = backend
+        model_id = (
+            context.get("model")
+            or context.get("model_id")
+            or getattr(self._asr_backend, "model_id", None)
+            or self.asr_model_id
+        )
+        if model_id:
+            context["model"] = model_id
+        context.pop("model_id", None)
+
+        message_order = [
+            "event",
+            "backend",
+            "model",
+            "device",
+            "dtype",
+            "compute_type",
+            "chunk_length_s",
+            "batch_size",
+            "size",
+            "duration_ms",
+            "agent_mode",
+            "status",
+            "error",
+        ]
+
+        parts: list[str] = []
+        used_keys: set[str] = set()
+        context["event"] = event
+        for key in message_order:
+            if key in context:
+                parts.append(f"{key}={self._format_log_value(context[key])}")
+                used_keys.add(key)
+        for key in sorted(context.keys()):
+            if key not in used_keys:
+                parts.append(f"{key}={self._format_log_value(context[key])}")
+
+        logging.log(level, "[ASR] " + " ".join(parts))
+
+    def _format_audio_source(self, audio_source: str | np.ndarray | bytes | bytearray | list[float] | None) -> str:
+        if audio_source is None:
+            return "none"
+        try:
+            if isinstance(audio_source, np.ndarray):
+                samples = int(audio_source.size)
+                if samples and AUDIO_SAMPLE_RATE:
+                    duration = samples / float(AUDIO_SAMPLE_RATE)
+                    return f"array_samples={samples} duration_s={duration:.2f}"
+                return f"array_samples={samples}"
+            if isinstance(audio_source, (bytes, bytearray)):
+                return f"bytes={len(audio_source)}"
+            if isinstance(audio_source, list):
+                return f"list_samples={len(audio_source)}"
+            if isinstance(audio_source, str):
+                path = Path(audio_source)
+                if path.exists():
+                    return f"file_bytes={path.stat().st_size}"
+                return "file"
+        except Exception:
+            pass
+        return "unknown"
 
     def _initialize_model_and_processor(self):
         # Este método será chamado para orquestrar o carregamento do modelo e a criação da pipeline
@@ -530,6 +663,13 @@ class TranscriptionHandler:
         )
 
     def start_model_loading(self):
+        core = getattr(self, "core_instance_ref", None)
+        if core is not None:
+            try:
+                if getattr(core, "current_state", None) != "LOADING_MODEL":
+                    core.notify_model_loading_started()
+            except AttributeError:
+                core._set_state("LOADING_MODEL")
         threading.Thread(target=self._load_model_task, daemon=True, name="ModelLoadThread").start()
 
     def is_transcription_running(self) -> bool:
@@ -557,27 +697,122 @@ class TranscriptionHandler:
                 asr_ct2_compute_type = self.config_manager.get("asr_ct2_compute_type")
                 asr_cache_dir = self.config_manager.get("asr_cache_dir")
 
-                backend_name = (asr_backend or "transformers").lower()
-                self.backend_resolved = backend_name
+                requested_backend_display = (
+                    asr_backend.strip() if isinstance(asr_backend, str) else "transformers"
+                )
+                backend_candidate = (
+                    requested_backend_display.lower() if requested_backend_display else "transformers"
+                )
+                if not backend_candidate:
+                    backend_candidate = "transformers"
 
-                gpu_index = self.gpu_index if isinstance(self.gpu_index, int) else -1
-                pref = asr_compute_device.lower() if isinstance(asr_compute_device, str) else "auto"
-                backend_device = "auto"
-                transformers_device = None
-                if pref == "cpu":
+                try:
+                    backend_instance = make_backend(backend_candidate)
+                except Exception as backend_exc:
+                    logging.debug(
+                        "Falha ao instanciar backend '%s': %s",
+                        backend_candidate,
+                        backend_exc,
+                        exc_info=True,
+                    )
+                    if backend_candidate != "transformers":
+                        self._report_adjustment(
+                            f"Backend de ASR '{requested_backend_display}' indisponível; alternando para 'transformers'."
+                        )
+                        backend_candidate = "transformers"
+                        backend_instance = make_backend(backend_candidate)
+                    else:
+                        raise
+
+                if backend_instance is None:
+                    raise RuntimeError(f"Falha ao inicializar backend '{backend_candidate}'.")
+
+                self.backend_resolved = backend_candidate
+                self._asr_backend = backend_instance
+
+                compute_pref = (
+                    asr_compute_device.strip().lower()
+                    if isinstance(asr_compute_device, str)
+                    else "auto"
+                )
+                if compute_pref not in {"auto", "cpu", "cuda"}:
+                    self._report_adjustment(
+                        f"Dispositivo '{asr_compute_device}' não é suportado; usando seleção automática."
+                    )
+                    compute_pref = "auto"
+
+                cuda_available = False
+                gpu_count = 0
+                try:
+                    cuda_available = bool(torch.cuda.is_available())
+                    if cuda_available:
+                        gpu_count = int(torch.cuda.device_count())
+                        if gpu_count <= 0:
+                            cuda_available = False
+                except Exception as cuda_err:
+                    logging.debug("Falha ao consultar GPUs disponíveis: %s", cuda_err, exc_info=True)
+                    cuda_available = False
+                    gpu_count = 0
+
+                requested_gpu_index = (
+                    self.gpu_index_requested
+                    if isinstance(getattr(self, "gpu_index_requested", None), int)
+                    else None
+                )
+                configured_gpu_index = (
+                    self.gpu_index if isinstance(self.gpu_index, int) else None
+                )
+                candidate_gpu_index = (
+                    requested_gpu_index
+                    if requested_gpu_index is not None
+                    else configured_gpu_index
+                )
+                user_explicit_gpu = bool(
+                    self.gpu_index_specified
+                    and requested_gpu_index is not None
+                    and requested_gpu_index >= 0
+                )
+                prefers_cuda = compute_pref == "cuda"
+
+                use_cuda = False
+                selected_gpu_index = None
+                backend_device = "cpu"
+                transformers_device = -1
+
+                if compute_pref == "cpu":
+                    pass
+                elif cuda_available:
+                    original_candidate = (
+                        candidate_gpu_index if candidate_gpu_index is not None else 0
+                    )
+                    normalized_candidate = original_candidate
+                    if normalized_candidate < 0:
+                        normalized_candidate = 0
+                    if normalized_candidate >= gpu_count:
+                        fallback_idx = 0
+                        if user_explicit_gpu or prefers_cuda:
+                            self._report_adjustment(
+                                f"GPU solicitada (índice {original_candidate}) não está disponível; usando cuda:{fallback_idx}."
+                            )
+                        normalized_candidate = fallback_idx
+                    selected_gpu_index = normalized_candidate
+                    backend_device = f"cuda:{selected_gpu_index}"
+                    transformers_device = backend_device
+                    use_cuda = True
+                else:
+                    if prefers_cuda or user_explicit_gpu:
+                        self._report_adjustment(
+                            "CUDA não está disponível neste sistema; executando o modelo na CPU."
+                        )
+
+                if not use_cuda:
+                    selected_gpu_index = -1
                     backend_device = "cpu"
                     transformers_device = -1
-                elif pref == "cuda":
-                    target_idx = gpu_index if gpu_index is not None and gpu_index >= 0 else 0
-                    backend_device = f"cuda:{target_idx}"
-                    transformers_device = f"cuda:{target_idx}"
-                    if self.gpu_index is None or self.gpu_index < 0:
-                        self.gpu_index = target_idx
-                else:
-                    backend_device = "auto"
-                    transformers_device = None
 
-                self._asr_backend = make_backend(backend_name)
+                self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
+                self.device_in_use = backend_device
+
                 if hasattr(self._asr_backend, "model_id"):
                     try:
                         self._asr_backend.model_id = asr_model_id
@@ -589,39 +824,95 @@ class TranscriptionHandler:
                     except Exception:
                         pass
 
-                load_kwargs = {}
-                if backend_name in {"transformers", "whisper"}:
-                    attn_impl = "sdpa"
-                    try:
-                        import importlib.util
-                        if importlib.util.find_spec("flash_attn") is not None:
-                            attn_impl = "flash_attn2"
-                    except Exception:
-                        pass
-                    load_kwargs = {
-                        "device": transformers_device,
-                        "dtype": asr_dtype,
-                        "cache_dir": asr_cache_dir,
-                        "attn_implementation": attn_impl,
-                    }
-                elif backend_name in {"ct2", "faster-whisper", "ctranslate2"}:
-                    load_kwargs = {
-                        "ct2_compute_type": asr_ct2_compute_type,
-                        "cache_dir": asr_cache_dir,
-                    }
-                else:
-                    load_kwargs = {"cache_dir": asr_cache_dir}
-
+                load_kwargs = self._build_backend_load_kwargs(
+                    backend_candidate,
+                    asr_dtype=asr_dtype,
+                    asr_ct2_compute_type=asr_ct2_compute_type,
+                    asr_cache_dir=asr_cache_dir,
+                    transformers_device=transformers_device,
+                )
                 load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
                 if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
                     load_kwargs["cache_dir"] = str(load_kwargs["cache_dir"])
 
-                self._asr_backend.load(**load_kwargs)
+                self._update_model_log_context(
+                    backend=backend_name,
+                    model=asr_model_id,
+                    device=backend_device,
+                    dtype=load_kwargs.get("dtype", asr_dtype),
+                    compute_type=load_kwargs.get("ct2_compute_type", asr_ct2_compute_type),
+                    chunk_length_s=float(self.chunk_length_sec),
+                    batch_size=self.batch_size,
+                )
+                load_started_at = time.perf_counter()
+                self._model_load_started_at = load_started_at
+                self._log_model_event(
+                    "load_start",
+                    backend=backend_name,
+                    model_id=asr_model_id,
+                    device=backend_device,
+                    dtype=load_kwargs.get("dtype", asr_dtype),
+                    compute_type=load_kwargs.get("ct2_compute_type", asr_ct2_compute_type),
+                    chunk_length_s=float(self.chunk_length_sec),
+                    batch_size=self.batch_size,
+                )
+                try:
+                    self._asr_backend.load(**load_kwargs)
+                except Exception as load_error:
+                    duration_ms = (time.perf_counter() - load_started_at) * 1000.0
+                    self._log_model_event(
+                        "load_failure",
+                        level=logging.ERROR,
+                        backend=backend_name,
+                        model_id=asr_model_id,
+                        device=backend_device,
+                        dtype=load_kwargs.get("dtype", asr_dtype),
+                        compute_type=load_kwargs.get("ct2_compute_type", asr_ct2_compute_type),
+                        chunk_length_s=float(self.chunk_length_sec),
+                        batch_size=self.batch_size,
+                        duration_ms=duration_ms,
+                        error=str(load_error),
+                    )
+                    self._model_load_started_at = None
+                    raise
+
+                warmup_failed = None
                 try:
                     self._asr_backend.warmup()
                 except Exception as warmup_error:
+                    warmup_failed = warmup_error
                     logging.debug(f"Falha no warmup do backend ASR: {warmup_error}")
+
+                duration_ms = (time.perf_counter() - load_started_at) * 1000.0
+                resolved_device = getattr(self._asr_backend, "device", backend_device)
+                resolved_model = getattr(self._asr_backend, "model_id", asr_model_id)
+                resolved_dtype = load_kwargs.get("dtype", asr_dtype)
+                resolved_compute = load_kwargs.get("ct2_compute_type", asr_ct2_compute_type)
+                self._update_model_log_context(
+                    backend=backend_name,
+                    model=resolved_model,
+                    device=resolved_device,
+                    dtype=resolved_dtype,
+                    compute_type=resolved_compute,
+                    chunk_length_s=float(self.chunk_length_sec),
+                    batch_size=self.batch_size,
+                )
+                self._log_model_event(
+                    "load_success",
+                    backend=backend_name,
+                    device=resolved_device,
+                    dtype=resolved_dtype,
+                    compute_type=resolved_compute,
+                    duration_ms=duration_ms,
+                    status="warmup_failed" if warmup_failed else "ready",
+                )
+                self._model_load_started_at = None
                 self.pipe = getattr(self._asr_backend, "pipe", None)
+                logging.info(
+                    "Backend '%s' inicializado no dispositivo %s.",
+                    self.backend_resolved,
+                    self.device_in_use,
+                )
                 self._asr_loaded = True
                 self.on_model_ready_callback()
                 return
@@ -635,6 +926,27 @@ class TranscriptionHandler:
                 raise FileNotFoundError(
                     f"Modelo '{model_id}' não encontrado. Instale-o nas configurações."
                 )
+            self._update_model_log_context(
+                backend=backend,
+                model=model_id,
+                device=compute_device,
+                dtype=self.asr_dtype,
+                compute_type=self.asr_ct2_compute_type,
+                chunk_length_s=float(self.chunk_length_sec),
+                batch_size=self.batch_size,
+            )
+            load_started_at = time.perf_counter()
+            self._model_load_started_at = load_started_at
+            self._log_model_event(
+                "load_start",
+                backend=backend,
+                model_id=model_id,
+                device=compute_device,
+                dtype=self.asr_dtype,
+                compute_type=self.asr_ct2_compute_type,
+                chunk_length_s=float(self.chunk_length_sec),
+                batch_size=self.batch_size,
+            )
             logging.info(f"Carregando processador de {model_id}...")
             processor = AutoProcessor.from_pretrained(str(model_path))
 
@@ -658,7 +970,11 @@ class TranscriptionHandler:
                         self.gpu_index = -1
 
             device = f"cuda:{self.gpu_index}" if self.gpu_index >= 0 and torch.cuda.is_available() else "cpu"
+            self.device_in_use = device
             torch_dtype_local = torch.float16 if device.startswith("cuda") else torch.float32
+            resolved_device = device
+            resolved_dtype_label = str(torch_dtype_local).replace("torch.", "")
+            self._update_model_log_context(device=resolved_device, dtype=resolved_dtype_label)
 
             logging.info(f"Dispositivo de carregamento do modelo definido explicitamente como: {device}")
 
@@ -747,10 +1063,31 @@ class TranscriptionHandler:
             except Exception as e:
                 logging.debug(f"Falha no warmup da pipeline: {e}")
 
+            duration_ms = (time.perf_counter() - load_started_at) * 1000.0
+            self._update_model_log_context(device=resolved_device, dtype=resolved_dtype_label)
+            self._log_model_event(
+                "load_success",
+                backend=backend,
+                device=resolved_device,
+                dtype=resolved_dtype_label,
+                compute_type=self.asr_ct2_compute_type,
+                duration_ms=duration_ms,
+                status="legacy_ready",
+            )
+            self._model_load_started_at = None
             self._asr_loaded = True
             self.on_model_ready_callback()
         except OSError:
             error_message = "Diretório de cache inválido. Verifique as configurações."
+            if self._model_load_started_at is not None:
+                duration_ms = (time.perf_counter() - self._model_load_started_at) * 1000.0
+                self._log_model_event(
+                    "load_failure",
+                    level=logging.ERROR,
+                    duration_ms=duration_ms,
+                    error=error_message,
+                )
+                self._model_load_started_at = None
             logging.error(error_message, exc_info=True)
             try:
                 self.on_model_error_callback(error_message)
@@ -759,6 +1096,15 @@ class TranscriptionHandler:
             return None, None
         except Exception as e:
             error_message = f"Falha ao carregar o modelo: {e}"
+            if self._model_load_started_at is not None:
+                duration_ms = (time.perf_counter() - self._model_load_started_at) * 1000.0
+                self._log_model_event(
+                    "load_failure",
+                    level=logging.ERROR,
+                    duration_ms=duration_ms,
+                    error=str(e),
+                )
+                self._model_load_started_at = None
             logging.error(error_message, exc_info=True)
             try:
                 self.on_model_error_callback(error_message)
@@ -776,42 +1122,152 @@ class TranscriptionHandler:
         self.transcription_cancel_event.clear()
 
         if self.transcription_cancel_event.is_set():
+            self._log_model_event(
+                "transcription_cancelled",
+                status="pre_start",
+                agent_mode=agent_mode,
+            )
             logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
             return
 
-        dynamic_batch_size = self._get_dynamic_batch_size()
-        result = self._asr_backend.transcribe(
-            audio_source,
-            chunk_length_s=float(self.chunk_length_sec),
-            batch_size=dynamic_batch_size,
-        )
-        text_result = result.get("text", "").strip() or "[No speech detected]"
-        if agent_mode and self.on_agent_result_callback:
-            self.on_agent_result_callback(text_result)
-        elif self.on_transcription_result_callback:
-            self.on_transcription_result_callback(text_result, text_result)
-        return
+        dynamic_batch_size = None
+        size_descriptor = self._format_audio_source(audio_source)
+        if self._asr_backend is not None:
+            try:
+                dynamic_batch_size = self._get_dynamic_batch_size()
+            except Exception as batch_error:
+                self._log_model_event(
+                    "transcription_failure",
+                    level=logging.ERROR,
+                    batch_size=dynamic_batch_size,
+                    chunk_length_s=float(self.chunk_length_sec),
+                    size=size_descriptor,
+                    agent_mode=agent_mode,
+                    error=f"dynamic_batch:{batch_error}",
+                )
+                raise
+
+            self._update_model_log_context(
+                chunk_length_s=float(self.chunk_length_sec),
+                batch_size=dynamic_batch_size,
+            )
+            start_ts = time.perf_counter()
+            self._log_model_event(
+                "transcription_start",
+                batch_size=dynamic_batch_size,
+                chunk_length_s=float(self.chunk_length_sec),
+                size=size_descriptor,
+                agent_mode=agent_mode,
+            )
+            try:
+                result = self._asr_backend.transcribe(
+                    audio_source,
+                    chunk_length_s=float(self.chunk_length_sec),
+                    batch_size=dynamic_batch_size,
+                )
+            except Exception as transcribe_error:
+                duration_ms = (time.perf_counter() - start_ts) * 1000.0
+                self._log_model_event(
+                    "transcription_failure",
+                    level=logging.ERROR,
+                    batch_size=dynamic_batch_size,
+                    chunk_length_s=float(self.chunk_length_sec),
+                    size=size_descriptor,
+                    agent_mode=agent_mode,
+                    duration_ms=duration_ms,
+                    error=str(transcribe_error),
+                )
+                logging.error(f"Erro durante a transcrição via backend unificado: {transcribe_error}", exc_info=True)
+            else:
+                duration_ms = (time.perf_counter() - start_ts) * 1000.0
+                text_result = result.get("text", "").strip() or "[No speech detected]"
+                self._log_model_event(
+                    "transcription_success",
+                    batch_size=dynamic_batch_size,
+                    chunk_length_s=float(self.chunk_length_sec),
+                    size=size_descriptor,
+                    agent_mode=agent_mode,
+                    duration_ms=duration_ms,
+                )
+                if agent_mode and self.on_agent_result_callback:
+                    self.on_agent_result_callback(text_result)
+                elif self.on_transcription_result_callback:
+                    self.on_transcription_result_callback(text_result, text_result)
+                return
 
         # Legacy pipeline (desativado após retorno antecipado)
         text_result = None
         # Garantir que dynamic_batch_size esteja definido mesmo quando o backend
         # for CTranslate2, evitando UnboundLocalError no bloco de exceção.
         dynamic_batch_size = None
+        legacy_started_at: float | None = None
+        logged_failure = False
         try:
             if self.backend_resolved == "ctranslate2":
+                self._update_model_log_context(
+                    chunk_length_s=float(self.chunk_length_sec),
+                )
+                legacy_started_at = time.perf_counter()
+                self._log_model_event(
+                    "transcription_start",
+                    chunk_length_s=float(self.chunk_length_sec),
+                    size=size_descriptor,
+                    agent_mode=agent_mode,
+                )
                 segments, _ = self.pipe.transcribe(audio_source, language=None)
                 text_result = "".join(seg.text for seg in segments).strip()
                 if not text_result:
                     text_result = "[No speech detected]"
+                duration_ms = (time.perf_counter() - legacy_started_at) * 1000.0
+                self._log_model_event(
+                    "transcription_success",
+                    chunk_length_s=float(self.chunk_length_sec),
+                    size=size_descriptor,
+                    agent_mode=agent_mode,
+                    duration_ms=duration_ms,
+                )
                 logging.info("Transcrição via CTranslate2 concluída.")
             else:
                 if self.pipe is None:
                     error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
+                    self._log_model_event(
+                        "transcription_failure",
+                        level=logging.ERROR,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        size=size_descriptor,
+                        agent_mode=agent_mode,
+                        error="pipeline_unavailable",
+                    )
                     logging.error(error_message)
                     self.on_model_error_callback(error_message)
                     return
 
-                dynamic_batch_size = self._get_dynamic_batch_size()
+                try:
+                    dynamic_batch_size = self._get_dynamic_batch_size()
+                except Exception as batch_error:
+                    logged_failure = True
+                    self._log_model_event(
+                        "transcription_failure",
+                        level=logging.ERROR,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        size=size_descriptor,
+                        agent_mode=agent_mode,
+                        error=f"dynamic_batch:{batch_error}",
+                    )
+                    raise
+
+                self._update_model_log_context(
+                    chunk_length_s=float(self.chunk_length_sec),
+                    batch_size=dynamic_batch_size,
+                )
+                legacy_started_at = time.perf_counter()
+                self._log_model_event(
+                    "transcription_start",
+                    batch_size=dynamic_batch_size,
+                    chunk_length_s=float(self.chunk_length_sec),
+                    size=size_descriptor,
+                    agent_mode=agent_mode,
+                )
                 logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
 
                 generate_kwargs = {
@@ -838,7 +1294,7 @@ class TranscriptionHandler:
                 except Exception:
                     attn_impl = "sdpa"
 
-                t_total_start = time.perf_counter()
+                t_total_start = legacy_started_at if legacy_started_at is not None else time.perf_counter()
                 t_pre_start = time.perf_counter()
                 t_pre_end = time.perf_counter()
                 t_pre_ms = (t_pre_end - t_pre_start) * 1000.0
@@ -875,6 +1331,15 @@ class TranscriptionHandler:
                 t_post_end = time.perf_counter()
                 t_post_ms = (t_post_end - t_post_start) * 1000.0
                 t_total_ms = (t_post_end - t_total_start) * 1000.0
+
+                self._log_model_event(
+                    "transcription_success",
+                    batch_size=dynamic_batch_size,
+                    chunk_length_s=float(self.chunk_length_sec),
+                    size=size_descriptor,
+                    agent_mode=agent_mode,
+                    duration_ms=t_total_ms,
+                )
 
                 try:
                     logging.info(f"[METRIC] stage=t_pre value_ms={t_pre_ms:.2f} device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} dtype={dtype} attn={attn_impl}")
@@ -926,11 +1391,41 @@ class TranscriptionHandler:
                 # Continua fluxo normal de erro
             except Exception as _oom_adj_e:
                 logging.debug(f"Falha ao ajustar parâmetros após OOM: {_oom_adj_e}")
+
+            if not logged_failure:
+                if legacy_started_at is not None:
+                    duration_ms = (time.perf_counter() - legacy_started_at) * 1000.0
+                    self._log_model_event(
+                        "transcription_failure",
+                        level=logging.ERROR,
+                        batch_size=dynamic_batch_size,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        size=size_descriptor,
+                        agent_mode=agent_mode,
+                        duration_ms=duration_ms,
+                        error=str(e),
+                    )
+                else:
+                    self._log_model_event(
+                        "transcription_failure",
+                        level=logging.ERROR,
+                        batch_size=dynamic_batch_size,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        size=size_descriptor,
+                        agent_mode=agent_mode,
+                        error=str(e),
+                    )
+
             logging.error(f"Erro durante a transcrição de segmento: {e}", exc_info=True)
             text_result = f"[Transcription Error: {e}]"
 
         finally:
             if self.transcription_cancel_event.is_set():
+                self._log_model_event(
+                    "transcription_cancelled",
+                    status="inference_cancelled",
+                    agent_mode=agent_mode,
+                )
                 logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
                 self.transcription_cancel_event.clear()
                 return
