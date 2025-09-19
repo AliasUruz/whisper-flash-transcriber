@@ -1,11 +1,11 @@
-# .github/workflows/codex-merge-queue.yml
+# .github/workflows/codex-merge-queue.yml (Versão Corrigida)
 
 name: 'Codex Merge Queue (Oldest to Newest)'
 
 on:
-  workflow_dispatch: # Permite que você rode este workflow manualmente pela aba "Actions"
+  workflow_dispatch:
   schedule:
-    - cron: '*/15 * * * *' # Roda automaticamente a cada 15 minutos
+    - cron: '*/15 * * * *'
 
 jobs:
   process_queue:
@@ -22,11 +22,6 @@ jobs:
           ref: 'stable'
           token: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
 
-      - name: 'Install GitHub CLI'
-        uses: crazy-max/gh-cli-tools-action@v3
-        with:
-          version: latest
-
       - name: 'Configure Git User'
         run: |
           git config user.name "Codex Merge Bot"
@@ -36,9 +31,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
         run: |
-          # Lista todos os PRs do Codex, extrai número, branch e data de criação em formato JSON.
-          # Em seguida, usa 'jq' para ordenar os PRs do mais antigo para o mais novo.
-          # O 'read' dentro do 'while' processa cada PR, um por um, na ordem correta.
+          # (O resto do script continua igual...)
           gh pr list --author "Codex" --state "open" --base "stable" --json number,headRefName,createdAt \
           | jq -c '. | sort_by(.createdAt) | .[]' \
           | while read -r pr_json; do
@@ -50,33 +43,26 @@ jobs:
               echo ">>> Processing PR #${PR_NUMBER} (Branch: ${PR_BRANCH})"
               echo "================================================================="
 
-              # Sincroniza a branch 'stable' local para garantir que está atualizada
               git fetch origin stable
               git reset --hard origin/stable
 
-              # Tenta fazer o merge da branch do PR. A flag -Xours resolve conflitos automaticamente,
-              # sempre favorecendo as mudanças que vêm do PR do Codex.
               echo "Attempting to merge ${PR_BRANCH} into stable..."
               if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER} from ${PR_BRANCH}" -X ours; then
                   echo "✅ Merge successful (with potential automatic conflict resolution)."
                   
-                  # Empurra a 'stable' atualizada para o repositório remoto
                   echo "Pushing updated stable branch to origin..."
                   git push origin stable
                   
                   echo "PR #${PR_NUMBER} merged and pushed successfully."
 
               else
-                  # Se o merge falhar mesmo com -Xours (o que é raro), reporta o erro e para.
                   echo "❌ CRITICAL: Merge of PR #${PR_NUMBER} failed despite '-X ours' strategy."
                   echo "Manual intervention is required for branch ${PR_BRANCH}."
                   
-                  # Adiciona um comentário no PR informando sobre a falha crítica
                   gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Ocorreu um conflito de merge crítico que a estratégia automática não conseguiu resolver. Intervenção manual é necessária."
                   
-                  # Reseta a branch local para evitar contaminação na próxima iteração do loop
                   git reset --hard origin/stable
-                  continue # Pula para o próximo PR da fila
+                  continue
               fi
           done
 
