@@ -1,4 +1,4 @@
-# .github/workflows/codex-merge-queue.yml (Correção Final da Estratégia de Merge)
+# .github/workflows/codex-merge-queue.yml (Correção Final: Histórico Completo)
 
 name: 'Codex Merge Queue (Oldest to Newest)'
 
@@ -20,7 +20,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: 'stable'
-          token: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
+          token: ${{ secrets.CODEX_WORK_TOKEN }}
+          # AQUI ESTÁ A CORREÇÃO FINAL: fetch-depth: 0 baixa todo o histórico do Git
+          fetch-depth: 0
 
       - name: 'Configure Git User'
         run: |
@@ -29,7 +31,7 @@ jobs:
 
       - name: 'List, Sort, and Process Codex PRs'
         env:
-          GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ secrets.CODEX_WORK_TOKEN }}
         run: |
           gh pr list --label "codex" --state "open" --base "stable" --json number,headRefName,createdAt \
           | jq -c '. | sort_by(.createdAt) | .[]' \
@@ -46,7 +48,6 @@ jobs:
               git reset --hard origin/stable
 
               echo "Attempting to merge ${PR_BRANCH} into stable..."
-              # CORREÇÃO FINAL: Trocamos -X ours por -X theirs para sempre aceitar as mudanças do PR
               if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER} from ${PR_BRANCH}" -X theirs; then
                   echo "✅ Merge successful (with potential automatic conflict resolution)."
                   
