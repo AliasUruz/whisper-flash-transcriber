@@ -1,4 +1,4 @@
-# .github/workflows/codex-merge-queue.yml (Versão Corrigida)
+# .github/workflows/codex-merge-queue.yml (Versão Corrigida com Filtro por Label)
 
 name: 'Codex Merge Queue (Oldest to Newest)'
 
@@ -31,8 +31,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
         run: |
-          # (O resto do script continua igual...)
-          gh pr list --author "Codex" --state "open" --base "stable" --json number,headRefName,createdAt \
+          # AQUI ESTÁ A MUDANÇA: trocamos --author "Codex" por --label "codex"
+          gh pr list --label "codex" --state "open" --base "stable" --json number,headRefName,createdAt \
           | jq -c '. | sort_by(.createdAt) | .[]' \
           | while read -r pr_json; do
               PR_NUMBER=$(echo "$pr_json" | jq -r '.number')
