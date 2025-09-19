@@ -1,26 +1,40 @@
-# .github/workflows/codex-automation.yml (Arquivo Único Consolidado)
+# .github/workflows/codex-automation.yml (Versão Final: Reativa + Agendada)
 
 name: 'Codex Automation'
 
-# Gatilhos para AMBOS os jobs. As condições 'if' abaixo decidirão qual job roda.
+# Gatilho de concorrência para garantir que apenas uma fila rode por vez.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# GATILHOS UNIFICADOS: Ouve tudo que nos interessa.
 on:
-  # Gatilhos para o job da fila de merge
+  # Gatilho manual para testes.
   workflow_dispatch:
+
+  # Gatilho agendado que roda a cada 5 minutos como garantia.
   schedule:
     - cron: '*/5 * * * *'
 
-  # Gatilhos para o job do status check "ready"
+  # Gatilho reativo que TENTA rodar instantaneamente.
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, labeled, reopened, synchronize]
 
 jobs:
   #############################################################
-  # Job 1: Lógica do Merge Automático (do codex-merge-queue.yml)
+  # Job Único: Tenta o merge instantâneo e garante com schedule
   #############################################################
-  merge_queue:
+  process_queue:
     name: 'Process Merge Queue'
-    # CONDIÇÃO: Este job só roda se o gatilho for 'schedule' ou 'workflow_dispatch'
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    
+    # CONDIÇÃO INTELIGENTE:
+    # Roda SEMPRE se for agendado ou manual.
+    # Roda SE for um PR e tiver a label "codex".
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'codex'))
+      
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -39,35 +53,30 @@ jobs:
           git config user.name "Codex Merge Bot"
           git config user.email "actions-bot@github.com"
 
-      - name: 'List, Sort, and Process Codex PRs'
+      - name: 'List, Sort, and Process All Codex PRs'
         env:
           GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
         run: |
+          echo "Starting queue processing triggered by: ${{ github.event_name }}"
+          # A lógica é sempre a mesma: processar a fila inteira.
+          # Isso simplifica o código e garante que, mesmo que um evento de PR falhe,
+          # a próxima execução agendada irá consertar a situação.
           gh pr list --label "codex" --state "open" --base "stable" --json number,headRefName,createdAt \
           | jq -c '. | sort_by(.createdAt) | .[]' \
           | while read -r pr_json; do
-              # ... (a lógica de merge continua exatamente a mesma)
               PR_NUMBER=$(echo "$pr_json" | jq -r '.number')
               PR_BRANCH=$(echo "$pr_json" | jq -r '.headRefName')
+              
               echo ">>> Processing PR #${PR_NUMBER} (Branch: ${PR_BRANCH})"
               git fetch origin stable && git reset --hard origin/stable
-              if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER}" -X theirs; then
+              
+              if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER} from ${PR_BRANCH}" -X theirs; then
                   echo "✅ Merge successful for PR #${PR_NUMBER}."
                   git push origin stable
               else
                   echo "❌ Merge failed for PR #${PR_NUMBER}."
-                  gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Conflito crítico detectado."
+                  gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Conflito crítico detectado que a estratégia automática não conseguiu resolver."
                   continue
               fi
           done
-
-  #############################################################
-  # Job 2: Lógica do Status Check "Ready" (do ready.yml)
-  #############################################################
-  ready_status_check:
-    name: 'Ready Status Check'
-    # CONDIÇÃO: Este job só roda se o gatilho for 'pull_request'
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "Status check 'ready' is ok."
+          echo "Queue processing finished."
