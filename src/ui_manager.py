@@ -9,7 +9,7 @@ from datetime import datetime
 import pystray
 from PIL import Image, ImageDraw
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
 
 # Importar constantes de configuração
 from .config_manager import (
