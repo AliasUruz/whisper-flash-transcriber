@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import time
 from pathlib import Path
 from threading import Event
@@ -12,13 +11,11 @@ from typing import Dict, List
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
 
-class DownloadCancelledError(RuntimeError):
-    """Raised when a model download is aborted by the caller."""
+MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
 
-    def __init__(self, message: str, *, timed_out: bool = False, by_user: bool = False) -> None:
-        super().__init__(message)
-        self.timed_out = bool(timed_out)
-        self.by_user = bool(by_user)
+
+class DownloadCancelledError(Exception):
+    """Raised when a model download is cancelled by the user."""
 
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
@@ -99,9 +96,10 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     installed: List[Dict[str, str]] = []
     seen = set()
 
-    cache_dir_path = normalized_dir
-    if cache_dir_path.is_dir():
-        for backend_dir in cache_dir_path.iterdir():
+    cache_dir = Path(cache_dir)
+    MODEL_LOGGER.debug("Listing curated models installed under %s", cache_dir)
+    if cache_dir.is_dir():
+        for backend_dir in cache_dir.iterdir():
             if not backend_dir.is_dir():
                 continue
             backend = backend_dir.name
@@ -176,11 +174,13 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
     for sibling in getattr(info, "siblings", []):
         total += sibling.size or 0
         files += 1
-
-    result = (total, files)
-    with _download_size_lock:
-        _download_size_cache[model_id] = (time.monotonic(), result)
-    return result
+    MODEL_LOGGER.debug(
+        "Computed download size for model %s: %.2f GB across %s files",
+        model_id,
+        total / (1024 ** 3) if total else 0.0,
+        files,
+    )
+    return total, files
 
 
 def get_installed_size(model_path: str | Path) -> tuple[int, int]:
@@ -229,21 +229,29 @@ def ensure_download(
     cache_dir = Path(cache_dir)
     local_dir = cache_dir / backend / model_id
     if local_dir.is_dir() and any(local_dir.iterdir()):
+        MODEL_LOGGER.info(
+            "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
+            model_id,
+            backend,
+            local_dir,
+        )
         return str(local_dir)
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    deadline = None
-    timeout_value: float | None
-    if timeout is None:
-        timeout_value = None
-    else:
-        try:
-            timeout_value = float(timeout)
-        except (TypeError, ValueError):
-            timeout_value = None
-    if timeout_value and timeout_value > 0:
-        deadline = time.monotonic() + timeout_value
+    start_time = time.perf_counter()
+    MODEL_LOGGER.info(
+        "Starting model download: model=%s backend=%s quant=%s target=%s",
+        model_id,
+        backend,
+        quant or "default",
+        local_dir,
+    )
+    try:
+        if backend == "transformers":
+            snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
+        elif backend == "ct2":
+            from faster_whisper import WhisperModel
 
     def _check_abort() -> None:
         if cancel_event is not None and cancel_event.is_set():
@@ -281,12 +289,38 @@ def ensure_download(
         _cleanup_partial()
         raise
     except KeyboardInterrupt as exc:
-        _cleanup_partial()
-        raise DownloadCancelledError("Model download cancelled by user.", by_user=True) from exc
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        MODEL_LOGGER.info(
+            "[METRIC] stage=model_download status=cancelled model=%s backend=%s duration_ms=%.2f",
+            model_id,
+            backend,
+            duration_ms,
+        )
+        raise DownloadCancelledError("Model download cancelled by user.") from exc
     except Exception:
-        _cleanup_partial()
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        MODEL_LOGGER.exception(
+            "Model download failed: model=%s backend=%s target=%s",
+            model_id,
+            backend,
+            local_dir,
+        )
+        MODEL_LOGGER.info(
+            "[METRIC] stage=model_download status=error model=%s backend=%s duration_ms=%.2f",
+            model_id,
+            backend,
+            duration_ms,
+        )
         raise
 
+    duration_ms = (time.perf_counter() - start_time) * 1000.0
+    MODEL_LOGGER.info(
+        "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
+        model_id,
+        backend,
+        duration_ms,
+        local_dir,
+    )
     return str(local_dir)
 
 

@@ -1218,122 +1218,16 @@ class UIManager:
             "update_install_button_state": _update_install_button_state,
         }
 
-    def _resolve_initial_value(
-        self,
-        key: str,
-        *,
-        var_name: str,
-        getter: Callable[[], Any] | None = None,
-        default: Any | None = None,
-        coerce: Callable[[Any], Any] | None = None,
-        allowed: Iterable[Any] | None = None,
-        sensitive: bool = False,
-        transform: Callable[[Any], Any] | None = None,
-    ) -> Any:
-        """Obtém valores do ConfigManager sincronizados com ``DEFAULT_CONFIG``.
+    def apply_settings_payload(self, payload: dict) -> None:
+        """Apply settings in headless mode or via unit tests."""
 
-        A função aplica coerção opcional de tipo, validação contra listas de
-        valores permitidos e registra divergências entre os valores atuais e os
-        padrões definidos em ``DEFAULT_CONFIG``. Quando ``sensitive`` é
-        ``True``, evita expor valores nos logs.
-        """
+        if not isinstance(payload, dict):  # Salvaguarda para chamadas incorretas
+            raise TypeError("payload must be a dict of keyword arguments")
+        if not self.core_instance_ref:
+            raise RuntimeError("core_instance_ref is not configured")
 
-        default_source = default if default is not None else DEFAULT_CONFIG.get(key)
-        if isinstance(default_source, (list, dict)):
-            default_value = copy.deepcopy(default_source)
-        else:
-            default_value = default_source
-
-        getter_fn: Callable[[], Any]
-        if getter is not None:
-            getter_fn = getter
-        else:
-            getter_fn = lambda: self.config_manager.get(key, default_value)
-
-        try:
-            value = getter_fn()
-        except Exception as exc:  # pragma: no cover - salvaguarda de UI
-            logging.error(
-                "UIManager: falha ao obter valor inicial de '%s' (%s). Usando padrão.",
-                key,
-                exc,
-                exc_info=True,
-            )
-            value = default_value
-
-        if value is None and default_value is not None:
-            logging.warning(
-                "UIManager: valor '%s' ausente. Aplicando padrão %s.",
-                key,
-                "<oculto>" if sensitive else repr(default_value),
-            )
-            value = default_value
-
-        def _coerce(candidate: Any, fallback: Any) -> Any:
-            if coerce is None:
-                return candidate
-            try:
-                return coerce(candidate)
-            except Exception as exc:  # pragma: no cover - defensivo
-                logging.warning(
-                    "UIManager: falha ao converter '%s' (valor=%s): %s. Usando padrão.",
-                    key,
-                    "<oculto>" if sensitive else repr(candidate),
-                    exc,
-                )
-                if fallback is None:
-                    return fallback
-                try:
-                    return coerce(fallback)
-                except Exception:
-                    return fallback
-
-        coerced_default = _coerce(default_value, default_value)
-        coerced_value = _coerce(value, coerced_default)
-
-        if allowed is not None and coerced_value not in allowed:
-            logging.warning(
-                "UIManager: valor '%s'=%s fora dos permitidos %s. Revertendo para padrão %s.",
-                key,
-                "<oculto>" if sensitive else repr(coerced_value),
-                list(allowed),
-                "<oculto>" if sensitive else repr(coerced_default),
-            )
-            coerced_value = coerced_default
-
-        if (
-            default_value is not None
-            and coerced_default is not None
-            and coerced_value != coerced_default
-            and key not in self._divergent_keys_logged
-        ):
-            if sensitive:
-                logging.info(
-                    "UIManager: '%s' difere do DEFAULT_CONFIG (valor personalizado em uso).",
-                    key,
-                )
-            else:
-                logging.info(
-                    "UIManager: '%s' difere do DEFAULT_CONFIG (atual=%r, padrão=%r).",
-                    key,
-                    coerced_value,
-                    coerced_default,
-                )
-            self._divergent_keys_logged.add(key)
-
-        final_value = coerced_value
-        if transform is not None:
-            try:
-                final_value = transform(coerced_value)
-            except Exception as exc:  # pragma: no cover - defensivo
-                logging.error(
-                    "UIManager: falha ao transformar '%s': %s. Reaplicando padrão.",
-                    key,
-                    exc,
-                )
-                final_value = transform(coerced_default) if coerced_default is not None else coerced_default
-
-        return final_value
+        logging.info("UIManager: forwarding settings payload to AppCore (%d keys).", len(payload))
+        self.core_instance_ref.apply_settings_from_external(**payload)
 
     def _recording_tooltip_updater(self):
         """Atualiza a tooltip com a duração da gravação a cada segundo."""
@@ -1983,13 +1877,13 @@ class UIManager:
                     model_to_apply = agent_model_var.get()
                     hotkey_stability_service_enabled_to_apply = hotkey_stability_service_enabled_var.get() # Coleta o valor da nova variável
                     sound_enabled_to_apply = sound_enabled_var.get()
-                    sound_freq_to_apply = safe_get_int(sound_frequency_var, "Frequência do Som", settings_win)
+                    sound_freq_to_apply = self._safe_get_int(sound_frequency_var, "Frequência do Som", settings_win)
                     if sound_freq_to_apply is None:
                         return
-                    sound_duration_to_apply = safe_get_float(sound_duration_var, "Duração do Som", settings_win)
+                    sound_duration_to_apply = self._safe_get_float(sound_duration_var, "Duração do Som", settings_win)
                     if sound_duration_to_apply is None:
                         return
-                    sound_volume_to_apply = safe_get_float(sound_volume_var, "Volume do Som", settings_win)
+                    sound_volume_to_apply = self._safe_get_float(sound_volume_var, "Volume do Som", settings_win)
                     if sound_volume_to_apply is None:
                         return
                     text_correction_enabled_to_apply = text_correction_enabled_var.get()
@@ -2000,26 +1894,26 @@ class UIManager:
                     gemini_model_to_apply = gemini_model_var.get()
                     gemini_prompt_correction_to_apply = gemini_prompt_correction_textbox.get("1.0", "end-1c")
                     agentico_prompt_to_apply = agentico_prompt_textbox.get("1.0", "end-1c")
-                    batch_size_to_apply = safe_get_int(batch_size_var, "Batch Size", settings_win)
+                    batch_size_to_apply = self._safe_get_int(batch_size_var, "Batch Size", settings_win)
                     if batch_size_to_apply is None:
                         return
-                    min_transcription_duration_to_apply = safe_get_float(min_transcription_duration_var, "Duração Mínima", settings_win)
+                    min_transcription_duration_to_apply = self._safe_get_float(min_transcription_duration_var, "Duração Mínima", settings_win)
                     if min_transcription_duration_to_apply is None:
                         return
-                    min_record_duration_to_apply = safe_get_float(min_record_duration_var, "Duração Mínima da Gravação", settings_win)
+                    min_record_duration_to_apply = self._safe_get_float(min_record_duration_var, "Duração Mínima da Gravação", settings_win)
                     if min_record_duration_to_apply is None:
                         return
                     use_vad_to_apply = use_vad_var.get()
-                    vad_threshold_to_apply = safe_get_float(vad_threshold_var, "Limiar do VAD", settings_win)
+                    vad_threshold_to_apply = self._safe_get_float(vad_threshold_var, "Limiar do VAD", settings_win)
                     if vad_threshold_to_apply is None:
                         return
-                    vad_silence_duration_to_apply = safe_get_float(vad_silence_duration_var, "Duração do Silêncio", settings_win)
+                    vad_silence_duration_to_apply = self._safe_get_float(vad_silence_duration_var, "Duração do Silêncio", settings_win)
                     if vad_silence_duration_to_apply is None:
                         return
                     save_temp_recordings_to_apply = save_temp_recordings_var.get()
                     display_transcripts_to_apply = display_transcripts_var.get()
                     max_memory_seconds_mode_to_apply = max_memory_seconds_mode_var.get()
-                    max_memory_seconds_to_apply = safe_get_float(max_memory_seconds_var, "Max Memory Retention", settings_win)
+                    max_memory_seconds_to_apply = self._safe_get_float(max_memory_seconds_var, "Max Memory Retention", settings_win)
                     if max_memory_seconds_to_apply is None:
                         return
                     asr_backend_to_apply = asr_backend_var.get()
@@ -2057,51 +1951,53 @@ class UIManager:
                         return
 
                     # Call AppCore method to apply settings
-                    self.core_instance_ref.apply_settings_from_external(
-                        new_key=key_to_apply,
-                        new_mode=mode_to_apply,
-                        new_auto_paste=auto_paste_to_apply,
-                        new_sound_enabled=sound_enabled_to_apply,
-                        new_sound_frequency=sound_freq_to_apply,
-                        new_sound_duration=sound_duration_to_apply,
-                        new_sound_volume=sound_volume_to_apply,
-                        new_agent_key=agent_key_to_apply,
-                        new_text_correction_enabled=text_correction_enabled_to_apply,
-                        new_text_correction_service=text_correction_service_to_apply,
-                        new_openrouter_api_key=openrouter_api_key_to_apply,
-                        new_openrouter_model=openrouter_model_to_apply,
-                        new_gemini_api_key=gemini_api_key_to_apply,
-                        new_gemini_model=gemini_model_to_apply,
-                        new_gemini_prompt=gemini_prompt_correction_to_apply,
-                        prompt_agentico=agentico_prompt_to_apply,
-                        new_agent_model=model_to_apply,
-                        new_gemini_model_options=new_models_list,
-                        new_batch_size=batch_size_to_apply,
-                        new_gpu_index=gpu_index_to_apply,
-                        new_hotkey_stability_service_enabled=hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
-                        new_min_transcription_duration=min_transcription_duration_to_apply,
-                        new_min_record_duration=min_record_duration_to_apply,
-                        new_save_temp_recordings=save_temp_recordings_to_apply,
-                        new_record_storage_mode=record_storage_mode_var.get(),
-                        new_record_to_memory=(record_storage_mode_var.get() == "memory"),
-                        new_max_memory_seconds_mode=max_memory_seconds_mode_to_apply,
-                        new_max_memory_seconds=max_memory_seconds_to_apply,
-                        new_use_vad=use_vad_to_apply,
-                        new_vad_threshold=vad_threshold_to_apply,
-                        new_vad_silence_duration=vad_silence_duration_to_apply,
-                        new_display_transcripts_in_terminal=display_transcripts_to_apply,
-                        new_launch_at_startup=launch_at_startup_var.get(),
-                        # New chunk settings
-                        new_chunk_length_mode=chunk_length_mode_var.get(),
-                        new_chunk_length_sec=float(chunk_length_sec_var.get()),
-                        # New: torch compile setting
-                        new_enable_torch_compile=bool(enable_torch_compile_var.get()),
-                        new_asr_backend=asr_backend_to_apply,
-                        new_asr_model_id=asr_model_id_to_apply,
-                        new_asr_compute_device=asr_compute_device_to_apply,
-                        new_asr_dtype=asr_dtype_to_apply,
-                        new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
-                        new_asr_cache_dir=asr_cache_dir_to_apply
+                    self.apply_settings_payload(
+                        {
+                            "new_key": key_to_apply,
+                            "new_mode": mode_to_apply,
+                            "new_auto_paste": auto_paste_to_apply,
+                            "new_sound_enabled": sound_enabled_to_apply,
+                            "new_sound_frequency": sound_freq_to_apply,
+                            "new_sound_duration": sound_duration_to_apply,
+                            "new_sound_volume": sound_volume_to_apply,
+                            "new_agent_key": agent_key_to_apply,
+                            "new_text_correction_enabled": text_correction_enabled_to_apply,
+                            "new_text_correction_service": text_correction_service_to_apply,
+                            "new_openrouter_api_key": openrouter_api_key_to_apply,
+                            "new_openrouter_model": openrouter_model_to_apply,
+                            "new_gemini_api_key": gemini_api_key_to_apply,
+                            "new_gemini_model": gemini_model_to_apply,
+                            "new_gemini_prompt": gemini_prompt_correction_to_apply,
+                            "prompt_agentico": agentico_prompt_to_apply,
+                            "new_agent_model": model_to_apply,
+                            "new_gemini_model_options": new_models_list,
+                            "new_batch_size": batch_size_to_apply,
+                            "new_gpu_index": gpu_index_to_apply,
+                            "new_hotkey_stability_service_enabled": hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
+                            "new_min_transcription_duration": min_transcription_duration_to_apply,
+                            "new_min_record_duration": min_record_duration_to_apply,
+                            "new_save_temp_recordings": save_temp_recordings_to_apply,
+                            "new_record_storage_mode": record_storage_mode_var.get(),
+                            "new_record_to_memory": (record_storage_mode_var.get() == "memory"),
+                            "new_max_memory_seconds_mode": max_memory_seconds_mode_to_apply,
+                            "new_max_memory_seconds": max_memory_seconds_to_apply,
+                            "new_use_vad": use_vad_to_apply,
+                            "new_vad_threshold": vad_threshold_to_apply,
+                            "new_vad_silence_duration": vad_silence_duration_to_apply,
+                            "new_display_transcripts_in_terminal": display_transcripts_to_apply,
+                            "new_launch_at_startup": launch_at_startup_var.get(),
+                            # New chunk settings
+                            "new_chunk_length_mode": chunk_length_mode_var.get(),
+                            "new_chunk_length_sec": float(chunk_length_sec_var.get()),
+                            # New: torch compile setting
+                            "new_enable_torch_compile": bool(enable_torch_compile_var.get()),
+                            "new_asr_backend": asr_backend_to_apply,
+                            "new_asr_model_id": asr_model_id_to_apply,
+                            "new_asr_compute_device": asr_compute_device_to_apply,
+                            "new_asr_dtype": asr_dtype_to_apply,
+                            "new_asr_ct2_compute_type": asr_ct2_compute_type_to_apply,
+                            "new_asr_cache_dir": asr_cache_dir_to_apply,
+                        }
                     )
                     self._close_settings_window() # Call class method
 
@@ -2147,17 +2043,25 @@ class UIManager:
                     else:
                         service_menu.set(text_correction_service_label_var.get())
                         update_text_correction_fields()
-                    openrouter_api_key_var.set(DEFAULT_CONFIG["openrouter_api_key"])
-                    openrouter_model_var.set(DEFAULT_CONFIG["openrouter_model"])
-                    gemini_api_key_var.set(DEFAULT_CONFIG["gemini_api_key"])
-                    gemini_model_var.set(DEFAULT_CONFIG["gemini_model"])
-                    asr_model_id_var.set(DEFAULT_CONFIG["asr_model_id"])
-                    default_model_display = id_to_display.get(
-                        DEFAULT_CONFIG["asr_model_id"],
-                        DEFAULT_CONFIG["asr_model_id"],
+                    openrouter_api_key_var.set(DEFAULT_CONFIG[OPENROUTER_API_KEY_CONFIG_KEY])
+                    openrouter_model_var.set(DEFAULT_CONFIG[OPENROUTER_MODEL_CONFIG_KEY])
+                    gemini_api_key_var.set(DEFAULT_CONFIG[GEMINI_API_KEY_CONFIG_KEY])
+                    gemini_model_var.set(DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY])
+                    try:
+                        gemini_model_menu
+                    except NameError:
+                        pass
+                    else:
+                        gemini_model_menu.configure(values=DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
+                        gemini_model_menu.set(DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY])
+                    gemini_model_options[:] = list(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
+                    asr_model_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
+                    asr_model_display_var.set(
+                        id_to_display.get(
+                            DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                            DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                        )
                     )
-                    asr_model_display_var.set(default_model_display)
-                    asr_model_menu.set(default_model_display)
                     gemini_prompt_correction_textbox.delete("1.0", "end")
                     gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG[GEMINI_PROMPT_CONFIG_KEY])
                     agentico_prompt_textbox.delete("1.0", "end")
@@ -2168,13 +2072,14 @@ class UIManager:
                         "\n".join(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY]),
                     )
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
-                    asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
-                    asr_backend_menu.set(DEFAULT_CONFIG["asr_backend"])
-                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
-                    asr_ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
-                    asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
-                    update_model_info(DEFAULT_CONFIG["asr_model_id"])
-                    on_backend_change(asr_backend_var.get())
+                    asr_backend_var.set(DEFAULT_CONFIG[ASR_BACKEND_CONFIG_KEY])
+                    asr_model_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
+                    asr_model_display_var.set(
+                        id_to_display.get(
+                            DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                            DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                        )
+                    )
 
                     if DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY] == "cpu":
                         asr_compute_device_var.set("Force CPU")
