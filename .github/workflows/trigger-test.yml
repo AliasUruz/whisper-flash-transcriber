@@ -1,0 +1,14 @@
+# .github/workflows/trigger-test.yml
+
+name: 'Trigger Test'
+
+on:
+  pull_request:
+    types: [opened, labeled, reopened, synchronize, ready_for_review]
+
+jobs:
+  test_job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Workflow was triggered'
+        run: echo "O gatilho de Pull Request está funcionando para o PR #${{ github.event.pull_request.number }}."
