@@ -3,6 +3,7 @@ import threading
 import queue
 import os
 import time
+import shutil
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
@@ -373,19 +374,20 @@ class AudioHandler:
                 try:
                     ts = int(time.time())
                     filename = f"temp_recording_{ts}.wav"
-                    Path(self.temp_file_path).rename(filename)
-                    # Usa sf.write para forçar a criação de um arquivo vazio
-                    sf.write(filename, np.empty((0, 1), dtype=np.float32), AUDIO_SAMPLE_RATE)
-                    self.temp_file_path = filename
-                    logging.info(f"Gravação temporária salva em {filename}")
+                    source_path = Path(self.temp_file_path)
+                    target_path = (Path.cwd() / filename).resolve()
+                    shutil.move(str(source_path), target_path)
+                    self.temp_file_path = str(target_path)
+                    logging.info(f"Gravação temporária salva em {target_path}")
                 except Exception as e:
                     logging.error(f"Falha ao salvar gravação temporária: {e}")
                     try:
-                        if os.path.exists(filename):
-                            os.remove(filename)
+                        if "target_path" in locals() and target_path.exists():
+                            target_path.unlink()
                     except Exception:
                         pass
-                    self.temp_file_path = filename
+                    # Mantém o caminho original para que a pipeline tente usar o arquivo de origem
+                    self.temp_file_path = str(source_path)
             self.on_audio_segment_ready_callback(self.temp_file_path)
 
         if not self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
