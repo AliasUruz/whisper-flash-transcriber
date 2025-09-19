@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import logging
+import shutil
 import time
 from pathlib import Path
-from threading import Event
+from threading import Event, RLock
 from typing import Dict, List
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
@@ -16,6 +18,17 @@ MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
 
 class DownloadCancelledError(Exception):
     """Raised when a model download is cancelled by the user."""
+
+    def __init__(
+        self,
+        message: str = "Model download cancelled.",
+        *,
+        by_user: bool = False,
+        timed_out: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.by_user = by_user
+        self.timed_out = timed_out
 
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
@@ -247,16 +260,23 @@ def ensure_download(
         quant or "default",
         local_dir,
     )
-    try:
-        if backend == "transformers":
-            snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
-        elif backend == "ct2":
-            from faster_whisper import WhisperModel
+
+    timeout_value: float | None = None
+    deadline: float | None = None
+    if timeout is not None:
+        try:
+            candidate = float(timeout)
+        except (TypeError, ValueError):
+            candidate = None
+        if candidate is not None and candidate > 0:
+            timeout_value = candidate
+            deadline = time.monotonic() + candidate
 
     def _check_abort() -> None:
         if cancel_event is not None and cancel_event.is_set():
             raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
         if deadline is not None and time.monotonic() >= deadline:
+            assert timeout_value is not None
             raise DownloadCancelledError(
                 f"Model download timed out after {timeout_value:.0f} seconds.", timed_out=True
             )
