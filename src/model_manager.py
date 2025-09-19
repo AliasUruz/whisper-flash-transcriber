@@ -48,6 +48,9 @@ CURATED: List[Dict[str, str]] = [
     {"id": "openai/whisper-large-v3", "backend": "transformers"},
     {"id": "openai/whisper-large-v3-turbo", "backend": "transformers"},
     {"id": "distil-whisper/distil-large-v3", "backend": "transformers"},
+    {"id": "Systran/faster-whisper-large-v3", "backend": "ct2"},
+    {"id": "h2oai/faster-whisper-large-v3-turbo", "backend": "ct2"},
+    {"id": "Systran/faster-distil-whisper-large-v3", "backend": "ct2"},
 ]
 
 DISPLAY_NAMES: Dict[str, str] = {
@@ -194,9 +197,19 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
 
     api = HfApi()
     info = api.model_info(model_id)
+    siblings = list(getattr(info, "siblings", []) or [])
+
+    def _normalize_size(value: object) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
     total = 0
-    files = 0
-    for sibling in getattr(info, "siblings", []):
+    sized_files = 0
+    for sibling in siblings:
         size_value = getattr(sibling, "size", None)
         if size_value is None:
             lfs_meta = getattr(sibling, "lfs", None)
@@ -204,23 +217,73 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
                 size_value = getattr(lfs_meta, "size")
             elif isinstance(lfs_meta, dict):
                 size_value = lfs_meta.get("size")
-        try:
-            total += int(size_value) if size_value is not None else 0
-        except (TypeError, ValueError):
+        normalized = _normalize_size(size_value)
+        if normalized is None and size_value is not None:
             MODEL_LOGGER.debug(
                 "Ignoring non-numeric size for %s/%s: %r",
                 model_id,
                 getattr(sibling, "rfilename", ""),
                 size_value,
             )
-        files += 1
+        if normalized is None:
+            continue
+        total += normalized
+        sized_files += 1
+
+    total_files = len(siblings) if siblings else sized_files
+
+    if total <= 0 or sized_files == 0:
+        try:
+            tree_items = api.list_repo_tree(
+                repo_id=model_id,
+                repo_type="model",
+                recursive=True,
+            )
+        except Exception:  # pragma: no cover - best effort fallback
+            MODEL_LOGGER.debug(
+                "Failed to retrieve repo tree for %s when computing download size.",
+                model_id,
+                exc_info=True,
+            )
+        else:
+            fallback_total = 0
+            fallback_files = 0
+            for item in tree_items:
+                if getattr(item, "type", None) != "file":
+                    continue
+                normalized = _normalize_size(getattr(item, "size", None))
+                if normalized is None:
+                    raw_size = getattr(item, "size", None)
+                    if raw_size is not None:
+                        MODEL_LOGGER.debug(
+                            "Ignoring non-numeric tree size for %s/%s: %r",
+                            model_id,
+                            getattr(item, "path", getattr(item, "rfilename", "")),
+                            raw_size,
+                        )
+                    continue
+                fallback_total += normalized
+                fallback_files += 1
+            if fallback_total > 0:
+                total = fallback_total
+            if fallback_files:
+                total_files = fallback_files
+                sized_files = max(sized_files, fallback_files)
+
+    if total_files == 0:
+        total_files = sized_files
+
     MODEL_LOGGER.debug(
         "Computed download size for model %s: %.2f GB across %s files",
         model_id,
         total / (1024 ** 3) if total else 0.0,
-        files,
+        total_files,
     )
-    return total, files
+
+    with _download_size_lock:
+        _download_size_cache[model_id] = (time.monotonic(), (total, total_files))
+
+    return total, total_files
 
 
 def get_installed_size(model_path: str | Path) -> tuple[int, int]:
