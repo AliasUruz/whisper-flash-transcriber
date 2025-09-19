@@ -130,7 +130,12 @@ if __name__ == "__main__":
     app_core_instance = AppCore(main_tk_root)
 
     # Inicializar o gerenciador de UI
-    ui_manager_instance = UIManager(main_tk_root, app_core_instance.config_manager, app_core_instance)
+    ui_manager_instance = UIManager(
+        main_tk_root,
+        app_core_instance.config_manager,
+        app_core_instance,
+        model_manager=app_core_instance.model_manager,
+    )
     app_core_instance.ui_manager = ui_manager_instance # Conectar UI Manager ao AppCore
 
     # Definir callbacks do AppCore para o UI Manager

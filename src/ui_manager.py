@@ -48,29 +48,49 @@ if TYPE_CHECKING:  # pragma: no cover - hints only
 # Para este plano, vamos movê-lo para cá.
 import torch # Necessário para get_available_devices_for_ui
 
+try:
+    from .model_manager import DownloadCancelledError as _DefaultDownloadCancelledError
+except Exception:  # pragma: no cover - fallback se a exceção não existir
+    class _DefaultDownloadCancelledError(Exception):
+        """Fallback exception when model_manager is unavailable."""
+
+        pass
+
 # Importar gerenciador de modelos de ASR
 try:
-    from . import model_manager
+    from . import model_manager as _default_model_manager
 except Exception:  # pragma: no cover - fallback caso o módulo não exista
     class _DummyModelManager:
-        CURATED = {}
+        """Fallback com operações inertes quando o model_manager não está disponível."""
 
-        def asr_installed_models(self):
-            return {}
+        DownloadCancelledError = _DefaultDownloadCancelledError
 
-        def ensure_download(self, *_args, **_kwargs):
+        @staticmethod
+        def list_catalog():
             logging.warning("model_manager module not available.")
+            return []
 
-    model_manager = _DummyModelManager()
+        @staticmethod
+        def list_installed(*_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+            return []
 
-try:
-    from .model_manager import DownloadCancelledError
-except Exception:  # pragma: no cover - fallback se a exceção não existir
-    class DownloadCancelledError(Exception):
-        def __init__(self, message="", *, timed_out: bool = False, by_user: bool = False):
-            super().__init__(message)
-            self.timed_out = bool(timed_out)
-            self.by_user = bool(by_user)
+        @staticmethod
+        def ensure_download(*_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+            return ""
+
+        @staticmethod
+        def get_model_download_size(*_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+            return 0, 0
+
+        @staticmethod
+        def get_installed_size(*_args, **_kwargs):
+            logging.warning("model_manager module not available.")
+            return 0, 0
+
+    _default_model_manager = _DummyModelManager()
 
 def get_available_devices_for_ui():
     """Returns a list of devices for the settings interface."""
@@ -89,10 +109,17 @@ def get_available_devices_for_ui():
     return devices
 
 class UIManager:
-    def __init__(self, main_tk_root, config_manager, core_instance_ref):
+    def __init__(self, main_tk_root, config_manager, core_instance_ref, model_manager=None):
         self.main_tk_root = main_tk_root
         self.config_manager = config_manager
         self.core_instance_ref = core_instance_ref # Reference to the AppCore instance
+
+        self.model_manager = model_manager if model_manager is not None else _default_model_manager
+        self._download_cancelled_error = getattr(
+            self.model_manager,
+            "DownloadCancelledError",
+            _DefaultDownloadCancelledError,
+        )
 
         self.tray_icon = None
         self._pending_tray_tooltip = None
@@ -1976,12 +2003,11 @@ class UIManager:
                 asr_model_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
 
-                catalog = model_manager.list_catalog()
-                self._set_settings_meta("catalog", catalog)
+                catalog = self.model_manager.list_catalog()
                 catalog_display_map = {entry["id"]: entry.get("display_name", entry["id"]) for entry in catalog}
                 try:
                     installed_ids = {
-                        m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
+                        m["id"] for m in self.model_manager.list_installed(asr_cache_dir_var.get())
                     }
                 except OSError:
                     messagebox.showerror(
@@ -2017,7 +2043,71 @@ class UIManager:
 
                 model_size_label = ctk.CTkLabel(asr_model_frame, text="")
                 model_size_label.pack(side="left", padx=5)
-                self._set_settings_var("model_size_label", model_size_label)
+
+                def _update_model_info(model_ref: str) -> None:
+                    model_id = display_to_id.get(model_ref, model_ref)
+                    try:
+                        d_bytes, d_files = self.model_manager.get_model_download_size(model_id)
+                        d_mb = d_bytes / (1024 * 1024)
+                        download_text = f"{d_mb:.1f} MB ({d_files} files)"
+                    except Exception:
+                        download_text = "?"
+
+                    try:
+                        installed_models = self.model_manager.list_installed(asr_cache_dir_var.get())
+                    except OSError:
+                        messagebox.showerror(
+                            "Configuração",
+                        )
+                        installed_models = []
+                    entry = next((m for m in installed_models if m["id"] == model_id), None)
+                    if entry:
+                        i_bytes, i_files = self.model_manager.get_installed_size(entry["path"])
+                        i_mb = i_bytes / (1024 * 1024)
+                        installed_text = f"{i_mb:.1f} MB ({i_files} files)"
+                    else:
+                        installed_text = "-"
+
+                    model_size_label.configure(
+                        text=f"Download: {download_text} | Installed: {installed_text}"
+                    )
+
+                def _derive_backend_from_model(model_ref: str) -> str | None:
+                    model_id = display_to_id.get(model_ref, model_ref)
+                    entry = next((m for m in catalog if m["id"] == model_id), None)
+                    if not entry:
+                        installed = self.model_manager.list_installed(asr_cache_dir_var.get())
+                        entry = next((m for m in installed if m["id"] == model_id), None)
+                    backend = entry.get("backend") if entry else None
+                    if backend in ("faster-whisper", "ctranslate2"):
+                        backend = "ct2"
+                    if backend not in ("transformers", "ct2"):
+                        return None
+                    return backend
+
+                def _update_install_button_state() -> None:
+                    backend = _derive_backend_from_model(asr_model_id_var.get())
+                    install_button.configure(state="normal" if backend else "disabled")
+                    quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
+
+                def _on_model_change(choice_display: str) -> None:
+                    model_id = display_to_id.get(choice_display, choice_display)
+                    asr_model_id_var.set(model_id)
+                    asr_model_display_var.set(id_to_display.get(model_id, model_id))
+                    backend = _derive_backend_from_model(model_id)
+                    if backend:
+                        asr_backend_var.set(backend)
+                        asr_backend_menu.configure(state="disabled")
+                    else:
+                        asr_backend_menu.configure(state="normal")
+                    self.config_manager.set_asr_model_id(model_id)
+                    self.config_manager.set_asr_backend(asr_backend_var.get())
+                    self.config_manager.save_config()
+                    _on_backend_change(asr_backend_var.get())
+                    _update_model_info(model_id)
+
+                asr_model_menu.configure(command=_on_model_change)
+                _on_model_change(asr_model_display_var.get())
 
                 asr_device_frame = ctk.CTkFrame(asr_frame)
                 asr_device_frame.pack(fill="x", pady=5)
@@ -2075,6 +2165,63 @@ class UIManager:
                 asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
                 asr_cache_entry.pack(side="left", padx=5)
                 Tooltip(asr_cache_entry, "Diretório para modelos de ASR em cache.")
+
+                def _install_model():
+                    cache_dir = asr_cache_dir_var.get()
+                    try:
+                        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+                    except Exception as e:
+                        messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}")
+                        return
+
+                    model_id = asr_model_id_var.get()
+                    backend = _derive_backend_from_model(model_id)
+                    if backend is None:
+                        messagebox.showerror(
+                            "Model", "Unable to determine backend for selected model.",
+                        )
+                        return
+
+                    try:
+                        size_bytes, file_count = self.model_manager.get_model_download_size(model_id)
+                        size_gb = size_bytes / (1024 ** 3)
+                        detail = f"approximately {size_gb:.2f} GB ({file_count} files)"
+                    except Exception:
+                        detail = "an unspecified size"
+
+                    if not messagebox.askyesno(
+                        "Model Download",
+                        f"Model '{model_id}' will download {detail}.\nContinue?",
+                    ):
+                        return
+
+                    try:
+                        self.model_manager.ensure_download(
+                            model_id,
+                            backend,
+                            cache_dir,
+                            asr_ct2_compute_type_var.get() if backend == "ct2" else None,
+                            timeout=timeout_arg,
+                        )
+                        installed_models = self.model_manager.list_installed(cache_dir)
+                        self.config_manager.set_asr_installed_models(installed_models)
+                        self.config_manager.save_config()
+                        _update_model_info(model_id)
+                        messagebox.showinfo("Model", "Download completed.")
+                    except self._download_cancelled_error:
+                        messagebox.showinfo("Model", "Download canceled.")
+                    except OSError:
+                        messagebox.showerror(
+                            "Model",
+                        )
+                    except Exception as e:
+                        messagebox.showerror("Model", f"Download failed: {e}")
+
+                def _reload_model():
+                    handler = getattr(self.core_instance_ref, "transcription_handler", None)
+                    if handler:
+                        handler.reload_asr()
+
 
                 install_button = ctk.CTkButton(
                     asr_frame, text="Install/Update", command=self._install_selected_model
