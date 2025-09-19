@@ -2,6 +2,9 @@ import logging
 import threading
 import time
 import os
+from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum, auto, unique
 from threading import RLock
 from pathlib import Path
 import atexit
@@ -25,18 +28,30 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
+    MIN_RECORDING_DURATION_CONFIG_KEY,
+    USE_VAD_CONFIG_KEY,
+    VAD_THRESHOLD_CONFIG_KEY,
+    VAD_SILENCE_DURATION_CONFIG_KEY,
+    RECORD_STORAGE_MODE_CONFIG_KEY,
+    RECORD_STORAGE_LIMIT_CONFIG_KEY,
+    LAUNCH_AT_STARTUP_CONFIG_KEY,
+    CLEAR_GPU_CACHE_CONFIG_KEY,
     ASR_BACKEND_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
     ASR_DTYPE_CONFIG_KEY,
+    ASR_CT2_CPU_THREADS_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
-from .model_manager import ensure_download, list_installed, DownloadCancelledError, get_model_download_size
+from . import model_manager as model_manager_module
+
+
+MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
 
 # Estados da aplicação (movidos de global)
 STATE_IDLE = "IDLE"
@@ -47,6 +62,111 @@ STATE_ERROR_MODEL = "ERROR_MODEL"
 STATE_ERROR_AUDIO = "ERROR_AUDIO"
 STATE_ERROR_TRANSCRIPTION = "ERROR_TRANSCRIPTION"
 STATE_ERROR_SETTINGS = "ERROR_SETTINGS"
+
+
+@unique
+class StateEvent(Enum):
+    """Eventos normalizados utilizados para transições de estado."""
+
+    MODEL_MISSING = auto()
+    MODEL_CACHE_INVALID = auto()
+    MODEL_PROMPT_FAILED = auto()
+    MODEL_DOWNLOAD_DECLINED = auto()
+    MODEL_DOWNLOAD_STARTED = auto()
+    MODEL_DOWNLOAD_CANCELLED = auto()
+    MODEL_DOWNLOAD_INVALID_CACHE = auto()
+    MODEL_DOWNLOAD_FAILED = auto()
+    MODEL_CACHE_NOT_CONFIGURED = auto()
+    MODEL_CACHE_MISSING = auto()
+    MODEL_READY = auto()
+    MODEL_LOADING_FAILED = auto()
+    AUDIO_RECORDING_STARTED = auto()
+    AUDIO_RECORDING_STOPPED = auto()
+    AUDIO_RECORDING_DISCARDED = auto()
+    AUDIO_ERROR = auto()
+    TRANSCRIPTION_STARTED = auto()
+    TRANSCRIPTION_COMPLETED = auto()
+    AGENT_COMMAND_COMPLETED = auto()
+    SETTINGS_MISSING_RECORD_KEY = auto()
+    SETTINGS_HOTKEY_START_FAILED = auto()
+    SETTINGS_REREGISTER_FAILED = auto()
+    SETTINGS_RECOVERED = auto()
+
+
+@dataclass(frozen=True)
+class StateNotification:
+    """Mensagem estruturada propagada para assinantes de mudanças de estado."""
+
+    event: StateEvent
+    state: str
+    previous_state: str | None = None
+    details: str | None = None
+    source: str | None = None
+
+
+STATE_FOR_EVENT: dict[StateEvent, str] = {
+    StateEvent.MODEL_MISSING: STATE_ERROR_MODEL,
+    StateEvent.MODEL_CACHE_INVALID: STATE_ERROR_MODEL,
+    StateEvent.MODEL_PROMPT_FAILED: STATE_ERROR_MODEL,
+    StateEvent.MODEL_DOWNLOAD_DECLINED: STATE_ERROR_MODEL,
+    StateEvent.MODEL_DOWNLOAD_STARTED: STATE_LOADING_MODEL,
+    StateEvent.MODEL_DOWNLOAD_CANCELLED: STATE_ERROR_MODEL,
+    StateEvent.MODEL_DOWNLOAD_INVALID_CACHE: STATE_ERROR_MODEL,
+    StateEvent.MODEL_DOWNLOAD_FAILED: STATE_ERROR_MODEL,
+    StateEvent.MODEL_CACHE_NOT_CONFIGURED: STATE_ERROR_MODEL,
+    StateEvent.MODEL_CACHE_MISSING: STATE_ERROR_MODEL,
+    StateEvent.MODEL_READY: STATE_IDLE,
+    StateEvent.MODEL_LOADING_FAILED: STATE_ERROR_MODEL,
+    StateEvent.AUDIO_RECORDING_STARTED: STATE_RECORDING,
+    StateEvent.AUDIO_RECORDING_STOPPED: STATE_IDLE,
+    StateEvent.AUDIO_RECORDING_DISCARDED: STATE_IDLE,
+    StateEvent.AUDIO_ERROR: STATE_ERROR_AUDIO,
+    StateEvent.TRANSCRIPTION_STARTED: STATE_TRANSCRIBING,
+    StateEvent.TRANSCRIPTION_COMPLETED: STATE_IDLE,
+    StateEvent.AGENT_COMMAND_COMPLETED: STATE_IDLE,
+    StateEvent.SETTINGS_MISSING_RECORD_KEY: STATE_ERROR_SETTINGS,
+    StateEvent.SETTINGS_HOTKEY_START_FAILED: STATE_ERROR_SETTINGS,
+    StateEvent.SETTINGS_REREGISTER_FAILED: STATE_ERROR_SETTINGS,
+    StateEvent.SETTINGS_RECOVERED: STATE_IDLE,
+}
+
+
+EVENT_DEFAULT_DETAILS: dict[StateEvent, str] = {
+    StateEvent.MODEL_MISSING: "ASR model not found locally",
+    StateEvent.MODEL_CACHE_INVALID: "Configured ASR cache directory is invalid",
+    StateEvent.MODEL_PROMPT_FAILED: "Failed to prompt user about model download",
+    StateEvent.MODEL_DOWNLOAD_DECLINED: "User declined automatic model download",
+    StateEvent.MODEL_DOWNLOAD_STARTED: "Starting model download",
+    StateEvent.MODEL_DOWNLOAD_CANCELLED: "Model download was cancelled",
+    StateEvent.MODEL_DOWNLOAD_INVALID_CACHE: "Model download aborted due to invalid cache directory",
+    StateEvent.MODEL_DOWNLOAD_FAILED: "Model download failed",
+    StateEvent.MODEL_CACHE_NOT_CONFIGURED: "ASR cache directory not configured",
+    StateEvent.MODEL_CACHE_MISSING: "ASR cache directory missing on disk",
+    StateEvent.MODEL_READY: "Model loaded successfully",
+    StateEvent.MODEL_LOADING_FAILED: "Model failed to load",
+    StateEvent.AUDIO_RECORDING_STARTED: "AudioHandler started recording",
+    StateEvent.AUDIO_RECORDING_STOPPED: "AudioHandler returned to idle",
+    StateEvent.AUDIO_RECORDING_DISCARDED: "Recorded audio discarded before transcription",
+    StateEvent.AUDIO_ERROR: "Audio subsystem reported an error",
+    StateEvent.TRANSCRIPTION_STARTED: "Transcription pipeline started",
+    StateEvent.TRANSCRIPTION_COMPLETED: "Transcription finished",
+    StateEvent.AGENT_COMMAND_COMPLETED: "Agent command completed",
+    StateEvent.SETTINGS_MISSING_RECORD_KEY: "Record hotkey is not configured",
+    StateEvent.SETTINGS_HOTKEY_START_FAILED: "KeyboardHotkeyManager failed to start",
+    StateEvent.SETTINGS_REREGISTER_FAILED: "Hotkey re-registration failed",
+    StateEvent.SETTINGS_RECOVERED: "Recovered stable hotkey registration",
+}
+
+
+AUDIO_STATE_EVENT_MAP: dict[str, StateEvent] = {
+    "RECORDING": StateEvent.AUDIO_RECORDING_STARTED,
+    "TRANSCRIBING": StateEvent.TRANSCRIPTION_STARTED,
+    "IDLE": StateEvent.AUDIO_RECORDING_STOPPED,
+    "ERROR_AUDIO": StateEvent.AUDIO_ERROR,
+}
+
+StateUpdateCallback = Callable[[StateNotification], None]
+
 
 class AppCore:
     def __init__(self, main_tk_root):
@@ -59,14 +179,22 @@ class AppCore:
         self.state_lock = RLock()
         self.keyboard_lock = RLock()
         self.agent_mode_lock = RLock() # Adicionado para o modo agente
+        self.model_prompt_lock = RLock()
 
         # --- Callbacks para UI (definidos externamente pelo UIManager) ---
-        self.state_update_callback = None
+        self.state_update_callback: StateUpdateCallback | None = None
         self.on_segment_transcribed = None # Callback para UI ao vivo
 
         # --- Módulos ---
         self.config_manager = ConfigManager()
         self._pending_tray_tooltips: list[str] = []
+
+        self.model_manager = model_manager_module
+        self._download_cancelled_error = getattr(
+            self.model_manager,
+            "DownloadCancelledError",
+            Exception,
+        )
 
         # Sincronizar modelos ASR já presentes no disco no início da aplicação
         try:
@@ -86,7 +214,7 @@ class AppCore:
         self.audio_handler = AudioHandler(
             config_manager=self.config_manager,
             on_audio_segment_ready_callback=self._on_audio_segment_ready,
-            on_recording_state_change_callback=self._set_state,
+            on_recording_state_change_callback=self._handle_recording_state_change,
         )
         self.gemini_api = GeminiAPI(self.config_manager) # Instancia o GeminiAPI
         self.transcription_handler = TranscriptionHandler(
@@ -104,10 +232,12 @@ class AppCore:
         self.ui_manager = None # Será setado externamente pelo main.py
         # --- Estado da Aplicação ---
         self.current_state = STATE_LOADING_MODEL
+        self._last_notification: StateNotification | None = None
         self.shutting_down = False
         self.full_transcription = "" # Acumula transcrição completa
         self.agent_mode_active = False # Adicionado para controle do modo agente
         self.key_detection_active = False # Flag para controle da detecção de tecla
+        self.model_prompt_active = False
 
         # --- Hotkey Manager ---
         self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
@@ -122,6 +252,9 @@ class AppCore:
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
 
+        self._active_model_download_event: threading.Event | None = None
+        self.model_download_timeout = self._resolve_model_download_timeout()
+
         try:
             cache_dir = self.config_manager.get("asr_cache_dir")
             model_id = self.asr_model_id
@@ -130,69 +263,163 @@ class AppCore:
             model_path = Path(cache_dir) / backend / model_id
 
             if not (model_path.is_dir() and any(model_path.iterdir())):
-                logging.warning("ASR model not found locally; waiting for user confirmation before downloading.")
+                MODEL_LOGGER.warning("ASR model not found locally; waiting for user confirmation before downloading.")
                 self._set_state(STATE_ERROR_MODEL)
                 self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
             else:
-                self.transcription_handler.start_model_loading()
+                self._start_model_loading_with_synced_config()
         except OSError:
             messagebox.showerror("Erro", "Diretório de cache inválido.")
-            self._set_state(STATE_ERROR_MODEL)
+            self._set_state(
+                StateEvent.MODEL_CACHE_INVALID,
+                details=f"Invalid cache directory reported during init: {cache_dir}",
+                source="init",
+            )
 
 
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
 
+    def _resolve_model_download_timeout(self) -> float | None:
+        """Return configured timeout (seconds) for ASR downloads."""
+        raw_timeout = self.config_manager.get("asr_download_timeout_seconds", 0)
+        try:
+            timeout_value = float(raw_timeout)
+        except (TypeError, ValueError):
+            logging.debug("Invalid ASR download timeout %r. Ignoring.", raw_timeout)
+            return None
+        return timeout_value if timeout_value > 0 else None
+
     def _prompt_model_install(self, model_id, backend, cache_dir, ct2_type):
         """Agenda um prompt para download do modelo na thread principal."""
+        with self.model_prompt_lock:
+            if self.model_prompt_active:
+                logging.info(
+                    "Model install prompt suppressed because another prompt is already active."
+                )
+                return
+            self.model_prompt_active = True
+
         def _ask_user():
             try:
                 try:
-                    size_bytes, file_count = get_model_download_size(model_id)
+                    size_bytes, file_count = self.model_manager.get_model_download_size(model_id)
                     size_gb = size_bytes / (1024 ** 3)
                     download_msg = f"Download of approximately {size_gb:.2f} GB ({file_count} files)."
                 except Exception as size_error:
-                    logging.debug(f"Could not fetch download size for {model_id}: {size_error}")
+                    MODEL_LOGGER.debug(f"Could not fetch download size for {model_id}: {size_error}")
                     download_msg = "Download size unavailable."
                 prompt_text = (
                     f"Model '{model_id}' is not installed.\n{download_msg}\nDownload now?"
                 )
                 if messagebox.askyesno("Model Download", prompt_text):
-                    self._start_model_download(model_id, backend, cache_dir, ct2_type)
+                    cancel_event = threading.Event()
+                    self._active_model_download_event = cancel_event
+                    self._start_model_download(
+                        model_id,
+                        backend,
+                        cache_dir,
+                        ct2_type,
+                        timeout=self.model_download_timeout,
+                        cancel_event=cancel_event,
+                    )
                 else:
-                    logging.info("User declined model download prompt.")
+                    MODEL_LOGGER.info("User declined model download prompt.")
                     messagebox.showinfo(
                         "Model",
                         "No model installed. You can install one later in the settings.",
                     )
-                    self._set_state(STATE_ERROR_MODEL)
+                    self._set_state(
+                        StateEvent.MODEL_DOWNLOAD_DECLINED,
+                        details=f"User declined download for '{model_id}'",
+                        source="model_prompt",
+                    )
             except Exception as prompt_error:
-                logging.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
+                MODEL_LOGGER.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
         self.main_tk_root.after(0, _ask_user)
 
-    def _start_model_download(self, model_id, backend, cache_dir, ct2_type):
+    def _start_model_download(
+        self,
+        model_id,
+        backend,
+        cache_dir,
+        ct2_type,
+        *,
+        timeout: float | None = None,
+        cancel_event: threading.Event | None = None,
+    ):
         """Inicia o download do modelo em uma thread separada."""
+
+        if cancel_event is not None:
+            cancel_event.clear()
+
         def _download():
             try:
                 self._set_state(STATE_LOADING_MODEL)
+                self.model_manager.ensure_download(model_id, backend, cache_dir, quant=ct2_type)
+            except self._download_cancelled_error:
+                logging.info("Model download cancelled by user.")
+                self._set_state(
+                    StateEvent.MODEL_DOWNLOAD_CANCELLED,
+                    details=f"Download for '{model_id}' cancelled by user",
+                    source="model_download",
+                )
                 ensure_download(model_id, backend, cache_dir, quant=ct2_type)
             except DownloadCancelledError:
-                logging.info("Model download cancelled by user.")
+                MODEL_LOGGER.info("Model download cancelled by user.")
                 self._set_state(STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download canceled."))
             except OSError:
-                logging.error("Invalid cache directory during model download.", exc_info=True)
+                MODEL_LOGGER.error("Invalid cache directory during model download.", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", "Diretório de cache inválido. Verifique as configurações."))
             except Exception as e:
-                logging.error(f"Model download failed: {e}", exc_info=True)
+                MODEL_LOGGER.error(f"Model download failed: {e}", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", f"Download failed: {e}"))
             else:
-                logging.info("Model download completed successfully.")
+                MODEL_LOGGER.info("Model download completed successfully.")
                 self.main_tk_root.after(0, self.transcription_handler.start_model_loading)
         threading.Thread(target=_download, daemon=True, name="ModelDownloadThread").start()
+
+    def _start_model_loading_with_synced_config(self):
+        """Start model loading after asserting the ConfigManager linkage.
+
+        A sincronização explícita garante que ``TranscriptionHandler`` use a
+        mesma instância de ``ConfigManager`` do núcleo antes de delegar o
+        carregamento do modelo. Este passo deve ser verificado manualmente em
+        cenários de recarga de modelo após alterações de configuração.
+        """
+        handler = getattr(self, "transcription_handler", None)
+        if handler is None:
+            logging.error("Cannot start model loading: transcription handler missing.")
+            self._set_state(STATE_ERROR_MODEL)
+            return
+
+        handler.config_manager = self.config_manager
+
+        try:
+            assert handler.config_manager is self.config_manager
+        except AssertionError:
+            logging.error(
+                "ConfigManager mismatch detected before model loading; aborting to avoid stale settings."
+            )
+            self._set_state(STATE_ERROR_SETTINGS)
+            return
+
+        logging.debug(
+            "ConfigManager synchronized before model loading (id=%s).",
+            id(self.config_manager),
+        )
+
+        handler.start_model_loading()
+
+    def cancel_model_download(self) -> None:
+        """Solicita o cancelamento do download de modelo em andamento."""
+        event = getattr(self, "_active_model_download_event", None)
+        if event is not None:
+            event.set()
 
     def _apply_initial_config_to_core_attributes(self):
         # Mover a atribuição de self.record_key, self.record_mode, etc.
@@ -246,7 +473,7 @@ class AppCore:
             return
 
         try:
-            installed = list_installed(resolved_path)
+            installed = self.model_manager.list_installed(resolved_path)
         except Exception as exc:  # pragma: no cover - defensivo
             logging.warning(
                 "AppCore[%s]: list_installed falhou em '%s': %r",
@@ -277,7 +504,16 @@ class AppCore:
             cache_repr,
             reason,
         )
-        self._set_state(STATE_ERROR_MODEL)
+        if reason == "not_configured":
+            event = StateEvent.MODEL_CACHE_NOT_CONFIGURED
+            detail = "ASR cache directory not configured"
+        elif reason == "missing":
+            event = StateEvent.MODEL_CACHE_MISSING
+            detail = f"ASR cache directory missing: {cache_repr}"
+        else:
+            event = StateEvent.MODEL_CACHE_INVALID
+            detail = f"ASR cache directory issue ({reason}): {cache_repr}"
+        self._set_state(event, details=detail, source=f"cache_dir::{context}")
         tooltip = (
             "Whisper Recorder - configure o diretório de modelos ASR"
             if reason == "not_configured"
@@ -297,6 +533,13 @@ class AppCore:
                 self._pending_tray_tooltips.append(message)
                 logging.debug("AppCore: tooltip pendente armazenada: %s", message)
 
+    def report_runtime_notice(self, message: str, *, level: int = logging.WARNING) -> None:
+        """Publica um aviso em log e encaminha mensagem para a UI."""
+        if not message:
+            return
+        logging.log(level, message)
+        self._queue_tooltip_update(message)
+
     def flush_pending_ui_notifications(self) -> None:
         if not self._pending_tray_tooltips:
             return
@@ -314,8 +557,43 @@ class AppCore:
         for message in pending:
             self.main_tk_root.after(0, lambda msg=message: ui_manager.show_status_tooltip(msg))
 
+    def emit_state_warning(
+        self,
+        code: str,
+        details: dict | None = None,
+        *,
+        message: str | None = None,
+        level: str = "warning",
+    ) -> None:
+        """Encaminha avisos para a UI usando o callback de estado."""
+        payload = {
+            "code": code,
+            "details": details or {},
+            "level": level,
+        }
+        if message:
+            payload["message"] = message
+        callback = self.state_update_callback
+        if callback:
+            try:
+                event = {"state": self.current_state, "warning": payload}
+                self.main_tk_root.after(0, lambda evt=event: callback(evt))
+            except Exception as error:
+                logging.error(
+                    "Falha ao propagar aviso de estado (%s): %s",
+                    code,
+                    error,
+                    exc_info=True,
+                )
+        if message:
+            self._queue_tooltip_update(message)
+
     # --- Callbacks de Módulos ---
-    def set_state_update_callback(self, callback):
+    def set_state_update_callback(self, callback: StateUpdateCallback | None) -> None:
+        """Registra um callback para receber ``StateNotification`` estruturado."""
+
+        if callback is not None and not callable(callback):
+            raise TypeError("state_update_callback must be callable or None")
         self.state_update_callback = callback
 
     def set_segment_callback(self, callback):
@@ -324,6 +602,16 @@ class AppCore:
     def set_key_detection_callback(self, callback):
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
+
+    def _handle_recording_state_change(self, audio_state: str):
+        """Normaliza notificações do ``AudioHandler`` em eventos estruturados."""
+
+        event = AUDIO_STATE_EVENT_MAP.get(audio_state)
+        if event is None:
+            logging.warning("AudioHandler emitted unknown state '%s'.", audio_state)
+            return
+        detail = f"AudioHandler signalled '{audio_state}'"
+        self._set_state(event, details=detail, source="audio_handler")
 
     def _on_audio_segment_ready(self, audio_source: str | np.ndarray):
         """Callback chamado ao finalizar a gravação (arquivo ou array)."""
@@ -344,7 +632,11 @@ class AppCore:
             logging.info(
                 f"Segmento de áudio ({duration_seconds:.2f}s) é mais curto que o mínimo configurado ({min_duration}s). Ignorando."
             )
-            self._set_state(STATE_IDLE)  # Volta para o estado IDLE
+            self._set_state(
+                StateEvent.AUDIO_RECORDING_DISCARDED,
+                details=f"Segment shorter than minimum ({duration_seconds:.2f}s < {min_duration}s)",
+                source="audio_handler",
+            )
             return  # Interrompe o processamento
 
         with self.agent_mode_lock:
@@ -362,8 +654,16 @@ class AppCore:
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
         logging.info("AppCore: Model loaded successfully.")
-        self._set_state(STATE_IDLE)
+        self._set_state(
+            StateEvent.MODEL_READY,
+            details="Transcription model loaded",
+            source="transcription_handler",
+        )
         self._start_autohotkey()
+
+    def notify_model_loading_started(self):
+        """Expõe atualização explícita de estado para carregamento de modelo."""
+        self._set_state(STATE_LOADING_MODEL)
         
         # Iniciar serviços de estabilidade de hotkey se habilitados
         if self.hotkey_stability_service_enabled:
@@ -390,7 +690,11 @@ class AppCore:
     def _on_model_load_failed(self, error_msg):
         """Callback do TranscriptionHandler quando o modelo falha ao carregar."""
         logging.error(f"AppCore: Falha ao carregar o modelo: {error_msg}")
-        self._set_state(STATE_ERROR_MODEL)
+        self._set_state(
+            StateEvent.MODEL_LOADING_FAILED,
+            details=error_msg,
+            source="transcription_handler",
+        )
         self._log_status(f"Erro: Falha ao carregar o modelo. {error_msg}", error=True)
         # Exibir messagebox via UI Manager se disponível
         if self.ui_manager:
@@ -445,7 +749,12 @@ class AppCore:
         except Exception:
             pass
         
-        self._set_state(STATE_IDLE)
+        char_count = len(final_text)
+        self._set_state(
+            StateEvent.TRANSCRIPTION_COMPLETED,
+            details=f"Transcription finalized ({char_count} chars)",
+            source="transcription",
+        )
         if self.ui_manager:
             self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
         logging.info(f"Corrected text ready for copy/paste: {final_text}")
@@ -477,7 +786,12 @@ class AppCore:
             logging.error(f"Erro ao manusear o resultado do agente: {e}", exc_info=True)
             self._log_status(f"Erro ao manusear o resultado do agente: {e}", error=True)
         finally:
-            self._set_state(STATE_IDLE)
+            response_size = len(agent_response_text)
+            self._set_state(
+                StateEvent.AGENT_COMMAND_COMPLETED,
+                details=f"Agent response delivered ({response_size} chars)",
+                source="agent_mode",
+            )
             if self.ui_manager:
                 self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
             self._delete_temp_audio_file()
@@ -529,20 +843,86 @@ class AppCore:
         threading.Thread(target=detect_key_task, daemon=True, name="KeyDetectionThread").start()
 
     # --- Gerenciamento de Estado e Logs ---
-    def _set_state(self, new_state):
+    def _set_state(self, event: StateEvent, *, details: str | None = None, source: str | None = None):
+        """Aplica uma transição de estado baseada em ``StateEvent``."""
+
+        if not isinstance(event, StateEvent):
+            raise ValueError(f"Unsupported state event payload: {event!r}")
+
+        try:
+            mapped_state = STATE_FOR_EVENT[event]
+        except KeyError as exc:
+            raise ValueError(f"No state mapping defined for event {event!r}") from exc
+
+        message = details or EVENT_DEFAULT_DETAILS.get(event)
+
         with self.state_lock:
-            if self.current_state == new_state:
-                logging.debug(f"State already {new_state}, not changing.")
+            previous_state = self.current_state
+            last_event = self._last_notification.event if self._last_notification else None
+            last_state = self._last_notification.state if self._last_notification else None
+            if last_event == event and last_state == mapped_state:
+                logging.debug(
+                    "Duplicate state event %s suppressed (state=%s, source=%s).",
+                    event.name,
+                    mapped_state,
+                    source,
+                )
                 return
-            self.current_state = new_state
-            logging.info(f"State changed to: {new_state}")
-            callback_to_call = self.state_update_callback
-            current_state_for_callback = new_state
-        if callback_to_call:
+
+            notification = StateNotification(
+                event=event,
+                state=mapped_state,
+                previous_state=previous_state,
+                details=message,
+                source=source,
+            )
+            self.current_state = mapped_state
+            self._last_notification = notification
+
+        transition_log = f"State transition via {event.name}: {previous_state} -> {mapped_state}"
+        if message:
+            transition_log += f" ({message})"
+        if source:
+            transition_log += f" [source={source}]"
+        logging.info(transition_log)
+
+        callback = self.state_update_callback
+        if not callback:
+            return
+
+        def _notify():
             try:
-                self.main_tk_root.after(0, lambda: callback_to_call(current_state_for_callback))
-            except Exception as e:
-                logging.error(f"Error calling state update callback for state {current_state_for_callback}: {e}")
+                callback(notification)
+            except Exception as exc:  # pragma: no cover - proteção defensiva
+                logging.error(
+                    "State update callback failed for %s: %s",
+                    event.name,
+                    exc,
+                    exc_info=True,
+                )
+
+        try:
+            self.main_tk_root.after(0, _notify)
+        except Exception:  # pragma: no cover - fallback quando Tk não estiver disponível
+            logging.debug(
+                "Tkinter scheduling failed for state event %s; calling callback directly.",
+                event.name,
+                exc_info=True,
+            )
+            _notify()
+
+    def _ensure_idle_state_notification(self):
+        with self.state_lock:
+            is_idle = self.current_state == STATE_IDLE
+            callback_to_call = self.state_update_callback
+        if is_idle:
+            if callback_to_call:
+                try:
+                    self.main_tk_root.after(0, lambda: callback_to_call(STATE_IDLE))
+                except Exception as e:
+                    logging.error(f"Error notifying idle state: {e}")
+        else:
+            self._set_state(STATE_IDLE)
 
     def is_state_transcribing(self) -> bool:
         """Indica se o estado atual é TRANSCRIBING."""
@@ -569,7 +949,11 @@ class AppCore:
                 self.ahk_running = True
                 self._log_status(f"Hotkey registered: {self.record_key.upper()} (mode: {self.record_mode})")
             else:
-                self._set_state(STATE_ERROR_SETTINGS)
+                self._set_state(
+                    StateEvent.SETTINGS_HOTKEY_START_FAILED,
+                    details="KeyboardHotkeyManager.start returned False",
+                    source="hotkeys",
+                )
                 self._log_status("Erro: Falha ao iniciar KeyboardHotkeyManager.", error=True)
             return success
 
@@ -577,16 +961,28 @@ class AppCore:
         self._cleanup_hotkeys()
         time.sleep(0.2)
         if not self.record_key:
-            self._set_state(STATE_ERROR_SETTINGS)
+            self._set_state(
+                StateEvent.SETTINGS_MISSING_RECORD_KEY,
+                details="Record hotkey not configured",
+                source="hotkeys",
+            )
             self._log_status("Error: No record key set!", error=True)
             return False
         success = self._start_autohotkey()
         if success:
             self._log_status(f"Global hotkey registered: {self.record_key.upper()} (mode: {self.record_mode})")
             if self.current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
-                self._set_state(STATE_IDLE)
+                self._set_state(
+                    StateEvent.SETTINGS_RECOVERED,
+                    details="Hotkeys registered successfully",
+                    source="hotkeys",
+                )
         else:
-            self._set_state(STATE_ERROR_SETTINGS)
+            self._set_state(
+                StateEvent.SETTINGS_HOTKEY_START_FAILED,
+                details="Hotkey registration failed",
+                source="hotkeys",
+            )
             self._log_status("Error: Hotkey registration failed.", error=True)
         return success
 
@@ -629,14 +1025,27 @@ class AppCore:
                     if success:
                         logging.info("Periodic hotkey re-registration attempt finished successfully.")
                         with self.state_lock:
-                            if self.current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
-                                self._set_state(STATE_IDLE)
+                            should_emit = self.current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]
+                        if should_emit:
+                            self._set_state(
+                                StateEvent.SETTINGS_RECOVERED,
+                                details="Periodic hotkey re-registration succeeded",
+                                source="hotkeys",
+                            )
                     else:
                         logging.warning("Periodic hotkey re-registration attempt failed.")
-                        self._set_state(STATE_ERROR_SETTINGS)
+                        self._set_state(
+                            StateEvent.SETTINGS_REREGISTER_FAILED,
+                            details="Periodic hotkey re-registration failed",
+                            source="hotkeys",
+                        )
                 except Exception as e:
                     logging.error(f"Error during periodic hotkey re-registration: {e}", exc_info=True)
-                    self._set_state(STATE_ERROR_SETTINGS)
+                    self._set_state(
+                        StateEvent.SETTINGS_REREGISTER_FAILED,
+                        details=f"Exception during periodic re-registration: {e}",
+                        source="hotkeys",
+                    )
             else:
                 logging.debug(f"Periodic check: State is {current_state}. Skipping hotkey re-registration.")
         logging.info("Periodic hotkey re-registration thread stopped.")
@@ -653,18 +1062,31 @@ class AppCore:
                     success = self.ahk_manager.start()
                     if success:
                         self.ahk_running = True
-                        if current_state.startswith("ERROR"): self._set_state(STATE_IDLE)
+                        if current_state.startswith("ERROR"):
+                            self._set_state(
+                                StateEvent.SETTINGS_RECOVERED,
+                                details="Manual hotkey re-registration succeeded",
+                                source="hotkeys",
+                            )
                         self._log_status("KeyboardHotkeyManager reload completed.", error=False)
                         return True
                     else:
                         self._log_status("Falha ao recarregar KeyboardHotkeyManager.", error=True)
-                        self._set_state(STATE_ERROR_SETTINGS)
+                        self._set_state(
+                            StateEvent.SETTINGS_REREGISTER_FAILED,
+                            details="Manual hotkey re-registration failed",
+                            source="hotkeys",
+                        )
                         return False
                 except Exception as e:
                     self.ahk_running = False
                     logging.error(f"Exception during manual KeyboardHotkeyManager re-registration: {e}", exc_info=True)
                     self._log_status(f"Erro ao recarregar KeyboardHotkeyManager: {e}", error=True)
-                    self._set_state(STATE_ERROR_SETTINGS)
+                    self._set_state(
+                        StateEvent.SETTINGS_REREGISTER_FAILED,
+                        details=f"Exception during manual hotkey re-registration: {e}",
+                        source="hotkeys",
+                    )
                     return False
         else:
             logging.warning(f"Manual trigger: Cannot re-register hotkeys. Current state is {current_state}.")
@@ -721,7 +1143,11 @@ class AppCore:
             # nenhum processo de transcrição fique pendente.
             if hasattr(self.transcription_handler, "stop_transcription"):
                 self.transcription_handler.stop_transcription()
-            self._set_state(STATE_IDLE)
+            self._set_state(
+                StateEvent.AUDIO_RECORDING_DISCARDED,
+                details="Recording discarded after stop",
+                source="audio_handler",
+            )
 
         # A janela de UI ao vivo será fechada pelo _handle_transcription_result
 
@@ -779,156 +1205,474 @@ class AppCore:
         )
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
+    def validate_settings_inputs(self, **kwargs) -> tuple[bool, list[str]]:
+        friendly_names: dict[str, str] = {
+            "new_key": "Tecla de gravação",
+            "new_mode": "Modo de gravação",
+            "new_auto_paste": "Colar automático",
+            "new_sound_enabled": "Som de feedback",
+            "new_sound_frequency": "Frequência do som",
+            "new_sound_duration": "Duração do som",
+            "new_sound_volume": "Volume do som",
+            "new_agent_key": "Tecla do agente",
+            "new_text_correction_enabled": "Correção de texto",
+            "new_text_correction_service": "Serviço de correção de texto",
+            "new_openrouter_api_key": "Chave da OpenRouter",
+            "new_openrouter_model": "Modelo OpenRouter",
+            "new_gemini_api_key": "Chave da Gemini",
+            "new_gemini_model": "Modelo Gemini",
+            "new_gemini_prompt": "Prompt de correção Gemini",
+            "prompt_agentico": "Prompt agêntico",
+            "new_agent_model": "Modelo do agente",
+            "new_gemini_model_options": "Lista de modelos Gemini",
+            "new_batch_size": "Tamanho do lote",
+            "new_gpu_index": "Índice da GPU",
+            "new_hotkey_stability_service_enabled": "Serviço de estabilidade das hotkeys",
+            "new_min_transcription_duration": "Duração mínima da transcrição",
+            "new_min_record_duration": "Duração mínima da gravação",
+            "new_save_temp_recordings": "Salvar gravações temporárias",
+            "new_record_storage_mode": "Modo de armazenamento da gravação",
+            "new_record_storage_limit": "Limite de armazenamento da gravação",
+            "new_record_to_memory": "Armazenar gravação em memória",
+            "new_max_memory_seconds_mode": "Modo de retenção em memória",
+            "new_max_memory_seconds": "Tempo máximo em memória",
+            "new_use_vad": "VAD",
+            "new_vad_threshold": "Limiar do VAD",
+            "new_vad_silence_duration": "Duração do silêncio (VAD)",
+            "new_display_transcripts_in_terminal": "Exibir transcrições no terminal",
+            "new_launch_at_startup": "Executar ao iniciar",
+            "new_chunk_length_mode": "Modo do tamanho de chunk",
+            "new_chunk_length_sec": "Duração do chunk",
+            "new_enable_torch_compile": "Torch compile",
+            "new_asr_backend": "Backend de ASR",
+            "new_asr_model": "Modelo de ASR",
+            "new_asr_model_id": "Modelo de ASR",
+            "new_asr_compute_device": "Dispositivo de ASR",
+            "new_asr_dtype": "DType de ASR",
+            "new_asr_ct2_compute_type": "Quantização CT2",
+            "new_ct2_quantization": "Quantização CT2",
+            "new_asr_cache_dir": "Diretório de cache do ASR",
+        }
+
+        def _label(key: str) -> str:
+            return friendly_names.get(key, key)
+
+        problems: list[str] = []
+
+        def ensure_bool(key: str) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not isinstance(value, bool):
+                problems.append(f"{_label(key)} deve ser verdadeiro ou falso.")
+
+        def ensure_string(key: str, *, allow_empty: bool) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not isinstance(value, str):
+                problems.append(f"{_label(key)} deve ser um texto.")
+                return
+            if not allow_empty and not value.strip():
+                problems.append(f"{_label(key)} não pode ficar em branco.")
+
+        def ensure_int(
+            key: str,
+            *,
+            min_value: int | None = None,
+            max_value: int | None = None,
+        ) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not isinstance(value, int) or isinstance(value, bool):
+                problems.append(f"{_label(key)} deve ser um número inteiro.")
+                return
+            if min_value is not None and value < min_value:
+                problems.append(
+                    f"{_label(key)} deve ser maior ou igual a {min_value}."
+                )
+            if max_value is not None and value > max_value:
+                problems.append(
+                    f"{_label(key)} deve ser menor ou igual a {max_value}."
+                )
+
+        def ensure_number(
+            key: str,
+            *,
+            min_value: float | None = None,
+            max_value: float | None = None,
+            min_inclusive: bool = True,
+            max_inclusive: bool = True,
+        ) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not (isinstance(value, (int, float)) and not isinstance(value, bool)):
+                problems.append(f"{_label(key)} deve ser um número.")
+                return
+            if min_value is not None:
+                if (min_inclusive and value < min_value) or (
+                    not min_inclusive and value <= min_value
+                ):
+                    operador = "maior ou igual" if min_inclusive else "maior"
+                    problems.append(
+                        f"{_label(key)} deve ser {operador} que {min_value}."
+                    )
+            if max_value is not None:
+                if (max_inclusive and value > max_value) or (
+                    not max_inclusive and value >= max_value
+                ):
+                    operador = "menor ou igual" if max_inclusive else "menor"
+                    problems.append(
+                        f"{_label(key)} deve ser {operador} que {max_value}."
+                    )
+
+        def ensure_enum(key: str, allowed: set[str]) -> None:
+            if key not in kwargs:
+                return
+            value = kwargs[key]
+            if not isinstance(value, str):
+                problems.append(f"{_label(key)} deve ser um texto.")
+                return
+            normalized = value.strip().lower()
+            if key == "new_asr_compute_device" and normalized.startswith("cuda"):
+                return
+            if normalized not in allowed:
+                opcoes = ", ".join(sorted(allowed))
+                problems.append(
+                    f"{_label(key)} possui um valor inválido. Opções permitidas: {opcoes}."
+                )
+
+        bool_fields = {
+            "new_auto_paste",
+            "new_sound_enabled",
+            "new_text_correction_enabled",
+            "new_hotkey_stability_service_enabled",
+            "new_save_temp_recordings",
+            "new_record_to_memory",
+            "new_use_vad",
+            "new_display_transcripts_in_terminal",
+            "new_launch_at_startup",
+            "new_enable_torch_compile",
+        }
+        for field in bool_fields:
+            ensure_bool(field)
+
+        for field in {
+            "new_openrouter_api_key",
+            "new_gemini_api_key",
+            "new_gemini_prompt",
+            "prompt_agentico",
+        }:
+            ensure_string(field, allow_empty=True)
+
+        for field in {
+            "new_key",
+            "new_agent_key",
+            "new_openrouter_model",
+            "new_gemini_model",
+            "new_agent_model",
+            "new_asr_model",
+            "new_asr_model_id",
+            "new_asr_cache_dir",
+        }:
+            ensure_string(field, allow_empty=False)
+
+        ensure_enum("new_mode", {"toggle", "press", "hold"})
+        ensure_enum(
+            "new_text_correction_service",
+            {"none", "openrouter", "gemini"},
+        )
+        ensure_enum(
+            "new_record_storage_mode",
+            {"auto", "disk", "memory", "hybrid"},
+        )
+        ensure_enum("new_max_memory_seconds_mode", {"auto", "manual"})
+        ensure_enum("new_chunk_length_mode", {"auto", "manual"})
+        ensure_enum(
+            "new_asr_backend",
+            {
+                "auto",
+                "transformers",
+                "ct2",
+                "ctranslate2",
+                "faster-whisper",
+                "faster_whisper",
+                "whisper",
+                "dummy",
+            },
+        )
+        ensure_enum(
+            "new_asr_compute_device",
+            {"auto", "cpu", "cuda", "mps", "rocm", "xpu", "openvino", "dml"},
+        )
+        ensure_enum(
+            "new_asr_dtype",
+            {"auto", "float16", "float32", "bfloat16"},
+        )
+        ensure_enum(
+            "new_asr_ct2_compute_type",
+            {"default", "float16", "int8", "int8_float16"},
+        )
+        ensure_enum(
+            "new_ct2_quantization",
+            {"default", "float16", "int8", "int8_float16"},
+        )
+
+        ensure_int("new_batch_size", min_value=1)
+        ensure_int("new_gpu_index", min_value=-1)
+        ensure_int("new_record_storage_limit", min_value=0)
+
+        ensure_number("new_sound_frequency", min_value=1, min_inclusive=True)
+        ensure_number("new_sound_duration", min_value=0.0, min_inclusive=False)
+        ensure_number("new_sound_volume", min_value=0.0, max_value=1.0)
+        ensure_number("new_min_transcription_duration", min_value=0.0)
+        ensure_number("new_min_record_duration", min_value=0.0)
+        ensure_number("new_max_memory_seconds", min_value=0.0, min_inclusive=False)
+        ensure_number("new_vad_threshold", min_value=0.0, max_value=1.0)
+        ensure_number("new_vad_silence_duration", min_value=0.0, min_inclusive=False)
+        ensure_number("new_chunk_length_sec", min_value=0.0, min_inclusive=False)
+
+        if "new_gemini_model_options" in kwargs:
+            options = kwargs["new_gemini_model_options"]
+            if not isinstance(options, (list, tuple)):
+                problems.append(
+                    f"{_label('new_gemini_model_options')} deve ser uma lista de textos."
+                )
+            else:
+                cleaned: list[str] = []
+                invalid_options = False
+                for item in options:
+                    if not isinstance(item, str):
+                        problems.append(
+                            f"{_label('new_gemini_model_options')} contém um item não textual."
+                        )
+                        invalid_options = True
+                        break
+                    stripped = item.strip()
+                    if not stripped:
+                        problems.append(
+                            f"{_label('new_gemini_model_options')} não pode ter entradas vazias."
+                        )
+                        invalid_options = True
+                        break
+                    cleaned.append(stripped)
+                if not invalid_options and not cleaned:
+                    problems.append(
+                        f"{_label('new_gemini_model_options')} deve possuir ao menos um modelo válido."
+                    )
+
+        return (len(problems) == 0, problems)
+
     def apply_settings_from_external(self, **kwargs):
         logging.info("AppCore: Applying new configuration from external source.")
+        valid_inputs, validation_errors = self.validate_settings_inputs(**kwargs)
+        if not valid_inputs:
+            summary = "\n".join(f"• {msg}" for msg in validation_errors)
+            message = (
+                "Não foi possível aplicar as configurações devido aos seguintes "
+                f"problemas:\n\n{summary}"
+            )
+            logging.error(
+                "AppCore: configuração rejeitada por validação: %s",
+                "; ".join(validation_errors),
+            )
+            self._set_state(STATE_ERROR_SETTINGS)
+
+            def _show_error():
+                messagebox.showerror("Configurações inválidas", message)
+
+            self.main_tk_root.after(0, _show_error)
+            return
         config_changed = False
+        changed_mapped_keys: set[str] = set()
 
-        # Atualizar ConfigManager e verificar se houve mudanças
-        launch_changed = False
-        reload_required = False
-        reload_keys = {
-            ASR_BACKEND_CONFIG_KEY,
-            ASR_MODEL_ID_CONFIG_KEY,
-            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-            "asr_model",
+        config_key_map = {
+            "new_key": "record_key",
+            "new_mode": "record_mode",
+            "new_auto_paste": "auto_paste",
+            "new_sound_enabled": "sound_enabled",
+            "new_sound_frequency": "sound_frequency",
+            "new_sound_duration": "sound_duration",
+            "new_sound_volume": "sound_volume",
+            "new_agent_key": "agent_key",
+            "new_text_correction_enabled": "text_correction_enabled",
+            "new_text_correction_service": "text_correction_service",
+            "new_openrouter_api_key": "openrouter_api_key",
+            "new_openrouter_model": "openrouter_model",
+            "new_gemini_api_key": "gemini_api_key",
+            "new_gemini_model": "gemini_model",
+            "new_agent_model": "gemini_agent_model",
+            "new_gemini_prompt": GEMINI_PROMPT_CONFIG_KEY,
+            "new_batch_size": "batch_size",
+            "new_gpu_index": "gpu_index",
+            "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled",
+            "new_min_transcription_duration": "min_transcription_duration",
+            "new_min_record_duration": "min_record_duration",
+            "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+            "new_record_to_memory": "record_to_memory",
+            "new_max_memory_seconds_mode": "max_memory_seconds_mode",
+            "new_max_memory_seconds": "max_memory_seconds",
+            "new_gemini_model_options": "gemini_model_options",
+            "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
+            "new_asr_model_id": ASR_MODEL_ID_CONFIG_KEY,
+            "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
+            "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
+            "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
+            "new_ct2_cpu_threads": ASR_CT2_CPU_THREADS_CONFIG_KEY,
+            "new_clear_gpu_cache": CLEAR_GPU_CACHE_CONFIG_KEY,
+            "new_use_vad": USE_VAD_CONFIG_KEY,
+            "new_vad_threshold": VAD_THRESHOLD_CONFIG_KEY,
+            "new_vad_silence_duration": VAD_SILENCE_DURATION_CONFIG_KEY,
+            "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
+            "new_record_storage_mode": RECORD_STORAGE_MODE_CONFIG_KEY,
+            "new_record_storage_limit": RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            "new_launch_at_startup": LAUNCH_AT_STARTUP_CONFIG_KEY,
+            "new_chunk_length_mode": "chunk_length_mode",
+            "new_chunk_length_sec": "chunk_length_sec",
+            "new_enable_torch_compile": "enable_torch_compile",
         }
-        for key, value in kwargs.items():
-            # Mapear nomes de kwargs para chaves de config_manager se necessário
-            config_key_map = {
-                "new_key": "record_key", "new_mode": "record_mode", "new_auto_paste": "auto_paste",
-                "new_sound_enabled": "sound_enabled", "new_sound_frequency": "sound_frequency",
-                "new_sound_duration": "sound_duration", "new_sound_volume": "sound_volume",
-                "new_agent_key": "agent_key", "new_text_correction_enabled": "text_correction_enabled",
-                "new_text_correction_service": "text_correction_service",
-                "new_openrouter_api_key": "openrouter_api_key", "new_openrouter_model": "openrouter_model",
-                "new_gemini_api_key": "gemini_api_key", "new_gemini_model": "gemini_model",
-                "new_agent_model": "gemini_agent_model",
-                "new_gemini_prompt": GEMINI_PROMPT_CONFIG_KEY,
-                "new_batch_size": "batch_size", "new_gpu_index": "gpu_index",
-                "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled", # Nova configuração unificada
-                "new_min_transcription_duration": "min_transcription_duration",
-                "new_min_record_duration": "min_record_duration",
-                "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
-                "new_record_to_memory": "record_to_memory",
-                "new_max_memory_seconds_mode": "max_memory_seconds_mode",
-                "new_max_memory_seconds": "max_memory_seconds",
-                "new_gemini_model_options": "gemini_model_options",
-                "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
-                "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
-                "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
-                "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
-                "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-                "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
-                "new_use_vad": "use_vad",
-                "new_vad_threshold": "vad_threshold",
-                "new_vad_silence_duration": "vad_silence_duration",
-                "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
-                "new_record_storage_mode": "record_storage_mode",
-                "new_record_storage_limit": "record_storage_limit",
-                "new_launch_at_startup": "launch_at_startup",
-                # Novas chaves para opções de chunk e recurso experimental
-                "new_chunk_length_mode": "chunk_length_mode",
-                "new_chunk_length_sec": "chunk_length_sec",
-                "new_enable_torch_compile": "enable_torch_compile",
-                "new_asr_model": "asr_model",
-                "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
-                "new_asr_model_id": ASR_MODEL_ID_CONFIG_KEY,
-                "new_ct2_quantization": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-            }
-            mapped_key = config_key_map.get(key, key) # Usa o nome original se não mapeado
 
+        legacy_key_aliases = {
+            "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
+            "asr_model": ASR_MODEL_ID_CONFIG_KEY,
+            "new_ct2_quantization": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+        }
+
+        normalized_updates: dict[str, object] = {}
+        sentinel = object()
+        for raw_key, value in kwargs.items():
+            if value is None:
+                logging.debug("Ignoring None value for configuration key '%s'.", raw_key)
+                continue
+            mapped_key = config_key_map.get(raw_key)
+            if mapped_key is None:
+                mapped_key = legacy_key_aliases.get(raw_key, raw_key)
+            previous_value = normalized_updates.get(mapped_key, sentinel)
+            if previous_value is not sentinel and previous_value != value:
+                logging.debug(
+                    "Configuration key '%s' was provided multiple times; using latest value %r.",
+                    mapped_key,
+                    value,
+                )
+            normalized_updates[mapped_key] = value
+
+        for mapped_key, value in normalized_updates.items():
             current_value = self.config_manager.get(mapped_key)
             if current_value != value:
                 self.config_manager.set(mapped_key, value)
                 config_changed = True
-                if mapped_key in reload_keys:
-                    reload_required = True
-                if mapped_key == "launch_at_startup":
-                    launch_changed = True
+                changed_mapped_keys.add(mapped_key)
                 logging.info(f"Configuração '{mapped_key}' alterada para: {value}")
-        
-        # Lógica para unificar auto_paste: se new_auto_paste foi passado, ele se aplica a ambos
-        if "new_auto_paste" in kwargs:
-            new_auto_paste_value = kwargs["new_auto_paste"]
-            if self.config_manager.get("auto_paste") != new_auto_paste_value:
-                self.config_manager.set("auto_paste", new_auto_paste_value)
-                config_changed = True
-                logging.info(f"Configuração 'auto_paste' alterada para: {new_auto_paste_value}")
-            # Garantir que agent_auto_paste seja sempre igual a auto_paste
+
+        if "auto_paste" in normalized_updates:
+            new_auto_paste_value = normalized_updates["auto_paste"]
             if self.config_manager.get("agent_auto_paste") != new_auto_paste_value:
                 self.config_manager.set("agent_auto_paste", new_auto_paste_value)
                 config_changed = True
-                logging.info(f"Configuração 'agent_auto_paste' (unificada) alterada para: {new_auto_paste_value}")
-        
-        if config_changed:
-            self.config_manager.save_config()
-            self._apply_initial_config_to_core_attributes() # Re-aplicar configs ao AppCore
+                changed_mapped_keys.add("agent_auto_paste")
+                logging.info(
+                    "Configuração 'agent_auto_paste' (unificada) alterada para: %s",
+                    new_auto_paste_value,
+                )
 
-            self.audio_handler.config_manager = self.config_manager # Atualizar referência
-            self.transcription_handler.config_manager = self.config_manager # Atualizar referência
-            if any(
-                key in kwargs
-                for key in [
-                    "new_use_vad",
-                    "new_vad_threshold",
-                    "new_vad_silence_duration",
-                    "new_record_storage_mode",
-                    "new_record_storage_limit",
-                    "new_min_record_duration",
-                ]
-            ):
+        if config_changed:
+            reload_keys = {
+                ASR_BACKEND_CONFIG_KEY,
+                ASR_MODEL_ID_CONFIG_KEY,
+                ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+                ASR_COMPUTE_DEVICE_CONFIG_KEY,
+                ASR_DTYPE_CONFIG_KEY,
+                ASR_CT2_CPU_THREADS_CONFIG_KEY,
+                ASR_CACHE_DIR_CONFIG_KEY,
+            }
+            reload_required = bool(changed_mapped_keys & reload_keys)
+            launch_changed = LAUNCH_AT_STARTUP_CONFIG_KEY in changed_mapped_keys
+
+            self.config_manager.save_config()
+            self._apply_initial_config_to_core_attributes()
+
+            self.audio_handler.config_manager = self.config_manager
+            self.transcription_handler.config_manager = self.config_manager
+
+            audio_related_keys = {
+                USE_VAD_CONFIG_KEY,
+                VAD_THRESHOLD_CONFIG_KEY,
+                VAD_SILENCE_DURATION_CONFIG_KEY,
+                RECORD_STORAGE_MODE_CONFIG_KEY,
+                RECORD_STORAGE_LIMIT_CONFIG_KEY,
+                MIN_RECORDING_DURATION_CONFIG_KEY,
+            }
+            if audio_related_keys & changed_mapped_keys:
                 self.audio_handler.update_config()
-            self.transcription_handler.update_config() # Chamar para recarregar configs específicas do handler
+
+            try:
+                reload_needed = self.transcription_handler.update_config(trigger_reload=False)
+            except Exception as exc:
+                logging.error("Erro ao atualizar configurações do TranscriptionHandler: %s", exc, exc_info=True)
+                self._set_state(STATE_ERROR_MODEL)
+                self._log_status("Erro: Falha ao aplicar configurações do modelo.", error=True)
+                return
+
+            reload_required = reload_required or reload_needed
+
             if reload_required:
-                self.transcription_handler.start_model_loading()
+                self._set_state(STATE_LOADING_MODEL)
+                try:
+                    self.transcription_handler.start_model_loading()
+                except Exception as exc:
+                    logging.error("Falha ao iniciar recarregamento do modelo ASR: %s", exc, exc_info=True)
+                    self._set_state(STATE_ERROR_MODEL)
+                    self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
+                    return
+            else:
+                self._ensure_idle_state_notification()
+
             if launch_changed:
                 from .utils.autostart import set_launch_at_startup
-                set_launch_at_startup(self.config_manager.get("launch_at_startup"))
-            # Re-inicializar clientes API existentes em vez de recriá-los
-            self.gemini_api.reinitialize_client() # Re-inicializar cliente principal
+
+                set_launch_at_startup(self.config_manager.get(LAUNCH_AT_STARTUP_CONFIG_KEY))
+
+            self.gemini_api.reinitialize_client()
             if self.transcription_handler.gemini_client:
-                self.transcription_handler.gemini_client.reinitialize_client() # Re-inicializar cliente Gemini do TranscriptionHandler
+                self.transcription_handler.gemini_client.reinitialize_client()
             if self.transcription_handler.openrouter_client:
                 self.transcription_handler.openrouter_client.reinitialize_client(
                     api_key=self.config_manager.get("openrouter_api_key"),
-                    model_id=self.config_manager.get("openrouter_model")
-                ) # Re-inicializar cliente OpenRouter do TranscriptionHandler
-            
-            # Re-registrar hotkeys se as chaves ou modo mudaram
-            if kwargs.get("new_key") is not None or kwargs.get("new_mode") is not None or kwargs.get("new_agent_key") is not None:
+                    model_id=self.config_manager.get("openrouter_model"),
+                )
+
+            hotkey_related_keys = {"record_key", "record_mode", "agent_key"}
+            if hotkey_related_keys & changed_mapped_keys:
                 self.register_hotkeys()
-            
-            # Reiniciar/parar serviços de estabilidade de hotkey se a configuração mudou
-            if kwargs.get("new_hotkey_stability_service_enabled") is not None:
-                if kwargs["new_hotkey_stability_service_enabled"]:
-                    # Iniciar thread de re-registro periódico
+
+            if "hotkey_stability_service_enabled" in changed_mapped_keys:
+                if self.config_manager.get("hotkey_stability_service_enabled"):
                     if not self.reregister_timer_thread or not self.reregister_timer_thread.is_alive():
                         self.stop_reregister_event.clear()
-                        self.reregister_timer_thread = threading.Thread(target=self._periodic_reregister_task, daemon=True, name="PeriodicHotkeyReregister")
+                        self.reregister_timer_thread = threading.Thread(
+                            target=self._periodic_reregister_task,
+                            daemon=True,
+                            name="PeriodicHotkeyReregister",
+                        )
                         self.reregister_timer_thread.start()
                         logging.info("Periodic hotkey re-registration thread launched via settings update.")
-                    
-                    # Iniciar thread de verificação de saúde
+
                     if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
                         self.stop_health_check_event.clear()
-                        self.health_check_thread = threading.Thread(target=self._hotkey_health_check_task, daemon=True, name="HotkeyHealthThread")
+                        self.health_check_thread = threading.Thread(
+                            target=self._hotkey_health_check_task,
+                            daemon=True,
+                            name="HotkeyHealthThread",
+                        )
                         self.health_check_thread.start()
                         logging.info("Hotkey health monitoring thread launched via settings update.")
                 else:
                     self.stop_reregister_event.set()
                     self.stop_health_check_event.set()
                     logging.info("Hotkey stability services stopped via settings update.")
-
-            # Atualizar min_transcription_duration
-            if kwargs.get('new_min_transcription_duration') is not None:
-                if self.config_manager.get('min_transcription_duration') != kwargs['new_min_transcription_duration']:
-                    self.config_manager.set('min_transcription_duration', kwargs['new_min_transcription_duration'])
-                    logging.info(f"Configuração 'min_transcription_duration' alterada para: {kwargs['new_min_transcription_duration']}")
-
-            if kwargs.get('new_min_record_duration') is not None:
-                if self.config_manager.get('min_record_duration') != kwargs['new_min_record_duration']:
-                    self.config_manager.set('min_record_duration', kwargs['new_min_record_duration'])
-                    logging.info(f"Configuração 'min_record_duration' alterada para: {kwargs['new_min_record_duration']}")
 
             self._log_status("Configurações atualizadas.")
         else:
@@ -945,6 +1689,8 @@ class AppCore:
             return
 
         self.config_manager.set(key, value)
+        if key in {ASR_BACKEND_CONFIG_KEY, ASR_MODEL_ID_CONFIG_KEY, "asr_model"}:
+            self.config_manager.reset_last_model_prompt_decision()
         self.config_manager.save_config()
         logging.info(f"Configuração '{key}' alterada para: {value}")
 
@@ -971,9 +1717,23 @@ class AppCore:
             ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             ASR_CACHE_DIR_CONFIG_KEY,
         ]:
-            self.transcription_handler.config_manager = self.config_manager # Garantir que a referência esteja atualizada
-            self.transcription_handler.update_config()
+            self.transcription_handler.config_manager = self.config_manager  # Garantir que a referência esteja atualizada
+            reload_needed = self.transcription_handler.update_config(trigger_reload=False)
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
+            if reload_needed:
+                self._set_state(STATE_LOADING_MODEL)
+                try:
+                    self.transcription_handler.start_model_loading()
+                except Exception as exc:
+                    logging.error(
+                        "Falha ao iniciar recarregamento do modelo após update_setting (%s): %s",
+                        key,
+                        exc,
+                        exc_info=True,
+                    )
+                    self._set_state(STATE_ERROR_MODEL)
+                    self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
+                    return
 
         if key in ["min_record_duration", "use_vad", "vad_threshold", "vad_silence_duration", "record_storage_mode", "record_storage_limit"]:
             self.audio_handler.config_manager = self.config_manager
@@ -1056,6 +1816,8 @@ class AppCore:
         if self.shutting_down: return
         self.shutting_down = True
         logging.info("Shutdown sequence initiated.")
+
+        self.cancel_model_download()
 
         self.stop_reregister_event.set()
         self.stop_health_check_event.set()

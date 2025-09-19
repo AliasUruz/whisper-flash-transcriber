@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
+from threading import Event
 from typing import Dict, List
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
+
+
+MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
 
 
 class DownloadCancelledError(Exception):
@@ -29,6 +35,34 @@ DISPLAY_NAMES: Dict[str, str] = {
 }
 
 
+_CACHE_TTL_SECONDS = 60.0
+
+_download_size_cache: dict[str, tuple[float, tuple[int, int]]] = {}
+_download_size_lock = RLock()
+
+_list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
+_list_installed_lock = RLock()
+
+
+def _normalize_cache_dir(cache_dir: str | Path) -> Path:
+    """Return a normalized ``Path`` instance for cache directory comparisons."""
+
+    if isinstance(cache_dir, Path):
+        return cache_dir.expanduser()
+    return Path(cache_dir).expanduser()
+
+
+def _invalidate_list_installed_cache(cache_dir: str | Path | None = None) -> None:
+    """Invalidate cached results for :func:`list_installed`."""
+
+    with _list_installed_lock:
+        if cache_dir is None:
+            _list_installed_cache.clear()
+            return
+        cache_key = str(_normalize_cache_dir(cache_dir))
+        _list_installed_cache.pop(cache_key, None)
+
+
 def list_catalog() -> List[Dict[str, str]]:
     """Return curated catalog entries with display names."""
     return [
@@ -46,11 +80,24 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     are ignored. The shared Hugging Face cache is queried as a fallback.
     """
 
+    normalized_dir = _normalize_cache_dir(cache_dir)
+    cache_key = str(normalized_dir)
+    now = time.monotonic()
+
+    with _list_installed_lock:
+        cached_entry = _list_installed_cache.get(cache_key)
+        if cached_entry:
+            cached_at, cached_value = cached_entry
+            if now - cached_at < _CACHE_TTL_SECONDS:
+                return copy.deepcopy(cached_value)
+            _list_installed_cache.pop(cache_key, None)
+
     curated_ids = {c["id"] for c in CURATED}
     installed: List[Dict[str, str]] = []
     seen = set()
 
     cache_dir = Path(cache_dir)
+    MODEL_LOGGER.debug("Listing curated models installed under %s", cache_dir)
     if cache_dir.is_dir():
         for backend_dir in cache_dir.iterdir():
             if not backend_dir.is_dir():
@@ -91,6 +138,9 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     except Exception:  # pragma: no cover - best effort
         pass
 
+    with _list_installed_lock:
+        _list_installed_cache[cache_key] = (time.monotonic(), copy.deepcopy(installed))
+
     return installed
 
 
@@ -108,6 +158,15 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
         Total size in bytes and number of files available for download.
     """
 
+    now = time.monotonic()
+    with _download_size_lock:
+        cached_entry = _download_size_cache.get(model_id)
+        if cached_entry:
+            cached_at, cached_value = cached_entry
+            if now - cached_at < _CACHE_TTL_SECONDS:
+                return cached_value
+            _download_size_cache.pop(model_id, None)
+
     api = HfApi()
     info = api.model_info(model_id)
     total = 0
@@ -115,6 +174,12 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
     for sibling in getattr(info, "siblings", []):
         total += sibling.size or 0
         files += 1
+    MODEL_LOGGER.debug(
+        "Computed download size for model %s: %.2f GB across %s files",
+        model_id,
+        total / (1024 ** 3) if total else 0.0,
+        files,
+    )
     return total, files
 
 
@@ -139,6 +204,9 @@ def ensure_download(
     backend: str,
     cache_dir: str | Path,
     quant: str | None = None,
+    *,
+    timeout: float | int | None = None,
+    cancel_event: Event | None = None,
 ) -> str:
     """Ensure that the given model is present locally.
 
@@ -152,30 +220,122 @@ def ensure_download(
         Root directory where models are cached.
     quant: str | None
         Quantization branch for CT2 models. Ignored for Transformers.
+    timeout: float | int | None, optional
+        Maximum number of seconds to wait before aborting the download. ``None`` disables the timeout.
+    cancel_event: Event | None, optional
+        When provided, the download is aborted if the event is set.
     """
 
     cache_dir = Path(cache_dir)
     local_dir = cache_dir / backend / model_id
     if local_dir.is_dir() and any(local_dir.iterdir()):
+        MODEL_LOGGER.info(
+            "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
+            model_id,
+            backend,
+            local_dir,
+        )
         return str(local_dir)
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
+    start_time = time.perf_counter()
+    MODEL_LOGGER.info(
+        "Starting model download: model=%s backend=%s quant=%s target=%s",
+        model_id,
+        backend,
+        quant or "default",
+        local_dir,
+    )
     try:
         if backend == "transformers":
             snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
         elif backend == "ct2":
             from faster_whisper import WhisperModel
 
-            WhisperModel(
-                model_id,
-                device="cpu",
-                compute_type=quant or "int8",
-                download_root=str(local_dir),
+    def _check_abort() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise DownloadCancelledError(
+                f"Model download timed out after {timeout_value:.0f} seconds.", timed_out=True
+            )
+
+    def _cleanup_partial() -> None:
+        try:
+            if local_dir.exists():
+                shutil.rmtree(local_dir)
+        except Exception:  # pragma: no cover - best effort cleanup
+            logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
+
+    _check_abort()
+
+    progress_class = None
+    if cancel_event is not None or deadline is not None:
+        progress_class = _make_cancellable_progress(_check_abort)
+
+    try:
+        if backend in {"transformers", "ct2"}:
+            snapshot_download(
+                repo_id=model_id,
+                local_dir=str(local_dir),
+                allow_patterns=None,
+                tqdm_class=progress_class,
             )
         else:
             raise ValueError(f"Unknown backend: {backend}")
+        _check_abort()
+    except DownloadCancelledError:
+        _cleanup_partial()
+        raise
     except KeyboardInterrupt as exc:
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        MODEL_LOGGER.info(
+            "[METRIC] stage=model_download status=cancelled model=%s backend=%s duration_ms=%.2f",
+            model_id,
+            backend,
+            duration_ms,
+        )
         raise DownloadCancelledError("Model download cancelled by user.") from exc
+    except Exception:
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        MODEL_LOGGER.exception(
+            "Model download failed: model=%s backend=%s target=%s",
+            model_id,
+            backend,
+            local_dir,
+        )
+        MODEL_LOGGER.info(
+            "[METRIC] stage=model_download status=error model=%s backend=%s duration_ms=%.2f",
+            model_id,
+            backend,
+            duration_ms,
+        )
+        raise
 
+    duration_ms = (time.perf_counter() - start_time) * 1000.0
+    MODEL_LOGGER.info(
+        "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
+        model_id,
+        backend,
+        duration_ms,
+        local_dir,
+    )
     return str(local_dir)
+
+
+def _make_cancellable_progress(check_abort):
+    from tqdm.auto import tqdm
+
+    class _Progress(tqdm):
+        def update(self, n=1):
+            check_abort()
+            result = super().update(n)
+            check_abort()
+            return result
+
+        def refresh(self, *args, **kwargs):
+            check_abort()
+            return super().refresh(*args, **kwargs)
+
+    return _Progress
