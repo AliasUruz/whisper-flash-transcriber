@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import logging
+import shutil
 import time
 from pathlib import Path
-from threading import Event
+from threading import Event, RLock
 from typing import Dict, List
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
@@ -15,7 +17,19 @@ MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
 
 
 class DownloadCancelledError(Exception):
-    """Raised when a model download is cancelled by the user."""
+    """Raised when a model download is cancelled or aborted."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        by_user: bool | None = None,
+        timed_out: bool | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.by_user = bool(by_user) if by_user is not None else False
+        self.timed_out = bool(timed_out) if timed_out is not None else False
 
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
@@ -239,26 +253,29 @@ def ensure_download(
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    start_time = time.perf_counter()
-    MODEL_LOGGER.info(
-        "Starting model download: model=%s backend=%s quant=%s target=%s",
-        model_id,
-        backend,
-        quant or "default",
-        local_dir,
-    )
-    try:
-        if backend == "transformers":
-            snapshot_download(repo_id=model_id, local_dir=str(local_dir), allow_patterns=None)
-        elif backend == "ct2":
-            from faster_whisper import WhisperModel
+    # Normaliza timeout recebido garantindo valores positivos e consistentes.
+    timeout_value: float | None = None
+    if timeout is not None:
+        try:
+            timeout_value = float(timeout)
+        except (TypeError, ValueError):
+            timeout_value = None
+        else:
+            if timeout_value <= 0:
+                timeout_value = None
+    deadline = time.monotonic() + timeout_value if timeout_value is not None else None
 
     def _check_abort() -> None:
         if cancel_event is not None and cancel_event.is_set():
-            raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
-        if deadline is not None and time.monotonic() >= deadline:
             raise DownloadCancelledError(
-                f"Model download timed out after {timeout_value:.0f} seconds.", timed_out=True
+                "Model download cancelled by caller.",
+                by_user=True,
+            )
+        if deadline is not None and time.monotonic() >= deadline:
+            seconds = timeout_value if timeout_value is not None else 0.0
+            raise DownloadCancelledError(
+                f"Model download timed out after {seconds:.0f} seconds.",
+                timed_out=True,
             )
 
     def _cleanup_partial() -> None:
@@ -268,20 +285,41 @@ def ensure_download(
         except Exception:  # pragma: no cover - best effort cleanup
             logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
 
-    _check_abort()
-
     progress_class = None
     if cancel_event is not None or deadline is not None:
         progress_class = _make_cancellable_progress(_check_abort)
 
+    start_time = time.perf_counter()
+    MODEL_LOGGER.info(
+        "Starting model download: model=%s backend=%s quant=%s target=%s",
+        model_id,
+        backend,
+        quant or "default",
+        local_dir,
+    )
+
+    # Seleciona branch de quantização quando aplicável (modelos CT2).
+    revision = None
+    if quant:
+        normalized_quant = str(quant).strip()
+        if normalized_quant and normalized_quant.lower() != "default":
+            revision = normalized_quant
+
+    download_kwargs = {
+        "repo_id": model_id,
+        "local_dir": str(local_dir),
+        "allow_patterns": None,
+        "tqdm_class": progress_class,
+    }
+    if revision is not None:
+        download_kwargs["revision"] = revision
+
     try:
-        if backend in {"transformers", "ct2"}:
-            snapshot_download(
-                repo_id=model_id,
-                local_dir=str(local_dir),
-                allow_patterns=None,
-                tqdm_class=progress_class,
-            )
+        _check_abort()
+        if backend == "transformers":
+            snapshot_download(**download_kwargs)
+        elif backend == "ct2":
+            snapshot_download(**download_kwargs)
         else:
             raise ValueError(f"Unknown backend: {backend}")
         _check_abort()
@@ -296,7 +334,10 @@ def ensure_download(
             backend,
             duration_ms,
         )
-        raise DownloadCancelledError("Model download cancelled by user.") from exc
+        raise DownloadCancelledError(
+            "Model download cancelled by user.",
+            by_user=True,
+        ) from exc
     except Exception:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         MODEL_LOGGER.exception(
