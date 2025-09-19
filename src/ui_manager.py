@@ -4,6 +4,7 @@ from tkinter import simpledialog # Adicionado para askstring
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING
 import pystray
 from PIL import Image, ImageDraw
 from pathlib import Path
@@ -21,6 +22,9 @@ from .config_manager import (
 
 from .utils.tooltip import Tooltip
 from .vad_manager import VADManager
+
+if TYPE_CHECKING:  # pragma: no cover - hints only
+    from .core import StateNotification
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -219,8 +223,29 @@ class UIManager:
                     self.tray_icon.title = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
             time.sleep(1)
 
-    def update_tray_icon(self, state):
-        # Logic moved from global, adjusted to use self.tray_icon and self.core_instance_ref
+    def update_tray_icon(self, state_update: "StateNotification | str | None") -> None:
+        """Atualiza o ícone da bandeja com ``StateNotification`` ou carga legada."""
+
+        state = "UNKNOWN"
+        if hasattr(state_update, "state") and hasattr(state_update, "event"):
+            state = getattr(state_update, "state", None) or "UNKNOWN"
+            event_obj = getattr(state_update, "event", None)
+            event_name = getattr(event_obj, "name", str(event_obj))
+            previous_state = getattr(state_update, "previous_state", None)
+            details = getattr(state_update, "details", None)
+            source = getattr(state_update, "source", None)
+            logging.info(
+                "Tray received state update: event=%s state=%s prev=%s source=%s details=%s",
+                event_name,
+                state,
+                previous_state,
+                source,
+                details,
+            )
+        else:
+            state = str(state_update) if state_update is not None else "UNKNOWN"
+            logging.info("Tray received legacy state update: state=%s", state)
+
         if self.tray_icon:
             color1, color2 = self.ICON_COLORS.get(state, self.DEFAULT_ICON_COLOR)
             icon_image = self.create_image(64, 64, color1, color2)
