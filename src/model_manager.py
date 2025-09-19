@@ -31,6 +31,17 @@ class DownloadCancelledError(Exception):
         self.by_user = bool(by_user) if by_user is not None else False
         self.timed_out = bool(timed_out) if timed_out is not None else False
 
+    def __init__(
+        self,
+        message: str = "Model download cancelled.",
+        *,
+        by_user: bool = False,
+        timed_out: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.by_user = by_user
+        self.timed_out = timed_out
+
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
 CURATED: List[Dict[str, str]] = [
@@ -253,20 +264,31 @@ def ensure_download(
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    # Normaliza timeout recebido garantindo valores positivos e consistentes.
+    start_time = time.perf_counter()
+    MODEL_LOGGER.info(
+        "Starting model download: model=%s backend=%s quant=%s target=%s",
+        model_id,
+        backend,
+        quant or "default",
+        local_dir,
+    )
+
     timeout_value: float | None = None
+    deadline: float | None = None
     if timeout is not None:
         try:
-            timeout_value = float(timeout)
+            candidate = float(timeout)
         except (TypeError, ValueError):
-            timeout_value = None
-        else:
-            if timeout_value <= 0:
-                timeout_value = None
-    deadline = time.monotonic() + timeout_value if timeout_value is not None else None
+            candidate = None
+        if candidate is not None and candidate > 0:
+            timeout_value = candidate
+            deadline = time.monotonic() + candidate
 
     def _check_abort() -> None:
         if cancel_event is not None and cancel_event.is_set():
+            raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
+        if deadline is not None and time.monotonic() >= deadline:
+            assert timeout_value is not None
             raise DownloadCancelledError(
                 "Model download cancelled by caller.",
                 by_user=True,
