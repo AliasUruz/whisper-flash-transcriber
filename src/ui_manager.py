@@ -1,27 +1,47 @@
+import copy
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
 from tkinter import simpledialog # Adicionado para askstring
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING
 import pystray
 from PIL import Image, ImageDraw
 from pathlib import Path
+from typing import Any, Callable, Iterable
 
 # Importar constantes de configuração
 from .config_manager import (
     SETTINGS_WINDOW_GEOMETRY,
     SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI,
+    GEMINI_AGENT_MODEL_CONFIG_KEY,
+    GEMINI_AGENT_PROMPT_CONFIG_KEY,
+    GEMINI_MODEL_CONFIG_KEY,
     GEMINI_MODEL_OPTIONS_CONFIG_KEY,
-    DISPLAY_TRANSCRIPTS_KEY,
-    DEFAULT_CONFIG,
-    SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
+    TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+    OPENROUTER_API_KEY_CONFIG_KEY,
+    OPENROUTER_MODEL_CONFIG_KEY,
+    GEMINI_API_KEY_CONFIG_KEY,
+    DISPLAY_TRANSCRIPTS_KEY,
+    SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    ASR_COMPUTE_DEVICE_CONFIG_KEY,
+    ASR_BACKEND_CONFIG_KEY,
+    ASR_MODEL_ID_CONFIG_KEY,
+    ASR_DTYPE_CONFIG_KEY,
+    ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+    ASR_CACHE_DIR_CONFIG_KEY,
+    GPU_INDEX_CONFIG_KEY,
+    DEFAULT_CONFIG,
 )
 
 from .utils.form_validation import safe_get_float, safe_get_int
 from .utils.tooltip import Tooltip
 from .vad_manager import VADManager
+
+if TYPE_CHECKING:  # pragma: no cover - hints only
+    from .core import StateNotification
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -79,6 +99,8 @@ class UIManager:
 
         self.live_window = None
         self.live_textbox = None
+
+        self._divergent_keys_logged: set[str] = set()
 
 
         # Assign methods to the instance
@@ -479,6 +501,123 @@ class UIManager:
             "update_install_button_state": _update_install_button_state,
         }
 
+    def _resolve_initial_value(
+        self,
+        key: str,
+        *,
+        var_name: str,
+        getter: Callable[[], Any] | None = None,
+        default: Any | None = None,
+        coerce: Callable[[Any], Any] | None = None,
+        allowed: Iterable[Any] | None = None,
+        sensitive: bool = False,
+        transform: Callable[[Any], Any] | None = None,
+    ) -> Any:
+        """Obtém valores do ConfigManager sincronizados com ``DEFAULT_CONFIG``.
+
+        A função aplica coerção opcional de tipo, validação contra listas de
+        valores permitidos e registra divergências entre os valores atuais e os
+        padrões definidos em ``DEFAULT_CONFIG``. Quando ``sensitive`` é
+        ``True``, evita expor valores nos logs.
+        """
+
+        default_source = default if default is not None else DEFAULT_CONFIG.get(key)
+        if isinstance(default_source, (list, dict)):
+            default_value = copy.deepcopy(default_source)
+        else:
+            default_value = default_source
+
+        getter_fn: Callable[[], Any]
+        if getter is not None:
+            getter_fn = getter
+        else:
+            getter_fn = lambda: self.config_manager.get(key, default_value)
+
+        try:
+            value = getter_fn()
+        except Exception as exc:  # pragma: no cover - salvaguarda de UI
+            logging.error(
+                "UIManager: falha ao obter valor inicial de '%s' (%s). Usando padrão.",
+                key,
+                exc,
+                exc_info=True,
+            )
+            value = default_value
+
+        if value is None and default_value is not None:
+            logging.warning(
+                "UIManager: valor '%s' ausente. Aplicando padrão %s.",
+                key,
+                "<oculto>" if sensitive else repr(default_value),
+            )
+            value = default_value
+
+        def _coerce(candidate: Any, fallback: Any) -> Any:
+            if coerce is None:
+                return candidate
+            try:
+                return coerce(candidate)
+            except Exception as exc:  # pragma: no cover - defensivo
+                logging.warning(
+                    "UIManager: falha ao converter '%s' (valor=%s): %s. Usando padrão.",
+                    key,
+                    "<oculto>" if sensitive else repr(candidate),
+                    exc,
+                )
+                if fallback is None:
+                    return fallback
+                try:
+                    return coerce(fallback)
+                except Exception:
+                    return fallback
+
+        coerced_default = _coerce(default_value, default_value)
+        coerced_value = _coerce(value, coerced_default)
+
+        if allowed is not None and coerced_value not in allowed:
+            logging.warning(
+                "UIManager: valor '%s'=%s fora dos permitidos %s. Revertendo para padrão %s.",
+                key,
+                "<oculto>" if sensitive else repr(coerced_value),
+                list(allowed),
+                "<oculto>" if sensitive else repr(coerced_default),
+            )
+            coerced_value = coerced_default
+
+        if (
+            default_value is not None
+            and coerced_default is not None
+            and coerced_value != coerced_default
+            and key not in self._divergent_keys_logged
+        ):
+            if sensitive:
+                logging.info(
+                    "UIManager: '%s' difere do DEFAULT_CONFIG (valor personalizado em uso).",
+                    key,
+                )
+            else:
+                logging.info(
+                    "UIManager: '%s' difere do DEFAULT_CONFIG (atual=%r, padrão=%r).",
+                    key,
+                    coerced_value,
+                    coerced_default,
+                )
+            self._divergent_keys_logged.add(key)
+
+        final_value = coerced_value
+        if transform is not None:
+            try:
+                final_value = transform(coerced_value)
+            except Exception as exc:  # pragma: no cover - defensivo
+                logging.error(
+                    "UIManager: falha ao transformar '%s': %s. Reaplicando padrão.",
+                    key,
+                    exc,
+                )
+                final_value = transform(coerced_default) if coerced_default is not None else coerced_default
+
+        return final_value
+
     def _recording_tooltip_updater(self):
         """Atualiza a tooltip com a duração da gravação a cada segundo."""
         while not self.stop_recording_timer_event.is_set():
@@ -530,8 +669,29 @@ class UIManager:
                     self.tray_icon.title = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
             time.sleep(1)
 
-    def update_tray_icon(self, state):
-        # Logic moved from global, adjusted to use self.tray_icon and self.core_instance_ref
+    def update_tray_icon(self, state_update: "StateNotification | str | None") -> None:
+        """Atualiza o ícone da bandeja com ``StateNotification`` ou carga legada."""
+
+        state = "UNKNOWN"
+        if hasattr(state_update, "state") and hasattr(state_update, "event"):
+            state = getattr(state_update, "state", None) or "UNKNOWN"
+            event_obj = getattr(state_update, "event", None)
+            event_name = getattr(event_obj, "name", str(event_obj))
+            previous_state = getattr(state_update, "previous_state", None)
+            details = getattr(state_update, "details", None)
+            source = getattr(state_update, "source", None)
+            logging.info(
+                "Tray received state update: event=%s state=%s prev=%s source=%s details=%s",
+                event_name,
+                state,
+                previous_state,
+                source,
+                details,
+            )
+        else:
+            state = str(state_update) if state_update is not None else "UNKNOWN"
+            logging.info("Tray received legacy state update: state=%s", state)
+
         if self.tray_icon:
             color1, color2 = self.ICON_COLORS.get(state, self.DEFAULT_ICON_COLOR)
             icon_image = self.create_image(64, 64, color1, color2)
@@ -665,49 +825,288 @@ class UIManager:
                 return
 
             try:
-                # Variables (adjust to use self.config_manager.get)
-                auto_paste_var = ctk.BooleanVar(value=self.config_manager.get("auto_paste"))
-                mode_var = ctk.StringVar(value=self.config_manager.get("record_mode"))
-                detected_key_var = ctk.StringVar(value=self.config_manager.get("record_key").upper())
-                agent_key_var = ctk.StringVar(value=self.config_manager.get("agent_key").upper())
-                agent_model_var = ctk.StringVar(value=self.config_manager.get("gemini_agent_model"))
-                hotkey_stability_service_enabled_var = ctk.BooleanVar(value=self.config_manager.get("hotkey_stability_service_enabled")) # Nova variável unificada
-                min_transcription_duration_var = ctk.DoubleVar(value=self.config_manager.get("min_transcription_duration")) # Nova variável
-                min_record_duration_var = ctk.DoubleVar(value=self.config_manager.get("min_record_duration"))
-                sound_enabled_var = ctk.BooleanVar(value=self.config_manager.get("sound_enabled"))
-                sound_frequency_var = ctk.StringVar(value=str(self.config_manager.get("sound_frequency")))
-                sound_duration_var = ctk.StringVar(value=str(self.config_manager.get("sound_duration")))
-                sound_volume_var = ctk.DoubleVar(value=self.config_manager.get("sound_volume"))
-                text_correction_enabled_var = ctk.BooleanVar(value=self.config_manager.get("text_correction_enabled"))
-                text_correction_service_var = ctk.StringVar(value=self.config_manager.get("text_correction_service"))
                 service_display_map = {
                     "None": SERVICE_NONE,
                     "OpenRouter": SERVICE_OPENROUTER,
                     "Gemini": SERVICE_GEMINI,
                 }
-                text_correction_service_label_var = ctk.StringVar(
-                    value=next((label for label, val in service_display_map.items()
-                                if val == text_correction_service_var.get()), "None")
+                service_values_allowed = {SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI}
+
+                auto_paste_var = ctk.BooleanVar(
+                    value=self._resolve_initial_value("auto_paste", var_name="auto_paste", coerce=bool)
                 )
-                openrouter_api_key_var = ctk.StringVar(value=self.config_manager.get("openrouter_api_key"))
-                openrouter_model_var = ctk.StringVar(value=self.config_manager.get("openrouter_model"))
-                gemini_api_key_var = ctk.StringVar(value=self.config_manager.get("gemini_api_key"))
-                gemini_model_var = ctk.StringVar(value=self.config_manager.get("gemini_model"))
-                batch_size_var = ctk.StringVar(value=str(self.config_manager.get("batch_size")))
-                use_vad_var = ctk.BooleanVar(value=self.config_manager.get("use_vad"))
-                launch_at_startup_var = ctk.BooleanVar(value=self.config_manager.get("launch_at_startup"))
-                vad_threshold_var = ctk.DoubleVar(value=self.config_manager.get("vad_threshold"))
-                vad_silence_duration_var = ctk.DoubleVar(value=self.config_manager.get("vad_silence_duration"))
-                save_temp_recordings_var = ctk.BooleanVar(value=self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY))
-                display_transcripts_var = ctk.BooleanVar(value=self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY))
+
+                mode_initial = self._resolve_initial_value(
+                    "record_mode",
+                    var_name="record_mode",
+                    coerce=lambda v: str(v).lower(),
+                    allowed={"toggle", "press", "hold"},
+                )
+                if mode_initial == "press":
+                    mode_initial = "hold"
+                mode_var = ctk.StringVar(value=mode_initial)
+
+                record_key_value = self._resolve_initial_value(
+                    "record_key",
+                    var_name="record_key",
+                    coerce=lambda v: str(v).lower(),
+                )
+                detected_key_var = ctk.StringVar(value=record_key_value.upper())
+
+                agent_key_value = self._resolve_initial_value(
+                    "agent_key",
+                    var_name="agent_key",
+                    coerce=lambda v: str(v).lower(),
+                )
+                agent_key_var = ctk.StringVar(value=agent_key_value.upper())
+
+                agent_model_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        GEMINI_AGENT_MODEL_CONFIG_KEY,
+                        var_name="gemini_agent_model",
+                        coerce=str,
+                    )
+                )
+
+                hotkey_stability_service_enabled_var = ctk.BooleanVar(
+                    value=self._resolve_initial_value(
+                        "hotkey_stability_service_enabled",
+                        var_name="hotkey_stability_service_enabled",
+                        coerce=bool,
+                    )
+                )
+
+                min_transcription_duration_var = ctk.DoubleVar(
+                    value=self._resolve_initial_value(
+                        "min_transcription_duration",
+                        var_name="min_transcription_duration",
+                        coerce=float,
+                    )
+                )
+                min_record_duration_var = ctk.DoubleVar(
+                    value=self._resolve_initial_value(
+                        "min_record_duration",
+                        var_name="min_record_duration",
+                        coerce=float,
+                    )
+                )
+
+                sound_enabled_var = ctk.BooleanVar(
+                    value=self._resolve_initial_value("sound_enabled", var_name="sound_enabled", coerce=bool)
+                )
+
+                sound_frequency_value = self._resolve_initial_value(
+                    "sound_frequency",
+                    var_name="sound_frequency",
+                    coerce=lambda v: int(float(v)),
+                )
+                sound_frequency_var = ctk.StringVar(value=str(sound_frequency_value))
+
+                sound_duration_value = self._resolve_initial_value(
+                    "sound_duration",
+                    var_name="sound_duration",
+                    coerce=float,
+                )
+                sound_duration_var = ctk.StringVar(value=str(sound_duration_value))
+
+                sound_volume_var = ctk.DoubleVar(
+                    value=self._resolve_initial_value("sound_volume", var_name="sound_volume", coerce=float)
+                )
+
+                text_correction_enabled_var = ctk.BooleanVar(
+                    value=self._resolve_initial_value(
+                        "text_correction_enabled",
+                        var_name="text_correction_enabled",
+                        coerce=bool,
+                    )
+                )
+
+                text_correction_service_value = self._resolve_initial_value(
+                    TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+                    var_name="text_correction_service",
+                    coerce=lambda v: str(v).lower(),
+                    allowed=service_values_allowed,
+                )
+                text_correction_service_var = ctk.StringVar(value=text_correction_service_value)
+                text_correction_service_label_var = ctk.StringVar(
+                    value=next(
+                        (
+                            label
+                            for label, val in service_display_map.items()
+                            if val == text_correction_service_value
+                        ),
+                        "None",
+                    )
+                )
+
+                openrouter_api_key_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        OPENROUTER_API_KEY_CONFIG_KEY,
+                        var_name="openrouter_api_key",
+                        coerce=str,
+                        sensitive=True,
+                    )
+                )
+                openrouter_model_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        OPENROUTER_MODEL_CONFIG_KEY,
+                        var_name="openrouter_model",
+                        coerce=str,
+                    )
+                )
+
+                gemini_api_key_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        GEMINI_API_KEY_CONFIG_KEY,
+                        var_name="gemini_api_key",
+                        coerce=str,
+                        sensitive=True,
+                    )
+                )
+                gemini_model_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        GEMINI_MODEL_CONFIG_KEY,
+                        var_name="gemini_model",
+                        coerce=str,
+                    )
+                )
+
+                gemini_model_options = self._resolve_initial_value(
+                    GEMINI_MODEL_OPTIONS_CONFIG_KEY,
+                    var_name="gemini_model_options",
+                    transform=lambda v, default=DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY]: [
+                        str(item) for item in (v if isinstance(v, (list, tuple, set)) else default)
+                    ],
+                )
+                if not gemini_model_options:
+                    gemini_model_options = list(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
+                else:
+                    gemini_model_options = list(dict.fromkeys(str(item) for item in gemini_model_options))
+
+                current_gemini_model = gemini_model_var.get()
+                if current_gemini_model and current_gemini_model not in gemini_model_options:
+                    gemini_model_options.insert(0, current_gemini_model)
+
+                gemini_prompt_initial = self._resolve_initial_value(
+                    GEMINI_PROMPT_CONFIG_KEY,
+                    var_name="gemini_prompt",
+                    coerce=str,
+                )
+                agent_prompt_initial = self._resolve_initial_value(
+                    GEMINI_AGENT_PROMPT_CONFIG_KEY,
+                    var_name="prompt_agentico",
+                    coerce=str,
+                )
+
+                batch_size_value = self._resolve_initial_value(
+                    "batch_size",
+                    var_name="batch_size",
+                    coerce=lambda v: int(float(v)),
+                )
+                batch_size_var = ctk.StringVar(value=str(batch_size_value))
+
+                use_vad_var = ctk.BooleanVar(
+                    value=self._resolve_initial_value("use_vad", var_name="use_vad", coerce=bool)
+                )
+                launch_at_startup_var = ctk.BooleanVar(
+                    value=self._resolve_initial_value(
+                        "launch_at_startup",
+                        var_name="launch_at_startup",
+                        coerce=bool,
+                    )
+                )
+                vad_threshold_var = ctk.DoubleVar(
+                    value=self._resolve_initial_value("vad_threshold", var_name="vad_threshold", coerce=float)
+                )
+                vad_silence_duration_var = ctk.DoubleVar(
+                    value=self._resolve_initial_value(
+                        "vad_silence_duration",
+                        var_name="vad_silence_duration",
+                        coerce=float,
+                    )
+                )
+
+                save_temp_recordings_var = ctk.BooleanVar(
+                    value=self._resolve_initial_value(
+                        SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+                        var_name="save_temp_recordings",
+                        coerce=bool,
+                    )
+                )
+                display_transcripts_var = ctk.BooleanVar(
+                    value=self._resolve_initial_value(
+                        DISPLAY_TRANSCRIPTS_KEY,
+                        var_name="display_transcripts_in_terminal",
+                        coerce=bool,
+                    )
+                )
+
                 record_storage_mode_var = ctk.StringVar(
-                    value=self.config_manager.get("record_storage_mode", "auto")
+                    value=self._resolve_initial_value(
+                        "record_storage_mode",
+                        var_name="record_storage_mode",
+                        coerce=lambda v: str(v).lower(),
+                        allowed={"auto", "memory", "disk"},
+                    )
                 )
                 max_memory_seconds_mode_var = ctk.StringVar(
-                    value=self.config_manager.get("max_memory_seconds_mode", "manual")
+                    value=self._resolve_initial_value(
+                        "max_memory_seconds_mode",
+                        var_name="max_memory_seconds_mode",
+                        coerce=lambda v: str(v).lower(),
+                        allowed={"manual", "auto"},
+                    )
                 )
                 max_memory_seconds_var = ctk.DoubleVar(
-                    value=self.config_manager.get("max_memory_seconds")
+                    value=self._resolve_initial_value(
+                        "max_memory_seconds",
+                        var_name="max_memory_seconds",
+                        coerce=float,
+                    )
+                )
+
+                chunk_length_mode_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        "chunk_length_mode",
+                        var_name="chunk_length_mode",
+                        getter=self.config_manager.get_chunk_length_mode,
+                        coerce=lambda v: str(v).lower(),
+                        allowed={"auto", "manual"},
+                    )
+                )
+                chunk_length_sec_var = ctk.DoubleVar(
+                    value=self._resolve_initial_value(
+                        "chunk_length_sec",
+                        var_name="chunk_length_sec",
+                        getter=self.config_manager.get_chunk_length_sec,
+                        coerce=float,
+                    )
+                )
+
+                enable_torch_compile_var = ctk.BooleanVar(
+                    value=self._resolve_initial_value(
+                        "enable_torch_compile",
+                        var_name="enable_torch_compile",
+                        getter=self.config_manager.get_enable_torch_compile,
+                        coerce=bool,
+                    )
+                )
+
+                asr_backend_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        ASR_BACKEND_CONFIG_KEY,
+                        var_name="asr_backend",
+                        getter=self.config_manager.get_asr_backend,
+                        coerce=lambda v: str(v).lower(),
+                    )
+                )
+                asr_model_id_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        ASR_MODEL_ID_CONFIG_KEY,
+                        var_name="asr_model_id",
+                        getter=self.config_manager.get_asr_model_id,
+                        coerce=str,
+                    )
                 )
                 # New: Chunk length controls
                 chunk_length_mode_var = ctk.StringVar(value=self.config_manager.get_chunk_length_mode())
@@ -735,13 +1134,23 @@ class UIManager:
                 # Compute device selection variable
                 available_devices = get_available_devices_for_ui()
                 current_device_selection = "Auto-select (Recommended)"
-                compute_device_cfg = self.config_manager.get("asr_compute_device")
-                gpu_index_cfg = self.config_manager.get("gpu_index")
-                if compute_device_cfg == "cpu":
+                asr_compute_device_value = self._resolve_initial_value(
+                    ASR_COMPUTE_DEVICE_CONFIG_KEY,
+                    var_name="asr_compute_device",
+                    getter=self.config_manager.get_asr_compute_device,
+                    coerce=lambda v: str(v).lower(),
+                    allowed={"auto", "cpu", "cuda"},
+                )
+                gpu_index_value = self._resolve_initial_value(
+                    GPU_INDEX_CONFIG_KEY,
+                    var_name="gpu_index",
+                    coerce=lambda v: int(float(v)),
+                )
+                if asr_compute_device_value == "cpu":
                     current_device_selection = "Force CPU"
-                elif compute_device_cfg == "cuda" and gpu_index_cfg >= 0:
+                elif asr_compute_device_value == "cuda" and gpu_index_value >= 0:
                     for dev in available_devices:
-                        if dev.startswith(f"GPU {gpu_index_cfg}"):
+                        if dev.startswith(f"GPU {gpu_index_value}"):
                             current_device_selection = dev
                             break
                 asr_compute_device_var = ctk.StringVar(value=current_device_selection)
@@ -751,6 +1160,19 @@ class UIManager:
                 # Will need to be adapted to call methods of self.core_instance_ref and self.config_manager
                 # Example of adapted apply_settings:
                 def apply_settings():
+                    """Aplica as configurações respeitando as dependências do pipeline de ASR.
+
+                    A sequência explicitamente segue ``backend → modelo → device → quantização``
+                    porque o ``TranscriptionHandler`` depende do backend correto antes de
+                    aceitar um modelo e, por consequência, o dispositivo informado precisa
+                    estar sincronizado com as opções de quantização (ex.: ``ct2`` habilita
+                    perfis diferentes). Toda a persistência é delegada para
+                    ``AppCore.apply_settings_from_external``, que repassa os valores ao
+                    ``ConfigManager`` e notifica os subsistemas correspondentes. Fluxo
+                    validado com as frentes de UX e engenharia para preservar a coerência
+                    entre a experiência da janela de ajustes e os requisitos técnicos de
+                    carregamento de modelo.
+                    """
                     logging.info("Apply settings clicked (in Tkinter thread).")
                     # State validations (moved to AppCore or handled via callbacks)
                     if self.core_instance_ref.current_state in ["RECORDING", "TRANSCRIBING", "LOADING_MODEL"]:
@@ -901,7 +1323,7 @@ class UIManager:
                     mode_var.set(DEFAULT_CONFIG["record_mode"])
                     detected_key_var.set(DEFAULT_CONFIG["record_key"].upper())
                     agent_key_var.set(DEFAULT_CONFIG["agent_key"].upper())
-                    agent_model_var.set(DEFAULT_CONFIG["gemini_agent_model"])
+                    agent_model_var.set(DEFAULT_CONFIG[GEMINI_AGENT_MODEL_CONFIG_KEY])
                     hotkey_stability_service_enabled_var.set(DEFAULT_CONFIG["hotkey_stability_service_enabled"])
                     min_transcription_duration_var.set(DEFAULT_CONFIG["min_transcription_duration"])
                     min_record_duration_var.set(DEFAULT_CONFIG["min_record_duration"])
@@ -910,13 +1332,13 @@ class UIManager:
                     sound_duration_var.set(str(DEFAULT_CONFIG["sound_duration"]))
                     sound_volume_var.set(DEFAULT_CONFIG["sound_volume"])
                     text_correction_enabled_var.set(DEFAULT_CONFIG["text_correction_enabled"])
-                    text_correction_service_var.set(DEFAULT_CONFIG["text_correction_service"])
+                    text_correction_service_var.set(DEFAULT_CONFIG[TEXT_CORRECTION_SERVICE_CONFIG_KEY])
                     text_correction_service_label_var.set(
                         next(
                             (
                                 label
                                 for label, val in service_display_map.items()
-                                if val == DEFAULT_CONFIG["text_correction_service"]
+                                if val == DEFAULT_CONFIG[TEXT_CORRECTION_SERVICE_CONFIG_KEY]
                             ),
                             "None",
                         )
@@ -941,11 +1363,14 @@ class UIManager:
                     asr_model_display_var.set(default_model_display)
                     asr_model_menu.set(default_model_display)
                     gemini_prompt_correction_textbox.delete("1.0", "end")
-                    gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG["gemini_prompt"])
+                    gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG[GEMINI_PROMPT_CONFIG_KEY])
                     agentico_prompt_textbox.delete("1.0", "end")
-                    agentico_prompt_textbox.insert("1.0", DEFAULT_CONFIG["prompt_agentico"])
+                    agentico_prompt_textbox.insert("1.0", DEFAULT_CONFIG[GEMINI_AGENT_PROMPT_CONFIG_KEY])
                     gemini_models_textbox.delete("1.0", "end")
-                    gemini_models_textbox.insert("1.0", "\n".join(DEFAULT_CONFIG["gemini_model_options"]))
+                    gemini_models_textbox.insert(
+                        "1.0",
+                        "\n".join(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY]),
+                    )
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
                     asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
                     asr_backend_menu.set(DEFAULT_CONFIG["asr_backend"])
@@ -955,12 +1380,15 @@ class UIManager:
                     update_model_info(DEFAULT_CONFIG["asr_model_id"])
                     on_backend_change(asr_backend_var.get())
 
-                    if DEFAULT_CONFIG["asr_compute_device"] == "cpu":
+                    if DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY] == "cpu":
                         asr_compute_device_var.set("Force CPU")
-                    elif DEFAULT_CONFIG["asr_compute_device"] == "cuda" and DEFAULT_CONFIG["gpu_index"] >= 0:
+                    elif (
+                        DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY] == "cuda"
+                        and DEFAULT_CONFIG[GPU_INDEX_CONFIG_KEY] >= 0
+                    ):
                         found = "Auto-select (Recommended)"
                         for dev in available_devices:
-                            if dev.startswith(f"GPU {DEFAULT_CONFIG['gpu_index']}"):
+                            if dev.startswith(f"GPU {DEFAULT_CONFIG[GPU_INDEX_CONFIG_KEY]}"):
                                 found = dev
                                 break
                         asr_compute_device_var.set(found)
@@ -971,16 +1399,16 @@ class UIManager:
                     vad_threshold_var.set(DEFAULT_CONFIG["vad_threshold"])
                     vad_silence_duration_var.set(DEFAULT_CONFIG["vad_silence_duration"])
                     save_temp_recordings_var.set(DEFAULT_CONFIG[SAVE_TEMP_RECORDINGS_CONFIG_KEY])
-                    display_transcripts_var.set(DEFAULT_CONFIG["display_transcripts_in_terminal"])
+                    display_transcripts_var.set(DEFAULT_CONFIG[DISPLAY_TRANSCRIPTS_KEY])
                     record_storage_mode_var.set(DEFAULT_CONFIG["record_storage_mode"])
                     max_memory_seconds_var.set(DEFAULT_CONFIG["max_memory_seconds"])
                     max_memory_seconds_mode_var.set(DEFAULT_CONFIG["max_memory_seconds_mode"])
                     launch_at_startup_var.set(DEFAULT_CONFIG["launch_at_startup"])
-                    asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
-                    asr_compute_device_var.set(DEFAULT_CONFIG["asr_compute_device"])
-                    asr_dtype_var.set(DEFAULT_CONFIG["asr_dtype"])
-                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
-                    asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
+                    asr_backend_var.set(DEFAULT_CONFIG[ASR_BACKEND_CONFIG_KEY])
+                    asr_compute_device_var.set(DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY])
+                    asr_dtype_var.set(DEFAULT_CONFIG[ASR_DTYPE_CONFIG_KEY])
+                    asr_ct2_compute_type_var.set(DEFAULT_CONFIG[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY])
+                    asr_cache_dir_var.set(DEFAULT_CONFIG[ASR_CACHE_DIR_CONFIG_KEY])
 
                     self.config_manager.save_config()
 
@@ -1104,6 +1532,7 @@ class UIManager:
                 )
                 service_menu.pack(side="left", padx=5)
                 Tooltip(service_menu, "Select the service for text correction.")
+                service_menu.set(text_correction_service_label_var.get())
 
                 # --- OpenRouter Settings ---
                 openrouter_frame = ctk.CTkFrame(ai_frame)
@@ -1125,29 +1554,31 @@ class UIManager:
                 gemini_key_entry.pack(side="left", padx=5)
                 Tooltip(gemini_key_entry, "API key for the Gemini service.")
                 ctk.CTkLabel(gemini_frame, text="Gemini Model:").pack(side="left", padx=(5, 10))
-                gemini_model_menu = ctk.CTkOptionMenu(gemini_frame, variable=gemini_model_var, values=self.config_manager.get("gemini_model_options", []))
+                gemini_model_menu = ctk.CTkOptionMenu(gemini_frame, variable=gemini_model_var, values=gemini_model_options)
                 gemini_model_menu.pack(side="left", padx=5)
                 Tooltip(gemini_model_menu, "Model used for Gemini requests.")
-                
+                if gemini_model_var.get() in gemini_model_options:
+                    gemini_model_menu.set(gemini_model_var.get())
+
                 # --- Gemini Prompt ---
                 gemini_prompt_frame = ctk.CTkFrame(ai_frame)
                 gemini_prompt_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(gemini_prompt_frame, text="Gemini Correction Prompt:").pack(anchor="w", pady=(5,0))
                 gemini_prompt_correction_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=100, wrap="word")
                 gemini_prompt_correction_textbox.pack(fill="x", expand=True, pady=5)
-                gemini_prompt_correction_textbox.insert("1.0", self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY))
+                gemini_prompt_correction_textbox.insert("1.0", gemini_prompt_initial or "")
                 Tooltip(gemini_prompt_correction_textbox, "Prompt used to refine text.")
 
                 ctk.CTkLabel(gemini_prompt_frame, text="Prompt do Modo Agêntico:").pack(anchor="w", pady=(5,0))
                 agentico_prompt_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
                 agentico_prompt_textbox.pack(fill="x", expand=True, pady=5)
-                agentico_prompt_textbox.insert("1.0", self.config_manager.get("prompt_agentico"))
+                agentico_prompt_textbox.insert("1.0", agent_prompt_initial or "")
                 Tooltip(agentico_prompt_textbox, "Prompt executed in agent mode.")
 
                 ctk.CTkLabel(gemini_prompt_frame, text="Gemini Models (one per line):").pack(anchor="w", pady=(5,0))
                 gemini_models_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
                 gemini_models_textbox.pack(fill="x", expand=True, pady=5)
-                gemini_models_textbox.insert("1.0", "\n".join(self.config_manager.get("gemini_model_options", [])))
+                gemini_models_textbox.insert("1.0", "\n".join(gemini_model_options))
                 Tooltip(gemini_models_textbox, "List of models to try, one per line.")
 
                 asr_helpers = self._build_asr_section(
