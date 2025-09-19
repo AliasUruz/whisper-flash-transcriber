@@ -191,7 +191,12 @@ class AppCore:
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", f"Download failed: {e}"))
             else:
                 logging.info("Model download completed successfully.")
-                self.main_tk_root.after(0, self.transcription_handler.start_model_loading)
+
+                def _after_download():
+                    self._set_state(STATE_IDLE)
+                    self.transcription_handler.start_model_loading()
+
+                self.main_tk_root.after(0, _after_download)
         threading.Thread(target=_download, daemon=True, name="ModelDownloadThread").start()
 
     def _apply_initial_config_to_core_attributes(self):
@@ -364,6 +369,10 @@ class AppCore:
         logging.info("AppCore: Model loaded successfully.")
         self._set_state(STATE_IDLE)
         self._start_autohotkey()
+
+    def notify_model_loading_started(self):
+        """Expõe atualização explícita de estado para carregamento de modelo."""
+        self._set_state(STATE_LOADING_MODEL)
         
         # Iniciar serviços de estabilidade de hotkey se habilitados
         if self.hotkey_stability_service_enabled:
