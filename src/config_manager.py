@@ -109,11 +109,13 @@ DEFAULT_CONFIG = {
     "asr_installed_models": [],
     "asr_curated_catalog": [],
     "asr_curated_catalog_url": "",
-    "last_model_prompt_decision": {
+    "asr_last_download_status": {
+        "status": "unknown",
+        "timestamp": "",
         "model_id": "",
         "backend": "",
-        "decision": "",
-        "timestamp": 0.0,
+        "message": "",
+        "details": "",
     },
 }
 
@@ -178,7 +180,7 @@ ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
 ASR_CURATED_CATALOG_URL_CONFIG_KEY = "asr_curated_catalog_url"
-LAST_MODEL_PROMPT_DECISION_CONFIG_KEY = "last_model_prompt_decision"
+ASR_LAST_DOWNLOAD_STATUS_KEY = "asr_last_download_status"
 
 
 def _normalize_asr_backend(name: str | None) -> str | None:
@@ -621,27 +623,24 @@ class ConfigManager:
             curated = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
         self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = curated
 
-        prompt_decision = self.config.get(
-            LAST_MODEL_PROMPT_DECISION_CONFIG_KEY,
-            self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY],
+        default_download_status = copy.deepcopy(
+            self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})
         )
-        if not isinstance(prompt_decision, dict):
-            prompt_decision = copy.deepcopy(
-                self.default_config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY]
-            )
-        decision_value = str(prompt_decision.get("decision", "")).strip().lower()
-        if decision_value not in {"accept", "defer"}:
-            decision_value = ""
-        try:
-            timestamp_value = float(prompt_decision.get("timestamp", 0.0))
-        except (TypeError, ValueError):
-            timestamp_value = 0.0
-        self.config[LAST_MODEL_PROMPT_DECISION_CONFIG_KEY] = {
-            "model_id": str(prompt_decision.get("model_id", "") or ""),
-            "backend": str(prompt_decision.get("backend", "") or ""),
-            "decision": decision_value,
-            "timestamp": timestamp_value,
-        }
+        stored_status = self.config.get(
+            ASR_LAST_DOWNLOAD_STATUS_KEY,
+            default_download_status,
+        )
+        if not isinstance(stored_status, dict):
+            stored_status = default_download_status
+        sanitized_status = copy.deepcopy(default_download_status)
+        if isinstance(stored_status, dict):
+            for key, value in stored_status.items():
+                if key not in sanitized_status:
+                    sanitized_status[key] = ""
+                sanitized_status[key] = "" if value is None else str(value)
+        if not sanitized_status.get("status"):
+            sanitized_status["status"] = default_download_status.get("status", "unknown")
+        self.config[ASR_LAST_DOWNLOAD_STATUS_KEY] = sanitized_status
 
         safe_config = self.config.copy()
         safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
@@ -833,6 +832,30 @@ class ConfigManager:
             self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = list(
                 self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY]
             )
+
+    def get_last_asr_download_status(self) -> dict:
+        status = self.config.get(
+            ASR_LAST_DOWNLOAD_STATUS_KEY,
+            copy.deepcopy(self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})),
+        )
+        if not isinstance(status, dict):
+            return copy.deepcopy(
+                self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})
+            )
+        return copy.deepcopy(status)
+
+    def set_last_asr_download_status(self, value: dict):
+        default_status = copy.deepcopy(
+            self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})
+        )
+        sanitized = copy.deepcopy(default_status)
+        if isinstance(value, dict):
+            for key, raw in value.items():
+                normalized = "" if raw is None else str(raw)
+                sanitized[key] = normalized
+        if not sanitized.get("status"):
+            sanitized["status"] = default_status.get("status", "unknown")
+        self.config[ASR_LAST_DOWNLOAD_STATUS_KEY] = sanitized
 
     def get_asr_curated_catalog(self):
         return self.config.get(
