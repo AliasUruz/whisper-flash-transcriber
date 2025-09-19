@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from threading import RLock
 from typing import Dict, List
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
@@ -34,6 +35,34 @@ DISPLAY_NAMES: Dict[str, str] = {
 }
 
 
+_CACHE_TTL_SECONDS = 60.0
+
+_download_size_cache: dict[str, tuple[float, tuple[int, int]]] = {}
+_download_size_lock = RLock()
+
+_list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
+_list_installed_lock = RLock()
+
+
+def _normalize_cache_dir(cache_dir: str | Path) -> Path:
+    """Return a normalized ``Path`` instance for cache directory comparisons."""
+
+    if isinstance(cache_dir, Path):
+        return cache_dir.expanduser()
+    return Path(cache_dir).expanduser()
+
+
+def _invalidate_list_installed_cache(cache_dir: str | Path | None = None) -> None:
+    """Invalidate cached results for :func:`list_installed`."""
+
+    with _list_installed_lock:
+        if cache_dir is None:
+            _list_installed_cache.clear()
+            return
+        cache_key = str(_normalize_cache_dir(cache_dir))
+        _list_installed_cache.pop(cache_key, None)
+
+
 def list_catalog() -> List[Dict[str, str]]:
     """Return curated catalog entries with display names."""
     return [
@@ -50,6 +79,18 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     returned. Any other directories or isolated files found in ``cache_dir``
     are ignored. The shared Hugging Face cache is queried as a fallback.
     """
+
+    normalized_dir = _normalize_cache_dir(cache_dir)
+    cache_key = str(normalized_dir)
+    now = time.monotonic()
+
+    with _list_installed_lock:
+        cached_entry = _list_installed_cache.get(cache_key)
+        if cached_entry:
+            cached_at, cached_value = cached_entry
+            if now - cached_at < _CACHE_TTL_SECONDS:
+                return copy.deepcopy(cached_value)
+            _list_installed_cache.pop(cache_key, None)
 
     curated_ids = {c["id"] for c in CURATED}
     installed: List[Dict[str, str]] = []
@@ -97,6 +138,9 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     except Exception:  # pragma: no cover - best effort
         pass
 
+    with _list_installed_lock:
+        _list_installed_cache[cache_key] = (time.monotonic(), copy.deepcopy(installed))
+
     return installed
 
 
@@ -113,6 +157,15 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
     tuple[int, int]
         Total size in bytes and number of files available for download.
     """
+
+    now = time.monotonic()
+    with _download_size_lock:
+        cached_entry = _download_size_cache.get(model_id)
+        if cached_entry:
+            cached_at, cached_value = cached_entry
+            if now - cached_at < _CACHE_TTL_SECONDS:
+                return cached_value
+            _download_size_cache.pop(model_id, None)
 
     api = HfApi()
     info = api.model_info(model_id)
