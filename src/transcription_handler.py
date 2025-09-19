@@ -756,6 +756,23 @@ class TranscriptionHandler:
                 if not backend_candidate:
                     backend_candidate = "transformers"
 
+                backend_name = backend_candidate
+                selected_gpu_index: int | None = None
+                try:
+                    self._asr_backend = make_backend(backend_name)
+                except Exception as backend_error:
+                    if backend_name != "transformers":
+                        logging.warning(
+                            "Falha ao instanciar backend '%s': %s. Aplicando fallback 'transformers'.",
+                            backend_name,
+                            backend_error,
+                        )
+                        backend_name = "transformers"
+                        self._asr_backend = make_backend(backend_name)
+                    else:
+                        raise
+                self.backend_resolved = backend_name
+
                 available_cuda = torch.cuda.is_available()
                 gpu_count = torch.cuda.device_count() if available_cuda else 0
                 gpu_index = self.gpu_index if isinstance(self.gpu_index, int) else -1
@@ -767,12 +784,13 @@ class TranscriptionHandler:
                 if pref == "cpu":
                     backend_device = "cpu"
                     transformers_device = -1
-                    self.gpu_index = -1
+                    selected_gpu_index = None
+                    self.device_in_use = "cpu"
                     logging.info("Dispositivo de ASR fixado em CPU conforme configuração explícita.")
                 elif pref == "cuda":
                     if not available_cuda or gpu_count == 0:
                         reason = "CUDA indisponível" if not available_cuda else "Nenhuma GPU detectada"
-                        self.gpu_index = -1
+                        selected_gpu_index = None
                         self.device_in_use = "cpu"
                         self._emit_device_warning("cuda", "cpu", reason)
                         backend_device = "cpu"
@@ -787,7 +805,7 @@ class TranscriptionHandler:
                             )
                         backend_device = f"cuda:{target_idx}"
                         transformers_device = f"cuda:{target_idx}"
-                        self.gpu_index = target_idx
+                        selected_gpu_index = target_idx
                         self.device_in_use = backend_device
                         logging.info("Dispositivo de ASR configurado em %s.", self.device_in_use)
                 else:
@@ -799,21 +817,27 @@ class TranscriptionHandler:
                                 gpu_index,
                                 target_idx,
                             )
-                        self.gpu_index = target_idx
-                        self.device_in_use = f"cuda:{target_idx}"
+                        backend_device = f"cuda:{target_idx}"
+                        transformers_device = f"cuda:{target_idx}"
+                        selected_gpu_index = target_idx
+                        self.device_in_use = backend_device
                         logging.info("Modo auto selecionou %s para ASR.", self.device_in_use)
                     else:
                         reason = "CUDA indisponível" if not available_cuda else "Nenhuma GPU detectada"
-                        self.gpu_index = -1
+                        selected_gpu_index = None
                         self.device_in_use = "cpu"
                         self._emit_device_warning("auto", "cpu", reason, level="info")
                         backend_device = "cpu"
                         transformers_device = -1
 
+                if backend_device == "auto":
+                    backend_device = self.device_in_use or "cpu"
+                if transformers_device is None and backend_device == "cpu":
+                    transformers_device = -1
+
                 effective_dtype = self._resolve_effective_dtype(asr_dtype)
 
                 self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
-                self.device_in_use = backend_device
 
                 if hasattr(self._asr_backend, "model_id"):
                     try:
