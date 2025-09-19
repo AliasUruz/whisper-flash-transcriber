@@ -371,7 +371,7 @@ class TranscriptionHandler:
             dtype = "float16" if compute_device.startswith("cuda") else "float32"
 
         default_gpu_model = "openai/whisper-large-v3-turbo"
-        default_cpu_model = "openai/whisper-large-v3"
+        default_cpu_model = "openai/whisper-large-v3-turbo"
         if model_id in ("auto", default_gpu_model, default_cpu_model):
             model_id = default_gpu_model if compute_device.startswith("cuda") else default_cpu_model
 

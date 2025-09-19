@@ -45,23 +45,15 @@ class DownloadCancelledError(Exception):
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
 CURATED: List[Dict[str, str]] = [
-    {"id": "openai/whisper-large-v3", "backend": "transformers"},
     {"id": "openai/whisper-large-v3-turbo", "backend": "transformers"},
-    {"id": "distil-whisper/distil-large-v3", "backend": "transformers"},
-    {"id": "Systran/faster-whisper-large-v3", "backend": "ct2"},
-    {"id": "h2oai/faster-whisper-large-v3-turbo", "backend": "ct2"},
-    {"id": "Systran/faster-distil-whisper-large-v3", "backend": "ct2"},
 ]
 
 DISPLAY_NAMES: Dict[str, str] = {
-    "openai/whisper-large-v3": "Whisper Large v3",
     "openai/whisper-large-v3-turbo": "Whisper Large v3 Turbo",
-    "distil-whisper/distil-large-v3": "Distil Whisper Large v3",
-    "Systran/faster-whisper-large-v3": "Faster Whisper Large v3",
-    "h2oai/faster-whisper-large-v3-turbo": "Faster Whisper Large v3 Turbo",
-    "Systran/faster-distil-whisper-large-v3": "Faster Distil Whisper Large v3",
 }
 
+# Para reintroduzir outros modelos futuramente, basta estender as estruturas
+# CURATED e DISPLAY_NAMES abaixo.
 
 _CACHE_TTL_SECONDS = 60.0
 

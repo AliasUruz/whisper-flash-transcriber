@@ -100,7 +100,7 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
-    "asr_model_id": "openai/whisper-large-v3",
+    "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "transformers",
     "asr_compute_device": "auto",
     "asr_dtype": "float16",

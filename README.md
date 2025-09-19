@@ -18,7 +18,7 @@ A lightweight, high-performance desktop tool for Windows that turns your speech 
 
 ## Features
 
-*   **High-Quality Transcription:** Powered by the `openai/whisper-large-v3` model for state-of-the-art speech recognition.
+*   **High-Quality Transcription:** Powered by the `openai/whisper-large-v3-turbo` model for state-of-the-art speech recognition.
 *   **GPU Acceleration:** Automatically utilizes your NVIDIA GPU (if available) for significantly faster transcriptions, with fallback to CPU.
 *   **Dynamic Performance:** Intelligently adjusts batch sizes based on available VRAM for optimal performance.
 *   **Customizable Hotkeys:**
@@ -287,7 +287,7 @@ The speech recognition engine supports multiple backends. The following keys in 
 
 | Key | Description | Example |
 | --- | ----------- | ------- |
-| `asr_model_id` | Model identifier to download. | `"openai/whisper-large-v3"` |
+| `asr_model_id` | Model identifier to download. | `"openai/whisper-large-v3-turbo"` |
 | `asr_backend` | Backend implementation (`transformers` or `ct2`). The value `faster-whisper` is accepted as an alias for `ct2`. | `"transformers"` |
 | `asr_compute_device` | Target device such as `cpu`, `cuda:0`, or `auto`. | `"cuda:0"` |
 | `asr_dtype` | Numerical precision (`float16`, `float32`, ...). | `"float16"` |

@@ -6,7 +6,7 @@ from typing import Any
 class TransformersBackend:
     """ASR backend based on Hugging Face Transformers."""
 
-    def __init__(self, model_id: str = "openai/whisper-large-v3", device: int | str | None = None) -> None:
+    def __init__(self, model_id: str = "openai/whisper-large-v3-turbo", device: int | str | None = None) -> None:
         self.model_id = model_id
         self.device = device
         self.processor = None
