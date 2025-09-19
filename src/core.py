@@ -297,6 +297,13 @@ class AppCore:
                 self._pending_tray_tooltips.append(message)
                 logging.debug("AppCore: tooltip pendente armazenada: %s", message)
 
+    def report_runtime_notice(self, message: str, *, level: int = logging.WARNING) -> None:
+        """Publica um aviso em log e encaminha mensagem para a UI."""
+        if not message:
+            return
+        logging.log(level, message)
+        self._queue_tooltip_update(message)
+
     def flush_pending_ui_notifications(self) -> None:
         if not self._pending_tray_tooltips:
             return
