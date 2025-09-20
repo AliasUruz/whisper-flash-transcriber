@@ -83,8 +83,7 @@ class GeminiAPI:
 
             if not self.current_api_key or "SUA_CHAVE" in self.current_api_key:
                 logging.warning(
-                    "Gemini API Key não configurada ou inválida. "
-                    "Correção de texto desativada."
+                    "Gemini API key is missing or invalid. Text correction disabled."
                 )
                 self.model = None
                 self.is_valid = False  # Chave inválida, marca como inválido
@@ -105,7 +104,7 @@ class GeminiAPI:
                 )
             except Exception as e:
                 logging.error(
-                    "Falha ao inicializar o cliente Gemini API: %s",
+                    "Failed to initialize the Gemini API client: %s",
                     e,
                 )
                 self.model = None
@@ -130,16 +129,14 @@ class GeminiAPI:
         """
         if not prompt or not self.is_valid or not self.model:
             logging.warning(
-                "Não é possível executar a requisição: prompt vazio, "
-                "cliente inválido ou modelo não carregado."
+                "Cannot execute request: empty prompt, invalid client, or model not loaded."
             )
             return ""
 
         for attempt in range(max_retries):
             try:
                 logging.info(
-                    "Enviando prompt para a API Gemini usando o modelo %s "
-                    "(tentativa %s/%s)",
+                    "Sending prompt to the Gemini API with model %s (attempt %s/%s)",
                     self.last_model_id,
                     attempt + 1,
                     max_retries,
@@ -152,41 +149,39 @@ class GeminiAPI:
                 if hasattr(response, 'text') and response.text:
                     generated_text = response.text.strip()
                     logging.info(
-                        "Resposta recebida com sucesso da API Gemini."
+                        "Gemini API returned a successful response."
                     )
                     return generated_text
                 else:
                     logging.warning(
-                        "API Gemini retornou resposta vazia (tentativa %s/%s)",
+                        "Gemini API returned an empty response (attempt %s/%s)",
                         attempt + 1,
                         max_retries,
                     )
 
             except (BrokenResponseError, IncompleteIterationError) as e:
                 logging.error(
-                    "Erro específico da API Gemini (tentativa %s/%s): %s",
+                    "Gemini API specific error (attempt %s/%s): %s",
                     attempt + 1,
                     max_retries,
                     e,
                 )
             except Exception as e:
                 logging.error(
-                    "Erro durante a geração de conteúdo da API Gemini "
-                    "(tentativa %s/%s): %s",
+                    "Error while generating content with the Gemini API (attempt %s/%s): %s",
                     attempt + 1,
                     max_retries,
                     e,
                 )
                 if attempt < max_retries - 1:
                     logging.info(
-                        "Tentando novamente em %s segundos...",
+                        "Retrying in %s seconds...",
                         retry_delay,
                     )
                     time.sleep(retry_delay)
 
         logging.error(
-            "Todas as tentativas de geração de conteúdo da API "
-            "Gemini falharam."
+            "All attempts to generate content with the Gemini API failed."
         )
         return ""
 

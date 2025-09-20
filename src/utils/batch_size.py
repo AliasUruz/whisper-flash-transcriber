@@ -12,7 +12,7 @@ def select_batch_size(gpu_index: int, fallback: int = 4, *, chunk_length_sec: fl
         import torch
     except Exception as e:  # pragma: no cover - torch pode não estar instalado
         logging.error(
-            "Torch indisponível: %s. Usando valor de fallback: %s",
+            "Torch unavailable: %s. Falling back to %s",
             e,
             fallback,
         )
@@ -20,7 +20,7 @@ def select_batch_size(gpu_index: int, fallback: int = 4, *, chunk_length_sec: fl
 
     if not torch.cuda.is_available() or gpu_index < 0:
         logging.info(
-            "GPU não disponível ou não selecionada, usando batch size de CPU"
+            "GPU unavailable or not selected; using CPU batch size"
         )
         return fallback
 
@@ -30,7 +30,7 @@ def select_batch_size(gpu_index: int, fallback: int = 4, *, chunk_length_sec: fl
         free_memory_gb = free_memory_bytes / (1024 ** 3)
         total_memory_gb = total_memory_bytes / (1024 ** 3)
         logging.info(
-            "Verificando VRAM para GPU %s: %.2fGB livres de %.2fGB.",
+            "Checking VRAM for GPU %s: %.2fGB free of %.2fGB.",
             gpu_index,
             free_memory_gb,
             total_memory_gb,
@@ -71,7 +71,7 @@ def select_batch_size(gpu_index: int, fallback: int = 4, *, chunk_length_sec: fl
                 pass
 
         logging.info(
-            "VRAM livre (%.2fGB) -> Batch size dinâmico selecionado: %s",
+            "Free VRAM (%.2fGB) -> Dynamic batch size selected: %s",
             free_memory_gb,
             bs,
         )
@@ -79,8 +79,8 @@ def select_batch_size(gpu_index: int, fallback: int = 4, *, chunk_length_sec: fl
     except Exception as e:  # pragma: no cover - erro ao consultar VRAM
         logging.error(
             (
-                "Erro ao calcular batch size dinâmico: %s. "
-                "Usando valor padrão de fallback: %s"
+                "Failed to compute dynamic batch size: %s. "
+                "Using fallback value: %s"
             ),
             e,
             fallback,

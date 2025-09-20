@@ -1708,7 +1708,7 @@ class UIManager:
                     self.show_status_tooltip(warning_message)
                 except Exception as tooltip_err:
                     logging.error(
-                        "Falha ao atualizar tooltip com aviso: %s",
+                        "Failed to update tooltip with warning: %s",
                         tooltip_err,
                         exc_info=True,
                     )
@@ -3293,10 +3293,10 @@ class UIManager:
             return
         if self.tray_icon:
             self.tray_icon.title = self._clamp_tray_tooltip(message)
-            logging.debug("UIManager: tooltip atualizada para: %s", message)
+            logging.debug("UIManager: tooltip updated to: %s", message)
         else:
             self._pending_tray_tooltip = message
-            logging.debug("UIManager: tooltip pendente armazenada: %s", message)
+            logging.debug("UIManager: pending tooltip queued: %s", message)
 
     def setup_tray_icon(self):
         # Logic moved from global, adjusted to use self.

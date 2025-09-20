@@ -77,7 +77,7 @@ class VADManager:
                 exc_info=True,
             )
             self.session = None
-            self._activate_energy_fallback("falha ao carregar modelo", exc)
+            self._activate_energy_fallback("model load failure", exc)
 
     def reset_states(self) -> None:
         """Reseta os estados internos do modelo."""
@@ -87,13 +87,13 @@ class VADManager:
         """Retorna ``True`` se o chunk contem fala."""
 
         if audio_chunk is None:
-            logging.debug("VAD recebeu chunk None; assumindo fala para manter gravacao.")
+            logging.debug("VAD received chunk None; assuming speech to keep recording.")
             return True
 
         self._chunk_counter += 1
         raw_array = np.asarray(audio_chunk)
         if raw_array.size == 0:
-            logging.debug("VAD recebeu chunk vazio; retornando False.")
+            logging.debug("VAD received an empty chunk; returning False.")
             return False
 
         raw_meta = {
@@ -129,10 +129,10 @@ class VADManager:
         except Exception as exc:
             self.reset_states()
             self._log_failure(exc, prepared, raw_meta)
-            self._activate_energy_fallback("falha de inferencia", exc)
+            self._activate_energy_fallback("inference failure", exc)
             detected, energy_peak, rms, threshold = self._energy_gate(mono_view, self.threshold)
             logging.debug(
-                "VAD energy fallback chunk %s (apos falha) -> detected=%s peak=%.4f rms=%.4f threshold=%.4f",
+                "VAD energy fallback chunk %s (after failure) -> detected=%s peak=%.4f rms=%.4f threshold=%.4f",
                 self._chunk_counter,
                 detected,
                 energy_peak,
@@ -215,7 +215,7 @@ class VADManager:
                 json.dump(payload, fp)
                 fp.write("\n")
         except Exception:
-            logging.debug("Nao foi possivel registrar falha do VAD.", exc_info=True)
+            logging.debug("Unable to record VAD failure.", exc_info=True)
 
     def _activate_energy_fallback(self, reason: str, exc: Exception | None = None) -> None:
         if self._use_energy_fallback:
@@ -227,7 +227,7 @@ class VADManager:
 
         if not self._fallback_notified:
             if exc is None:
-                logging.warning("VAD fallback para deteccao por energia ativado (%s).", reason)
+                logging.warning("VAD fallback to energy detection enabled (%s).", reason)
             else:
-                logging.warning("VAD fallback para deteccao por energia ativado (%s): %s", reason, exc)
+                logging.warning("VAD fallback to energy detection enabled (%s): %s", reason, exc)
             self._fallback_notified = True
