@@ -72,6 +72,9 @@ class AudioHandler:
         self._processing_thread = threading.Thread(target=self._process_audio_queue, daemon=True)
         self._processing_thread.start()
 
+        self.stream_blocksize = int(AUDIO_SAMPLE_RATE / 10)  # ~100ms buffers
+        self._overflow_log_window = 5.0  # seconds
+        self._last_overflow_sample: tuple[float, int] | None = None
         self.update_config()  # Carrega a configuração inicial
 
     # ------------------------------------------------------------------
@@ -80,9 +83,32 @@ class AudioHandler:
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
             logging.warning(f"Audio callback status: {status}")
+            self._handle_audio_overflow(status)
         if self.is_recording:
             # A cópia evita referências a buffers reutilizados pelo SoundDevice
             self.audio_queue.put(indata.copy())
+
+    def _handle_audio_overflow(self, status) -> None:
+        try:
+            status_str = str(status).strip()
+        except Exception:
+            status_str = repr(status)
+
+        if "input overflow" in status_str.lower():
+            now = time.time()
+            last_ts, count = (self._last_overflow_sample
+                               if isinstance(self._last_overflow_sample, tuple)
+                               else (0.0, 0))
+            if now - last_ts > self._overflow_log_window:
+                count = 0
+            count += 1
+            self._last_overflow_sample = (now, count)
+
+            logging.warning(
+                "Audio input overflow detected (%s occurrences in last %.0fs).",
+                count,
+                self._overflow_log_window,
+            )
 
     def _process_audio_queue(self):
         while True:
@@ -96,7 +122,18 @@ class AudioHandler:
 
                 write_data = None
                 if self.use_vad and self.vad_manager:
-                    is_speech = self.vad_manager.is_speech(indata[:, 0])
+                    try:
+                        max_abs = float(np.max(np.abs(indata))) if indata.size else 0.0
+                        logging.debug(
+                            "VAD check chunk shape=%s dtype=%s max_abs=%.4f",
+                            indata.shape,
+                            indata.dtype,
+                            max_abs,
+                        )
+                        is_speech = self.vad_manager.is_speech(indata)
+                    except Exception as exc:
+                        self._handle_vad_exception(exc, indata)
+                        is_speech = True
                     if is_speech:
                         self._vad_silence_counter = 0.0
                         write_data = indata
@@ -151,6 +188,24 @@ class AudioHandler:
             except Exception as e:
                 logging.error(f"Erro no processamento da fila de áudio: {e}")
 
+    def _handle_vad_exception(self, exc: Exception, chunk: np.ndarray) -> None:
+        logging.error("Erro no processamento do VAD: %s", exc, exc_info=True)
+        if self.vad_manager:
+            try:
+                self.vad_manager.reset_states()
+            except Exception:
+                logging.debug("Falha ao resetar estados do VAD apos excecao.", exc_info=True)
+        self._vad_silence_counter = 0.0
+        try:
+            max_abs = float(np.max(np.abs(chunk))) if chunk is not None and chunk.size else 0.0
+            logging.debug(
+                "VAD em fallback; chunk_shape=%s max_abs=%.4f",
+                getattr(chunk, "shape", None),
+                max_abs,
+            )
+        except Exception:
+            logging.debug("Nao foi possivel calcular diagnostico do chunk apos excecao VAD.", exc_info=True)
+
     def _record_audio_task(self):
         self.audio_stream = None
         try:
@@ -164,6 +219,7 @@ class AudioHandler:
                 channels=AUDIO_CHANNELS,
                 callback=self._audio_callback,
                 dtype="float32",
+                blocksize=self.stream_blocksize,
             )
             self.audio_stream.start()
             self.stream_started = True
@@ -241,7 +297,6 @@ class AudioHandler:
             self.audio_queue = queue.Queue()
             self._processing_thread = threading.Thread(target=self._process_audio_queue, daemon=True)
             self._processing_thread.start()
-
 
         if self._record_thread and self._record_thread.is_alive():
             logging.debug("Aguardando t\u00e9rmino da thread de grava\u00e7\u00e3o anterior.")

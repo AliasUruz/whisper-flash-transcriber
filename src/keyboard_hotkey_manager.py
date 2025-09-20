@@ -61,7 +61,8 @@ class KeyboardHotkeyManager:
             }
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
-            logging.info("Configuration saved: %s", config)
+            logging.info("Configuration saved: record_key=%s, agent_key=%s, record_mode=%s",
+                         self.record_key, self.agent_key, self.record_mode)
         except Exception as e:
             logging.error(f"Erro ao salvar configuração: {e}")
 

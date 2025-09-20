@@ -1516,11 +1516,11 @@ class AppCore:
         )
         ensure_enum(
             "new_asr_ct2_compute_type",
-            {"default", "float16", "int8", "int8_float16"},
+            {"default", "float16", "float32", "int8", "int8_float16", "int8_float32"},
         )
         ensure_enum(
             "new_ct2_quantization",
-            {"default", "float16", "int8", "int8_float16"},
+            {"default", "float16", "float32", "int8", "int8_float16", "int8_float32"},
         )
 
         ensure_int("new_batch_size", min_value=1)
@@ -1572,7 +1572,7 @@ class AppCore:
         logging.info("AppCore: Applying new configuration from external source.")
         valid_inputs, validation_errors = self.validate_settings_inputs(**kwargs)
         if not valid_inputs:
-            summary = "\n".join(f"• {msg}" for msg in validation_errors)
+            summary = "\n".join(f"- {msg}" for msg in validation_errors)
             message = (
                 "Não foi possível aplicar as configurações devido aos seguintes "
                 f"problemas:\n\n{summary}"

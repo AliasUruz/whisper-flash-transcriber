@@ -4,11 +4,66 @@ import logging
 import atexit
 import os  # Adicionado para manipulação de caminhos
 import importlib
+import re
 
 # Configuração de logging (mantida aqui para o ponto de entrada)
+ANSI_ESCAPE_RE = re.compile(r'\x1B[@-_][0-?]*[ -/]*[@-~]')
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub('', text) if isinstance(text, str) else text
+
+
+class _AnsiStrippingStream:
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, data):
+        if isinstance(data, str):
+            data = _strip_ansi(data)
+        return self._stream.write(data)
+
+    def flush(self):
+        return self._stream.flush()
+
+    def isatty(self):
+        return self._stream.isatty()
+
+    @property
+    def encoding(self):
+        return getattr(self._stream, 'encoding', None)
+
+    @property
+    def buffer(self):
+        return getattr(self._stream, 'buffer', None)
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+class _StripAnsiFilter(logging.Filter):
+    def filter(self, record):
+        if isinstance(record.msg, str):
+            record.msg = _strip_ansi(record.msg)
+        if record.args:
+            record.args = tuple(_strip_ansi(arg) if isinstance(arg, str) else arg for arg in record.args)
+        return True
+
+os.environ.setdefault('HF_HUB_DISABLE_PROGRESS_BARS', '1')
+os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
+os.environ.setdefault('TRANSFORMERS_NO_ADVISORY_WARNINGS', '1')
+os.environ.setdefault('BITSANDBYTES_NOWELCOME', '1')
+os.environ.setdefault('TRANSFORMERS_VERBOSITY', os.environ.get('TRANSFORMERS_VERBOSITY', 'error'))
+
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
+sys.stdout = _AnsiStrippingStream(sys.stdout)
+sys.stderr = _AnsiStrippingStream(sys.stderr)
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(threadName)s - %(message)s', encoding='utf-8')
+for handler in logging.getLogger().handlers:
+    handler.addFilter(_StripAnsiFilter())
+    if isinstance(handler, logging.StreamHandler):
+        handler.stream = sys.stderr
 
 # Se não houver DISPLAY, encerra a aplicação antes de carregar módulos que exigem interface gráfica
 if os.name != "nt" and not os.environ.get("DISPLAY"):

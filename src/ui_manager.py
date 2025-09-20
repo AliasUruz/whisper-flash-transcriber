@@ -1027,8 +1027,41 @@ class UIManager:
         Returns a dictionary with UI references needed by the caller.
         """
 
+        advanced_state = {'visible': False}
+        advanced_specs = []
+        toggle_button_ref = {'widget': None}
+
+        def _register_advanced(widget, **pack_kwargs):
+            advanced_specs.append((widget, pack_kwargs))
+            if advanced_state['visible']:
+                widget.pack(**pack_kwargs)
+
+        def _set_advanced_visibility(show: bool) -> None:
+            advanced_state['visible'] = show
+            for widget, pack_kwargs in advanced_specs:
+                try:
+                    widget.pack_forget()
+                except Exception:
+                    continue
+                if show:
+                    widget.pack(**pack_kwargs)
+            button = toggle_button_ref['widget']
+            if button is not None:
+                button.configure(text='Ocultar avancado' if show else 'Mostrar avancado')
+
+        def _toggle_advanced() -> None:
+            _set_advanced_visibility(not advanced_state['visible'])
+
+        advanced_toggle = ctk.CTkButton(
+            asr_frame,
+            text='Mostrar avancado',
+            command=_toggle_advanced,
+        )
+        advanced_toggle.pack(fill='x', pady=(0, 5))
+        toggle_button_ref['widget'] = advanced_toggle
+
         asr_backend_frame = ctk.CTkFrame(asr_frame)
-        asr_backend_frame.pack(fill="x", pady=5)
+        _register_advanced(asr_backend_frame, fill="x", pady=5)
         ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 0))
         ctk.CTkButton(
             asr_backend_frame,
@@ -1057,8 +1090,8 @@ class UIManager:
             "Inference backend for speech recognition.\nDerived from selected model; override in advanced mode.",
         )
 
-        quant_frame = ctk.CTkFrame(transcription_frame)
-        quant_frame.pack(fill="x", pady=5)
+        quant_frame = ctk.CTkFrame(asr_frame)
+        _register_advanced(quant_frame, fill="x", pady=5)
         ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 0))
         ctk.CTkButton(
             quant_frame,
@@ -1211,7 +1244,7 @@ class UIManager:
         Tooltip(asr_device_menu, "Select compute device for ASR model.")
 
         asr_dtype_frame = ctk.CTkFrame(asr_frame)
-        asr_dtype_frame.pack(fill="x", pady=5)
+        _register_advanced(asr_dtype_frame, fill="x", pady=5)
         ctk.CTkLabel(asr_dtype_frame, text="ASR DType:").pack(side="left", padx=(5, 0))
         ctk.CTkButton(
             asr_dtype_frame,
@@ -1228,8 +1261,8 @@ class UIManager:
         asr_dtype_menu.pack(side="left", padx=5)
         Tooltip(asr_dtype_menu, "Torch dtype for ASR model.")
 
-        asr_ct2_frame = ctk.CTkFrame(transcription_frame)
-        asr_ct2_frame.pack(fill="x", pady=5)
+        asr_ct2_frame = ctk.CTkFrame(asr_frame)
+        _register_advanced(asr_ct2_frame, fill="x", pady=5)
         ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 0))
         ctk.CTkButton(
             asr_ct2_frame,
@@ -1243,13 +1276,13 @@ class UIManager:
         asr_ct2_menu = ctk.CTkOptionMenu(
             asr_ct2_frame,
             variable=asr_ct2_compute_type_var,
-            values=["auto", "float16", "float32", "int8_float16", "int8_float32"],
+            values=["default", "float16", "float32", "int8", "int8_float16", "int8_float32"],
         )
         asr_ct2_menu.pack(side="left", padx=5)
         Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
 
-        asr_cache_frame = ctk.CTkFrame(transcription_frame)
-        asr_cache_frame.pack(fill="x", pady=5)
+        asr_cache_frame = ctk.CTkFrame(asr_frame)
+        _register_advanced(asr_cache_frame, fill="x", pady=5)
         ctk.CTkLabel(
             asr_cache_frame,
             text="ASR Cache Directory:",
@@ -1318,6 +1351,11 @@ class UIManager:
             asr_frame, text="Install/Update", command=_install_model
         )
         install_button.pack(pady=5)
+        for idx, (widget, pack_kwargs) in enumerate(list(advanced_specs)):
+            if "before" not in pack_kwargs:
+                updated_kwargs = dict(pack_kwargs)
+                updated_kwargs["before"] = install_button
+                advanced_specs[idx] = (widget, updated_kwargs)
         reload_button = ctk.CTkButton(
             asr_frame, text="Reload Model", command=_reload_model
         )
@@ -1327,8 +1365,18 @@ class UIManager:
         _update_model_info(asr_model_id_var.get())
         _update_install_button_state()
         _on_backend_change(asr_backend_var.get())
+        should_show_advanced = any(
+            [
+                asr_backend_var.get() not in ("auto", ""),
+                asr_dtype_var.get() not in ("auto", ""),
+                asr_ct2_compute_type_var.get() not in ("auto", "float16"),
+            ]
+        )
+        _set_advanced_visibility(should_show_advanced)
 
         return {
+            "advanced_toggle": advanced_toggle,
+            "set_advanced_visibility": _set_advanced_visibility,
             "asr_backend_menu": asr_backend_menu,
             "asr_ct2_menu": asr_ct2_menu,
             "asr_model_menu": asr_model_menu,
@@ -2283,7 +2331,7 @@ class UIManager:
                         pass
                     else:
                         service_menu.set(text_correction_service_label_var.get())
-                        update_text_correction_fields()
+                        self._update_text_correction_fields()
                     openrouter_api_key_var.set(DEFAULT_CONFIG[OPENROUTER_API_KEY_CONFIG_KEY])
                     openrouter_model_var.set(DEFAULT_CONFIG[OPENROUTER_MODEL_CONFIG_KEY])
                     gemini_api_key_var.set(DEFAULT_CONFIG[GEMINI_API_KEY_CONFIG_KEY])
@@ -3033,7 +3081,7 @@ class UIManager:
                 asr_ct2_menu = ctk.CTkOptionMenu(
                     asr_ct2_frame,
                     variable=asr_ct2_compute_type_var,
-                    values=["auto", "float16", "float32", "int8_float16", "int8_float32"],
+                    values=["default", "float16", "float32", "int8", "int8_float16", "int8_float32"],
                 )
                 asr_ct2_menu.pack(side="left", padx=5)
                 self._set_settings_var("asr_ct2_menu", asr_ct2_menu)
@@ -3211,7 +3259,7 @@ class UIManager:
 
                 _apply_post_download_ui()
 
-                update_text_correction_fields()
+                self._update_text_correction_fields()
 
             except Exception as e:
                 logging.error(f"Failed to create Toplevel for settings: {e}", exc_info=True)

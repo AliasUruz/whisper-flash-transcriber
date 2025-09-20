@@ -251,6 +251,7 @@ To access and change settings:
 
 ### Key Configuration Options:
 
+* **ASR Settings Panel:** The ASR view now starts with the essential model and device selectors. Click the `Mostrar avancado` button to expose backend, dtype, quantization and cache controls.
 *   **Hotkey:** Change the keyboard shortcut used to start and stop recording. The default is F3. Choose a key combination that doesn't conflict with other applications you use frequently.
 *   **Agent Hotkey:** A separate hotkey (default F4) to activate "Agent Mode".
 *   **Recording Mode:** Choose between "Toggle" (press to start, press to stop) or "Hold" (record while key is pressed).
@@ -415,6 +416,14 @@ Best Practices
 - On CPU, prefer smaller chunks (15–20s) and reduced batch sizes.
 
 ## Troubleshooting
+
+### VAD crash when recording with silence detection enabled
+- Update to the latest build; the audio pipeline now normalizes each chunk before sending it to the Silero VAD model.
+- If the issue persists, grab the newest entry from `logs/vad_failure.jsonl` and share it when reporting the bug.
+
+### Terminal prints stray ESC characters
+- Standard output now strips ANSI escape sequences and disables progress-bar color codes by default.
+- If a custom launcher re-enables colored logs, wrap its stdout the same way or set `HF_HUB_DISABLE_PROGRESS_BARS=1`.
 
 ### Hotkeys Stop Working on Windows 11
 
