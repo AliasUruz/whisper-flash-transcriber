@@ -179,7 +179,7 @@ class GeminiAPI:
         self.agent_model = agent_model
         self.correction_model_id = correction_model_id
         self.agent_model_id = agent_model_id
-        self.is_valid = self.correction_model is not None
+        self.is_valid = any((self.correction_model, self.agent_model))
 
     def _resolve_timeout(self, default_timeout: float | int) -> float:
         """Obtém o timeout configurado garantindo um valor positivo."""
@@ -231,7 +231,7 @@ class GeminiAPI:
             return ""
 
         timeout_value = self._resolve_timeout(timeout)
-        model_for_log = self.current_model_id or self.last_model_id or "unknown"
+        model_for_log = model_id or "<unknown>"
 
         for attempt in range(max_retries):
             attempt_number = attempt + 1
@@ -250,7 +250,7 @@ class GeminiAPI:
                     max_retries,
                     prompt,
                 )
-                response = self.model.generate_content(
+                response = model.generate_content(
                     prompt,
                     request_options=helper_types.RequestOptions(timeout=timeout_value),
                 )
