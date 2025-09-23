@@ -43,6 +43,7 @@ from .config_manager import (
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
+    OPENROUTER_TIMEOUT_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
 from .transcription_handler import TranscriptionHandler
@@ -1811,9 +1812,14 @@ class AppCore:
             if self.transcription_handler.gemini_client:
                 self.transcription_handler.gemini_client.reinitialize_client()
             if self.transcription_handler.openrouter_client:
+                openrouter_timeout = self.config_manager.get_timeout(
+                    OPENROUTER_TIMEOUT_CONFIG_KEY,
+                    self.transcription_handler.openrouter_client.request_timeout,
+                )
                 self.transcription_handler.openrouter_client.reinitialize_client(
                     api_key=self.config_manager.get("openrouter_api_key"),
                     model_id=self.config_manager.get("openrouter_model"),
+                    request_timeout=openrouter_timeout,
                 )
 
             hotkey_related_keys = {"record_key", "record_mode", "agent_key"}
@@ -1918,9 +1924,14 @@ class AppCore:
             if self.transcription_handler.gemini_client:
                 self.transcription_handler.gemini_client.reinitialize_client()
             if self.transcription_handler.openrouter_client:
+                openrouter_timeout = self.config_manager.get_timeout(
+                    OPENROUTER_TIMEOUT_CONFIG_KEY,
+                    self.transcription_handler.openrouter_client.request_timeout,
+                )
                 self.transcription_handler.openrouter_client.reinitialize_client(
                     api_key=self.config_manager.get("openrouter_api_key"),
-                    model_id=self.config_manager.get("openrouter_model")
+                    model_id=self.config_manager.get("openrouter_model"),
+                    request_timeout=openrouter_timeout,
                 )
             logging.info(f"Clientes API re-inicializados via update_setting para '{key}'.")
 

@@ -12,11 +12,14 @@ class OpenRouterAPI:
     e modelo dinamicamente, permitindo aplicar novas configurações sem
     recriar a instância.
     """
+
+    DEFAULT_TIMEOUT = 30.0
     def __init__(
         self,
         api_key: str,
         model_id: str = "deepseek/deepseek-chat-v3-0324:free",
         max_tokens: int = 4096,
+        request_timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         """Inicializa o cliente OpenRouter.
 
@@ -25,11 +28,18 @@ class OpenRouterAPI:
             model_id: Identificador do modelo em uso.
             max_tokens: Limite máximo de tokens retornados pela API. O padrão
                 ``4096`` é compatível com a maioria dos modelos do OpenRouter.
+            request_timeout: Tempo máximo (em segundos) aguardado por resposta
+                da API em cada tentativa.
         """
         self.api_key = api_key
         self.model_id = model_id
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         self.max_tokens = max_tokens
+        self._last_invalid_timeout_value: object | None = None
+        self.request_timeout = self._normalize_timeout(
+            request_timeout,
+            self.DEFAULT_TIMEOUT,
+        )
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -37,10 +47,35 @@ class OpenRouterAPI:
             "X-Title": "Whisper Recorder",
         }
 
+    def _normalize_timeout(
+        self,
+        value: float | int | str | None,
+        fallback: float,
+    ) -> float:
+        """Converte valores arbitrários de timeout em ``float`` positivos."""
+        if value is None:
+            return float(fallback)
+        try:
+            timeout_value = float(value)
+            if timeout_value <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            if value != self._last_invalid_timeout_value:
+                logging.warning(
+                    "Invalid OpenRouter timeout '%s'; using fallback %.2f seconds.",
+                    value,
+                    float(fallback),
+                )
+                self._last_invalid_timeout_value = value
+            return float(fallback)
+        self._last_invalid_timeout_value = None
+        return timeout_value
+
     def reinitialize_client(
         self,
         api_key: Optional[str] = None,
         model_id: Optional[str] = None,
+        request_timeout: Optional[float] = None,
     ) -> None:
         """Atualiza chave, modelo e cabeçalhos do cliente.
 
@@ -48,16 +83,122 @@ class OpenRouterAPI:
             api_key: Nova chave de API. Se ``None``, mantém a atual.
             model_id: Novo identificador de modelo.
                 Se ``None``, mantém o atual.
+            request_timeout: Novo timeout (em segundos) para requisições. Se
+                ``None``, mantém o atual.
         """
         if api_key:
             self.api_key = api_key
         if model_id:
             self.model_id = model_id
+        if request_timeout is not None:
+            self.request_timeout = self._normalize_timeout(
+                request_timeout,
+                self.request_timeout,
+            )
         self.headers["Authorization"] = f"Bearer {self.api_key}"
         logging.info(
             "OpenRouter API client re/initialized with model '%s'",
             self.model_id,
         )
+
+    def _perform_single_attempt(
+        self,
+        payload_json: str,
+        attempt_number: int,
+        max_retries: int,
+    ) -> tuple[Optional[dict], bool]:
+        """Executa uma tentativa única de requisição ao OpenRouter."""
+        logging.info(
+            "Sending request to OpenRouter API with model '%s' (attempt %s/%s)",
+            self.model_id,
+            attempt_number,
+            max_retries,
+        )
+        logging.debug(
+            "OpenRouter payload for model '%s' (attempt %s/%s): %s",
+            self.model_id,
+            attempt_number,
+            max_retries,
+            payload_json,
+        )
+        try:
+            response = requests.post(
+                self.base_url,
+                headers=self.headers,
+                data=payload_json,
+                timeout=self.request_timeout,
+            )
+        except requests.exceptions.Timeout as exc:
+            logging.error(
+                "OpenRouter API request timed out after %.2f seconds (attempt %s/%s): %s",
+                self.request_timeout,
+                attempt_number,
+                max_retries,
+                exc,
+            )
+            return None, True
+        except requests.exceptions.RequestException as exc:
+            logging.error(
+                "Network error when calling OpenRouter API (attempt %s/%s): %s",
+                attempt_number,
+                max_retries,
+                exc,
+            )
+            return None, True
+
+        logging.debug(
+            "OpenRouter raw response (status %s, attempt %s/%s): %s",
+            response.status_code,
+            attempt_number,
+            max_retries,
+            response.text,
+        )
+
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            status_code = (
+                exc.response.status_code if exc.response is not None else "unknown"
+            )
+            logging.error(
+                "OpenRouter API HTTP error (status %s) on attempt %s/%s: %s",
+                status_code,
+                attempt_number,
+                max_retries,
+                exc,
+            )
+            if exc.response is not None:
+                logging.debug(
+                    "OpenRouter HTTP error response body (attempt %s/%s): %s",
+                    attempt_number,
+                    max_retries,
+                    exc.response.text,
+                )
+            if isinstance(status_code, int) and 400 <= status_code < 500:
+                return None, False
+            return None, True
+
+        try:
+            result = response.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            logging.error(
+                "Failed to decode OpenRouter API response JSON (attempt %s/%s): %s",
+                attempt_number,
+                max_retries,
+                exc,
+            )
+            return None, True
+        except Exception as exc:
+            logging.error(
+                "Unexpected error while parsing OpenRouter API response (attempt %s/%s): %s",
+                attempt_number,
+                max_retries,
+                exc,
+                exc_info=True,
+            )
+            return None, False
+
+        return result, False
 
     def correct_text(
         self,
@@ -103,64 +244,51 @@ class OpenRouterAPI:
                 }
             ],
             "temperature": 0.0,
-            # Low temperature for mais determinismo
-            "max_tokens": self.max_tokens  # Ajustável conforme o modelo em uso
+            # Low temperature para maior determinismo
+            "max_tokens": self.max_tokens
         }
 
-        # Try to make the API call with retries
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        delay = retry_delay
+
         for attempt in range(max_retries):
-            try:
-                logging.info(
-                    "Sending text to OpenRouter API (attempt %s/%s)",
-                    attempt + 1,
-                    max_retries,
-                )
-                response = requests.post(
-                    self.base_url,
-                    headers=self.headers,
-                    data=json.dumps(payload),
-                    timeout=30  # 30 second timeout
-                )
+            attempt_number = attempt + 1
+            result, should_retry = self._perform_single_attempt(
+                payload_json,
+                attempt_number,
+                max_retries,
+            )
 
-                response.raise_for_status()  # Exceção para erros 4XX/5XX
-
-                result = response.json()
-                if 'choices' in result and len(result['choices']) > 0:
-                    corrected_text = result['choices'][0]['message']['content']
-                    logging.info(
-                        "Successfully received corrected text from "
-                        "OpenRouter API"
-                    )
-                    if corrected_text != text:
-                        logging.info(
-                            "OpenRouter API made corrections to the text"
-                        )
-                    else:
-                        logging.info("OpenRouter API returned text unchanged")
-                    return corrected_text
+            if result is not None and 'choices' in result and result['choices']:
+                corrected_text = result['choices'][0]['message']['content']
+                logging.info("Successfully received corrected text from OpenRouter API")
+                if corrected_text != text:
+                    logging.info("OpenRouter API made corrections to the text")
                 else:
-                    logging.error(
-                        "Unexpected response format from OpenRouter API: %s",
-                        result,
-                    )
-                    logging.debug(
-                        "Full response: %s",
-                        json.dumps(result, indent=2),
-                    )
+                    logging.info("OpenRouter API returned text unchanged")
+                return corrected_text
 
-            except requests.exceptions.RequestException as e:
-                logging.error("Error calling OpenRouter API: %s", e)
-                if attempt < max_retries - 1:
-                    logging.info("Retrying in %s seconds...", retry_delay)
-                    time.sleep(retry_delay)
-                    # Increase retry delay for subsequent attempts
-                    retry_delay *= 2
+            if result is not None:
+                logging.error(
+                    "Unexpected response format from OpenRouter API: %s",
+                    result,
+                )
+                logging.debug(
+                    "OpenRouter unexpected response payload (attempt %s/%s): %s",
+                    attempt_number,
+                    max_retries,
+                    json.dumps(result, ensure_ascii=False),
+                )
+                should_retry = True
 
-            except Exception as e:
-                logging.error("Unexpected error with OpenRouter API: %s", e)
-                break
+            if should_retry and attempt < max_retries - 1:
+                logging.info("Retrying in %s seconds...", delay)
+                time.sleep(delay)
+                delay *= 2
+            else:
+                if not should_retry:
+                    break
 
-        # If we get here, all attempts failed
         logging.warning(
             "Failed to correct text with OpenRouter API, "
             "returning original text",
@@ -197,38 +325,41 @@ class OpenRouterAPI:
             "max_tokens": 10000,
         }
 
-        for attempt in range(3):
-            try:
-                logging.info(
-                    "Sending text to OpenRouter API (attempt %s/%s)",
-                    attempt + 1,
-                    3,
-                )
-                response = requests.post(
-                    self.base_url,
-                    headers=self.headers,
-                    data=json.dumps(payload),
-                    timeout=30,
-                )
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        max_attempts = 3
+        delay = 1.0
 
-                response.raise_for_status()
-                result = response.json()
+        for attempt in range(max_attempts):
+            attempt_number = attempt + 1
+            result, should_retry = self._perform_single_attempt(
+                payload_json,
+                attempt_number,
+                max_attempts,
+            )
 
-                if "choices" in result and result["choices"]:
-                    corrected_text = result["choices"][0]["message"]["content"]
-                    return corrected_text
-                else:
-                    logging.error(
-                        "Unexpected response format from OpenRouter API: %s",
-                        result,
-                    )
-            except requests.exceptions.RequestException as e:
-                logging.error("Error calling OpenRouter API: %s", e)
-                if attempt < 2:
-                    time.sleep(1)
-            except Exception as e:
-                logging.error("Unexpected error with OpenRouter API: %s", e)
-                break
+            if result is not None and result.get("choices"):
+                corrected_text = result["choices"][0]["message"]["content"]
+                return corrected_text
+
+            if result is not None:
+                logging.error(
+                    "Unexpected response format from OpenRouter API: %s",
+                    result,
+                )
+                logging.debug(
+                    "OpenRouter unexpected response payload (attempt %s/%s): %s",
+                    attempt_number,
+                    max_attempts,
+                    json.dumps(result, ensure_ascii=False),
+                )
+                should_retry = True
+
+            if should_retry and attempt < max_attempts - 1:
+                logging.info("Retrying in %s seconds...", delay)
+                time.sleep(delay)
+            else:
+                if not should_retry:
+                    break
 
         logging.warning(
             "Failed to correct text with OpenRouter API, "

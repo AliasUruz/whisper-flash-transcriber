@@ -5,7 +5,7 @@ import copy
 import hashlib
 import time
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import requests
 import tkinter.messagebox as messagebox
@@ -49,6 +49,8 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash-lite",
     "gemini_agent_model": "gemini-2.5-flash-lite",
+    "openrouter_timeout": 30,
+    "gemini_timeout": 120,
     "ai_provider": "gemini",
     "openrouter_prompt": "",
     "prompt_agentico": (
@@ -157,10 +159,13 @@ SERVICE_OPENROUTER = "openrouter"
 SERVICE_GEMINI = "gemini"
 OPENROUTER_API_KEY_CONFIG_KEY = "openrouter_api_key"
 OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
+OPENROUTER_TIMEOUT_CONFIG_KEY = "openrouter_timeout"
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
 GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
+# Novas constantes de timeout de APIs externas
+GEMINI_TIMEOUT_CONFIG_KEY = "gemini_timeout"
 # Novas constantes para otimizações de desempenho
 CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
 ENABLE_TORCH_COMPILE_CONFIG_KEY = "enable_torch_compile"
@@ -210,6 +215,7 @@ class ConfigManager:
         self.config = {}
         self._config_hash = None
         self._secrets_hash = None
+        self._invalid_timeout_cache: dict[str, Any] = {}
         self.load_config()
         url = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
         if url:
@@ -736,6 +742,29 @@ class ConfigManager:
         if key == ASR_BACKEND_CONFIG_KEY:
             value = _normalize_asr_backend(value)
         return value
+
+    def get_timeout(self, key: str, default: float | int) -> float:
+        """Retorna um timeout positivo em segundos para a chave informada."""
+        value = self.get(key, default)
+        try:
+            timeout_value = float(value)
+            if timeout_value <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            cached_value = self._invalid_timeout_cache.get(key)
+            if value != cached_value:
+                logging.warning(
+                    "Invalid timeout '%s' for key '%s'; using default %.2f seconds.",
+                    value,
+                    key,
+                    float(default),
+                )
+                self._invalid_timeout_cache[key] = value
+            return float(default)
+        else:
+            if key in self._invalid_timeout_cache:
+                self._invalid_timeout_cache.pop(key, None)
+            return timeout_value
 
     def set(self, key, value):
         if key == ASR_BACKEND_CONFIG_KEY:
