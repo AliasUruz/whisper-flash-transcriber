@@ -313,35 +313,28 @@ except Exception:
     sys.modules["PIL.Image"] = image_module
     sys.modules["PIL.ImageDraw"] = image_draw_module
 
-if TYPE_CHECKING:
-    from src.config_manager import ConfigManager as ConfigManagerType
-    from src.transcription_handler import (
-        TranscriptionHandler as TranscriptionHandlerType,
-    )
-    import src.transcription_handler as transcription_handler_module_type
+
+def _load_config_manager():
+    from src.config_manager import ConfigManager
+
+    return ConfigManager
 
 
-def _load_runtime_dependencies():
-    from src.config_manager import ConfigManager as _ConfigManager
-    from src.transcription_handler import (
-        TranscriptionHandler as _TranscriptionHandler,
-    )
-    import src.transcription_handler as handler_module
+def _load_transcription_handler():
+    from src.transcription_handler import TranscriptionHandler
 
-    return _ConfigManager, _TranscriptionHandler, handler_module
+    return TranscriptionHandler
 
 
-ConfigManager: ConfigManagerType
-TranscriptionHandler: TranscriptionHandlerType
-transcription_handler_module: transcription_handler_module_type
-(
-    ConfigManager,
-    TranscriptionHandler,
-    transcription_handler_module,
-) = _load_runtime_dependencies()
+def _load_transcription_handler_module():
+    import src.transcription_handler as transcription_handler_module
+
+    return transcription_handler_module
 
 
 def main() -> None:
+    ConfigManager = _load_config_manager()
+    TranscriptionHandler = _load_transcription_handler()
     cfg = ConfigManager()
 
     handler = TranscriptionHandler(
@@ -369,7 +362,8 @@ def main() -> None:
 # --- Tests ---------------------------------------------------------------
 
 
-def _make_handler_for_tests(chunk: float = 30.0, gpu_index: int = 0) -> TranscriptionHandler:
+def _make_handler_for_tests(chunk: float = 30.0, gpu_index: int = 0):
+    TranscriptionHandler = _load_transcription_handler()
     handler = TranscriptionHandler.__new__(TranscriptionHandler)
     handler.chunk_length_sec = chunk
     handler.gpu_index = gpu_index
@@ -400,6 +394,7 @@ def _mock_cuda_env(
 
         fake_cuda.mem_get_info = _mem_info
 
+    transcription_handler_module = _load_transcription_handler_module()
     monkeypatch.setattr(transcription_handler_module.torch, "cuda", fake_cuda)
     monkeypatch.setattr(transcription_handler_module.torch, "device", lambda spec: spec)
 
