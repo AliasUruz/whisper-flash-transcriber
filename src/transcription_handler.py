@@ -585,10 +585,48 @@ class TranscriptionHandler:
             logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
             return text
 
+    def _emit_transcription_result(
+        self,
+        final_text: str,
+        original_text: str,
+        *,
+        allow_after_state_change: bool = False,
+        context: str = "transcrição",
+    ) -> None:
+        """Entrega o resultado final para a UI, respeitando (ou não) o estado atual."""
+
+        callback = getattr(self, "on_transcription_result_callback", None)
+        if not callable(callback):
+            return
+
+        state_fn = getattr(self, "is_state_transcribing_fn", None)
+        is_transcribing = True
+        if callable(state_fn):
+            try:
+                is_transcribing = bool(state_fn())
+            except Exception as state_exc:
+                logging.debug(
+                    f"Falha ao verificar estado antes do resultado de {context}: {state_exc}"
+                )
+                is_transcribing = True
+
+        if not is_transcribing and not allow_after_state_change:
+            logging.warning(
+                f"Estado mudou antes do resultado de {context}. UI não será atualizada."
+            )
+            return
+
+        if not is_transcribing and allow_after_state_change:
+            logging.warning(
+                f"Estado mudou antes do resultado de {context}. Entregando dados para evitar perda de informações do usuário."
+            )
+
+        callback(final_text, original_text)
+
     def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str, was_transcribing_when_started: bool):
         if not self.text_correction_enabled:
             self.correction_in_progress = False
-            self.on_transcription_result_callback(text, text)
+            self._emit_transcription_result(text, text, allow_after_state_change=True)
             return
 
         self.correction_in_progress = True
@@ -641,7 +679,7 @@ class TranscriptionHandler:
             # de uma mudança de estado subsequente, para evitar perda de dados do usuário.
             if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
                 logging.info(f"Transcrição corrigida: {corrected}")
-            self.on_transcription_result_callback(corrected, text)
+            self._emit_transcription_result(corrected, text, allow_after_state_change=True)
 
     def _get_dynamic_batch_size(self) -> int:
         device_in_use = (str(self.device_in_use or "").lower())
@@ -1230,8 +1268,8 @@ class TranscriptionHandler:
                 )
                 if agent_mode and self.on_agent_result_callback:
                     self.on_agent_result_callback(text_result)
-                elif self.on_transcription_result_callback:
-                    self.on_transcription_result_callback(text_result, text_result)
+                else:
+                    self._emit_transcription_result(text_result, text_result, allow_after_state_change=True)
                 return
 
         # Legacy pipeline (desativado após retorno antecipado)
@@ -1476,18 +1514,11 @@ class TranscriptionHandler:
                 logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
                 if text_result and self.on_segment_transcribed_callback:
                     self.on_segment_transcribed_callback(text_result or "")
-                if (
-                    not agent_mode
-                    and text_result
-                    and (
-                        not self.is_state_transcribing_fn
-                        or self.is_state_transcribing_fn()
-                    )
-                ):
-                    self.on_transcription_result_callback(text_result, text_result)
-                elif not agent_mode and text_result:
-                    logging.warning(
-                        "Estado mudou antes do resultado de transcrição. UI não será atualizada."
+                if not agent_mode and text_result:
+                    self._emit_transcription_result(
+                        text_result,
+                        text_result,
+                        allow_after_state_change=True,
                     )
                 return
 
@@ -1550,7 +1581,11 @@ class TranscriptionHandler:
                     )
                     self.correction_thread.start()
                 else:
-                    self.on_transcription_result_callback(text_result, text_result)
+                    self._emit_transcription_result(
+                        text_result,
+                        text_result,
+                        allow_after_state_change=True,
+                    )
 
             # Mantemos a VRAM em cache para acelerar transcrições consecutivas.
             # A limpeza completa ocorre somente no shutdown.
