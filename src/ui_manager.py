@@ -541,7 +541,6 @@ class UIManager:
         cache_var = self._get_settings_var("asr_cache_dir_var")
         if model_var is None or cache_var is None:
             return
-        download_cancelled_error = self._download_cancelled_error
         cache_dir = cache_var.get()
         try:
             Path(cache_dir).mkdir(parents=True, exist_ok=True)
@@ -1755,7 +1754,7 @@ class UIManager:
                 x_cordinate = int((screen_width / 2) - (window_width / 2))
                 y_cordinate = int((screen_height / 2) - (window_height / 2))
                 settings_win.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
-            except Exception as init_err:
+            except Exception:
                 logging.error("Failed to initialize settings UI", exc_info=True)
                 self.settings_thread_running = False
                 if self.settings_window_instance:
@@ -2578,21 +2577,21 @@ class UIManager:
                 ctk.CTkLabel(gemini_prompt_frame, text="Gemini Correction Prompt:").pack(anchor="w", pady=(5,0))
                 gemini_prompt_correction_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=100, wrap="word")
                 gemini_prompt_correction_textbox.pack(fill="x", expand=True, pady=5)
-                gemini_prompt_correction_textbox.insert("1.0", self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY))
+                gemini_prompt_correction_textbox.insert("1.0", gemini_prompt_initial)
                 self._set_settings_var("gemini_prompt_correction_textbox", gemini_prompt_correction_textbox)
                 Tooltip(gemini_prompt_correction_textbox, "Prompt used to refine text.")
 
                 ctk.CTkLabel(gemini_prompt_frame, text="Agent Mode Prompt:").pack(anchor="w", pady=(5,0))
                 agentico_prompt_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
                 agentico_prompt_textbox.pack(fill="x", expand=True, pady=5)
-                agentico_prompt_textbox.insert("1.0", self.config_manager.get("prompt_agentico"))
+                agentico_prompt_textbox.insert("1.0", agent_prompt_initial)
                 self._set_settings_var("agentico_prompt_textbox", agentico_prompt_textbox)
                 Tooltip(agentico_prompt_textbox, "Prompt executed in agent mode.")
 
                 ctk.CTkLabel(gemini_prompt_frame, text="Gemini Models (one per line):").pack(anchor="w", pady=(5,0))
                 gemini_models_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
                 gemini_models_textbox.pack(fill="x", expand=True, pady=5)
-                gemini_models_textbox.insert("1.0", "\n".join(self.config_manager.get("gemini_model_options", [])))
+                gemini_models_textbox.insert("1.0", "\n".join(gemini_model_options))
                 self._set_settings_var("gemini_models_textbox", gemini_models_textbox)
                 Tooltip(gemini_models_textbox, "List of models to try, one per line.")
 
@@ -2632,7 +2631,6 @@ class UIManager:
                 asr_model_display_var = asr_helpers["asr_model_display_var"]
                 id_to_display = asr_helpers["id_to_display"]
                 on_backend_change = asr_helpers["on_backend_change"]
-                update_model_info = asr_helpers["update_model_info"]
 
                 # New: Chunk Length Mode
                 chunk_mode_frame = ctk.CTkFrame(transcription_frame)
@@ -3317,8 +3315,6 @@ class UIManager:
         # ...
         current_state = self.core_instance_ref.current_state
         is_recording = current_state == "RECORDING"
-        is_idle = current_state == "IDLE"
-        is_loading = current_state == "LOADING_MODEL"
 
         menu_items = [
             pystray.MenuItem(

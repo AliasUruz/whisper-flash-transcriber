@@ -92,8 +92,6 @@ class TranscriptionHandler:
         # utilize "is_state_transcribing_fn" nas novas implementações.
         self.state_check_callback = is_state_transcribing_fn
         self.correction_in_progress = False
-        self.correction_thread = None
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
         self.pipe = None
         self.backend_resolved = None
@@ -602,63 +600,94 @@ class TranscriptionHandler:
             logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
             return text
 
-    def _async_text_correction(self, text: str, is_agent_mode: bool, gemini_prompt: str, openrouter_prompt: str, was_transcribing_when_started: bool):
+    def _process_ai_pipeline(self, transcribed_text: str, is_agent_mode: bool) -> str:
+        """Centraliza o fluxo de pós-processamento baseado em IA."""
+        if not transcribed_text:
+            return transcribed_text
+
+        if is_agent_mode:
+            if not self.gemini_api or not getattr(self.gemini_api, "is_valid", False):
+                logging.warning("Modo agente ativado, mas o cliente Gemini está indisponível.")
+                return transcribed_text
+            try:
+                agent_response = self.gemini_api.get_agent_response(transcribed_text)
+                return agent_response or transcribed_text
+            except Exception as exc:
+                logging.error(
+                    "Erro ao obter resposta do agente Gemini: %s",
+                    exc,
+                    exc_info=True,
+                )
+                return transcribed_text
+
         if not self.text_correction_enabled:
-            self.correction_in_progress = False
-            self.on_transcription_result_callback(text, text)
-            return
+            return transcribed_text
 
+        active_provider = self._get_text_correction_service()
+        if active_provider == SERVICE_NONE:
+            logging.info("Correção de texto desativada ou provedor indisponível.")
+            return transcribed_text
+
+        if active_provider == SERVICE_GEMINI and (
+            not self.gemini_api or not getattr(self.gemini_api, "is_valid", False)
+        ):
+            logging.warning("Cliente Gemini indisponível para correção de texto.")
+            return transcribed_text
+
+        if active_provider == SERVICE_OPENROUTER and not self.openrouter_api:
+            logging.warning("Cliente OpenRouter indisponível para correção de texto.")
+            return transcribed_text
+
+        processed_text = transcribed_text
         self.correction_in_progress = True
-        corrected = text  # Default to original text
-        future = None
         try:
-            active_provider = self._get_text_correction_service()
-            if active_provider == SERVICE_NONE:
-                logging.info(
-                    "Correção de texto desativada ou provedor indisponível."
-                )
-                return
-
-            api_key = self.config_manager.get_api_key(active_provider)
-
-            if not api_key:
-                logging.warning(
-                    f"Nenhuma chave de API encontrada para o provedor {active_provider}. Pulando correção de texto."
-                )
-                return
-
-            if active_provider == "gemini":
-                if not is_agent_mode:
-                    prompt = gemini_prompt
-                else:
-                    logging.info("Modo Agente ativado. Usando prompt do Agente para o Gemini.")
-                    prompt = self.config_manager.get(GEMINI_AGENT_PROMPT_CONFIG_KEY)
-                future = self.executor.submit(self.gemini_api.correct_text_async, corrected, prompt, api_key)
-                corrected = future.result()
-            elif active_provider == "openrouter":
-                if not is_agent_mode:
-                    prompt = openrouter_prompt
-                else:
-                    logging.info("Modo Agente ativado. Usando prompt do Agente para o OpenRouter.")
-                    prompt = self.config_manager.get(OPENROUTER_AGENT_PROMPT_CONFIG_KEY)
+            if active_provider == SERVICE_GEMINI:
+                processed_text = self.gemini_api.get_correction(transcribed_text) or transcribed_text
+            elif active_provider == SERVICE_OPENROUTER:
+                api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
+                if not api_key:
+                    logging.warning(
+                        "Nenhuma chave de API encontrada para o provedor OpenRouter. Pulando correção de texto."
+                    )
+                    return transcribed_text
 
                 model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-                future = self.executor.submit(self.openrouter_api.correct_text_async, corrected, prompt, api_key, model)
-                corrected = future.result()
+                prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                try:
+                    self.openrouter_api.reinitialize_client(api_key=api_key, model_id=model)
+                except Exception as exc:
+                    logging.error(
+                        "Erro ao reconfigurar o cliente OpenRouter: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                if prompt:
+                    processed_text = self.openrouter_api.correct_text_async(
+                        transcribed_text,
+                        prompt,
+                        api_key,
+                        model,
+                    )
+                else:
+                    processed_text = self.openrouter_api.correct_text(transcribed_text)
             else:
                 logging.error(f"Provedor de IA desconhecido: {active_provider}")
-
+                return transcribed_text
         except Exception as exc:
-            logging.error(f"Erro ao corrigir texto: {exc}")
-            if future and not future.done():
-                future.cancel()
+            logging.error(
+                "Erro ao processar texto com o provedor %s: %s",
+                active_provider,
+                exc,
+                exc_info=True,
+            )
+            processed_text = transcribed_text
         finally:
             self.correction_in_progress = False
-            # O resultado da correção deve ser sempre retornado, independentemente
-            # de uma mudança de estado subsequente, para evitar perda de dados do usuário.
-            if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
-                logging.info(f"Transcrição corrigida: {corrected}")
-            self.on_transcription_result_callback(corrected, text)
+
+        if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
+            logging.info(f"Transcrição corrigida: {processed_text}")
+
+        return processed_text or transcribed_text
 
     def _get_dynamic_batch_size(self) -> int:
         device_in_use = (str(self.device_in_use or "").lower())
@@ -757,15 +786,12 @@ class TranscriptionHandler:
         try:
             self.device_in_use = "cpu"
             if make_backend is not None:
-                asr_model_id = self.config_manager.get("asr_model_id")
-                asr_backend = (self.config_manager.get("asr_backend") or "transformers")
-                asr_compute_device = self.config_manager.get("asr_compute_device") or "auto"
-                asr_dtype = self.config_manager.get("asr_dtype")
-                asr_ct2_compute_type = self.config_manager.get("asr_ct2_compute_type")
-                asr_cache_dir = self.config_manager.get("asr_cache_dir")
+                backend_preference = self.config_manager.get("asr_backend") or "transformers"
 
                 requested_backend_display = (
-                    asr_backend.strip() if isinstance(asr_backend, str) else "transformers"
+                    backend_preference.strip()
+                    if isinstance(backend_preference, str)
+                    else "transformers"
                 )
                 backend_candidate = (
                     requested_backend_display.lower() if requested_backend_display else "transformers"
@@ -1035,7 +1061,7 @@ class TranscriptionHandler:
                 quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
             # Determina dinamicamente se o FlashAttention 2 está disponível
-            self._asr_backend = make_backend(asr_backend)
+            self._asr_backend = make_backend(backend)
 
             attn_impl = "sdpa"
             try:
@@ -1146,6 +1172,7 @@ class TranscriptionHandler:
 
     def _transcription_task(self, audio_source: str | np.ndarray, agent_mode: bool) -> None:
         self.transcription_cancel_event.clear()
+        text_result: str | None = None
 
         if self.transcription_cancel_event.is_set():
             self._log_model_event(
@@ -1216,207 +1243,201 @@ class TranscriptionHandler:
                     agent_mode=agent_mode,
                     duration_ms=duration_ms,
                 )
-                if agent_mode and self.on_agent_result_callback:
-                    self.on_agent_result_callback(text_result)
-                elif self.on_transcription_result_callback:
-                    self.on_transcription_result_callback(text_result, text_result)
-                return
-
-        # Legacy pipeline (desativado após retorno antecipado)
-        text_result = None
-        # Garantir que dynamic_batch_size esteja definido mesmo quando o backend
-        # for CTranslate2, evitando UnboundLocalError no bloco de exceção.
-        dynamic_batch_size = None
-        legacy_started_at: float | None = None
-        logged_failure = False
-        try:
-            if self.backend_resolved == "ctranslate2":
-                self._update_model_log_context(
-                    chunk_length_s=float(self.chunk_length_sec),
-                )
-                legacy_started_at = time.perf_counter()
-                self._log_model_event(
-                    "transcription_start",
-                    chunk_length_s=float(self.chunk_length_sec),
-                    size=size_descriptor,
-                    agent_mode=agent_mode,
-                )
-                segments, _ = self.pipe.transcribe(audio_source, language=None)
-                text_result = "".join(seg.text for seg in segments).strip()
-                if not text_result:
-                    text_result = "[No speech detected]"
-                duration_ms = (time.perf_counter() - legacy_started_at) * 1000.0
-                self._log_model_event(
-                    "transcription_success",
-                    chunk_length_s=float(self.chunk_length_sec),
-                    size=size_descriptor,
-                    agent_mode=agent_mode,
-                    duration_ms=duration_ms,
-                )
-                logging.info("Transcrição via CTranslate2 concluída.")
-            else:
-                if self.pipe is None:
-                    error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
+        else:
+            # Legacy pipeline
+            # Garantir que dynamic_batch_size esteja definido mesmo quando o backend
+            # for CTranslate2, evitando UnboundLocalError no bloco de exceção.
+            dynamic_batch_size = None
+            legacy_started_at: float | None = None
+            logged_failure = False
+            try:
+                if self.backend_resolved == "ctranslate2":
+                    self._update_model_log_context(
+                        chunk_length_s=float(self.chunk_length_sec),
+                    )
+                    legacy_started_at = time.perf_counter()
                     self._log_model_event(
-                        "transcription_failure",
-                        level=logging.ERROR,
+                        "transcription_start",
                         chunk_length_s=float(self.chunk_length_sec),
                         size=size_descriptor,
                         agent_mode=agent_mode,
-                        error="pipeline_unavailable",
                     )
-                    logging.error(error_message)
-                    self.on_model_error_callback(error_message)
-                    return
-
-                try:
-                    dynamic_batch_size = self._get_dynamic_batch_size()
-                except Exception as batch_error:
-                    logged_failure = True
+                    segments, _ = self.pipe.transcribe(audio_source, language=None)
+                    text_result = "".join(seg.text for seg in segments).strip()
+                    if not text_result:
+                        text_result = "[No speech detected]"
+                    duration_ms = (time.perf_counter() - legacy_started_at) * 1000.0
                     self._log_model_event(
-                        "transcription_failure",
-                        level=logging.ERROR,
+                        "transcription_success",
                         chunk_length_s=float(self.chunk_length_sec),
                         size=size_descriptor,
                         agent_mode=agent_mode,
-                        error=f"dynamic_batch:{batch_error}",
+                        duration_ms=duration_ms,
                     )
-                    raise
+                    logging.info("Transcrição via CTranslate2 concluída.")
+                else:
+                    if self.pipe is None:
+                        error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
+                        self._log_model_event(
+                            "transcription_failure",
+                            level=logging.ERROR,
+                            chunk_length_s=float(self.chunk_length_sec),
+                            size=size_descriptor,
+                            agent_mode=agent_mode,
+                            error="pipeline_unavailable",
+                        )
+                        logging.error(error_message)
+                        self.on_model_error_callback(error_message)
+                        return
 
-                self._update_model_log_context(
-                    chunk_length_s=float(self.chunk_length_sec),
-                    batch_size=dynamic_batch_size,
-                )
-                legacy_started_at = time.perf_counter()
-                self._log_model_event(
-                    "transcription_start",
-                    batch_size=dynamic_batch_size,
-                    chunk_length_s=float(self.chunk_length_sec),
-                    size=size_descriptor,
-                    agent_mode=agent_mode,
-                )
-                logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
-
-                generate_kwargs = {
-                    "task": "transcribe",
-                    "language": None
-                }
-                if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
-                    audio_source = audio_source.flatten()
-
-                if self.chunk_length_mode == "auto":
                     try:
-                        self.chunk_length_sec = float(self._effective_chunk_length())
+                        dynamic_batch_size = self._get_dynamic_batch_size()
+                    except Exception as batch_error:
+                        logged_failure = True
+                        self._log_model_event(
+                            "transcription_failure",
+                            level=logging.ERROR,
+                            chunk_length_s=float(self.chunk_length_sec),
+                            size=size_descriptor,
+                            agent_mode=agent_mode,
+                            error=f"dynamic_batch:{batch_error}",
+                        )
+                        raise
+
+                    self._update_model_log_context(
+                        chunk_length_s=float(self.chunk_length_sec),
+                        batch_size=dynamic_batch_size,
+                    )
+                    legacy_started_at = time.perf_counter()
+                    self._log_model_event(
+                        "transcription_start",
+                        batch_size=dynamic_batch_size,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        size=size_descriptor,
+                        agent_mode=agent_mode,
+                    )
+                    logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
+
+                    generate_kwargs = {
+                        "task": "transcribe",
+                        "language": None
+                    }
+                    if isinstance(audio_source, np.ndarray) and audio_source.ndim > 1:
+                        audio_source = audio_source.flatten()
+
+                    if self.chunk_length_mode == "auto":
+                        try:
+                            self.chunk_length_sec = float(self._effective_chunk_length())
+                        except Exception:
+                            pass
+
+                    try:
+                        device = f"cuda:{self.gpu_index}" if torch.cuda.is_available() and self.gpu_index >= 0 else "cpu"
+                    except Exception:
+                        device = "cpu"
+                    dtype = "fp16" if (torch.cuda.is_available() and self.gpu_index >= 0) else "fp32"
+                    try:
+                        import importlib.util as _spec_util
+                        attn_impl = "flash_attn2" if _spec_util.find_spec("flash_attn") is not None else "sdpa"
+                    except Exception:
+                        attn_impl = "sdpa"
+
+                    t_total_start = legacy_started_at if legacy_started_at is not None else time.perf_counter()
+                    t_pre_start = time.perf_counter()
+                    t_pre_end = time.perf_counter()
+                    t_pre_ms = (t_pre_end - t_pre_start) * 1000.0
+
+                    with torch.no_grad():
+                        t_infer_start = time.perf_counter()
+                        result = self.pipe(
+                            audio_source,
+                            chunk_length_s=self.chunk_length_sec,
+                            batch_size=dynamic_batch_size,
+                            return_timestamps=False,
+                            generate_kwargs=generate_kwargs
+                        )
+                        t_infer_end = time.perf_counter()
+                    t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
+
+                    try:
+                        self.last_dynamic_batch_size = int(dynamic_batch_size)
+                    except Exception:
+                        self.last_dynamic_batch_size = None
+
+                    t_post_start = time.perf_counter()
+
+                    if result and "text" in result:
+                        text_result = result["text"].strip()
+                        if not text_result:
+                            text_result = "[No speech detected]"
+                        else:
+                            logging.info("Transcrição de segmento bem-sucedida.")
+                    else:
+                        text_result = "[Transcription failed: Bad format]"
+                        logging.error(f"Formato de resultado inesperado: {result}")
+
+                    t_post_end = time.perf_counter()
+                    t_post_ms = (t_post_end - t_post_start) * 1000.0
+                    t_total_ms = (t_post_end - t_total_start) * 1000.0
+
+                    self._log_model_event(
+                        "transcription_success",
+                        batch_size=dynamic_batch_size,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        size=size_descriptor,
+                        agent_mode=agent_mode,
+                        duration_ms=t_total_ms,
+                    )
+
+                    try:
+                        logging.info(
+                            f"[METRIC] stage=t_pre value_ms={t_pre_ms:.2f} device={device} "
+                            f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
+                            f"dtype={dtype} attn={attn_impl}"
+                        )
+                        logging.info(
+                            f"[METRIC] stage=t_infer value_ms={t_infer_ms:.2f} device={device} "
+                            f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
+                            f"dtype={dtype} attn={attn_impl}"
+                        )
+                        logging.info(
+                            f"[METRIC] stage=t_post value_ms={t_post_ms:.2f} device={device} "
+                            f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
+                            f"dtype={dtype} attn={attn_impl}"
+                        )
+                        logging.info(
+                            f"[METRIC] stage=segment_total value_ms={t_total_ms:.2f} device={device} "
+                            f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
+                            f"dtype={dtype} attn={attn_impl}"
+                        )
                     except Exception:
                         pass
 
+                    # Fim do bloco de processamento principal do segmento
+
+            except Exception as e:
+                # Tratamento de OOM e fallback automático (reduz batch, depois chunk) – não recria a pipeline
                 try:
-                    device = f"cuda:{self.gpu_index}" if torch.cuda.is_available() and self.gpu_index >= 0 else "cpu"
-                except Exception:
-                    device = "cpu"
-                dtype = "fp16" if (torch.cuda.is_available() and self.gpu_index >= 0) else "fp32"
-                try:
-                    import importlib.util as _spec_util
-                    attn_impl = "flash_attn2" if _spec_util.find_spec("flash_attn") is not None else "sdpa"
-                except Exception:
-                    attn_impl = "sdpa"
-
-                t_total_start = legacy_started_at if legacy_started_at is not None else time.perf_counter()
-                t_pre_start = time.perf_counter()
-                t_pre_end = time.perf_counter()
-                t_pre_ms = (t_pre_end - t_pre_start) * 1000.0
-
-                with torch.no_grad():
-                    t_infer_start = time.perf_counter()
-                    result = self.pipe(
-                        audio_source,
-                        chunk_length_s=self.chunk_length_sec,
-                        batch_size=dynamic_batch_size,
-                        return_timestamps=False,
-                        generate_kwargs=generate_kwargs
-                    )
-                    t_infer_end = time.perf_counter()
-                t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
-
-                try:
-                    self.last_dynamic_batch_size = int(dynamic_batch_size)
-                except Exception:
-                    self.last_dynamic_batch_size = None
-
-                t_post_start = time.perf_counter()
-
-                if result and "text" in result:
-                    text_result = result["text"].strip()
-                    if not text_result:
-                        text_result = "[No speech detected]"
-                    else:
-                        logging.info("Transcrição de segmento bem-sucedida.")
-                else:
-                    text_result = "[Transcription failed: Bad format]"
-                    logging.error(f"Formato de resultado inesperado: {result}")
-
-                t_post_end = time.perf_counter()
-                t_post_ms = (t_post_end - t_post_start) * 1000.0
-                t_total_ms = (t_post_end - t_total_start) * 1000.0
-
-                self._log_model_event(
-                    "transcription_success",
-                    batch_size=dynamic_batch_size,
-                    chunk_length_s=float(self.chunk_length_sec),
-                    size=size_descriptor,
-                    agent_mode=agent_mode,
-                    duration_ms=t_total_ms,
-                )
-
-                try:
-                    logging.info(
-                        f"[METRIC] stage=t_pre value_ms={t_pre_ms:.2f} device={device} "
-                        f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
-                        f"dtype={dtype} attn={attn_impl}"
-                    )
-                    logging.info(
-                        f"[METRIC] stage=t_infer value_ms={t_infer_ms:.2f} device={device} "
-                        f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
-                        f"dtype={dtype} attn={attn_impl}"
-                    )
-                    logging.info(
-                        f"[METRIC] stage=t_post value_ms={t_post_ms:.2f} device={device} "
-                        f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
-                        f"dtype={dtype} attn={attn_impl}"
-                    )
-                    logging.info(
-                        f"[METRIC] stage=segment_total value_ms={t_total_ms:.2f} device={device} "
-                        f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
-                        f"dtype={dtype} attn={attn_impl}"
-                    )
-                except Exception:
-                    pass
-
-                # Fim do bloco de processamento principal do segmento
-
-        except Exception as e:
-            # Tratamento de OOM e fallback automático (reduz batch, depois chunk) – não recria a pipeline
-            try:
-                err_txt = str(e).lower()
-                is_oom = any(tok in err_txt for tok in ["out of memory", "cuda oom", "cublas", "cudnn", "hip out of memory", "alloc"])
-                if is_oom:
-                    try:
-                        old_bs = int(dynamic_batch_size)
-                    except Exception:
-                        old_bs = None
+                    err_txt = str(e).lower()
+                    is_oom = any(tok in err_txt for tok in ["out of memory", "cuda oom", "cublas", "cudnn", "hip out of memory", "alloc"])
                     did_change = False
-                    if old_bs and old_bs > 1:
-                        new_bs = max(1, old_bs // 2)
+                    if is_oom:
                         try:
-                            self.last_dynamic_batch_size = new_bs
+                            old_bs = int(dynamic_batch_size)
                         except Exception:
-                            pass
-                        did_change = True
-                        logging.warning(f"OOM detectado. Reduzindo batch_size de {old_bs} para {new_bs} para próximas submissões.")
-                        try:
-                            logging.info(f"[METRIC] stage=oom_recovery action=reduce_batch from={old_bs} to={new_bs}")
-                        except Exception:
-                            pass
+                            old_bs = None
+                        if old_bs and old_bs > 1:
+                            new_bs = max(1, old_bs // 2)
+                            try:
+                                self.last_dynamic_batch_size = new_bs
+                            except Exception:
+                                pass
+                            did_change = True
+                            logging.warning(f"OOM detectado. Reduzindo batch_size de {old_bs} para {new_bs} para próximas submissões.")
+                            try:
+                                logging.info(f"[METRIC] stage=oom_recovery action=reduce_batch from={old_bs} to={new_bs}")
+                            except Exception:
+                                pass
                     if not did_change:
                         # Reduz chunk_length_sec moderadamente
                         try:
@@ -1431,138 +1452,125 @@ class TranscriptionHandler:
                                 logging.info(f"[METRIC] stage=oom_recovery action=reduce_chunk from={old_chunk:.1f} to={new_chunk:.1f}")
                             except Exception:
                                 pass
-                # Continua fluxo normal de erro
-            except Exception as _oom_adj_e:
-                logging.debug(f"Falha ao ajustar parâmetros após OOM: {_oom_adj_e}")
+                    # Continua fluxo normal de erro
+                except Exception as _oom_adj_e:
+                    logging.debug(f"Falha ao ajustar parâmetros após OOM: {_oom_adj_e}")
 
-            if not logged_failure:
-                if legacy_started_at is not None:
-                    duration_ms = (time.perf_counter() - legacy_started_at) * 1000.0
-                    self._log_model_event(
-                        "transcription_failure",
-                        level=logging.ERROR,
-                        batch_size=dynamic_batch_size,
-                        chunk_length_s=float(self.chunk_length_sec),
-                        size=size_descriptor,
-                        agent_mode=agent_mode,
-                        duration_ms=duration_ms,
-                        error=str(e),
-                    )
-                else:
-                    self._log_model_event(
-                        "transcription_failure",
-                        level=logging.ERROR,
-                        batch_size=dynamic_batch_size,
-                        chunk_length_s=float(self.chunk_length_sec),
-                        size=size_descriptor,
-                        agent_mode=agent_mode,
-                        error=str(e),
-                    )
+                if not logged_failure:
+                    if legacy_started_at is not None:
+                        duration_ms = (time.perf_counter() - legacy_started_at) * 1000.0
+                        self._log_model_event(
+                            "transcription_failure",
+                            level=logging.ERROR,
+                            batch_size=dynamic_batch_size,
+                            chunk_length_s=float(self.chunk_length_sec),
+                            size=size_descriptor,
+                            agent_mode=agent_mode,
+                            duration_ms=duration_ms,
+                            error=str(e),
+                        )
+                    else:
+                        self._log_model_event(
+                            "transcription_failure",
+                            level=logging.ERROR,
+                            batch_size=dynamic_batch_size,
+                            chunk_length_s=float(self.chunk_length_sec),
+                            size=size_descriptor,
+                            agent_mode=agent_mode,
+                            error=str(e),
+                        )
 
-            logging.error(f"Erro durante a transcrição de segmento: {e}", exc_info=True)
-            text_result = f"[Transcription Error: {e}]"
+                logging.error(f"Erro durante a transcrição de segmento: {e}", exc_info=True)
+                text_result = f"[Transcription Error: {e}]"
 
-        finally:
-            if self.transcription_cancel_event.is_set():
-                self._log_model_event(
-                    "transcription_cancelled",
-                    status="inference_cancelled",
-                    agent_mode=agent_mode,
+        if self.transcription_cancel_event.is_set():
+            self._log_model_event(
+                "transcription_cancelled",
+                status="inference_cancelled",
+                agent_mode=agent_mode,
+            )
+            logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
+            self.transcription_cancel_event.clear()
+            return
+
+        if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
+            logging.info(f"Transcrição bruta: {text_result}")
+
+        if (
+            not text_result
+            or text_result == "[No speech detected]"
+            or text_result.strip().startswith("[Transcription Error:")
+        ):
+            logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
+            if text_result and self.on_segment_transcribed_callback:
+                self.on_segment_transcribed_callback(text_result or "")
+            if (
+                not agent_mode
+                and text_result
+                and (
+                    not self.is_state_transcribing_fn
+                    or self.is_state_transcribing_fn()
                 )
-                logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
-                self.transcription_cancel_event.clear()
-                return
-
-            if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
-                logging.info(f"Transcrição bruta: {text_result}")
-
-            if not text_result or text_result == "[No speech detected]" or text_result.strip().startswith("[Transcription Error:"):
-                logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
-                if text_result and self.on_segment_transcribed_callback:
-                    self.on_segment_transcribed_callback(text_result or "")
-                if (
-                    not agent_mode
-                    and text_result
-                    and (
-                        not self.is_state_transcribing_fn
-                        or self.is_state_transcribing_fn()
-                    )
-                ):
+            ):
+                if self.on_transcription_result_callback:
                     self.on_transcription_result_callback(text_result, text_result)
-                elif not agent_mode and text_result:
-                    logging.warning(
-                        "Estado mudou antes do resultado de transcrição. UI não será atualizada."
-                    )
+            elif not agent_mode and text_result:
+                logging.warning(
+                    "Estado mudou antes do resultado de transcrição. UI não será atualizada."
+                )
+            return
+
+        try:
+            enable_clear = bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY))
+            is_gpu = torch.cuda.is_available() and getattr(self, "gpu_index", -1) >= 0
+            long_audio = float(getattr(self, "chunk_length_sec", 30.0)) >= 45.0
+            if enable_clear and is_gpu and long_audio:
+                t_ec_start = time.perf_counter()
+                before_b = (
+                    torch.cuda.memory_allocated()
+                    if hasattr(torch.cuda, "memory_allocated")
+                    else 0
+                )
+                torch.cuda.empty_cache()
+                after_b = (
+                    torch.cuda.memory_allocated()
+                    if hasattr(torch.cuda, "memory_allocated")
+                    else 0
+                )
+                t_ec_ms = (time.perf_counter() - t_ec_start) * 1000.0
+                freed_mb = max(0.0, (before_b - after_b) / (1024 ** 2))
+                logging.info(
+                    f"[METRIC] stage=empty_cache value_ms={t_ec_ms:.2f} freed_estimate_mb={freed_mb:.1f}"
+                )
+        except Exception as _ec_e:
+            logging.debug(f"Falha ao executar empty_cache opcional: {_ec_e}")
+
+        final_text = self._process_ai_pipeline(text_result, agent_mode)
+
+        if agent_mode:
+            if not self.on_agent_result_callback:
+                logging.debug("Callback de resultado do agente não configurado.")
                 return
-
-            # empty_cache opcional após segmentos longos (heurística simples) quando em GPU
-            try:
-                import torch
-                from .config_manager import CLEAR_GPU_CACHE_CONFIG_KEY
-                enable_clear = bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY))
-                is_gpu = torch.cuda.is_available() and getattr(self, "gpu_index", -1) >= 0
-                long_audio = float(getattr(self, "chunk_length_sec", 30.0)) >= 45.0
-                if enable_clear and is_gpu and long_audio:
-                    t_ec_start = time.perf_counter()
-                    before_b = torch.cuda.memory_allocated() if hasattr(torch.cuda, "memory_allocated") else 0
-                    torch.cuda.empty_cache()
-                    after_b = torch.cuda.memory_allocated() if hasattr(torch.cuda, "memory_allocated") else 0
-                    t_ec_ms = (time.perf_counter() - t_ec_start) * 1000.0
-                    freed_mb = max(0.0, (before_b - after_b) / (1024 ** 2))
-                    logging.info(f"[METRIC] stage=empty_cache value_ms={t_ec_ms:.2f} freed_estimate_mb={freed_mb:.1f}")
-            except Exception as _ec_e:
-                logging.debug(f"Falha ao executar empty_cache opcional: {_ec_e}")
-
-            if agent_mode:
-                try:
-                    logging.info(f"Enviando texto para o modo agente: '{text_result}'")
-                    agent_response = self.gemini_client.get_agent_response(text_result)
-                    logging.info(
-                        f"Resposta recebida do modo agente: '{agent_response}'"
-                    )
-                    if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
-                        self.on_agent_result_callback(agent_response)
-                    else:
-                        logging.warning(
-                            "Estado mudou antes do resultado do agente. UI não será atualizada."
-                        )
-                except Exception as e:
-                    logging.error(f"Erro ao processar o comando do agente: {e}", exc_info=True)
-                    if (
-                        not self.is_state_transcribing_fn
-                        or self.is_state_transcribing_fn()
-                    ):
-                        self.on_agent_result_callback(text_result)  # Falha, retorna o texto original
-                    else:
-                        logging.warning(
-                            "Estado mudou antes do resultado do agente. UI não será atualizada."
-                        )
+            if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
+                self.on_agent_result_callback(final_text)
             else:
-                if self.text_correction_enabled:
-                    self._get_text_correction_service()
-                    was_transcribing_when_started = (
-                        self.is_state_transcribing_fn()
-                        if self.is_state_transcribing_fn
-                        else False
-                    )
-                    openrouter_prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
-                    self.correction_thread = threading.Thread(
-                        target=self._async_text_correction,
-                        args=(text_result, agent_mode, self.gemini_prompt, openrouter_prompt, was_transcribing_when_started),
-                        daemon=True,
-                        name="TextCorrectionThread",
-                    )
-                    self.correction_thread.start()
-                else:
-                    self.on_transcription_result_callback(text_result, text_result)
-
-            # Mantemos a VRAM em cache para acelerar transcrições consecutivas.
-            # A limpeza completa ocorre somente no shutdown.
-            if torch.cuda.is_available():
-                logging.debug(
-                    "Cache da GPU preservado para transcrições consecutivas."
+                logging.warning(
+                    "Estado mudou antes do resultado do agente. UI não será atualizada."
+                )
+        else:
+            if not self.on_transcription_result_callback:
+                logging.debug("Callback de resultado de transcrição não configurado.")
+            elif not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
+                self.on_transcription_result_callback(final_text, text_result)
+            else:
+                logging.warning(
+                    "Estado mudou antes do resultado de transcrição. UI não será atualizada."
                 )
 
+        if torch.cuda.is_available():
+            logging.debug(
+                "Cache da GPU preservado para transcrições consecutivas."
+            )
     def _effective_chunk_length(self) -> float:
         """
         Heurística simples para chunk_length_sec quando em modo 'auto'.
@@ -1596,11 +1604,6 @@ class TranscriptionHandler:
         try:
             # Sinaliza cancelamento para qualquer tarefa em andamento
             self.transcription_cancel_event.set()
-
-            # Aguarda a conclusão da thread de correção, se estiver ativa
-            if hasattr(self, "correction_thread") and self.correction_thread:
-                if self.correction_thread.is_alive():
-                    self.correction_thread.join(timeout=1)
 
             self.transcription_executor.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
