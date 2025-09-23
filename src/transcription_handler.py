@@ -757,15 +757,12 @@ class TranscriptionHandler:
         try:
             self.device_in_use = "cpu"
             if make_backend is not None:
-                asr_model_id = self.config_manager.get("asr_model_id")
-                asr_backend = (self.config_manager.get("asr_backend") or "transformers")
-                asr_compute_device = self.config_manager.get("asr_compute_device") or "auto"
-                asr_dtype = self.config_manager.get("asr_dtype")
-                asr_ct2_compute_type = self.config_manager.get("asr_ct2_compute_type")
-                asr_cache_dir = self.config_manager.get("asr_cache_dir")
+                backend_preference = self.config_manager.get("asr_backend") or "transformers"
 
                 requested_backend_display = (
-                    asr_backend.strip() if isinstance(asr_backend, str) else "transformers"
+                    backend_preference.strip()
+                    if isinstance(backend_preference, str)
+                    else "transformers"
                 )
                 backend_candidate = (
                     requested_backend_display.lower() if requested_backend_display else "transformers"
@@ -1035,7 +1032,7 @@ class TranscriptionHandler:
                 quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
             # Determina dinamicamente se o FlashAttention 2 está disponível
-            self._asr_backend = make_backend(asr_backend)
+            self._asr_backend = make_backend(backend)
 
             attn_impl = "sdpa"
             try:
@@ -1497,19 +1494,27 @@ class TranscriptionHandler:
 
             # empty_cache opcional após segmentos longos (heurística simples) quando em GPU
             try:
-                import torch
-                from .config_manager import CLEAR_GPU_CACHE_CONFIG_KEY
                 enable_clear = bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY))
                 is_gpu = torch.cuda.is_available() and getattr(self, "gpu_index", -1) >= 0
                 long_audio = float(getattr(self, "chunk_length_sec", 30.0)) >= 45.0
                 if enable_clear and is_gpu and long_audio:
                     t_ec_start = time.perf_counter()
-                    before_b = torch.cuda.memory_allocated() if hasattr(torch.cuda, "memory_allocated") else 0
+                    before_b = (
+                        torch.cuda.memory_allocated()
+                        if hasattr(torch.cuda, "memory_allocated")
+                        else 0
+                    )
                     torch.cuda.empty_cache()
-                    after_b = torch.cuda.memory_allocated() if hasattr(torch.cuda, "memory_allocated") else 0
+                    after_b = (
+                        torch.cuda.memory_allocated()
+                        if hasattr(torch.cuda, "memory_allocated")
+                        else 0
+                    )
                     t_ec_ms = (time.perf_counter() - t_ec_start) * 1000.0
                     freed_mb = max(0.0, (before_b - after_b) / (1024 ** 2))
-                    logging.info(f"[METRIC] stage=empty_cache value_ms={t_ec_ms:.2f} freed_estimate_mb={freed_mb:.1f}")
+                    logging.info(
+                        f"[METRIC] stage=empty_cache value_ms={t_ec_ms:.2f} freed_estimate_mb={freed_mb:.1f}"
+                    )
             except Exception as _ec_e:
                 logging.debug(f"Falha ao executar empty_cache opcional: {_ec_e}")
 

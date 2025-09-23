@@ -44,6 +44,14 @@ class ToastNotification(BaseToplevel):
         x = screen_width - width - 40
         y = screen_height - height - 60
 
+        # If the master window has a meaningful geometry, anchor the toast
+        # relative to it while clamping inside the visible screen area.
+        if master_width > 1 and master_height > 1:
+            x = master_x + master_width - width - 20
+            y = master_y + master_height - height - 20
+            x = max(0, min(x, screen_width - width))
+            y = max(0, min(y, screen_height - height))
+
         self.geometry(f"+{int(x)}+{int(y)}")
 
         self.after(self.duration, self.destroy)
