@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 try:
     import google.generativeai as genai
@@ -50,14 +50,12 @@ class GeminiAPI:
                 fornecida, será obtida do ConfigManager.
         """
         self.config_manager = config_manager
-        self.client = None
-        self.model = None
-        self.current_api_key = None
-        self.current_model_id = None
-        self.current_prompt = None
-        self.last_api_key = api_key
-        self.last_model_id = None
-        self.last_prompt = None
+        self.current_api_key: Optional[str] = None
+        self.override_api_key: Optional[str] = api_key
+        self.correction_model_id: Optional[str] = None
+        self.agent_model_id: Optional[str] = None
+        self.correction_model: Any | None = None
+        self.agent_model: Any | None = None
         self.is_valid: bool = False
 
         if not GEMINI_API_AVAILABLE:
@@ -77,59 +75,93 @@ class GeminiAPI:
         logging.info(
             "Gemini API client re/initializing due to external request."
         )
-        self._load_model_from_config()
+        self._load_models_from_config()
 
-    def _load_model_from_config(self):
-        """Recarrega o modelo Gemini quando chave ou modelo mudam."""
+    def _reset_models(self) -> None:
+        self.correction_model = None
+        self.agent_model = None
+        self.correction_model_id = None
+        self.agent_model_id = None
+
+    def _initialize_model(self, model_id: Optional[str], purpose: str) -> Any | None:
+        if not model_id:
+            logging.warning(
+                "No Gemini %s model configured.",
+                purpose,
+            )
+            return None
+
+        try:
+            model = genai.GenerativeModel(model_id)
+            logging.info(
+                "Gemini %s model initialized: %s",
+                purpose,
+                model_id,
+            )
+            return model
+        except Exception as e:
+            logging.error(
+                "Failed to initialize the Gemini %s model '%s': %s",
+                purpose,
+                model_id,
+                e,
+            )
+            return None
+
+    def _load_models_from_config(self) -> None:
+        """Carrega os modelos de correção e agente usando as configurações atuais."""
+        self._reset_models()
+
         if not GEMINI_API_AVAILABLE:
             self.is_valid = False
             return
 
-        self.current_api_key = (
-            self.last_api_key or self.config_manager.get("gemini_api_key")
+        api_key = self.override_api_key or self.config_manager.get("gemini_api_key")
+
+        if not api_key or "SUA_CHAVE" in api_key:
+            logging.warning(
+                "Gemini API key is missing or invalid. Text correction disabled."
+            )
+            self.is_valid = False
+            self.current_api_key = None
+            return
+
+        try:
+            genai.configure(api_key=api_key)
+        except Exception as e:
+            logging.error(
+                "Failed to configure the Gemini API client: %s",
+                e,
+            )
+            self.is_valid = False
+            self.current_api_key = None
+            return
+
+        self.current_api_key = api_key
+
+        correction_model_id = self.config_manager.get("gemini_model")
+        agent_model_id = self.config_manager.get("gemini_agent_model")
+
+        correction_model = self._initialize_model(
+            correction_model_id,
+            "text correction",
         )
-        self.current_model_id = self.config_manager.get('gemini_model')
-        self.current_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
+        agent_model = self._initialize_model(
+            agent_model_id,
+            "agent",
+        )
 
-        key_changed = self.current_api_key != self.last_api_key
-        model_changed = self.current_model_id != self.last_model_id
-        config_changed = key_changed or model_changed
-
-        if self.model is None or config_changed:
-            if not self.current_api_key or "SUA_CHAVE" in self.current_api_key:
-                logging.warning(
-                    "Gemini API key is missing or invalid. Text correction disabled."
-                )
-                self.model = None
-                self.is_valid = False
-                self.last_api_key = self.current_api_key
-                return
-
-            try:
-                genai.configure(api_key=self.current_api_key)
-                self.model = genai.GenerativeModel(self.current_model_id)
-                self.last_api_key = self.current_api_key
-                self.last_model_id = self.current_model_id
-                self.last_prompt = self.current_prompt
-                self.is_valid = True
-                logging.info(
-                    "Gemini API client re/initialized with model: %s",
-                    self.last_model_id,
-                )
-            except Exception as e:
-                logging.error(
-                    "Failed to initialize the Gemini API client: %s",
-                    e,
-                )
-                self.model = None
-                self.is_valid = False
-                self.last_api_key = self.current_api_key
-                self.last_model_id = self.current_model_id
-                self.last_prompt = self.current_prompt
+        self.correction_model = correction_model
+        self.agent_model = agent_model
+        self.correction_model_id = correction_model_id
+        self.agent_model_id = agent_model_id
+        self.is_valid = self.correction_model is not None
 
     def _execute_request(
         self,
         prompt: str,
+        model: Any | None,
+        model_id: Optional[str],
         max_retries: int = 3,
         retry_delay: int = 1,
         timeout: int | float = 120,
@@ -137,9 +169,14 @@ class GeminiAPI:
         """
         Executa uma requisição para a API Gemini com lógica de retry.
         """
-        if not prompt or not self.is_valid or not self.model:
+        if not prompt:
+            logging.warning("Cannot execute request: empty prompt provided.")
+            return ""
+
+        if model is None:
             logging.warning(
-                "Cannot execute request: empty prompt, invalid client, or model not loaded."
+                "Cannot execute request: model '%s' is not available.",
+                model_id or "<unknown>",
             )
             return ""
 
@@ -147,11 +184,11 @@ class GeminiAPI:
             try:
                 logging.info(
                     "Sending prompt to the Gemini API with model %s (attempt %s/%s)",
-                    self.last_model_id,
+                    model_id or "<unknown>",
                     attempt + 1,
                     max_retries,
                 )
-                response = self.model.generate_content(
+                response = model.generate_content(
                     prompt,
                     request_options=helper_types.RequestOptions(timeout=timeout),
                 )
@@ -199,42 +236,62 @@ class GeminiAPI:
         """
         Formata e executa uma requisição de correção de texto.
         """
-        if not text or not self.is_valid:
+        if not text or not self.is_valid or not self.correction_model:
             return text
+
         correction_prompt_template = self.config_manager.get(
             GEMINI_PROMPT_CONFIG_KEY
         )
+        if not correction_prompt_template:
+            logging.warning("Gemini correction prompt template is empty.")
+            return text
+
         full_prompt = correction_prompt_template.format(text=text)
-        corrected_text = self._execute_request(full_prompt)
+        corrected_text = self._execute_request(
+            full_prompt,
+            self.correction_model,
+            self.correction_model_id,
+        )
         return corrected_text if corrected_text else text
 
     def get_agent_response(self, text: str) -> str:
         """
         Formata e executa uma requisição do modo agente.
         """
-        if not text or not self.is_valid:
+        if not text or not self.agent_model:
             return text
         agent_prompt_template = self.config_manager.get('prompt_agentico')
+        if not agent_prompt_template:
+            logging.warning("Gemini agent prompt template is empty.")
+            return text
+
         full_prompt = f"{agent_prompt_template}\n\n{text}"
-        original_model = self.current_model_id
-        original_last_model = self.last_model_id
-        original_config_model = self.config_manager.get('gemini_model')
-        self.current_model_id = self.config_manager.get('gemini_agent_model')
-        self.last_model_id = None
-        self.config_manager.set('gemini_model', self.current_model_id)
-        self._load_model_from_config()
-        agent_response = self._execute_request(full_prompt)
-        self.config_manager.set('gemini_model', original_config_model)
-        self.current_model_id = original_model
-        self.last_model_id = original_last_model
-        self._load_model_from_config()
+        agent_response = self._execute_request(
+            full_prompt,
+            self.agent_model,
+            self.agent_model_id,
+        )
         return agent_response if agent_response else text
 
     def correct_text_async(self, text: str, prompt: str, api_key: str) -> str:
-        if not self.is_valid:
+        if not self.is_valid or not self.correction_model:
             return text
-        self.last_api_key = api_key
-        self.current_api_key = api_key
-        self.current_prompt = prompt
+
+        if not prompt:
+            logging.warning("Empty Gemini prompt received for async correction.")
+            return text
+
+        if api_key and self.current_api_key and api_key != self.current_api_key:
+            logging.debug(
+                "Async correction received API key different from configured key. Using configured client instead."
+            )
+
         full_prompt = prompt.format(text=text)
-        return self._execute_request(full_prompt) or text
+        return (
+            self._execute_request(
+                full_prompt,
+                self.correction_model,
+                self.correction_model_id,
+            )
+            or text
+        )
