@@ -541,6 +541,7 @@ class UIManager:
         cache_var = self._get_settings_var("asr_cache_dir_var")
         if model_var is None or cache_var is None:
             return
+        download_cancelled_error = self._download_cancelled_error
         cache_dir = cache_var.get()
         try:
             Path(cache_dir).mkdir(parents=True, exist_ok=True)
@@ -1309,6 +1310,8 @@ class UIManager:
                 )
                 return
 
+            download_cancelled_error = self._download_cancelled_error
+
             try:
                 size_bytes, file_count = model_manager.get_model_download_size(model_id)
                 size_gb = size_bytes / (1024 ** 3)
@@ -1334,11 +1337,12 @@ class UIManager:
                 self.config_manager.save_config()
                 _update_model_info(model_id)
                 messagebox.showinfo("Model", "Download completed.")
-            except DownloadCancelledError:  # noqa: F821
+            except download_cancelled_error:
                 messagebox.showinfo("Model", "Download canceled.")
             except OSError:
                 messagebox.showerror(
                     "Model",
+                    "Unable to write to the ASR cache directory. Please check permissions.",
                 )
             except Exception as e:
                 messagebox.showerror("Model", f"Download failed: {e}")
@@ -2353,7 +2357,7 @@ class UIManager:
                         gemini_model_menu.configure(values=DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
                         gemini_model_menu.set(DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY])
                     gemini_model_options[:] = list(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
-                    asr_model_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])  # noqa: F821
+                    asr_model_id_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
                     asr_model_display_var.set(
                         id_to_display.get(
                             DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
@@ -2371,7 +2375,7 @@ class UIManager:
                     )
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
                     asr_backend_var.set(DEFAULT_CONFIG[ASR_BACKEND_CONFIG_KEY])
-                    asr_model_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])  # noqa: F821
+                    asr_model_id_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
                     asr_model_display_var.set(
                         id_to_display.get(
                             DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
@@ -3164,7 +3168,12 @@ class UIManager:
                             self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download canceled."))
                         except Exception as e:
                             logging.error(f"Error during model download task: {e}", exc_info=True)
-                            self.main_tk_root.after(0, lambda: messagebox.showerror("Model", f"Download failed: {e}"))  # noqa: F821
+                            self.main_tk_root.after(
+                                0,
+                                lambda err=e: messagebox.showerror(
+                                    "Model", f"Download failed: {err}"
+                                ),
+                            )
                         finally:
                             # Limpeza da UI na thread principal
                             def _update_ui_finish():
