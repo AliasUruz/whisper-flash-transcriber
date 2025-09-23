@@ -55,21 +55,18 @@ DEFAULT_CONFIG = {
         "You are an AI assistant that executes text commands. "
         "The user will provide an instruction followed by the text to be processed. "
         "Your task is to execute the instruction on the text and return ONLY the final result. "
-        "Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. "
+        "Do not add explanations, greetings, or any extra text. "
         "The output language should match the main language of the provided text."
     ),
     "gemini_prompt": (
         "You are a meticulous speech-to-text correction AI. "
         "Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below "
-        "while preserving the original content and structure as closely as possible.\n"
-        "Key instructions:\n"
-        "- Correct punctuation, such as adding commas, periods, and question marks where appropriate.\n"
-        "- Fix capitalization at the beginning of sentences.\n"
-        "- Remove only obvious speech disfluencies like stutters (e.g., \"I-I mean\") and false starts, but preserve the natural flow of speech.\n"
-        "- DO NOT summarize, paraphrase, or change the original meaning of the sentences.\n"
-        "- DO NOT remove any content, even if it seems redundant.\n"
-        "- Preserve all language transitions (e.g., Portuguese/English) exactly as they occur.\n"
-        "- Return only the corrected text, with no additional comments or explanations.\n"
+        "while preserving the original content and structure as closely as possible. "
+        "Key instructions: - Correct punctuation, such as adding commas, periods, and question marks. "
+        "- Fix capitalization at the beginning of sentences. "
+        "- Remove only obvious speech disfluencies (e.g., \"I-I mean\"). "
+        "- DO NOT summarize, paraphrase, or change the original meaning. "
+        "- Return ONLY the corrected text, with no additional comments or explanations. "
         "Transcribed speech: {text}"
     ),
     "batch_size": 16, # Valor padrão para o modo automático
