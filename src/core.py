@@ -190,6 +190,7 @@ class AppCore:
         self.keyboard_lock = RLock()
         self.agent_mode_lock = RLock() # Adicionado para o modo agente
         self.model_prompt_lock = RLock()
+        self.model_prompt_lock = RLock()
 
         # --- Callbacks para UI (definidos externamente pelo UIManager) ---
         self.state_update_callback: StateUpdateCallback | None = None
@@ -248,6 +249,7 @@ class AppCore:
         self.agent_mode_active = False # Adicionado para controle do modo agente
         self.key_detection_active = False # Flag para controle da detecção de tecla
         self.model_prompt_active = False
+        self.model_prompt_active = False
 
         # --- Hotkey Manager ---
         self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
@@ -302,15 +304,28 @@ class AppCore:
 
     def _prompt_model_install(self, model_id, backend, cache_dir, ct2_type):
         """Agenda um prompt para download do modelo na thread principal."""
-        with self.model_prompt_lock:
-            if self.model_prompt_active:
-                logging.info(
-                    "Model install prompt suppressed because another prompt is already active."
-                )
-                return
-            self.model_prompt_active = True
 
         def _ask_user():
+            with self.model_prompt_lock:
+                if self.model_prompt_active:
+                    logging.info(
+                        "Model install prompt suppressed because another prompt is already active."
+                    )
+                    return
+
+                last_decision = self.config_manager.get_last_model_prompt_decision()
+                if (
+                    last_decision.get("model_id") == model_id
+                    and last_decision.get("decision") == "defer"
+                    and (time.time() - last_decision.get("timestamp", 0)) < 86400
+                ):
+                    logging.info(
+                        "Model install prompt suppressed because user recently deferred it."
+                    )
+                    return
+
+                self.model_prompt_active = True
+
             try:
                 try:
                     size_bytes, file_count = self.model_manager.get_model_download_size(model_id)
@@ -323,6 +338,7 @@ class AppCore:
                     f"Model '{model_id}' is not installed.\n{download_msg}\nDownload now?"
                 )
                 if messagebox.askyesno("Model Download", prompt_text):
+                    self.config_manager.record_model_prompt_decision("accept", model_id, backend)
                     cancel_event = threading.Event()
                     self._active_model_download_event = cancel_event
                     self._start_model_download(
@@ -334,6 +350,7 @@ class AppCore:
                         cancel_event=cancel_event,
                     )
                 else:
+                    self.config_manager.record_model_prompt_decision("defer", model_id, backend)
                     MODEL_LOGGER.info("User declined model download prompt.")
                     messagebox.showinfo(
                         "Model",
@@ -347,7 +364,49 @@ class AppCore:
             except Exception as prompt_error:
                 MODEL_LOGGER.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
+            finally:
+                self.model_prompt_active = False
+
         self.main_tk_root.after(0, _ask_user)
+
+    def download_model_and_reload(self, model_id, backend, cache_dir, quant):
+        """
+        Handles the full model download and subsequent reload process.
+        This method is designed to be called from a background thread started by the UI.
+        It raises exceptions back to the caller thread.
+        """
+        cancel_event = threading.Event()
+        self._active_model_download_event = cancel_event
+        
+        try:
+            self._set_state(STATE_LOADING_MODEL)
+            
+            ensure_kwargs = {
+                "quant": quant,
+                "timeout": self.model_download_timeout,
+                "cancel_event": cancel_event,
+            }
+            
+            self.model_manager.ensure_download(
+                model_id,
+                backend,
+                cache_dir,
+                **ensure_kwargs,
+            )
+            
+            # If download was not cancelled and did not raise an error, reload
+            self._refresh_installed_models("post_download", raise_errors=False)
+            self.transcription_handler.reload_asr()
+
+        except self._download_cancelled_error as e:
+            logging.info(f"Download was cancelled for model {model_id}: {e}")
+            raise # Re-raise for the UI thread to handle
+        except Exception as e:
+            logging.error(f"An error occurred during model download/reload for {model_id}: {e}", exc_info=True)
+            self._set_state(STATE_ERROR_MODEL)
+            raise # Re-raise for the UI thread to handle
+        finally:
+            self._active_model_download_event = None
 
     def _start_model_download(
         self,
@@ -416,10 +475,10 @@ class AppCore:
                 MODEL_LOGGER.error("Invalid cache directory during model download.", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", "Diretório de cache inválido. Verifique as configurações."))
-            except Exception as e:
-                MODEL_LOGGER.error(f"Model download failed: {e}", exc_info=True)
+            except Exception as exc:
+                MODEL_LOGGER.error(f"Model download failed: {exc}", exc_info=True)
                 self._set_state(STATE_ERROR_MODEL)
-                self.main_tk_root.after(0, lambda: messagebox.showerror("Model", f"Download failed: {e}"))
+                self.main_tk_root.after(0, lambda exc=exc: messagebox.showerror("Model", f"Download failed: {exc}"))  # noqa: F821
             else:
                 MODEL_LOGGER.info("Model download completed successfully.")
                 self.main_tk_root.after(0, self.transcription_handler.start_model_loading)
@@ -747,12 +806,15 @@ class AppCore:
             if error_msg == "Diretório de cache inválido.":
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Erro", "Diretório de cache inválido."))
             else:
+                error_title = "Erro de Carregamento do Modelo"
+                error_message = (
+                    f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\n"
+                    "Por favor, verifique sua conexão com a internet, "
+                    "o nome do modelo nas configurações ou a memória da sua GPU."
+                )
                 self.main_tk_root.after(
                     0,
-                    lambda: messagebox.showerror(
-                        "Erro de Carregamento do Modelo",
-                        f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\nPor favor, verifique sua conexão com a internet, o nome do modelo nas configurações ou a memória da sua GPU.",
-                    ),
+                    lambda: messagebox.showerror(error_title, error_message),
                 )
 
     def _on_segment_transcribed_for_ui(self, text):
@@ -919,7 +981,8 @@ class AppCore:
             last_state = self._last_notification.state if self._last_notification else None
             if last_event == event_obj and last_state == mapped_state:
                 logging.debug(
-                    "Duplicate state event %s suppressed (state=%s, source=%s).",
+                    "Duplicate state event %s suppressed "
+                    "(state=%s, source=%s).",
                     event_obj.name if event_obj else mapped_state,
                     mapped_state,
                     source,
@@ -1033,13 +1096,16 @@ class AppCore:
             return self.current_state == STATE_TRANSCRIBING
 
     def _log_status(self, text, error=False):
-        if error: logging.error(text)
-        else: logging.info(text)
+        if error:
+            logging.error(text)
+        else:
+            logging.info(text)
 
     # --- Hotkey Logic (movida de WhisperCore) ---
     def _start_autohotkey(self):
         with self.hotkey_lock:
-            if self.ahk_running: return True
+            if self.ahk_running:
+                return True
             self.ahk_manager.update_config(
                 record_key=self.record_key, agent_key=self.agent_key, record_mode=self.record_mode
             )
@@ -1103,16 +1169,25 @@ class AppCore:
 
     def _reload_keyboard_and_suppress(self):
         with self.keyboard_lock:
-            max_attempts = 3; attempt = 0; last_error = None
-            self._cleanup_hotkeys(); time.sleep(0.3)
+            max_attempts = 3
+            attempt = 0
+            last_error = None
+            self._cleanup_hotkeys()
+            time.sleep(0.3)
             while attempt < max_attempts:
                 attempt += 1
                 try:
-                    if self.ahk_running: self.ahk_manager.stop(); self.ahk_running = False; time.sleep(0.2)
+                    if self.ahk_running:
+                        self.ahk_manager.stop()
+                        self.ahk_running = False
+                        time.sleep(0.2)
                     self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
                     logging.info("KeyboardHotkeyManager reload completed successfully.")
                     break
-                except Exception as e: last_error = e; logging.error(f"Erro na tentativa {attempt} de recarregamento: {e}"); time.sleep(1)
+                except Exception as e:
+                    last_error = e
+                    logging.error(f"Erro na tentativa {attempt} de recarregamento: {e}")
+                    time.sleep(1)
             if attempt >= max_attempts and last_error is not None:
                 logging.error(f"Falha após {max_attempts} tentativas de recarregamento. Último erro: {last_error}")
                 return False
@@ -1120,7 +1195,8 @@ class AppCore:
 
     def _periodic_reregister_task(self):
         while not self.stop_reregister_event.wait(REREGISTER_INTERVAL_SECONDS):
-            with self.state_lock: current_state = self.current_state
+            with self.state_lock:
+                current_state = self.current_state
             if current_state == STATE_IDLE: # Re-registrar hotkeys apenas quando ocioso
                 logging.info(f"Periodic check: State is {current_state}. Attempting hotkey re-registration.")
                 try:
@@ -1154,12 +1230,16 @@ class AppCore:
         logging.info("Periodic hotkey re-registration thread stopped.")
 
     def force_reregister_hotkeys(self):
-        with self.state_lock: current_state = self.current_state
+        with self.state_lock:
+            current_state = self.current_state
         if current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
             logging.info(f"Manual trigger: State is {current_state}. Attempting hotkey re-registration.")
             with self.hotkey_lock:
                 try:
-                    if self.ahk_running: self.ahk_manager.stop(); self.ahk_running = False; time.sleep(0.5)
+                    if self.ahk_running:
+                        self.ahk_manager.stop()
+                        self.ahk_running = False
+                        time.sleep(0.5)
                     self.ahk_manager.update_config(record_key=self.record_key, agent_key=self.agent_key, record_mode=self.record_mode)
                     self.ahk_manager.set_callbacks(toggle=self.toggle_recording, start=self.start_recording, stop=self.stop_recording_if_needed, agent=self.start_agent_command)
                     success = self.ahk_manager.start()
@@ -1198,7 +1278,8 @@ class AppCore:
 
     def _hotkey_health_check_task(self):
         while not self.stop_health_check_event.wait(HOTKEY_HEALTH_CHECK_INTERVAL):
-            with self.state_lock: current_state = self.current_state
+            with self.state_lock:
+                current_state = self.current_state
             if current_state == STATE_IDLE: # Only check/fix if IDLE
                 if not self.ahk_running:
                     logging.warning("Hotkey health check: KeyboardHotkeyManager not running while IDLE. Attempting restart.")
@@ -1256,7 +1337,8 @@ class AppCore:
 
     def stop_recording_if_needed(self):
         with self.recording_lock:
-            if not self.audio_handler.is_recording: return
+            if not self.audio_handler.is_recording:
+                return
         self.stop_recording()
 
     def toggle_recording(self):
@@ -1495,29 +1577,16 @@ class AppCore:
         ensure_enum("new_chunk_length_mode", {"auto", "manual"})
         ensure_enum(
             "new_asr_backend",
-            {
-                "auto",
-                "transformers",
-                "ct2",
-                "ctranslate2",
-                "faster-whisper",
-                "faster_whisper",
-                "whisper",
-                "dummy",
-            },
+            {"auto", "transformers", "ct2", "ctranslate2", "faster-whisper", "faster_whisper", "whisper", "dummy"},
         )
         ensure_enum(
             "new_asr_compute_device",
             {"auto", "cpu", "cuda", "mps", "rocm", "xpu", "openvino", "dml"},
         )
-        ensure_enum(
-            "new_asr_dtype",
-            {"auto", "float16", "float32", "bfloat16"},
-        )
-        ensure_enum(
-            "new_asr_ct2_compute_type",
-            {"default", "float16", "float32", "int8", "int8_float16", "int8_float32"},
-        )
+        ensure_enum("new_asr_dtype", {"auto", "float16", "float32", "bfloat16"},)
+
+        ensure_enum("new_asr_ct2_compute_type", {"default", "float16", "float32", "int8", "int8_float16", "int8_float32"},)
+
         ensure_enum(
             "new_ct2_quantization",
             {"default", "float16", "float32", "int8", "int8_float16", "int8_float32"},
@@ -1916,7 +1985,8 @@ class AppCore:
         self.audio_handler.temp_file_path = None
 
     def shutdown(self):
-        if self.shutting_down: return
+        if self.shutting_down:
+            return
         self.shutting_down = True
         logging.info("Shutdown sequence initiated.")
 

@@ -2,13 +2,27 @@ import logging
 import time
 from typing import Optional
 
-import google.generativeai as genai
-from google.generativeai.types import (
-    helper_types,
-    BrokenResponseError,
-    IncompleteIterationError,
-)
+try:
+    import google.generativeai as genai
+    from google.generativeai.types import (
+        helper_types,
+        BrokenResponseError,
+        IncompleteIterationError,
+    )
+    GEMINI_API_AVAILABLE = True
+except ImportError:
+    GEMINI_API_AVAILABLE = False
+    # Crie classes dummy para evitar erros de tipo se a biblioteca não estiver instalada
+    class BrokenResponseError(Exception):
+        pass
 
+    class IncompleteIterationError(Exception):
+        pass
+
+    class helper_types:
+        class RequestOptions:
+            def __init__(self, timeout=None):
+                pass
 
 from .config_manager import ConfigManager
 from .config_manager import GEMINI_PROMPT_CONFIG_KEY
@@ -34,59 +48,58 @@ class GeminiAPI:
                 fornecida, será obtida do ConfigManager.
         """
         self.config_manager = config_manager
-        self.client = None  # Inicializa o cliente Gemini
+        self.client = None
         self.model = None
         self.current_api_key = None
         self.current_model_id = None
         self.current_prompt = None
-        # Armazena a chave passada na inicialização
         self.last_api_key = api_key
         self.last_model_id = None
         self.last_prompt = None
-        # Novo atributo para indicar se a API está configurada e válida
         self.is_valid: bool = False
 
-        # Inicializa o cliente Gemini
-        self.reinitialize_client()
+        if not GEMINI_API_AVAILABLE:
+            logging.warning("Google Generative AI SDK not found. Gemini features will be disabled.")
+            self.is_valid = False
+        else:
+            self.reinitialize_client()
 
     def reinitialize_client(self):
         """
         Recarrega o cliente Gemini com as configurações mais recentes.
-        Útil quando as configurações mudam em tempo de execução.
         """
+        if not GEMINI_API_AVAILABLE:
+            self.is_valid = False
+            return
+
         logging.info(
             "Gemini API client re/initializing due to external request."
         )
         self._load_model_from_config()
 
     def _load_model_from_config(self):
-        """Recarrega o modelo Gemini quando chave ou modelo mudam.
+        """Recarrega o modelo Gemini quando chave ou modelo mudam."""
+        if not GEMINI_API_AVAILABLE:
+            self.is_valid = False
+            return
 
-        A chave da API é obtida da instância ou do ``ConfigManager``. O prompt
-        é lido diretamente nos métodos públicos, portanto não participa do
-        critério de reinicialização.
-        """
-        # Prioriza a chave da API passada no construtor, depois a do config
         self.current_api_key = (
             self.last_api_key or self.config_manager.get("gemini_api_key")
         )
         self.current_model_id = self.config_manager.get('gemini_model')
         self.current_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
 
-        # A reinicialização considera apenas chave e modelo. O prompt é lido a
-        # cada chamada pública, portanto não dispara reload.
         key_changed = self.current_api_key != self.last_api_key
         model_changed = self.current_model_id != self.last_model_id
         config_changed = key_changed or model_changed
 
         if self.model is None or config_changed:
-
             if not self.current_api_key or "SUA_CHAVE" in self.current_api_key:
                 logging.warning(
                     "Gemini API key is missing or invalid. Text correction disabled."
                 )
                 self.model = None
-                self.is_valid = False  # Chave inválida, marca como inválido
+                self.is_valid = False
                 self.last_api_key = self.current_api_key
                 return
 
@@ -96,7 +109,6 @@ class GeminiAPI:
                 self.last_api_key = self.current_api_key
                 self.last_model_id = self.current_model_id
                 self.last_prompt = self.current_prompt
-                # Sucesso na configuração, marca como válido
                 self.is_valid = True
                 logging.info(
                     "Gemini API client re/initialized with model: %s",
@@ -108,10 +120,7 @@ class GeminiAPI:
                     e,
                 )
                 self.model = None
-                # Falha na configuração, marca como inválido
                 self.is_valid = False
-                # Não limpa a chave aqui para que o erro de chave inválida
-                # persista até ser corrigido
                 self.last_api_key = self.current_api_key
                 self.last_model_id = self.current_model_id
                 self.last_prompt = self.current_prompt
@@ -125,7 +134,6 @@ class GeminiAPI:
     ) -> str:
         """
         Executa uma requisição para a API Gemini com lógica de retry.
-        Este é o método central para todas as chamadas da API.
         """
         if not prompt or not self.is_valid or not self.model:
             logging.warning(
@@ -189,8 +197,8 @@ class GeminiAPI:
         """
         Formata e executa uma requisição de correção de texto.
         """
-        if not text:
-            return ""
+        if not text or not self.is_valid:
+            return text
         correction_prompt_template = self.config_manager.get(
             GEMINI_PROMPT_CONFIG_KEY
         )
@@ -202,8 +210,8 @@ class GeminiAPI:
         """
         Formata e executa uma requisição do modo agente.
         """
-        if not text:
-            return ""
+        if not text or not self.is_valid:
+            return text
         agent_prompt_template = self.config_manager.get('prompt_agentico')
         full_prompt = f"{agent_prompt_template}\n\n{text}"
         original_model = self.current_model_id
@@ -221,6 +229,8 @@ class GeminiAPI:
         return agent_response if agent_response else text
 
     def correct_text_async(self, text: str, prompt: str, api_key: str) -> str:
+        if not self.is_valid:
+            return text
         self.last_api_key = api_key
         self.current_api_key = api_key
         self.current_prompt = prompt

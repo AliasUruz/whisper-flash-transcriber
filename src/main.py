@@ -1,16 +1,18 @@
 import os  # Added for path handling
 import sys
-import tkinter as tk
-import logging
-import atexit
-import importlib
 
+# Add project root to path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from src.logging_utils import setup_logging
+import tkinter as tk  # noqa: E402
+import logging  # noqa: E402
+import atexit  # noqa: E402
+import importlib  # noqa: E402
+
+from src.logging_utils import setup_logging  # noqa: E402
 
 
 ENV_DEFAULTS = {
@@ -134,6 +136,11 @@ def main() -> None:
 
     main_tk_root = tk.Tk()
     main_tk_root.withdraw()
+    try:
+        # Define o ícone da aplicação, que aparecerá na barra de tarefas
+        main_tk_root.iconbitmap("icon.ico")
+    except Exception:
+        logging.warning("Failed to set main window icon. icon.ico may be missing or invalid.")
 
     app_core_instance = AppCore(main_tk_root)
     ui_manager_instance = UIManager(

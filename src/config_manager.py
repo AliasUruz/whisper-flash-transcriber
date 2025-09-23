@@ -117,9 +117,16 @@ DEFAULT_CONFIG = {
         "message": "",
         "details": "",
     },
+    "asr_last_prompt_decision": {
+        "model_id": "",
+        "backend": "",
+        "decision": "",
+        "timestamp": 0,
+    },
 }
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
+LAST_MODEL_PROMPT_DECISION_CONFIG_KEY = "asr_last_prompt_decision"
 MIN_RECORDING_DURATION_CONFIG_KEY = "min_record_duration"
 MIN_TRANSCRIPTION_DURATION_CONFIG_KEY = "min_transcription_duration"
 AGENT_KEY_CONFIG_KEY = "agent_key"
@@ -216,64 +223,63 @@ class ConfigManager:
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode("utf-8")).hexdigest()
 
     def load_config(self):
-        cfg = copy.deepcopy(self.default_config) # Usar deepcopy para evitar modificações no default
-
-        # 1. Carregar config.json (configurações do usuário)
+        cfg = copy.deepcopy(self.default_config)
         loaded_config_from_file = {}
+        config_file_exists = os.path.exists(self.config_file)
+
         try:
-            if os.path.exists(self.config_file):
+            if config_file_exists:
                 with open(self.config_file, "r", encoding='utf-8') as f:
                     loaded_config_from_file = json.load(f)
                 self._config_hash = self._compute_hash(loaded_config_from_file)
-
-                if "vad_enabled" in loaded_config_from_file:
-                    logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
-                    loaded_config_from_file["use_vad"] = loaded_config_from_file.pop("vad_enabled")
-                if (
-                    "record_storage_mode" not in loaded_config_from_file and "record_to_memory" in loaded_config_from_file
-                ):
-                    logging.info(
-                        "Migrating legacy 'record_to_memory' key to 'record_storage_mode'."
-                    )
-                    rec_mem = _parse_bool(loaded_config_from_file["record_to_memory"])
-                    loaded_config_from_file["record_storage_mode"] = (
-                        "memory" if rec_mem else "disk"
-                    )
                 cfg.update(loaded_config_from_file)
                 logging.info(f"Configuration loaded from {self.config_file}.")
-
-                # --- Migração do Prompt Agêntico ---
-                old_agent_prompt = (
-                    "Você é um assistente de IA que integra um sistema operacional. "
-                    "Se o usuário pedir uma ação que possa ser resolvida por um comando de terminal "
-                    "(como listar arquivos, verificar o IP, etc.), responda exclusivamente com o comando "
-                    "dentro das tags <cmd>comando</cmd>. Para todas as outras solicitações, responda normalmente."
-                )
-                current_agent_prompt = cfg.get("prompt_agentico", "")
-                if current_agent_prompt == old_agent_prompt:
-                    cfg["prompt_agentico"] = self.default_config["prompt_agentico"]
-                    logging.info("Old agent prompt detected and migrated to the new standard.")
-                # --- Fim da Migração ---
             else:
-                logging.info(f"{self.config_file} not found. Using defaults.")
-                self._config_hash = None
-        except (json.JSONDecodeError, FileNotFoundError) as e:
-            logging.warning(f"Error reading or decoding {self.config_file}: {e}. Using default configuration.")
-            # Em caso de erro, garantir que o config.json seja recriado com defaults
+                logging.warning(f"{self.config_file} not found. A new one will be created with default settings.")
+                self.config = cfg
+                self.save_config() # Salva o arquivo de configuração padrão
+                self._config_hash = self._compute_hash(cfg)
+
+        except json.JSONDecodeError as e:
+            logging.error(f"Error decoding {self.config_file}: {e}. The file is corrupted. A new one will be created with default settings.")
+            cfg = copy.deepcopy(self.default_config)
+            self.config = cfg
+            self.save_config() # Sobrescreve o arquivo corrompido
             loaded_config_from_file = {}
-            cfg = copy.deepcopy(self.default_config) # Resetar para defaults limpos
+            self._config_hash = self._compute_hash(cfg)
+
         except Exception as e:
             logging.error(f"An unexpected error occurred while loading {self.config_file}: {e}. Using default configuration.", exc_info=True)
             loaded_config_from_file = {}
             cfg = copy.deepcopy(self.default_config)
 
-        # 2. Carregar secrets.json (chaves de API e segredos)
+        # Migrations for older configs
+        if "vad_enabled" in loaded_config_from_file:
+            logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
+            cfg["use_vad"] = loaded_config_from_file.pop("vad_enabled")
+        if ("record_storage_mode" not in loaded_config_from_file and "record_to_memory" in loaded_config_from_file):
+            logging.info("Migrating legacy 'record_to_memory' key to 'record_storage_mode'.")
+            rec_mem = _parse_bool(loaded_config_from_file["record_to_memory"])
+            cfg["record_storage_mode"] = "memory" if rec_mem else "disk"
+        
+        old_agent_prompt = (
+            "Você é um assistente de IA que integra um sistema operacional. "
+            "Se o usuário pedir uma ação que possa ser resolvida por um comando de terminal "
+            "(como listar arquivos, verificar o IP, etc.), responda exclusivamente com o comando "
+            "dentro das tags <cmd>comando</cmd>. Para todas as outras solicitações, responda normalmente."
+        )
+        current_agent_prompt = cfg.get("prompt_agentico", "")
+        if current_agent_prompt == old_agent_prompt:
+            cfg["prompt_agentico"] = self.default_config["prompt_agentico"]
+            logging.info("Old agent prompt detected and migrated to the new standard.")
+
+        # Load secrets
         secrets_loaded = {}
         try:
             if os.path.exists(SECRETS_FILE):
                 with open(SECRETS_FILE, "r", encoding='utf-8') as f:
                     secrets_loaded = json.load(f)
-                cfg.update(secrets_loaded)  # Secrets sobrescrevem configs se houver conflito
+                cfg.update(secrets_loaded)
                 self._secrets_hash = self._compute_hash(secrets_loaded)
                 logging.info(f"Secrets loaded from {SECRETS_FILE}.")
             else:
@@ -281,14 +287,12 @@ class ConfigManager:
                 self._secrets_hash = None
         except (json.JSONDecodeError, FileNotFoundError) as e:
             logging.warning(f"Error reading or decoding {SECRETS_FILE}: {e}. API keys might be missing or invalid.")
-            secrets_loaded = {}  # Resetar segredos em caso de erro
             self._secrets_hash = None
         except Exception as e:
             logging.error(f"An unexpected error occurred while loading {SECRETS_FILE}: {e}. API keys might be missing or invalid.", exc_info=True)
-            secrets_loaded = {}
             self._secrets_hash = None
 
-        # Validar caminho do cache de ASR
+        # Validate ASR cache directory
         asr_cache_dir = cfg.get(ASR_CACHE_DIR_CONFIG_KEY, "")
         asr_cache_dir = os.path.expanduser(str(asr_cache_dir)) if isinstance(asr_cache_dir, str) else ""
         if not asr_cache_dir or not os.path.isdir(asr_cache_dir):
@@ -296,27 +300,21 @@ class ConfigManager:
             cfg[ASR_CACHE_DIR_CONFIG_KEY] = asr_cache_dir
         try:
             os.makedirs(asr_cache_dir, exist_ok=True)
-        except Exception as e:  # pragma: no cover - salvaguarda
-            logging.warning(f"Falha ao criar diretório de cache ASR '{asr_cache_dir}': {e}")
+        except Exception as e:
+            logging.warning(f"Failed to create ASR cache directory '{asr_cache_dir}': {e}")
 
         cfg["asr_curated_catalog"] = list_catalog()
         try:
             cfg["asr_installed_models"] = list_installed(asr_cache_dir)
         except OSError:
-            messagebox.showerror(
-                "Configuração",
-                "Diretório de cache inválido. Verifique as configurações.",
-            )
+            messagebox.showerror("Configuração", "Diretório de cache inválido. Verifique as configurações.")
             cfg["asr_installed_models"] = []
-        except Exception as e:  # pragma: no cover - salvaguarda
-            logging.warning(f"Falha ao listar modelos instalados: {e}")
+        except Exception as e:
+            logging.warning(f"Failed to list installed models: {e}")
             cfg["asr_installed_models"] = []
 
         self.config = cfg
-        # Aplicar validação e conversão de tipo
-        self._validate_and_apply_config(loaded_config_from_file) # Passar o config.json carregado para validação de 'specified'
-        
-        # Salvar a configuração (apenas as não sensíveis) após o carregamento e validação
+        self._validate_and_apply_config(loaded_config_from_file)
         self.save_config()
 
     def _validate_and_apply_config(self, loaded_config):

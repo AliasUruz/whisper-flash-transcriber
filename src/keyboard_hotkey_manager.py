@@ -34,22 +34,27 @@ class KeyboardHotkeyManager:
         self._load_config()
 
     def _load_config(self):
-        """Carrega a configuração do arquivo."""
+        """Carrega a configuração do arquivo, criando-o com valores padrão se não existir."""
         try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    self.record_key = config.get('record_key', self.record_key)
-                    self.agent_key = config.get('agent_key', self.agent_key)
-                    self.record_mode = config.get('record_mode', self.record_mode)
-                    logging.info(
-                        "Configuration loaded: record_key=%s, agent_key=%s, record_mode=%s",
-                        self.record_key,
-                        self.agent_key,
-                        self.record_mode,
-                    )
+            if not os.path.exists(self.config_file):
+                logging.warning(f"'{self.config_file}' not found. Creating it with default values.")
+                self._save_config()
+
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                self.record_key = config.get('record_key', self.record_key)
+                self.agent_key = config.get('agent_key', self.agent_key)
+                self.record_mode = config.get('record_mode', self.record_mode)
+                logging.info(
+                    "Configuration loaded: record_key=%s, agent_key=%s, record_mode=%s",
+                    self.record_key,
+                    self.agent_key,
+                    self.record_mode,
+                )
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            logging.error(f"Error loading or creating hotkey config: {e}. Using default hotkeys.")
         except Exception as e:
-            logging.error(f"Erro ao carregar configuração: {e}")
+            logging.error(f"An unexpected error occurred while loading hotkey config: {e}", exc_info=True)
 
     def _save_config(self):
         """Salva a configuração no arquivo."""

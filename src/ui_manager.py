@@ -1,4 +1,4 @@
-import copy
+
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
 from tkinter import simpledialog  # Adicionado para askstring
@@ -9,7 +9,7 @@ from datetime import datetime
 import pystray
 from PIL import Image, ImageDraw
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 # Importar constantes de configuração
 from .config_manager import (
@@ -40,13 +40,10 @@ from .utils.form_validation import safe_get_float, safe_get_int
 from .utils.tooltip import Tooltip
 from .vad_manager import VADManager
 
-if TYPE_CHECKING:  # pragma: no cover - hints only
-    from .core import StateNotification
-
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
 # Para este plano, vamos movê-lo para cá.
-import torch # Necessário para get_available_devices_for_ui
+# import torch # Necessário para get_available_devices_for_ui - REMOVIDO
 
 try:
     from .model_manager import DownloadCancelledError as _DefaultDownloadCancelledError
@@ -95,16 +92,20 @@ except Exception:  # pragma: no cover - fallback caso o módulo não exista
 def get_available_devices_for_ui():
     """Returns a list of devices for the settings interface."""
     devices = ["Auto-select (Recommended)"]
-    if torch.cuda.is_available():
-        num_gpus = torch.cuda.device_count()
-        for i in range(num_gpus):
-            try:
-                name = torch.cuda.get_device_name(i)
-                total_mem_gb = torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
-                devices.append(f"GPU {i}: {name} ({total_mem_gb:.1f}GB)")
-            except Exception as e:
-                devices.append(f"GPU {i}: Error getting name")
-                logging.error(f"Could not get GPU name {i}: {e}")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            num_gpus = torch.cuda.device_count()
+            for i in range(num_gpus):
+                try:
+                    name = torch.cuda.get_device_name(i)
+                    total_mem_gb = torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
+                    devices.append(f"GPU {i}: {name} ({total_mem_gb:.1f}GB)")
+                except Exception as e:
+                    devices.append(f"GPU {i}: Error getting name")
+                    logging.error(f"Could not get GPU name {i}: {e}")
+    except ImportError:
+        logging.debug("torch not found, returning CPU-only devices.")
     devices.append("Force CPU")
     return devices
 
@@ -576,7 +577,7 @@ class UIManager:
             self.config_manager.save_config()
             self._update_model_info(model_id)
             messagebox.showinfo("Model", "Download completed.")
-        except DownloadCancelledError:
+        except self._download_cancelled_error:
             messagebox.showinfo("Model", "Download canceled.")
         except OSError:
             messagebox.showerror(
@@ -883,7 +884,7 @@ class UIManager:
                 selection = "Force CPU"
             elif defaults["asr_compute_device"] == "cuda" and defaults.get("gpu_index", -1) >= 0:
                 selection = next(
-                    (dev for dev in available_devices if dev.startswith(f"GPU {defaults['gpu_index']}") ),
+                    (dev for dev in available_devices if dev.startswith(f"GPU {defaults['gpu_index']}")),
                     selection,
                 )
             try:
@@ -1333,7 +1334,7 @@ class UIManager:
                 self.config_manager.save_config()
                 _update_model_info(model_id)
                 messagebox.showinfo("Model", "Download completed.")
-            except DownloadCancelledError:
+            except DownloadCancelledError:  # noqa: F821
                 messagebox.showinfo("Model", "Download canceled.")
             except OSError:
                 messagebox.showerror(
@@ -1578,8 +1579,12 @@ class UIManager:
             return f"{text}{suffix}" if suffix else text
 
         if self.tray_icon:
-            color1, color2 = self.ICON_COLORS.get(state_str, self.DEFAULT_ICON_COLOR)
-            icon_image = self.create_image(64, 64, color1, color2)
+            try:
+                icon_image = Image.open("icon.png")
+            except FileNotFoundError:
+                logging.warning("icon.png not found, using fallback image for update.")
+                color1, color2 = self.ICON_COLORS.get(state_str, self.DEFAULT_ICON_COLOR)
+                icon_image = self.create_image(64, 64, color1, color2)
             self.tray_icon.icon = icon_image
             tooltip = f"Whisper Recorder ({state_str})"
 
@@ -1730,6 +1735,10 @@ class UIManager:
                 settings_win = ctk.CTkToplevel(self.main_tk_root)
                 self.settings_window_instance = settings_win
                 settings_win.title("Whisper Recorder Settings")
+                try:
+                    settings_win.iconbitmap("icon.ico")
+                except Exception as e:
+                    logging.warning(f"Failed to set settings window icon: {e}")
                 settings_win.resizable(False, True)
                 settings_win.attributes("-topmost", True)
 
@@ -2344,7 +2353,7 @@ class UIManager:
                         gemini_model_menu.configure(values=DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
                         gemini_model_menu.set(DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY])
                     gemini_model_options[:] = list(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
-                    asr_model_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
+                    asr_model_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])  # noqa: F821
                     asr_model_display_var.set(
                         id_to_display.get(
                             DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
@@ -2362,7 +2371,7 @@ class UIManager:
                     )
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
                     asr_backend_var.set(DEFAULT_CONFIG[ASR_BACKEND_CONFIG_KEY])
-                    asr_model_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
+                    asr_model_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])  # noqa: F821
                     asr_model_display_var.set(
                         id_to_display.get(
                             DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
@@ -3127,111 +3136,47 @@ class UIManager:
                     ):
                         return
 
-                    progress_status = {
-                        "status": "running",
-                        "timestamp": datetime.now().isoformat(timespec="seconds"),
-                        "model_id": model_id,
-                        "backend": backend or "",
-                        "message": "Downloading the selected ASR model...",
-                        "details": f"Target directory: {cache_dir}",
-                    }
-                    _apply_post_download_ui(progress_status)
-                    if install_button is not None:
-                        install_button.configure(state="disabled")
+                    # --- Início do download em thread ---
+                    download_frame = self._get_settings_var("download_frame")
+                    progress_label = self._get_settings_var("progress_label")
+                    progress_bar = self._get_settings_var("progress_bar")
+                    install_button = self._get_settings_var("install_button")
+                    reload_button = self._get_settings_var("reload_button")
 
-                    try:
-                        local_path = model_manager.ensure_download(
-                            model_id,
-                            backend,
-                            cache_dir,
-                            asr_ct2_compute_type_var.get() if backend == "ct2" else None,
-                            timeout=timeout_arg,
-                        )
-                        installed_models = model_manager.list_installed(cache_dir)
-                        self.config_manager.set_asr_installed_models(installed_models)
-                        success_status = {
-                            "status": "success",
-                            "timestamp": datetime.now().isoformat(timespec="seconds"),
-                            "model_id": model_id,
-                            "backend": backend or "",
-                            "message": "Download completed successfully.",
-                            "details": f"Stored at: {local_path}",
-                        }
-                        self.config_manager.set_last_asr_download_status(success_status)
-                        self.config_manager.save_config()
-                        _update_model_info(model_id)
-                        _apply_post_download_ui(success_status)
-                        logging.info(
-                            "ASR model '%s' downloaded successfully to %s (backend=%s)",
-                            model_id,
-                            local_path,
-                            backend,
-                        )
-                        messagebox.showinfo(
-                            "Model",
-                            f"Download completed successfully.\nStored at: {local_path}",
-                        )
-                    except DownloadCancelledError:
-                        cancel_message = (
-                            "Download canceled. Retry later or check your internet connection "
-                            "and disk space before trying again."
-                        )
-                        cancel_status = {
-                            "status": "cancelled",
-                            "timestamp": datetime.now().isoformat(timespec="seconds"),
-                            "model_id": model_id,
-                            "backend": backend or "",
-                            "message": cancel_message,
-                            "details": f"Cache directory: {cache_dir}",
-                        }
-                        self.config_manager.set_last_asr_download_status(cancel_status)
-                        self.config_manager.save_config()
-                        _apply_post_download_ui(cancel_status)
-                        logging.info("ASR model '%s' download cancelled by user.", model_id)
-                        messagebox.showinfo("Model", cancel_message)
-                    except OSError as exc:
-                        logging.exception(
-                            "ASR model '%s' download failed due to filesystem error.",
-                            model_id,
-                        )
-                        error_message = (
-                            "Download failed due to a filesystem error. Check the logs for diagnostics "
-                            "and ensure the cache directory is writable."
-                        )
-                        error_status = {
-                            "status": "error",
-                            "timestamp": datetime.now().isoformat(timespec="seconds"),
-                            "model_id": model_id,
-                            "backend": backend or "",
-                            "message": error_message,
-                            "details": str(exc),
-                        }
-                        self.config_manager.set_last_asr_download_status(error_status)
-                        self.config_manager.save_config()
-                        _apply_post_download_ui(error_status)
-                        messagebox.showerror("Model", f"{error_message}\n\n{exc}")
-                    except Exception as e:
-                        logging.exception(
-                            "ASR model '%s' download failed due to an unexpected error.",
-                            model_id,
-                        )
-                        failure_message = (
-                            "Download failed. Check the logs for diagnostics."
-                        )
-                        failure_status = {
-                            "status": "error",
-                            "timestamp": datetime.now().isoformat(timespec="seconds"),
-                            "model_id": model_id,
-                            "backend": backend or "",
-                            "message": failure_message,
-                            "details": str(e),
-                        }
-                        self.config_manager.set_last_asr_download_status(failure_status)
-                        self.config_manager.save_config()
-                        _apply_post_download_ui(failure_status)
-                        messagebox.showerror("Model", f"{failure_message}\n\n{e}")
-                    finally:
-                        _update_install_button_state()
+                    def download_task():
+                        # UI updates must be on main thread
+                        def _update_ui_start():
+                            progress_label.configure(text=f"Downloading {model_id}...")
+                            progress_bar.start()
+                            download_frame.pack(fill="x", pady=10, after=reload_button)
+                            install_button.configure(state="disabled")
+                            reload_button.configure(state="disabled")
+
+                        self.main_tk_root.after(0, _update_ui_start)
+
+                        try:
+                            quant = asr_ct2_compute_type_var.get() if backend == "ct2" else None
+                            # Esta é a chamada bloqueante que agora está na thread
+                            self.core_instance_ref.download_model_and_reload(model_id, backend, cache_dir, quant)
+                            self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download completed successfully."))
+
+                        except self._download_cancelled_error:
+                            self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download canceled."))
+                        except Exception as e:
+                            logging.error(f"Error during model download task: {e}", exc_info=True)
+                            self.main_tk_root.after(0, lambda: messagebox.showerror("Model", f"Download failed: {e}"))  # noqa: F821
+                        finally:
+                            # Limpeza da UI na thread principal
+                            def _update_ui_finish():
+                                progress_bar.stop()
+                                download_frame.pack_forget()
+                                install_button.configure(state="normal")
+                                reload_button.configure(state="normal")
+                                _update_model_info(model_id) # Atualiza o tamanho instalado
+
+                            self.main_tk_root.after(0, _update_ui_finish)
+
+                    threading.Thread(target=download_task, daemon=True, name="ModelDownloadTask").start()
 
                 def _reload_model():
                     handler = getattr(self.core_instance_ref, "transcription_handler", None)
@@ -3252,6 +3197,28 @@ class UIManager:
                 )
                 reload_button.pack(pady=5)
                 Tooltip(reload_button, "Reload the ASR model from disk.")
+
+                # --- Download Progress Frame (Initially Hidden) ---
+                download_frame = ctk.CTkFrame(asr_frame)
+
+                progress_label = ctk.CTkLabel(download_frame, text="Downloading model...")
+                progress_label.pack(side="left", padx=(10, 5))
+
+                progress_bar = ctk.CTkProgressBar(download_frame, mode='indeterminate')
+                progress_bar.pack(side="left", fill="x", expand=True, padx=5)
+
+                def _cancel_download_from_ui():
+                    if self.core_instance_ref:
+                        self.core_instance_ref.cancel_model_download()
+
+                cancel_button = ctk.CTkButton(download_frame, text="Cancel", command=_cancel_download_from_ui, width=80, fg_color="gray50")
+                cancel_button.pack(side="left", padx=(5, 10))
+
+                self._set_settings_var("download_frame", download_frame)
+                self._set_settings_var("progress_label", progress_label)
+                self._set_settings_var("progress_bar", progress_bar)
+                self._set_settings_var("install_button", install_button)
+                self._set_settings_var("reload_button", reload_button)
 
                 _update_model_info(asr_model_id_var.get())
                 _update_install_button_state()
@@ -3301,8 +3268,12 @@ class UIManager:
     def setup_tray_icon(self):
         # Logic moved from global, adjusted to use self.
         initial_state = self.core_instance_ref.current_state
-        color1, color2 = self.ICON_COLORS.get(initial_state, self.DEFAULT_ICON_COLOR)
-        initial_image = self.create_image(64, 64, color1, color2)
+        try:
+            initial_image = Image.open("icon.png")
+        except FileNotFoundError:
+            logging.warning("icon.png not found, using fallback image.")
+            color1, color2 = self.ICON_COLORS.get(initial_state, self.DEFAULT_ICON_COLOR)
+            initial_image = self.create_image(64, 64, color1, color2)
         initial_tooltip = self._pending_tray_tooltip or f"Whisper Recorder ({initial_state})"
 
         self.tray_icon = pystray.Icon(
@@ -3425,4 +3396,3 @@ class UIManager:
                     messagebox.showerror("Input Error", "Batch size must be a positive integer.", parent=self.settings_window_instance)
             except ValueError:
                 messagebox.showerror("Input Error", "Invalid entry. Please provide an integer.", parent=self.settings_window_instance)
-

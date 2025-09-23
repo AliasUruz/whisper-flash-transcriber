@@ -96,9 +96,11 @@ class AudioHandler:
 
         if "input overflow" in status_str.lower():
             now = time.time()
-            last_ts, count = (self._last_overflow_sample
-                               if isinstance(self._last_overflow_sample, tuple)
-                               else (0.0, 0))
+            last_ts, count = (
+                self._last_overflow_sample
+                if isinstance(self._last_overflow_sample, tuple)
+                else (0.0, 0)
+            )
             if now - last_ts > self._overflow_log_window:
                 count = 0
             count += 1

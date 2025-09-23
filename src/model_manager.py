@@ -21,18 +21,6 @@ class DownloadCancelledError(Exception):
 
     def __init__(
         self,
-        message: str,
-        *,
-        by_user: bool | None = None,
-        timed_out: bool | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.by_user = bool(by_user) if by_user is not None else False
-        self.timed_out = bool(timed_out) if timed_out is not None else False
-
-    def __init__(
-        self,
         message: str = "Model download cancelled.",
         *,
         by_user: bool = False,
@@ -41,6 +29,7 @@ class DownloadCancelledError(Exception):
         super().__init__(message)
         self.by_user = by_user
         self.timed_out = timed_out
+
 
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
@@ -356,20 +345,14 @@ def ensure_download(
             deadline = time.monotonic() + candidate
 
     def _check_abort() -> None:
-        if cancel_event is not None and cancel_event.is_set():
-            raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
-        if deadline is not None and time.monotonic() >= deadline:
-            assert timeout_value is not None
-            raise DownloadCancelledError(
-                "Model download cancelled by caller.",
-                by_user=True,
-            )
         if deadline is not None and time.monotonic() >= deadline:
             seconds = timeout_value if timeout_value is not None else 0.0
             raise DownloadCancelledError(
                 f"Model download timed out after {seconds:.0f} seconds.",
                 timed_out=True,
             )
+        if cancel_event is not None and cancel_event.is_set():
+            raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
 
     def _cleanup_partial() -> None:
         try:
