@@ -55,18 +55,21 @@ DEFAULT_CONFIG = {
         "You are an AI assistant that executes text commands. "
         "The user will provide an instruction followed by the text to be processed. "
         "Your task is to execute the instruction on the text and return ONLY the final result. "
-        "Do not add explanations, greetings, or any extra text. "
+        "Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. "
         "The output language should match the main language of the provided text."
     ),
     "gemini_prompt": (
         "You are a meticulous speech-to-text correction AI. "
         "Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below "
-        "while preserving the original content and structure as closely as possible. "
-        "Key instructions: - Correct punctuation, such as adding commas, periods, and question marks. "
-        "- Fix capitalization at the beginning of sentences. "
-        "- Remove only obvious speech disfluencies (e.g., \"I-I mean\"). "
-        "- DO NOT summarize, paraphrase, or change the original meaning. "
-        "- Return ONLY the corrected text, with no additional comments or explanations. "
+        "while preserving the original content and structure as closely as possible.\n"
+        "Key instructions:\n"
+        "- Correct punctuation, such as adding commas, periods, and question marks where appropriate.\n"
+        "- Fix capitalization at the beginning of sentences.\n"
+        "- Remove only obvious speech disfluencies like stutters (e.g., \"I-I mean\") and false starts, but preserve the natural flow of speech.\n"
+        "- DO NOT summarize, paraphrase, or change the original meaning of the sentences.\n"
+        "- DO NOT remove any content, even if it seems redundant.\n"
+        "- Preserve all language transitions (e.g., Portuguese/English) exactly as they occur.\n"
+        "- Return only the corrected text, with no additional comments or explanations.\n"
         "Transcribed speech: {text}"
     ),
     "batch_size": 16, # Valor padrão para o modo automático
@@ -265,35 +268,10 @@ class ConfigManager:
             "(como listar arquivos, verificar o IP, etc.), responda exclusivamente com o comando "
             "dentro das tags <cmd>comando</cmd>. Para todas as outras solicitações, responda normalmente."
         )
-        previous_agent_prompt = (
-            "You are an AI assistant that executes text commands. "
-            "The user will provide an instruction followed by the text to be processed. "
-            "Your task is to execute the instruction on the text and return ONLY the final result. "
-            "Do not add explanations, greetings, or any extra text. The user's instruction is your top priority. "
-            "The output language should match the main language of the provided text."
-        )
         current_agent_prompt = cfg.get("prompt_agentico", "")
-        if current_agent_prompt in {old_agent_prompt, previous_agent_prompt}:
+        if current_agent_prompt == old_agent_prompt:
             cfg["prompt_agentico"] = self.default_config["prompt_agentico"]
-            logging.info("Legacy agent prompt detected and migrated to the new standard.")
-
-        previous_gemini_prompt = (
-            "You are a meticulous speech-to-text correction AI. "
-            "Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below "
-            "while preserving the original content and structure as closely as possible.\n"
-            "Key instructions:\n"
-            "- Correct punctuation, such as adding commas, periods, and question marks where appropriate.\n"
-            "- Fix capitalization at the beginning of sentences.\n"
-            "- Remove only obvious speech disfluencies like stutters (e.g., \"I-I mean\") and false starts, but preserve the natural flow of speech.\n"
-            "- DO NOT summarize, paraphrase, or change the original meaning of the sentences.\n"
-            "- DO NOT remove any content, even if it seems redundant.\n"
-            "- Preserve all language transitions (e.g., Portuguese/English) exactly as they occur.\n"
-            "- Return only the corrected text, with no additional comments or explanations.\n"
-            "Transcribed speech: {text}"
-        )
-        if cfg.get("gemini_prompt", "") == previous_gemini_prompt:
-            cfg["gemini_prompt"] = self.default_config["gemini_prompt"]
-            logging.info("Legacy Gemini prompt detected and migrated to the new standard.")
+            logging.info("Old agent prompt detected and migrated to the new standard.")
 
         # Load secrets
         secrets_loaded = {}
