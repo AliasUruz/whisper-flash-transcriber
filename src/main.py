@@ -1,18 +1,15 @@
-import os  # Added for path handling
+import atexit
+import importlib
+import logging
+import os
 import sys
+import tkinter as tk
 
 # Add project root to path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-
-import tkinter as tk  # noqa: E402
-import logging  # noqa: E402
-import atexit  # noqa: E402
-import importlib  # noqa: E402
-
-from src.logging_utils import setup_logging  # noqa: E402
 
 
 ENV_DEFAULTS = {
@@ -112,6 +109,8 @@ def patch_tk_variable_cleanup() -> None:
 
 
 def main() -> None:
+    from src.logging_utils import setup_logging
+
     setup_logging()
     configure_environment()
     ensure_display_available()
