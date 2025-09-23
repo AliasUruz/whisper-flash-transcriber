@@ -1,6 +1,7 @@
+import json
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 try:
     import google.generativeai as genai
@@ -9,9 +10,14 @@ try:
         BrokenResponseError,
         IncompleteIterationError,
     )
+    try:
+        from google.api_core import exceptions as google_api_exceptions
+    except ImportError:
+        google_api_exceptions = None
     GEMINI_API_AVAILABLE = True
 except ImportError:
     GEMINI_API_AVAILABLE = False
+    google_api_exceptions = None
     # Crie classes dummy para evitar erros de tipo se a biblioteca não estiver instalada
 
     class BrokenResponseError(Exception):
@@ -26,8 +32,26 @@ except ImportError:
             def __init__(self, timeout=None):
                 pass
 
-from .config_manager import ConfigManager
-from .config_manager import GEMINI_PROMPT_CONFIG_KEY
+if google_api_exceptions is not None:
+    GoogleAPIError = google_api_exceptions.GoogleAPIError
+    GoogleAPITimeoutError = getattr(
+        google_api_exceptions,
+        "DeadlineExceeded",
+        google_api_exceptions.GoogleAPIError,
+    )
+else:
+    class GoogleAPIError(Exception):
+        """Fallback genérico quando google-api-core não está disponível."""
+
+
+    class GoogleAPITimeoutError(GoogleAPIError):
+        """Fallback genérico para timeouts quando google-api-core não está disponível."""
+
+from .config_manager import (
+    ConfigManager,
+    GEMINI_PROMPT_CONFIG_KEY,
+    GEMINI_TIMEOUT_CONFIG_KEY,
+)
 
 
 class GeminiAPI:
@@ -127,6 +151,32 @@ class GeminiAPI:
                 self.last_model_id = self.current_model_id
                 self.last_prompt = self.current_prompt
 
+    def _resolve_timeout(self, default_timeout: float | int) -> float:
+        """Obtém o timeout configurado garantindo um valor positivo."""
+        configured_timeout = self.config_manager.get_timeout(
+            GEMINI_TIMEOUT_CONFIG_KEY,
+            default_timeout,
+        )
+        return float(configured_timeout)
+
+    @staticmethod
+    def _format_response_for_logging(response: Any) -> str:
+        """Serializa respostas arbitrárias em uma string amigável para logs."""
+        if response is None:
+            return "None"
+
+        if hasattr(response, "to_dict"):
+            try:
+                response_dict = response.to_dict()
+                return json.dumps(response_dict, ensure_ascii=False)
+            except Exception:
+                return repr(response)
+
+        try:
+            return json.dumps(response, ensure_ascii=False)
+        except TypeError:
+            return repr(response)
+
     def _execute_request(
         self,
         prompt: str,
@@ -143,17 +193,36 @@ class GeminiAPI:
             )
             return ""
 
+        timeout_value = self._resolve_timeout(timeout)
+        model_for_log = self.current_model_id or self.last_model_id or "unknown"
+
         for attempt in range(max_retries):
+            attempt_number = attempt + 1
+            should_retry = False
             try:
                 logging.info(
                     "Sending prompt to the Gemini API with model %s (attempt %s/%s)",
-                    self.last_model_id,
-                    attempt + 1,
+                    model_for_log,
+                    attempt_number,
                     max_retries,
+                )
+                logging.debug(
+                    "Gemini prompt payload for model '%s' (attempt %s/%s): %s",
+                    model_for_log,
+                    attempt_number,
+                    max_retries,
+                    prompt,
                 )
                 response = self.model.generate_content(
                     prompt,
-                    request_options=helper_types.RequestOptions(timeout=timeout),
+                    request_options=helper_types.RequestOptions(timeout=timeout_value),
+                )
+                logging.debug(
+                    "Gemini raw response for model '%s' (attempt %s/%s): %s",
+                    model_for_log,
+                    attempt_number,
+                    max_retries,
+                    self._format_response_for_logging(response),
                 )
 
                 if hasattr(response, 'text') and response.text:
@@ -162,33 +231,55 @@ class GeminiAPI:
                         "Gemini API returned a successful response."
                     )
                     return generated_text
-                else:
-                    logging.warning(
-                        "Gemini API returned an empty response (attempt %s/%s)",
-                        attempt + 1,
-                        max_retries,
-                    )
 
+                logging.warning(
+                    "Gemini API returned an empty response (attempt %s/%s)",
+                    attempt_number,
+                    max_retries,
+                )
+                should_retry = True
+
+            except GoogleAPITimeoutError as e:
+                logging.error(
+                    "Gemini API request timed out after %.2f seconds (attempt %s/%s): %s",
+                    timeout_value,
+                    attempt_number,
+                    max_retries,
+                    e,
+                )
+                should_retry = True
             except (BrokenResponseError, IncompleteIterationError) as e:
                 logging.error(
                     "Gemini API specific error (attempt %s/%s): %s",
-                    attempt + 1,
+                    attempt_number,
                     max_retries,
                     e,
                 )
+                should_retry = True
+            except GoogleAPIError as e:
+                logging.error(
+                    "Gemini API returned an error response (attempt %s/%s): %s",
+                    attempt_number,
+                    max_retries,
+                    e,
+                )
+                should_retry = True
             except Exception as e:
                 logging.error(
                     "Error while generating content with the Gemini API (attempt %s/%s): %s",
-                    attempt + 1,
+                    attempt_number,
                     max_retries,
                     e,
+                    exc_info=True,
                 )
-                if attempt < max_retries - 1:
-                    logging.info(
-                        "Retrying in %s seconds...",
-                        retry_delay,
-                    )
-                    time.sleep(retry_delay)
+                should_retry = True
+
+            if should_retry and attempt < max_retries - 1:
+                logging.info(
+                    "Retrying in %s seconds...",
+                    retry_delay,
+                )
+                time.sleep(retry_delay)
 
         logging.error(
             "All attempts to generate content with the Gemini API failed."

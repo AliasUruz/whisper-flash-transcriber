@@ -45,6 +45,7 @@ from .config_manager import (
     SERVICE_GEMINI,
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
+    OPENROUTER_TIMEOUT_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     GEMINI_AGENT_PROMPT_CONFIG_KEY,
     OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
@@ -198,7 +199,15 @@ class TranscriptionHandler:
         self.openrouter_api = None
         if self.text_correction_enabled and self.text_correction_service == SERVICE_OPENROUTER and self.openrouter_api_key and OpenRouterAPI:
             try:
-                self.openrouter_client = OpenRouterAPI(api_key=self.openrouter_api_key, model_id=self.openrouter_model)
+                openrouter_timeout = self.config_manager.get_timeout(
+                    OPENROUTER_TIMEOUT_CONFIG_KEY,
+                    OpenRouterAPI.DEFAULT_TIMEOUT,
+                )
+                self.openrouter_client = OpenRouterAPI(
+                    api_key=self.openrouter_api_key,
+                    model_id=self.openrouter_model,
+                    request_timeout=openrouter_timeout,
+                )
                 self.openrouter_api = self.openrouter_client
                 logging.info("OpenRouter API client initialized.")
             except Exception as e:
