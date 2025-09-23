@@ -1,35 +1,27 @@
-# .github/workflows/codex-automation.yml (Versão Final: Reativa + Agendada)
+# .github/workflows/codex-automation.yml (Versão Final: Multi-Branch - stable & alpha)
 
 name: 'Codex Automation'
 
-# Gatilho de concorrência para garantir que apenas uma fila rode por vez.
+# Gatilho de concorrência para separar as filas de stable e alpha
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.base.ref || 'scheduled-run' }}
   cancel-in-progress: true
 
-# GATILHOS UNIFICADOS: Ouve tudo que nos interessa.
 on:
-  # Gatilho manual para testes.
   workflow_dispatch:
-
-  # Gatilho agendado que roda a cada 5 minutos como garantia.
   schedule:
     - cron: '*/5 * * * *'
-
-  # Gatilho reativo que TENTA rodar instantaneamente.
+  
+  # Gatilho reativo que agora escuta PRs para ambas as branches
   pull_request:
     types: [opened, labeled, reopened, synchronize]
+    branches: [ 'stable', 'alpha' ]
 
 jobs:
-  #############################################################
-  # Job Único: Tenta o merge instantâneo e garante com schedule
-  #############################################################
   process_queue:
     name: 'Process Merge Queue'
     
-    # CONDIÇÃO INTELIGENTE:
-    # Roda SEMPRE se for agendado ou manual.
-    # Roda SE for um PR e tiver a label "codex".
+    # Condição inteligente que continua funcionando para os PRs de ambas as branches
     if: >
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
@@ -41,10 +33,9 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: 'Checkout to stable branch'
+      - name: 'Checkout Repository'
         uses: actions/checkout@v4
         with:
-          ref: 'stable'
           token: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
           fetch-depth: 0
 
@@ -56,27 +47,53 @@ jobs:
       - name: 'List, Sort, and Process All Codex PRs'
         env:
           GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          # Passa a branch base do PR para o script
+          PR_BASE_REF: ${{ github.base_ref }}
         run: |
-          echo "Starting queue processing triggered by: ${{ github.event_name }}"
-          # A lógica é sempre a mesma: processar a fila inteira.
-          # Isso simplifica o código e garante que, mesmo que um evento de PR falhe,
-          # a próxima execução agendada irá consertar a situação.
-          gh pr list --label "codex" --state "open" --base "stable" --json number,headRefName,createdAt \
-          | jq -c '. | sort_by(.createdAt) | .[]' \
-          | while read -r pr_json; do
-              PR_NUMBER=$(echo "$pr_json" | jq -r '.number')
-              PR_BRANCH=$(echo "$pr_json" | jq -r '.headRefName')
-              
-              echo ">>> Processing PR #${PR_NUMBER} (Branch: ${PR_BRANCH})"
-              git fetch origin stable && git reset --hard origin/stable
-              
-              if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER} from ${PR_BRANCH}" -X theirs; then
-                  echo "✅ Merge successful for PR #${PR_NUMBER}."
-                  git push origin stable
-              else
-                  echo "❌ Merge failed for PR #${PR_NUMBER}."
-                  gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Conflito crítico detectado que a estratégia automática não conseguiu resolver."
-                  continue
-              fi
+          echo "Starting queue processing triggered by: $EVENT_NAME"
+
+          # Define dinamicamente quais branches processar
+          TARGET_BRANCHES=""
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            # Se for um PR, processa apenas a branch alvo do PR
+            TARGET_BRANCHES="$PR_BASE_REF"
+          else
+            # Se for agendado ou manual, processa AMBAS as filas
+            TARGET_BRANCHES="stable alpha"
+          fi
+
+          echo "Processing target branches: $TARGET_BRANCHES"
+
+          # Loop para processar cada branch de destino
+          for BASE_BRANCH in $TARGET_BRANCHES; do
+            echo ""
+            echo "================================================================="
+            echo ">>> Processing queue for branch: $BASE_BRANCH"
+            echo "================================================================="
+
+            # Garante que estamos trabalhando na versão mais recente da branch alvo
+            git checkout "$BASE_BRANCH"
+            git reset --hard "origin/$BASE_BRANCH"
+
+            # Busca e processa a fila de PRs específica para a branch atual
+            gh pr list --label "codex" --state "open" --base "$BASE_BRANCH" --json number,headRefName,createdAt \
+            | jq -c '. | sort_by(.createdAt) | .[]' \
+            | while read -r pr_json; do
+                PR_NUMBER=$(echo "$pr_json" | jq -r '.number')
+                PR_BRANCH=$(echo "$pr_json" | jq -r '.headRefName')
+
+                echo "--- Processing PR #${PR_NUMBER} into ${BASE_BRANCH} ---"
+
+                if git merge --no-ff "origin/${PR_BRANCH}" -m "Merge pull request #${PR_NUMBER} from ${PR_BRANCH}" -X theirs; then
+                    echo "✅ Merge successful for PR #${PR_NUMBER}."
+                    git push origin "$BASE_BRANCH"
+                else
+                    echo "❌ Merge failed for PR #${PR_NUMBER}."
+                    gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Conflito crítico detectado em '${BASE_BRANCH}' que a estratégia automática não conseguiu resolver."
+                    continue
+                fi
+            done
           done
+
           echo "Queue processing finished."
