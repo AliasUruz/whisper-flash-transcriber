@@ -1,8 +1,7 @@
-# .github/workflows/codex-automation.yml (Versão Final: Multi-Branch - stable & alpha)
+# .github/workflows/codex-automation.yml (Versão com Melhorias de Robustez)
 
 name: 'Codex Automation'
 
-# Gatilho de concorrência para separar as filas de stable e alpha
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.base.ref || 'scheduled-run' }}
   cancel-in-progress: true
@@ -12,7 +11,6 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   
-  # Gatilho reativo que agora escuta PRs para ambas as branches
   pull_request:
     types: [opened, labeled, reopened, synchronize]
     branches: [ 'stable', 'alpha' ]
@@ -21,7 +19,9 @@ jobs:
   process_queue:
     name: 'Process Merge Queue'
     
-    # Condição inteligente que continua funcionando para os PRs de ambas as branches
+    # MELHORIA 1: Adiciona um timeout de 10 minutos para evitar jobs travados.
+    timeout-minutes: 10
+    
     if: >
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
@@ -48,38 +48,35 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
-          # Passa a branch base do PR para o script
           PR_BASE_REF: ${{ github.base_ref }}
         run: |
+          # MELHORIA 2: Torna o script mais estrito e detalhado.
+          set -euxo pipefail
+
           echo "Starting queue processing triggered by: $EVENT_NAME"
 
-          # Define dinamicamente quais branches processar
           TARGET_BRANCHES=""
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            # Se for um PR, processa apenas a branch alvo do PR
             TARGET_BRANCHES="$PR_BASE_REF"
           else
-            # Se for agendado ou manual, processa AMBAS as filas
             TARGET_BRANCHES="stable alpha"
           fi
 
           echo "Processing target branches: $TARGET_BRANCHES"
 
-          # Loop para processar cada branch de destino
           for BASE_BRANCH in $TARGET_BRANCHES; do
             echo ""
             echo "================================================================="
             echo ">>> Processing queue for branch: $BASE_BRANCH"
             echo "================================================================="
 
-            # Garante que estamos trabalhando na versão mais recente da branch alvo
             git checkout "$BASE_BRANCH"
             git reset --hard "origin/$BASE_BRANCH"
 
-            # Busca e processa a fila de PRs específica para a branch atual
+            # Usamos 'jq --exit-status' para não falhar se a lista de PRs for vazia
+            # E 'read' para evitar problemas com a última linha
             gh pr list --label "codex" --state "open" --base "$BASE_BRANCH" --json number,headRefName,createdAt \
-            | jq -c '. | sort_by(.createdAt) | .[]' \
-            | while read -r pr_json; do
+            | jq -c '.[]' | while read -r pr_json; do
                 PR_NUMBER=$(echo "$pr_json" | jq -r '.number')
                 PR_BRANCH=$(echo "$pr_json" | jq -r '.headRefName')
 
