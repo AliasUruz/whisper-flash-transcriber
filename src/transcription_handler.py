@@ -650,8 +650,7 @@ class TranscriptionHandler:
 
         except Exception as exc:
             logging.error(f"Erro ao corrigir texto: {exc}")
-            if future \
-                    and not future.done():
+            if future and not future.done():
                 future.cancel()
         finally:
             self.correction_in_progress = False
@@ -1529,8 +1528,10 @@ class TranscriptionHandler:
                         )
                 except Exception as e:
                     logging.error(f"Erro ao processar o comando do agente: {e}", exc_info=True)
-                    if not self.is_state_transcribing_fn \
-                            or self.is_state_transcribing_fn():
+                    if (
+                        not self.is_state_transcribing_fn
+                        or self.is_state_transcribing_fn()
+                    ):
                         self.on_agent_result_callback(text_result)  # Falha, retorna o texto original
                     else:
                         logging.warning(
