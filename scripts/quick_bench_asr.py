@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -312,9 +313,32 @@ except Exception:
     sys.modules["PIL.Image"] = image_module
     sys.modules["PIL.ImageDraw"] = image_draw_module
 
-from src.config_manager import ConfigManager
-from src.transcription_handler import TranscriptionHandler
-import src.transcription_handler as transcription_handler_module
+if TYPE_CHECKING:
+    from src.config_manager import ConfigManager as ConfigManagerType
+    from src.transcription_handler import (
+        TranscriptionHandler as TranscriptionHandlerType,
+    )
+    import src.transcription_handler as transcription_handler_module_type
+
+
+def _load_runtime_dependencies():
+    from src.config_manager import ConfigManager as _ConfigManager
+    from src.transcription_handler import (
+        TranscriptionHandler as _TranscriptionHandler,
+    )
+    import src.transcription_handler as handler_module
+
+    return _ConfigManager, _TranscriptionHandler, handler_module
+
+
+ConfigManager: ConfigManagerType
+TranscriptionHandler: TranscriptionHandlerType
+transcription_handler_module: transcription_handler_module_type
+(
+    ConfigManager,
+    TranscriptionHandler,
+    transcription_handler_module,
+) = _load_runtime_dependencies()
 
 
 def main() -> None:

@@ -13,8 +13,10 @@ try:
 except ImportError:
     GEMINI_API_AVAILABLE = False
     # Crie classes dummy para evitar erros de tipo se a biblioteca não estiver instalada
+
     class BrokenResponseError(Exception):
         pass
+
 
     class IncompleteIterationError(Exception):
         pass
