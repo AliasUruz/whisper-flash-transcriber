@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -313,31 +313,47 @@ except Exception:
     sys.modules["PIL.Image"] = image_module
     sys.modules["PIL.ImageDraw"] = image_draw_module
 
+if TYPE_CHECKING:  # pragma: no cover - apenas para tipagem estática
+    from src.config_manager import ConfigManager as _ConfigManager
+    from src.transcription_handler import TranscriptionHandler as _TranscriptionHandler
+else:  # pragma: no cover - evita NameError em tempo de execução
+    _ConfigManager = Any  # type: ignore[assignment]
+    _TranscriptionHandler = Any  # type: ignore[assignment]
 
-def _load_config_manager():
-    from src.config_manager import ConfigManager
-
-    return ConfigManager
-
-
-def _load_transcription_handler():
-    from src.transcription_handler import TranscriptionHandler
-
-    return TranscriptionHandler
+_CONFIG_MANAGER_CLS: type[_ConfigManager] | None = None
+_TRANSCRIPTION_HANDLER_CLS: type[_TranscriptionHandler] | None = None
+_TRANSCRIPTION_HANDLER_MODULE: ModuleType | None = None
 
 
-def _load_transcription_handler_module():
-    import src.transcription_handler as transcription_handler_module
+def _ensure_app_dependencies() -> None:
+    """Importa dependências do app somente após configurar dummies."""
 
-    return transcription_handler_module
+    global _CONFIG_MANAGER_CLS, _TRANSCRIPTION_HANDLER_CLS, _TRANSCRIPTION_HANDLER_MODULE
+
+    if (
+        _CONFIG_MANAGER_CLS is not None
+        and _TRANSCRIPTION_HANDLER_CLS is not None
+        and _TRANSCRIPTION_HANDLER_MODULE is not None
+    ):
+        return
+
+    from src.config_manager import ConfigManager as _LoadedConfigManager
+    from src.transcription_handler import TranscriptionHandler as _LoadedTranscriptionHandler
+    import src.transcription_handler as loaded_transcription_handler_module
+
+    _CONFIG_MANAGER_CLS = _LoadedConfigManager
+    _TRANSCRIPTION_HANDLER_CLS = _LoadedTranscriptionHandler
+    _TRANSCRIPTION_HANDLER_MODULE = loaded_transcription_handler_module
 
 
 def main() -> None:
-    ConfigManager = _load_config_manager()
-    TranscriptionHandler = _load_transcription_handler()
-    cfg = ConfigManager()
+    _ensure_app_dependencies()
+    assert _CONFIG_MANAGER_CLS is not None
+    assert _TRANSCRIPTION_HANDLER_CLS is not None
 
-    handler = TranscriptionHandler(
+    cfg = _CONFIG_MANAGER_CLS()
+
+    handler = _TRANSCRIPTION_HANDLER_CLS(
         cfg,
         gemini_api_client=None,
         on_model_ready_callback=lambda: None,
@@ -362,9 +378,11 @@ def main() -> None:
 # --- Tests ---------------------------------------------------------------
 
 
-def _make_handler_for_tests(chunk: float = 30.0, gpu_index: int = 0):
-    TranscriptionHandler = _load_transcription_handler()
-    handler = TranscriptionHandler.__new__(TranscriptionHandler)
+def _make_handler_for_tests(chunk: float = 30.0, gpu_index: int = 0) -> "_TranscriptionHandler":
+    _ensure_app_dependencies()
+    assert _TRANSCRIPTION_HANDLER_CLS is not None
+
+    handler = _TRANSCRIPTION_HANDLER_CLS.__new__(_TRANSCRIPTION_HANDLER_CLS)
     handler.chunk_length_sec = chunk
     handler.gpu_index = gpu_index
     return handler
@@ -394,9 +412,11 @@ def _mock_cuda_env(
 
         fake_cuda.mem_get_info = _mem_info
 
-    transcription_handler_module = _load_transcription_handler_module()
-    monkeypatch.setattr(transcription_handler_module.torch, "cuda", fake_cuda)
-    monkeypatch.setattr(transcription_handler_module.torch, "device", lambda spec: spec)
+    _ensure_app_dependencies()
+    assert _TRANSCRIPTION_HANDLER_MODULE is not None
+
+    monkeypatch.setattr(_TRANSCRIPTION_HANDLER_MODULE.torch, "cuda", fake_cuda)
+    monkeypatch.setattr(_TRANSCRIPTION_HANDLER_MODULE.torch, "device", lambda spec: spec)
 
 
 def test_effective_chunk_length_cpu(monkeypatch):
