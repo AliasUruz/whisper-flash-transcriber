@@ -64,7 +64,6 @@ REMAINING_TASKS.md
 BUG_FIX_PLAN.md
 BUG_FIX_PLAN_2.md
 BUG_FIX_PLAN_3.md
-.gitignore
 src/main.py
 plans/CONSOLIDATED_MASTER_PLAN.md
 plans/PART_2_FLAKE8_FIXES.md
