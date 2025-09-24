@@ -1,234 +1,90 @@
-"""Coordenador de ações entre captura de áudio e transcrição."""
+"""Coordena ações pós-processamento como clipboard/paste e limpeza de áudio.
 
+Este módulo encapsula o fluxo compartilhado entre transcrição e modo agente,
+permitindo que o ``AppCore`` delegue responsabilidades operacionais (copiar
+texto, colar automaticamente, disparar eventos de estado e fechar a UI) a uma
+classe dedicada que pode ser testada de forma isolada.
+"""
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
 from typing import Any
 
-import numpy as np
-import soundfile as sf
+import pyperclip
 
-from . import state_manager as sm
-from .audio_handler import AUDIO_SAMPLE_RATE
 from .config_manager import ConfigManager
-
-LOGGER = logging.getLogger(__name__)
 
 
 class ActionOrchestrator:
-    """Encapsula o fluxo entre áudio, transcrição e pós-processamento."""
+    """Implementa as rotinas de entrega de texto e limpeza de recursos."""
 
     def __init__(
         self,
-        *,
-        state_manager: sm.StateManager,
         config_manager: ConfigManager,
-        transcription_handler: Any | None = None,
-        clipboard_module: Any | None = None,
-        paste_callback: Callable[[], None] | None = None,
-        log_status_callback: Callable[[str, bool], None] | None = None,
-        tk_root: Any | None = None,
-        close_ui_callback: Callable[[], None] | None = None,
-        fallback_text_provider: Callable[[], str] | None = None,
-        reset_transcription_buffer: Callable[[], None] | None = None,
-        delete_temp_audio_callback: Callable[[], None] | None = None,
+        *,
+        status_logger: Callable[..., None],
+        state_dispatcher: Callable[..., None],
+        paste_callback: Callable[[], None],
+        ui_close_callback: Callable[[], None] | None,
+        temp_audio_cleaner: Callable[[], None],
     ) -> None:
-        self._state_manager = state_manager
         self._config_manager = config_manager
-        self._transcription_handler = transcription_handler
-        self._clipboard_module = clipboard_module
+        self._log_status = status_logger
+        self._dispatch_state = state_dispatcher
         self._paste_callback = paste_callback
-        self._log_status_callback = log_status_callback
-        self._tk_root = tk_root
-        self._close_ui_callback = close_ui_callback
-        self._fallback_text_provider = fallback_text_provider
-        self._reset_transcription_buffer = reset_transcription_buffer
-        self._delete_temp_audio_callback = delete_temp_audio_callback
+        self._ui_close_callback = ui_close_callback
+        self._temp_audio_cleaner = temp_audio_cleaner
 
-        self._agent_mode_active = False
+    def handle_agent_result(self, agent_response_text: str | None, *, state_event: Any) -> None:
+        """Entrega o resultado do modo agente respeitando colagem automática."""
+        normalized_response = agent_response_text or ""
 
-    def bind_transcription_handler(self, handler: Any) -> None:
-        """Associa o ``TranscriptionHandler`` responsável pelas transcrições."""
-
-        self._transcription_handler = handler
-
-    # ------------------------------------------------------------------
-    # Agent mode management
-    # ------------------------------------------------------------------
-    def activate_agent_mode(self) -> None:
-        LOGGER.debug("ActionOrchestrator: agent mode activated.")
-        self._agent_mode_active = True
-
-    def deactivate_agent_mode(self) -> None:
-        LOGGER.debug("ActionOrchestrator: agent mode deactivated.")
-        self._agent_mode_active = False
-
-    @property
-    def is_agent_mode_active(self) -> bool:
-        return self._agent_mode_active
-
-    # ------------------------------------------------------------------
-    # Audio coordination
-    # ------------------------------------------------------------------
-    def on_audio_segment_ready(self, audio_source: str | np.ndarray) -> None:
-        """Processa um segmento de áudio finalizado."""
-
-        duration_seconds = self._compute_duration_seconds(audio_source)
-        min_duration = float(
-            self._config_manager.get("min_transcription_duration", 0.0)
-        )
-        if duration_seconds < min_duration:
-            LOGGER.info(
-                "Segment discarded: duration %.2fs below threshold %.2fs.",
-                duration_seconds,
-                min_duration,
-            )
-            self._state_manager.set_state(
-                sm.StateEvent.AUDIO_RECORDING_DISCARDED,
-                details=(
-                    f"Segment shorter than minimum ({duration_seconds:.2f}s < "
-                    f"{min_duration:.2f}s)"
-                ),
-                source="audio_handler",
-            )
-            return
-
-        agent_mode = self._agent_mode_active
-        self._agent_mode_active = False
-
-        if self._transcription_handler is None:
-            LOGGER.error("Transcription handler is not available to receive audio.")
-            self._state_manager.set_state(
-                sm.StateEvent.AUDIO_ERROR,
-                details="Transcription handler unavailable",
-                source="action_orchestrator",
-            )
-            return
-
-        LOGGER.info(
-            "Dispatching audio segment for transcription (duration=%.2fs, agent=%s).",
-            duration_seconds,
-            agent_mode,
-        )
-        self._transcription_handler.transcribe_audio_segment(audio_source, agent_mode)
-
-    # ------------------------------------------------------------------
-    # Result handling
-    # ------------------------------------------------------------------
-    def handle_transcription_result(self, corrected_text: str | None, raw_text: str | None) -> None:
-        """Trata o resultado final da transcrição."""
-
-        final_text = (corrected_text or "").strip()
-        if not final_text and self._fallback_text_provider:
-            final_text = self._fallback_text_provider().strip()
-        if not final_text and raw_text:
-            final_text = raw_text.strip()
-
-        if self._config_manager.get("display_transcripts_in_terminal", False):
-            print("\n=== COMPLETE TRANSCRIPTION ===\n" + final_text + "\n==============================\n")
-
-        self._copy_to_clipboard(final_text)
-
-        if self._config_manager.get("auto_paste", True):
-            self._paste_and_log()
-        else:
-            self._log_status("Transcription complete. Auto-paste disabled.")
-
-        self._state_manager.set_state(
-            sm.StateEvent.TRANSCRIPTION_COMPLETED,
-            details=f"Transcription finalized ({len(final_text)} chars)",
-            source="transcription",
-        )
-        self._close_live_transcription_ui()
-        if self._reset_transcription_buffer:
-            self._reset_transcription_buffer()
-        if self._delete_temp_audio_callback:
-            self._delete_temp_audio_callback()
-
-        LOGGER.info("Transcription ready for consumption (chars=%d).", len(final_text))
-
-    def handle_agent_result(self, agent_response_text: str) -> None:
-        """Trata o resultado do modo agente."""
-
-        response = (agent_response_text or "").strip()
         try:
-            if not response:
+            if not normalized_response:
+                logging.warning("Comando do agente retornou uma resposta vazia.")
                 self._log_status("Comando do agente sem resposta.", error=True)
-                LOGGER.warning("Agent command returned an empty response.")
                 return
 
-            self._copy_to_clipboard(response)
+            try:
+                pyperclip.copy(normalized_response)
+                logging.info("Agent response copied to clipboard.")
+            except Exception as clipboard_error:  # pragma: no cover - integração com SO
+                logging.error(
+                    "Erro ao copiar resposta do agente para o clipboard: %s",
+                    clipboard_error,
+                    exc_info=True,
+                )
+                self._log_status(
+                    "Erro ao copiar resposta do agente para o clipboard.",
+                    error=True,
+                )
 
             if self._config_manager.get("agent_auto_paste", True):
-                self._paste_and_log(success_message="Comando do agente executado e colado.")
+                self._paste_callback()
+                self._log_status("Comando do agente executado e colado.")
             else:
                 self._log_status("Comando do agente executado (colagem automática desativada).")
+
+        except Exception as exc:  # pragma: no cover - integrações dependentes do SO
+            logging.error("Erro ao manusear o resultado do agente: %s", exc, exc_info=True)
+            self._log_status(f"Erro ao manusear o resultado do agente: {exc}", error=True)
         finally:
-            self._state_manager.set_state(
-                sm.StateEvent.AGENT_COMMAND_COMPLETED,
-                details=f"Agent response delivered ({len(response)} chars)",
+            response_size = len(normalized_response)
+            self._dispatch_state(
+                state_event,
+                details=f"Agent response delivered ({response_size} chars)",
                 source="agent_mode",
             )
-            self._close_live_transcription_ui()
-            if self._delete_temp_audio_callback:
-                self._delete_temp_audio_callback()
+            if self._ui_close_callback:
+                try:
+                    self._ui_close_callback()
+                except Exception as exc:  # pragma: no cover - apenas loga
+                    logging.debug(
+                        "Falha ao agendar fechamento da janela de transcrição ao final do modo agente: %s",
+                        exc,
+                        exc_info=True,
+                    )
+            self._temp_audio_cleaner()
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-    def _compute_duration_seconds(self, audio_source: str | np.ndarray) -> float:
-        if isinstance(audio_source, str):
-            try:
-                with sf.SoundFile(audio_source) as stream:
-                    return len(stream) / float(stream.samplerate)
-            except Exception as exc:  # pragma: no cover - logging apenas
-                LOGGER.warning("Unable to compute audio duration from file '%s': %s", audio_source, exc)
-                return 0.0
-        array = np.asarray(audio_source)
-        if array.size == 0:
-            return 0.0
-        samples = array.shape[0]
-        return float(samples) / AUDIO_SAMPLE_RATE
-
-    def _copy_to_clipboard(self, text: str) -> None:
-        if not self._clipboard_module:
-            return
-        try:
-            self._clipboard_module.copy(text)
-            LOGGER.info("Text copied to clipboard (%d chars).", len(text))
-        except Exception as exc:  # pragma: no cover - ambiente pode não suportar
-            LOGGER.error("Failed to copy text to clipboard: %s", exc, exc_info=True)
-
-    def _paste_and_log(self, success_message: str | None = None) -> None:
-        if not self._paste_callback:
-            LOGGER.debug("Paste callback not configured; skipping auto-paste.")
-            return
-        try:
-            self._paste_callback()
-            if success_message:
-                self._log_status(success_message)
-            else:
-                self._log_status("Text pasted.")
-        except Exception as exc:  # pragma: no cover - dependente de ambiente
-            LOGGER.error("Failed to simulate paste action: %s", exc, exc_info=True)
-            self._log_status("Erro ao colar.", error=True)
-
-    def _log_status(self, message: str, *, error: bool = False) -> None:
-        callback = self._log_status_callback
-        if callback:
-            callback(message, error)
-        else:
-            log_func = LOGGER.error if error else LOGGER.info
-            log_func(message)
-
-    def _close_live_transcription_ui(self) -> None:
-        if not self._close_ui_callback:
-            return
-        if self._tk_root:
-            self._tk_root.after(0, self._close_ui_callback)
-        else:
-            try:
-                self._close_ui_callback()
-            except Exception:  # pragma: no cover - fail-safe
-                LOGGER.debug("Close UI callback raised an exception.", exc_info=True)
+__all__ = ["ActionOrchestrator"]

@@ -52,6 +52,7 @@ from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from . import model_manager as model_manager_module
+from .action_orchestrator import ActionOrchestrator
 
 
 MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
@@ -141,7 +142,15 @@ class AppCore:
         # Expõe referência do núcleo ao handler
         self.action_orchestrator.bind_transcription_handler(self.transcription_handler)
 
-        self._ui_manager = None # Será setado externamente pelo main.py
+        self.ui_manager = None # Será setado externamente pelo main.py
+        self.action_orchestrator = ActionOrchestrator(
+            config_manager=self.config_manager,
+            status_logger=self._log_status,
+            state_dispatcher=self._set_state,
+            paste_callback=self._do_paste,
+            ui_close_callback=self._close_live_transcription_window_async,
+            temp_audio_cleaner=self._delete_temp_audio_file,
+        )
         # --- Estado da Aplicação ---
         self.shutting_down = False
         self.full_transcription = "" # Acumula transcrição completa
@@ -657,9 +666,57 @@ class AppCore:
         ui_manager = getattr(self, "ui_manager", None)
         if ui_manager:
             try:
-                ui_manager.close_live_transcription_window()
-            except Exception:  # pragma: no cover - apenas log defensivo
-                logging.debug("Failed to close live transcription window.", exc_info=True)
+                pyperclip.copy(final_text)
+                logging.info("Transcription copied to clipboard.")
+            except Exception as e:
+                logging.error(f"Erro ao copiar para o clipboard: {e}")
+        
+        t_clip_copy_start = time.perf_counter()
+        if self.auto_paste:
+            self._do_paste()
+        else:
+            self._log_status("Transcription complete. Auto-paste disabled.")
+        t_clip_copy_end = time.perf_counter()
+        try:
+            logging.info(f"[METRIC] stage=clipboard_paste_block value_ms={(t_clip_copy_end - t_clip_copy_start) * 1000:.2f}")
+        except Exception:
+            pass
+        
+        char_count = len(final_text)
+        self._set_state(
+            StateEvent.TRANSCRIPTION_COMPLETED,
+            details=f"Transcription finalized ({char_count} chars)",
+            source="transcription",
+        )
+        self._close_live_transcription_window_async()
+        logging.info(f"Corrected text ready for copy/paste: {final_text}")
+        self.full_transcription = ""  # Reset para a próxima gravação
+        self._delete_temp_audio_file()
+
+    def _handle_agent_result_final(self, agent_response_text: str | None):
+        """
+        Lida com o resultado final do modo agente (copia, cola e reseta o estado).
+        Esta função é chamada pelo TranscriptionHandler após a API Gemini ser consultada.
+        """
+        self.action_orchestrator.handle_agent_result(
+            agent_response_text,
+            state_event=StateEvent.AGENT_COMMAND_COMPLETED,
+        )
+
+    def _close_live_transcription_window_async(self) -> None:
+        """Agenda o fechamento da janela de transcrição ao vivo se disponível."""
+        if not self.ui_manager:
+            return
+
+        try:
+            self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
+        except Exception as exc:
+            logging.debug(
+                "Falha ao agendar fechamento da janela de transcrição: %s",
+                exc,
+                exc_info=True,
+            )
+            self.ui_manager.close_live_transcription_window()
 
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
