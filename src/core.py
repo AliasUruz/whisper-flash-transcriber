@@ -870,19 +870,20 @@ class AppCore:
         self.full_transcription = ""  # Reset para a próxima gravação
         self._delete_temp_audio_file()
 
-    def _handle_agent_result_final(self, agent_response_text: str):
+    def _handle_agent_result_final(self, agent_response_text: str | None):
         """
         Lida com o resultado final do modo agente (copia, cola e reseta o estado).
         Esta função é chamada pelo TranscriptionHandler após a API Gemini ser consultada.
         """
+        normalized_response = agent_response_text or ""
         try:
-            if not agent_response_text:
+            if not normalized_response:
                 logging.warning("Comando do agente retornou uma resposta vazia.")
                 self._log_status("Comando do agente sem resposta.", error=True)
                 return
 
             if pyperclip:
-                pyperclip.copy(agent_response_text)
+                pyperclip.copy(normalized_response)
                 logging.info("Agent response copied to clipboard.")
 
             if self.config_manager.get("agent_auto_paste", True): # Usa agent_auto_paste
@@ -895,7 +896,7 @@ class AppCore:
             logging.error(f"Erro ao manusear o resultado do agente: {e}", exc_info=True)
             self._log_status(f"Erro ao manusear o resultado do agente: {e}", error=True)
         finally:
-            response_size = len(agent_response_text)
+            response_size = len(normalized_response)
             self._set_state(
                 StateEvent.AGENT_COMMAND_COMPLETED,
                 details=f"Agent response delivered ({response_size} chars)",
