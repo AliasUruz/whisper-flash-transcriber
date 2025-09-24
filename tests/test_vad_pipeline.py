@@ -12,6 +12,21 @@ except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
     from src.vad_manager import VADManager
 
 
+class DummyConfigManager:
+    def __init__(self, overrides: dict | None = None):
+        base = {
+            "vad_threshold": 0.5,
+            "vad_pre_speech_padding_ms": 0,
+            "vad_post_speech_padding_ms": 0,
+        }
+        if overrides:
+            base.update(overrides)
+        self._data = base
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+
 class TestVADPipeline(unittest.TestCase):
     def test_prepare_input_for_mono_chunk(self):
         chunk = np.random.uniform(-0.5, 0.5, size=320).astype(np.float64)
@@ -58,16 +73,41 @@ class TestVADPipeline(unittest.TestCase):
         self.assertAlmostEqual(adjusted, adjusted_loud)
 
     def test_is_speech_uses_energy_fallback_when_session_missing(self):
-        manager = VADManager.__new__(VADManager)
-        manager.threshold = 0.5
-        manager.sr = 16000
-        manager.enabled = True
-        manager._chunk_counter = 0
+        manager = VADManager(
+            sampling_rate=16000,
+            config_manager=DummyConfigManager({"vad_threshold": 0.1}),
+        )
         manager.session = None
-        manager._state = np.zeros((2, 1, 128), dtype=np.float32)
         manager._use_energy_fallback = True
         chunk = np.ones(1600, dtype=np.float32) * 0.2
-        self.assertTrue(VADManager.is_speech(manager, chunk)[0])
+        self.assertTrue(manager.is_speech(chunk))
+
+    def test_process_chunk_contract(self):
+        manager = VADManager(
+            sampling_rate=16000,
+            config_manager=DummyConfigManager(
+                {
+                    "vad_threshold": 0.01,
+                    "vad_pre_speech_padding_ms": 0,
+                    "vad_post_speech_padding_ms": 0,
+                }
+            ),
+        )
+        manager.session = None
+        manager._use_energy_fallback = True
+
+        chunk = np.ones(320, dtype=np.float32) * 0.2
+        is_speech, frames = manager.process_chunk(chunk)
+        self.assertTrue(is_speech)
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].dtype, np.float32)
+        np.testing.assert_allclose(frames[0], chunk)
+
+        manager.reset_states()
+        silence = np.zeros(320, dtype=np.float32)
+        is_speech_silence, frames_silence = manager.process_chunk(silence)
+        self.assertFalse(is_speech_silence)
+        self.assertEqual(frames_silence, [])
 
 
 if __name__ == "__main__":

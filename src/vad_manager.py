@@ -23,26 +23,35 @@ logging.info("VAD model path set to '%s'", MODEL_PATH)
 
 
 class VADManager:
-    """Gerencia a deteccao de voz usando o modelo Silero."""
+    """Gerencia a detecção de voz usando o modelo Silero."""
 
     @staticmethod
     def is_model_available() -> bool:
-        """Verifica se o arquivo do modelo Silero VAD esta presente."""
+        """Verifica se o arquivo do modelo Silero VAD está presente."""
         return MODEL_PATH.exists()
 
     def __init__(
         self,
-        threshold: float = 0.5,
+        threshold: float | None = None,
         sampling_rate: int = 16000,
-        pre_speech_padding_ms: int = 150,
-        post_speech_padding_ms: int = 300,
+        pre_speech_padding_ms: int | None = None,
+        post_speech_padding_ms: int | None = None,
+        *,
+        config_manager=None,
     ):
         """Inicializa o VAD Manager."""
 
-        self.threshold = threshold
-        self.sr = sampling_rate
-        self.vad_pre_speech_padding_ms = pre_speech_padding_ms
-        self.vad_post_speech_padding_ms = post_speech_padding_ms
+        self.config_manager = config_manager
+        self.sr = int(sampling_rate)
+        self.threshold = float(
+            self._resolve_config_value("vad_threshold", threshold, fallback=0.5)
+        )
+        self.pre_speech_padding_ms = int(
+            max(0, self._resolve_config_value("vad_pre_speech_padding_ms", pre_speech_padding_ms, fallback=150))
+        )
+        self.post_speech_padding_ms = int(
+            max(0, self._resolve_config_value("vad_post_speech_padding_ms", post_speech_padding_ms, fallback=300))
+        )
         self.enabled = False
         self._chunk_counter = 0
         self.session = None
@@ -54,9 +63,6 @@ class VADManager:
         self._post_silence_samples = 0
         self._sanitize_padding()
         self._update_padding_samples()
-
-        self.pre_speech_buffer = np.array([], dtype=np.float32)
-        self.post_speech_cooldown = 0
 
         if not self.is_model_available():
             logging.error(
@@ -105,89 +111,50 @@ class VADManager:
         self._speech_active = False
         self._post_silence_samples = 0
 
-    def is_speech(self, audio_chunk: np.ndarray) -> tuple[bool, np.ndarray | None]:
-        """Retorna ``True`` se o chunk contem fala."""
+    def is_speech(self, audio_chunk: np.ndarray) -> bool:
+        """Retorna ``True`` se o chunk contém fala."""
 
         pre_padding_ms, post_padding_ms = self._ensure_runtime_state()
 
         if audio_chunk is None:
             logging.debug("VAD received chunk None; assuming speech to keep recording.")
-            return True, None
+            return True
 
         self._chunk_counter += 1
         raw_array = np.asarray(audio_chunk)
         if raw_array.size == 0:
             logging.debug("VAD received an empty chunk; returning False.")
-            return False, None
+            return False
 
-        if not hasattr(self, "pre_speech_buffer"):
-            self.pre_speech_buffer = np.array([], dtype=np.float32)
-        if not isinstance(self.pre_speech_buffer, np.ndarray):
-            self.pre_speech_buffer = np.asarray(self.pre_speech_buffer, dtype=np.float32)
-        if not hasattr(self, "post_speech_cooldown"):
-            self.post_speech_cooldown = 0
-        if not hasattr(self, "vad_pre_speech_padding_ms"):
-            self.vad_pre_speech_padding_ms = getattr(self, "pre_speech_padding_ms", 0)
-        if not hasattr(self, "vad_post_speech_padding_ms"):
-            self.vad_post_speech_padding_ms = getattr(self, "post_speech_padding_ms", 0)
-
-        prepared, peak = self._prepare_input(raw_array)
+        prepared, _ = self._prepare_input(raw_array)
         mono_view = prepared.reshape(-1) if prepared.size else np.empty(0, dtype=np.float32)
 
         if self.session is None or self._use_energy_fallback:
             detected, _, _, _ = self._energy_gate(mono_view, self.threshold)
-        else:
-            ort_inputs = {
-                "input": prepared,
-                "state": self._state,
-                "sr": np.array([self.sr], dtype=np.int64),
+            return detected
+
+        ort_inputs = {
+            "input": prepared,
+            "state": self._state,
+            "sr": np.array([self.sr], dtype=np.int64),
+        }
+        try:
+            outs = self.session.run(None, ort_inputs)
+            speech_prob = float(outs[0][0][0])
+            self._state = outs[1]
+            return speech_prob > self.threshold
+        except Exception as exc:
+            self.reset_states()
+            raw_meta = {
+                "raw_max_abs": float(np.max(np.abs(raw_array))) if raw_array.size else 0.0,
+                "raw_shape": list(raw_array.shape),
+                "raw_dtype": str(raw_array.dtype),
+                "preview": raw_array.reshape(-1)[:10].tolist(),
             }
-            try:
-                outs = self.session.run(None, ort_inputs)
-                speech_prob = float(outs[0][0][0])
-                self._state = outs[1]
-                detected = speech_prob > self.threshold
-            except Exception as exc:
-                self.reset_states()
-                self._log_failure(exc, prepared, {})
-                self._activate_energy_fallback("inference failure", exc)
-                detected, _, _, _ = self._energy_gate(mono_view, self.threshold)
-
-        if detected:
-            try:
-                post_padding_ms = float(self.vad_post_speech_padding_ms)
-            except (TypeError, ValueError):
-                post_padding_ms = 0.0
-            try:
-                sr_value = float(self.sr)
-            except (TypeError, ValueError):
-                sr_value = 16000.0
-            self.post_speech_cooldown = int(post_padding_ms / 1000.0 * sr_value)
-            if self.pre_speech_buffer.size > 0:
-                # Retorna o buffer de pre-speech e o chunk atual
-                returning_buffer = np.concatenate([self.pre_speech_buffer, raw_array])
-                self.pre_speech_buffer = np.array([], dtype=np.float32)
-                return True, returning_buffer
-            return True, raw_array
-        else:
-            if self.post_speech_cooldown > 0:
-                self.post_speech_cooldown -= len(raw_array)
-                return True, raw_array
-
-            # Adiciona ao buffer de pre-speech
-            self.pre_speech_buffer = np.concatenate([self.pre_speech_buffer, raw_array])
-            try:
-                pre_padding_ms = float(self.vad_pre_speech_padding_ms)
-            except (TypeError, ValueError):
-                pre_padding_ms = 0.0
-            try:
-                sr_value = float(self.sr)
-            except (TypeError, ValueError):
-                sr_value = 16000.0
-            max_buffer_size = int(pre_padding_ms / 1000.0 * sr_value)
-            if self.pre_speech_buffer.size > max_buffer_size:
-                self.pre_speech_buffer = self.pre_speech_buffer[-max_buffer_size:]
-            return False, None
+            self._log_failure(exc, prepared, raw_meta)
+            self._activate_energy_fallback("inference failure", exc)
+            detected, _, _, _ = self._energy_gate(mono_view, self.threshold)
+            return detected
 
     def configure(
         self,
@@ -200,37 +167,83 @@ class VADManager:
 
         if threshold is not None:
             self.threshold = float(threshold)
+        elif self.config_manager is not None:
+            try:
+                self.threshold = float(self.config_manager.get("vad_threshold", self.threshold))
+            except Exception:
+                logging.debug("Failed to read VAD threshold from config manager.", exc_info=True)
+
         if pre_padding_ms is not None:
-            self.pre_speech_padding_ms = pre_padding_ms
+            self.pre_speech_padding_ms = max(0, int(pre_padding_ms))
+        elif self.config_manager is not None:
+            try:
+                value = self.config_manager.get("vad_pre_speech_padding_ms", self.pre_speech_padding_ms)
+                self.pre_speech_padding_ms = max(0, int(value))
+            except Exception:
+                logging.debug("Failed to read VAD pre padding from config manager.", exc_info=True)
+
         if post_padding_ms is not None:
-            self.post_speech_padding_ms = post_padding_ms
-        self._sanitize_padding()
+            self.post_speech_padding_ms = max(0, int(post_padding_ms))
+        elif self.config_manager is not None:
+            try:
+                value = self.config_manager.get("vad_post_speech_padding_ms", self.post_speech_padding_ms)
+                self.post_speech_padding_ms = max(0, int(value))
+            except Exception:
+                logging.debug("Failed to read VAD post padding from config manager.", exc_info=True)
         self._update_padding_samples()
 
-    def process_chunk(self, chunk: np.ndarray) -> list[np.ndarray]:
-        """Retorna os frames que devem ser escritos considerando padding."""
+    def process_chunk(self, chunk: np.ndarray) -> tuple[bool, list[np.ndarray]]:
+        """Avalia um chunk e retorna (``is_speech``, ``frames``).
+
+        ``is_speech`` indica se o chunk está dentro de uma janela ativa de fala
+        (incluindo o período de pós-fala). ``frames`` contém os buffers que devem
+        ser persistidos imediatamente. Quando não há fala detectada o método
+        retorna ``(False, [])`` e o chunk é mantido no buffer de pré-fala.
+        """
 
         frames: list[np.ndarray] = []
         speech_detected = self.is_speech(chunk)
+        chunk_array = np.asarray(chunk, dtype=np.float32).copy()
 
         if speech_detected:
             if not self._speech_active:
                 frames.extend(self._drain_pre_buffer())
                 self._speech_active = True
             self._post_silence_samples = 0
-            frames.append(np.asarray(chunk, dtype=np.float32).copy())
-            return frames
+            frames.append(chunk_array)
+            return True, frames
 
         if self._speech_active:
-            self._post_silence_samples += len(chunk)
-            frames.append(np.asarray(chunk, dtype=np.float32).copy())
+            self._post_silence_samples += len(chunk_array)
+            frames.append(chunk_array)
             if self._post_silence_samples >= self._post_padding_samples:
                 self._speech_active = False
                 self._post_silence_samples = 0
-            return frames
+            return True, frames
 
-        self._append_to_pre_buffer(np.asarray(chunk, dtype=np.float32))
-        return frames
+        self._append_to_pre_buffer(chunk_array)
+        return False, frames
+
+    def enable_energy_fallback(self, reason: str, exc: Exception | None = None) -> None:
+        """Expõe o modo de fallback por energia para o pipeline externo."""
+
+        self._activate_energy_fallback(reason, exc)
+
+    def _resolve_config_value(self, key: str, override, *, fallback):
+        if override is not None:
+            return override
+        if self.config_manager is None:
+            return fallback
+        try:
+            return self.config_manager.get(key, fallback)
+        except Exception:
+            logging.debug(
+                "Failed to read '%s' from config manager. Using fallback %s.",
+                key,
+                fallback,
+                exc_info=True,
+            )
+            return fallback
 
 
     @staticmethod
