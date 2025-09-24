@@ -1,12 +1,15 @@
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import unittest
 
 import numpy as np
 
-from src.vad_manager import VADManager
+try:
+    from src.vad_manager import VADManager
+except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    from src.vad_manager import VADManager
 
 
 class TestVADPipeline(unittest.TestCase):
