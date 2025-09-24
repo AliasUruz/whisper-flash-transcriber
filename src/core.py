@@ -13,6 +13,7 @@ except ImportError as exc:
         "Erro: a biblioteca 'pyautogui' não está instalada. "
         "Execute 'pip install -r requirements.txt' antes de executar o aplicativo."
     ) from exc
+import pyperclip # Ainda necessário para _handle_transcription_result
 from tkinter import messagebox # Adicionado para messagebox no _on_model_load_failed
 
 # Importar os novos módulos
@@ -39,10 +40,14 @@ from .config_manager import (
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
+    TEXT_CORRECTION_ENABLED_CONFIG_KEY,
+    TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
+    VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+    VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
 )
-from .action_orchestrator import ActionOrchestrator
 from .audio_handler import AudioHandler
+from .action_orchestrator import ActionOrchestrator
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
@@ -68,7 +73,6 @@ class AppCore:
         self.keyboard_lock = RLock()
         self.agent_mode_lock = RLock() # Adicionado para o modo agente
         self.model_prompt_lock = RLock()
-        self.model_prompt_lock = RLock()
 
         # --- Callbacks para UI (definidos externamente pelo UIManager) ---
         self.state_update_callback: StateUpdateCallback | None = None
@@ -76,7 +80,26 @@ class AppCore:
 
         # --- Módulos ---
         self.config_manager = ConfigManager()
+        self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
+        self._ui_manager = None  # Será setado externamente pelo main.py
         self._pending_tray_tooltips: list[str] = []
+
+        self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
+
+        self.full_transcription = ""
+
+        self.action_orchestrator = ActionOrchestrator(
+            state_manager=self.state_manager,
+            config_manager=self.config_manager,
+            clipboard_module=pyperclip,
+            paste_callback=self._do_paste,
+            log_status_callback=self._log_status,
+            tk_root=self.main_tk_root,
+            close_ui_callback=self._close_live_transcription_window,
+            fallback_text_provider=lambda: self.full_transcription.strip(),
+            reset_transcription_buffer=self._reset_full_transcription,
+            delete_temp_audio_callback=self._delete_temp_audio_file,
+        )
 
         self.model_manager = model_manager_module
         self._download_cancelled_error = getattr(
@@ -108,25 +131,27 @@ class AppCore:
         self.audio_handler = AudioHandler(
             config_manager=self.config_manager,
             state_manager=self.state_manager,
-            on_audio_segment_ready_callback=self.action_orchestrator.handle_audio_segment,
+            on_audio_segment_ready_callback=self.action_orchestrator.on_audio_segment_ready,
         )
-        self.gemini_api = GeminiAPI(self.config_manager) # Instancia o GeminiAPI
+        self.gemini_api = GeminiAPI(self.config_manager)
         self.transcription_handler = TranscriptionHandler(
             config_manager=self.config_manager,
-            gemini_api_client=self.gemini_api,  # Injeta a instância da API
+            gemini_api_client=self.gemini_api,
             on_model_ready_callback=self._on_model_loaded,
             on_model_error_callback=self._on_model_load_failed,
+            on_transcription_result_callback=self.action_orchestrator.handle_transcription_result,
+            on_agent_result_callback=self.action_orchestrator.handle_agent_result,
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
             is_state_transcribing_fn=self.is_state_transcribing,
         )
-        self.transcription_handler.core_instance_ref = self  # Expõe referência do núcleo ao handler
+        self.transcription_handler.core_instance_ref = self
+        # Expõe referência do núcleo ao handler
+        self.action_orchestrator.bind_transcription_handler(self.transcription_handler)
 
-        self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
         self._ui_manager = None # Será setado externamente pelo main.py
         # --- Estado da Aplicação ---
         self.shutting_down = False
         self.full_transcription = "" # Acumula transcrição completa
-        self.agent_mode_active = False # Adicionado para controle do modo agente
         self.model_prompt_active = False
 
     @property
@@ -565,7 +590,6 @@ class AppCore:
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
 
-
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
         logging.info("AppCore: Model loaded successfully.")
@@ -633,6 +657,16 @@ class AppCore:
             self.on_segment_transcribed(text)
         self.full_transcription += text + " " # Acumula a transcrição completa
 
+    def _reset_full_transcription(self) -> None:
+        self.full_transcription = ""
+
+    def _close_live_transcription_window(self) -> None:
+        ui_manager = getattr(self, "ui_manager", None)
+        if ui_manager:
+            try:
+                ui_manager.close_live_transcription_window()
+            except Exception:  # pragma: no cover - apenas log defensivo
+                logging.debug("Failed to close live transcription window.", exc_info=True)
 
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
@@ -866,17 +900,16 @@ class AppCore:
         # if self.ui_manager:
         #     self.ui_manager.show_live_transcription_window()
         self.audio_handler.start_recording()
-        self.full_transcription = "" # Reset full transcription on new recording
+        self._reset_full_transcription()
+        self.action_orchestrator.deactivate_agent_mode()
 
-    def stop_recording(self, agent_mode=False):
+    def stop_recording(self):
         with self.recording_lock:
             if not self.audio_handler.is_recording:
                 return
 
         was_valid = self.audio_handler.stop_recording()
         if was_valid is False:
-            # Se a gravação foi descartada por ser muito curta, garanta que
-            # nenhum processo de transcrição fique pendente.
             if hasattr(self.transcription_handler, "stop_transcription"):
                 self.transcription_handler.stop_transcription()
             self.state_manager.set_state(
@@ -884,8 +917,7 @@ class AppCore:
                 details="Recording discarded after stop",
                 source="audio_handler",
             )
-
-        # A janela de UI ao vivo será fechada pelo _handle_transcription_result
+            self.action_orchestrator.deactivate_agent_mode()
 
     def stop_recording_if_needed(self):
         with self.recording_lock:
@@ -907,9 +939,9 @@ class AppCore:
     def start_agent_command(self):
         with self.recording_lock:
             if self.audio_handler.is_recording:
-                if self.agent_mode_active:
-                    self.stop_recording(agent_mode=True)
-                    self.agent_mode_active = False
+                if self.action_orchestrator.is_agent_mode_active:
+                    self.stop_recording()
+                    self.action_orchestrator.deactivate_agent_mode()
                 return
         current_state = self.state_manager.get_current_state()
         if current_state == sm.STATE_TRANSCRIBING:
@@ -921,8 +953,8 @@ class AppCore:
         if current_state.startswith("ERROR"):
             self._log_status(f"Cannot start command: state {current_state}", error=True)
             return
-        self.agent_mode_active = True
         self.start_recording()
+        self.action_orchestrator.activate_agent_mode()
 
     # --- Cancelamentos e consultas ---
     def is_transcription_running(self) -> bool:
@@ -941,11 +973,8 @@ class AppCore:
         )
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
-
     def apply_settings_from_external(self, **kwargs):
         logging.info("AppCore: Applying new configuration from external source.")
-        config_changed = False
-        changed_mapped_keys: set[str] = set()
 
         config_key_map = {
             "new_key": "record_key",
@@ -985,6 +1014,8 @@ class AppCore:
             "new_use_vad": USE_VAD_CONFIG_KEY,
             "new_vad_threshold": VAD_THRESHOLD_CONFIG_KEY,
             "new_vad_silence_duration": VAD_SILENCE_DURATION_CONFIG_KEY,
+            "new_vad_pre_padding_ms": VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+            "new_vad_post_padding_ms": VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
             "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
             "new_record_storage_mode": RECORD_STORAGE_MODE_CONFIG_KEY,
             "new_record_storage_limit": RECORD_STORAGE_LIMIT_CONFIG_KEY,
@@ -1018,133 +1049,144 @@ class AppCore:
                 )
             normalized_updates[mapped_key] = value
 
-        for mapped_key, value in normalized_updates.items():
-            current_value = self.config_manager.get(mapped_key)
-            if current_value != value:
-                self.config_manager.set(mapped_key, value)
-                config_changed = True
-                changed_mapped_keys.add(mapped_key)
-                logging.info(f"Configuração '{mapped_key}' alterada para: {value}")
-
-        if "auto_paste" in normalized_updates:
-            new_auto_paste_value = normalized_updates["auto_paste"]
-            if self.config_manager.get("agent_auto_paste") != new_auto_paste_value:
-                self.config_manager.set("agent_auto_paste", new_auto_paste_value)
-                config_changed = True
-                changed_mapped_keys.add("agent_auto_paste")
-                logging.info(
-                    "Configuração 'agent_auto_paste' (unificada) alterada para: %s",
-                    new_auto_paste_value,
-                )
-
-        if config_changed:
-            reload_keys = {
-                ASR_BACKEND_CONFIG_KEY,
-                ASR_MODEL_ID_CONFIG_KEY,
-                ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
-                ASR_COMPUTE_DEVICE_CONFIG_KEY,
-                ASR_DTYPE_CONFIG_KEY,
-                ASR_CT2_CPU_THREADS_CONFIG_KEY,
-                ASR_CACHE_DIR_CONFIG_KEY,
-            }
-            reload_required = bool(changed_mapped_keys & reload_keys)
-            launch_changed = LAUNCH_AT_STARTUP_CONFIG_KEY in changed_mapped_keys
-
-            self.config_manager.save_config()
-            self._apply_initial_config_to_core_attributes()
-
-            self.audio_handler.config_manager = self.config_manager
-            self.transcription_handler.config_manager = self.config_manager
-
-            audio_related_keys = {
-                USE_VAD_CONFIG_KEY,
-                VAD_THRESHOLD_CONFIG_KEY,
-                VAD_SILENCE_DURATION_CONFIG_KEY,
-                RECORD_STORAGE_MODE_CONFIG_KEY,
-                RECORD_STORAGE_LIMIT_CONFIG_KEY,
-                MIN_RECORDING_DURATION_CONFIG_KEY,
-            }
-            if audio_related_keys & changed_mapped_keys:
-                self.audio_handler.update_config()
-
-            try:
-                reload_needed = self.transcription_handler.update_config(trigger_reload=False)
-            except Exception as exc:
-                logging.error("Erro ao atualizar configurações do TranscriptionHandler: %s", exc, exc_info=True)
-                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                self._log_status("Erro: Falha ao aplicar configurações do modelo.", error=True)
-                return
-
-            reload_required = reload_required or reload_needed
-
-            if reload_required:
-                self.state_manager.set_state(sm.STATE_LOADING_MODEL)
-                try:
-                    self.transcription_handler.start_model_loading()
-                except Exception as exc:
-                    logging.error("Falha ao iniciar recarregamento do modelo ASR: %s", exc, exc_info=True)
-                    self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                    self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
-                    return
-            else:
-                self.state_manager.set_state(
-                    sm.StateEvent.SETTINGS_RECOVERED,
-                    details="Configurações aplicadas; mantendo estado IDLE.",
-                    source="settings",
-                )
-
-            if launch_changed:
-                from .utils.autostart import set_launch_at_startup
-
-                set_launch_at_startup(self.config_manager.get(LAUNCH_AT_STARTUP_CONFIG_KEY))
-
-            self.gemini_api.reinitialize_client()
-            if self.transcription_handler.gemini_client:
-                self.transcription_handler.gemini_client.reinitialize_client()
-            if self.transcription_handler.openrouter_client:
-                openrouter_timeout = self.config_manager.get_timeout(
-                    OPENROUTER_TIMEOUT_CONFIG_KEY,
-                    self.transcription_handler.openrouter_client.request_timeout,
-                )
-                self.transcription_handler.openrouter_client.reinitialize_client(
-                    api_key=self.config_manager.get("openrouter_api_key"),
-                    model_id=self.config_manager.get("openrouter_model"),
-                    request_timeout=openrouter_timeout,
-                )
-
-            hotkey_related_keys = {"record_key", "record_mode", "agent_key"}
-            if hotkey_related_keys & changed_mapped_keys:
-                self.register_hotkeys()
-
-            if "hotkey_stability_service_enabled" in changed_mapped_keys:
-                if self.config_manager.get("hotkey_stability_service_enabled"):
-                    if not self.reregister_timer_thread or not self.reregister_timer_thread.is_alive():
-                        self.stop_reregister_event.clear()
-                        self.reregister_timer_thread = threading.Thread(
-                            target=self._periodic_reregister_task,
-                            daemon=True,
-                            name="PeriodicHotkeyReregister",
-                        )
-                        self.reregister_timer_thread.start()
-                        logging.info("Periodic hotkey re-registration thread launched via settings update.")
-
-                    if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
-                        self.stop_health_check_event.clear()
-                        self.health_check_thread = threading.Thread(
-                            target=self._hotkey_health_check_task,
-                            daemon=True,
-                            name="HotkeyHealthThread",
-                        )
-                        self.health_check_thread.start()
-                        logging.info("Hotkey health monitoring thread launched via settings update.")
-                else:
-                    self.stop_reregister_event.set()
-                    self.stop_health_check_event.set()
-                    logging.info("Hotkey stability services stopped via settings update.")
-
-            self._log_status("Configurações atualizadas.")
-        else:
+        if not normalized_updates:
             logging.info("Nenhuma configuração alterada.")
+            return
+
+        changed_mapped_keys, warnings = self.config_manager.apply_updates(normalized_updates)
+        if warnings:
+            summary = "\n".join(f"- {message}" for message in warnings)
+            message = (
+                "Algumas configurações foram ajustadas automaticamente:\n\n"
+                f"{summary}"
+            )
+
+            def _show_warning():
+                messagebox.showwarning("Configurações ajustadas", message)
+
+            self.main_tk_root.after(0, _show_warning)
+        if not changed_mapped_keys:
+            logging.info("Nenhuma configuração alterada.")
+            return
+
+        reload_keys = {
+            ASR_BACKEND_CONFIG_KEY,
+            ASR_MODEL_ID_CONFIG_KEY,
+            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            ASR_COMPUTE_DEVICE_CONFIG_KEY,
+            ASR_DTYPE_CONFIG_KEY,
+            ASR_CT2_CPU_THREADS_CONFIG_KEY,
+            ASR_CACHE_DIR_CONFIG_KEY,
+        }
+        reload_required = bool(changed_mapped_keys & reload_keys)
+        launch_changed = LAUNCH_AT_STARTUP_CONFIG_KEY in changed_mapped_keys
+
+        self._apply_initial_config_to_core_attributes()
+
+        self.audio_handler.config_manager = self.config_manager
+        self.transcription_handler.config_manager = self.config_manager
+
+        audio_related_keys = {
+            USE_VAD_CONFIG_KEY,
+            VAD_THRESHOLD_CONFIG_KEY,
+            VAD_SILENCE_DURATION_CONFIG_KEY,
+            VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+            VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+            RECORD_STORAGE_MODE_CONFIG_KEY,
+            RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            MIN_RECORDING_DURATION_CONFIG_KEY,
+        }
+        if audio_related_keys & changed_mapped_keys:
+            self.audio_handler.update_config()
+
+        try:
+            reload_needed = self.transcription_handler.update_config(trigger_reload=False)
+        except Exception as exc:
+            logging.error("Erro ao atualizar configurações do TranscriptionHandler: %s", exc, exc_info=True)
+            self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+            self._log_status("Erro: Falha ao aplicar configurações do modelo.", error=True)
+            return
+
+        reload_required = reload_required or reload_needed
+
+        if reload_required:
+            self.state_manager.set_state(sm.STATE_LOADING_MODEL)
+            try:
+                self.transcription_handler.start_model_loading()
+            except Exception as exc:
+                logging.error("Falha ao iniciar recarregamento do modelo ASR: %s", exc, exc_info=True)
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+                self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
+                return
+        else:
+            self.state_manager.set_state(
+                sm.StateEvent.SETTINGS_RECOVERED,
+                details="Configurações aplicadas; mantendo estado IDLE.",
+                source="settings",
+            )
+
+        if launch_changed:
+            from .utils.autostart import set_launch_at_startup
+
+            set_launch_at_startup(self.config_manager.get(LAUNCH_AT_STARTUP_CONFIG_KEY))
+
+        self.gemini_api.reinitialize_client()
+        if self.transcription_handler.gemini_client:
+            self.transcription_handler.gemini_client.reinitialize_client()
+        if self.transcription_handler.openrouter_client:
+            openrouter_timeout = self.config_manager.get_timeout(
+                OPENROUTER_TIMEOUT_CONFIG_KEY,
+                self.transcription_handler.openrouter_client.request_timeout,
+            )
+            self.transcription_handler.openrouter_client.reinitialize_client(
+                api_key=self.config_manager.get("openrouter_api_key"),
+                model_id=self.config_manager.get("openrouter_model"),
+                request_timeout=openrouter_timeout,
+            )
+
+        hotkey_related_keys = {"record_key", "record_mode", "agent_key"}
+        if hotkey_related_keys & changed_mapped_keys:
+            self.register_hotkeys()
+
+        if "hotkey_stability_service_enabled" in changed_mapped_keys:
+            if self.config_manager.get("hotkey_stability_service_enabled"):
+                if not self.reregister_timer_thread or not self.reregister_timer_thread.is_alive():
+                    self.stop_reregister_event.clear()
+                    self.reregister_timer_thread = threading.Thread(
+                        target=self._periodic_reregister_task,
+                        daemon=True,
+                        name="PeriodicHotkeyReregister",
+                    )
+                    self.reregister_timer_thread.start()
+                    logging.info("Periodic hotkey re-registration thread launched via settings update.")
+
+                if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
+                    self.stop_health_check_event.clear()
+                    self.health_check_thread = threading.Thread(
+                        target=self._hotkey_health_check_task,
+                        daemon=True,
+                        name="HotkeyHealthThread",
+                    )
+                    self.health_check_thread.start()
+                    logging.info("Hotkey health monitoring thread launched via settings update.")
+            else:
+                self.stop_reregister_event.set()
+                self.stop_health_check_event.set()
+                logging.info("Hotkey stability services stopped via settings update.")
+
+        text_correction_keys = {
+            "openrouter_api_key",
+            "openrouter_model",
+            "gemini_api_key",
+            "gemini_model",
+            "gemini_agent_model",
+            TEXT_CORRECTION_ENABLED_CONFIG_KEY,
+            TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+        }
+        if text_correction_keys & changed_mapped_keys:
+            self._refresh_text_correction_clients()
+
+        self._log_status("Configurações atualizadas.")
 
     def update_setting(self, key: str, value):
         """
@@ -1169,8 +1211,7 @@ class AppCore:
             from .utils.autostart import set_launch_at_startup
             set_launch_at_startup(bool(value))
 
-        # Propagar para TranscriptionHandler se for uma configuração relevante
-        if key in [
+        transcription_config_keys = {
             "batch_size_mode",
             "manual_batch_size",
             "gpu_index",
@@ -1184,7 +1225,19 @@ class AppCore:
             ASR_DTYPE_CONFIG_KEY,
             ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             ASR_CACHE_DIR_CONFIG_KEY,
-        ]:
+        }
+        text_correction_keys = {
+            "openrouter_api_key",
+            "openrouter_model",
+            "gemini_api_key",
+            "gemini_model",
+            "gemini_agent_model",
+            TEXT_CORRECTION_ENABLED_CONFIG_KEY,
+            TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+        }
+
+        # Propagar para TranscriptionHandler se for uma configuração relevante
+        if key in transcription_config_keys or key in text_correction_keys:
             self.transcription_handler.config_manager = self.config_manager  # Garantir que a referência esteja atualizada
             reload_needed = self.transcription_handler.update_config(trigger_reload=False)
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
@@ -1208,22 +1261,9 @@ class AppCore:
             self.audio_handler.update_config()
             logging.info(f"AudioHandler: Configurações atualizadas via update_setting para '{key}'.")
 
-        # Re-inicializar clientes API se a chave ou modelo mudou
-        if key in ["gemini_api_key", "gemini_model", "gemini_agent_model", "openrouter_api_key", "openrouter_model"]:
-            self.gemini_api.reinitialize_client()
-            if self.transcription_handler.gemini_client:
-                self.transcription_handler.gemini_client.reinitialize_client()
-            if self.transcription_handler.openrouter_client:
-                openrouter_timeout = self.config_manager.get_timeout(
-                    OPENROUTER_TIMEOUT_CONFIG_KEY,
-                    self.transcription_handler.openrouter_client.request_timeout,
-                )
-                self.transcription_handler.openrouter_client.reinitialize_client(
-                    api_key=self.config_manager.get("openrouter_api_key"),
-                    model_id=self.config_manager.get("openrouter_model"),
-                    request_timeout=openrouter_timeout,
-                )
-            logging.info(f"Clientes API re-inicializados via update_setting para '{key}'.")
+        # Re-inicializar clientes de correção de texto quando necessário
+        if key in text_correction_keys:
+            self._refresh_text_correction_clients()
 
         # Re-registrar hotkeys se as chaves ou modo mudaram
         if key in ["record_key", "agent_key", "record_mode"]:
@@ -1238,7 +1278,7 @@ class AppCore:
                     self.reregister_timer_thread = threading.Thread(target=self._periodic_reregister_task, daemon=True, name="PeriodicHotkeyReregister")
                     self.reregister_timer_thread.start()
                     logging.info("Periodic hotkey re-registration thread launched via update_setting.")
-                
+
                 if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
                     self.stop_health_check_event.clear()
                     self.health_check_thread = threading.Thread(target=self._hotkey_health_check_task, daemon=True, name="HotkeyHealthThread")
@@ -1248,8 +1288,41 @@ class AppCore:
                 self.stop_reregister_event.set()
                 self.stop_health_check_event.set()
                 logging.info("Hotkey stability services stopped via update_setting.")
-        
+
         logging.info(f"Configuração '{key}' atualizada e propagada com sucesso.")
+
+    def _refresh_text_correction_clients(self) -> None:
+        """Reinicializa clientes de correção de texto respeitando a configuração atual."""
+        try:
+            if getattr(self, "gemini_api", None):
+                self.gemini_api.reinitialize_client()
+        except Exception as exc:  # pragma: no cover - falhas são registradas apenas
+            logging.error(
+                "Falha ao reinicializar o cliente Gemini após alteração de configuração: %s",
+                exc,
+                exc_info=True,
+            )
+
+        openrouter_client = getattr(self.transcription_handler, "openrouter_client", None)
+        if not openrouter_client:
+            return
+
+        try:
+            openrouter_timeout = self.config_manager.get_timeout(
+                OPENROUTER_TIMEOUT_CONFIG_KEY,
+                getattr(openrouter_client, "request_timeout", None),
+            )
+            openrouter_client.reinitialize_client(
+                api_key=self.config_manager.get("openrouter_api_key"),
+                model_id=self.config_manager.get("openrouter_model"),
+                request_timeout=openrouter_timeout,
+            )
+        except Exception as exc:  # pragma: no cover - falhas são registradas apenas
+            logging.error(
+                "Falha ao reinicializar o cliente OpenRouter após alteração de configuração: %s",
+                exc,
+                exc_info=True,
+            )
 
     # --- Cleanup ---
     def _cleanup_old_audio_files_on_startup(self):
