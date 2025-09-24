@@ -47,8 +47,6 @@ from .config_manager import (
     OPENROUTER_MODEL_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
-    GEMINI_AGENT_PROMPT_CONFIG_KEY,
-    OPENROUTER_AGENT_PROMPT_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
@@ -1595,6 +1593,7 @@ class TranscriptionHandler:
             logging.debug(
                 "Cache da GPU preservado para transcrições consecutivas."
             )
+
     def _effective_chunk_length(self) -> float:
         """
         Heurística simples para chunk_length_sec quando em modo 'auto'.

@@ -80,6 +80,8 @@ class AppCore:
 
         # --- Módulos ---
         self.config_manager = ConfigManager()
+        self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
+        self._ui_manager = None  # Será setado externamente pelo main.py
         self._pending_tray_tooltips: list[str] = []
 
         self.model_manager = model_manager_module
@@ -121,9 +123,6 @@ class AppCore:
             is_state_transcribing_fn=self.is_state_transcribing,
         )
         self.transcription_handler.core_instance_ref = self  # Expõe referência do núcleo ao handler
-
-        self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
-        self._ui_manager = None # Será setado externamente pelo main.py
         # --- Estado da Aplicação ---
         self.shutting_down = False
         self.full_transcription = "" # Acumula transcrição completa
