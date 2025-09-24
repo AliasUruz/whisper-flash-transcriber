@@ -3,8 +3,6 @@ import threading
 import time
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
-from enum import Enum, auto, unique
 from threading import RLock
 from pathlib import Path
 import atexit
@@ -21,6 +19,7 @@ import soundfile as sf
 from tkinter import messagebox # Adicionado para messagebox no _on_model_load_failed
 
 # Importar os novos módulos
+from . import state_manager as sm
 from .config_manager import (
     ConfigManager,
     REREGISTER_INTERVAL_SECONDS,
@@ -54,129 +53,9 @@ from . import model_manager as model_manager_module
 
 MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
 
-# Estados da aplicação (movidos de global)
-STATE_IDLE = "IDLE"
-STATE_LOADING_MODEL = "LOADING_MODEL"
-STATE_RECORDING = "RECORDING"
-STATE_TRANSCRIBING = "TRANSCRIBING"
-STATE_ERROR_MODEL = "ERROR_MODEL"
-STATE_ERROR_AUDIO = "ERROR_AUDIO"
-STATE_ERROR_TRANSCRIPTION = "ERROR_TRANSCRIPTION"
-STATE_ERROR_SETTINGS = "ERROR_SETTINGS"
-
-LEGACY_STATE_DEFAULT_DETAILS: dict[str, str] = {
-    STATE_IDLE: "State transitioned to IDLE",
-    STATE_LOADING_MODEL: "State transitioned to LOADING_MODEL",
-    STATE_RECORDING: "State transitioned to RECORDING",
-    STATE_TRANSCRIBING: "State transitioned to TRANSCRIBING",
-    STATE_ERROR_MODEL: "State transitioned to ERROR_MODEL",
-    STATE_ERROR_AUDIO: "State transitioned to ERROR_AUDIO",
-    STATE_ERROR_TRANSCRIPTION: "State transitioned to ERROR_TRANSCRIPTION",
-    STATE_ERROR_SETTINGS: "State transitioned to ERROR_SETTINGS",
-}
-
-@unique
-class StateEvent(Enum):
-    """Eventos normalizados utilizados para transições de estado."""
-
-    MODEL_MISSING = auto()
-    MODEL_CACHE_INVALID = auto()
-    MODEL_PROMPT_FAILED = auto()
-    MODEL_DOWNLOAD_DECLINED = auto()
-    MODEL_DOWNLOAD_STARTED = auto()
-    MODEL_DOWNLOAD_CANCELLED = auto()
-    MODEL_DOWNLOAD_INVALID_CACHE = auto()
-    MODEL_DOWNLOAD_FAILED = auto()
-    MODEL_CACHE_NOT_CONFIGURED = auto()
-    MODEL_CACHE_MISSING = auto()
-    MODEL_READY = auto()
-    MODEL_LOADING_FAILED = auto()
-    AUDIO_RECORDING_STARTED = auto()
-    AUDIO_RECORDING_STOPPED = auto()
-    AUDIO_RECORDING_DISCARDED = auto()
-    AUDIO_ERROR = auto()
-    TRANSCRIPTION_STARTED = auto()
-    TRANSCRIPTION_COMPLETED = auto()
-    AGENT_COMMAND_COMPLETED = auto()
-    SETTINGS_MISSING_RECORD_KEY = auto()
-    SETTINGS_HOTKEY_START_FAILED = auto()
-    SETTINGS_REREGISTER_FAILED = auto()
-    SETTINGS_RECOVERED = auto()
 
 
-@dataclass(frozen=True)
-class StateNotification:
-    """Mensagem estruturada propagada para assinantes de mudanças de estado."""
-
-    event: StateEvent | None
-    state: str
-    previous_state: str | None = None
-    details: str | None = None
-    source: str | None = None
-
-
-STATE_FOR_EVENT: dict[StateEvent, str] = {
-    StateEvent.MODEL_MISSING: STATE_ERROR_MODEL,
-    StateEvent.MODEL_CACHE_INVALID: STATE_ERROR_MODEL,
-    StateEvent.MODEL_PROMPT_FAILED: STATE_ERROR_MODEL,
-    StateEvent.MODEL_DOWNLOAD_DECLINED: STATE_ERROR_MODEL,
-    StateEvent.MODEL_DOWNLOAD_STARTED: STATE_LOADING_MODEL,
-    StateEvent.MODEL_DOWNLOAD_CANCELLED: STATE_ERROR_MODEL,
-    StateEvent.MODEL_DOWNLOAD_INVALID_CACHE: STATE_ERROR_MODEL,
-    StateEvent.MODEL_DOWNLOAD_FAILED: STATE_ERROR_MODEL,
-    StateEvent.MODEL_CACHE_NOT_CONFIGURED: STATE_ERROR_MODEL,
-    StateEvent.MODEL_CACHE_MISSING: STATE_ERROR_MODEL,
-    StateEvent.MODEL_READY: STATE_IDLE,
-    StateEvent.MODEL_LOADING_FAILED: STATE_ERROR_MODEL,
-    StateEvent.AUDIO_RECORDING_STARTED: STATE_RECORDING,
-    StateEvent.AUDIO_RECORDING_STOPPED: STATE_IDLE,
-    StateEvent.AUDIO_RECORDING_DISCARDED: STATE_IDLE,
-    StateEvent.AUDIO_ERROR: STATE_ERROR_AUDIO,
-    StateEvent.TRANSCRIPTION_STARTED: STATE_TRANSCRIBING,
-    StateEvent.TRANSCRIPTION_COMPLETED: STATE_IDLE,
-    StateEvent.AGENT_COMMAND_COMPLETED: STATE_IDLE,
-    StateEvent.SETTINGS_MISSING_RECORD_KEY: STATE_ERROR_SETTINGS,
-    StateEvent.SETTINGS_HOTKEY_START_FAILED: STATE_ERROR_SETTINGS,
-    StateEvent.SETTINGS_REREGISTER_FAILED: STATE_ERROR_SETTINGS,
-    StateEvent.SETTINGS_RECOVERED: STATE_IDLE,
-}
-
-
-EVENT_DEFAULT_DETAILS: dict[StateEvent, str] = {
-    StateEvent.MODEL_MISSING: "ASR model not found locally",
-    StateEvent.MODEL_CACHE_INVALID: "Configured ASR cache directory is invalid",
-    StateEvent.MODEL_PROMPT_FAILED: "Failed to prompt user about model download",
-    StateEvent.MODEL_DOWNLOAD_DECLINED: "User declined automatic model download",
-    StateEvent.MODEL_DOWNLOAD_STARTED: "Starting model download",
-    StateEvent.MODEL_DOWNLOAD_CANCELLED: "Model download was cancelled",
-    StateEvent.MODEL_DOWNLOAD_INVALID_CACHE: "Model download aborted due to invalid cache directory",
-    StateEvent.MODEL_DOWNLOAD_FAILED: "Model download failed",
-    StateEvent.MODEL_CACHE_NOT_CONFIGURED: "ASR cache directory not configured",
-    StateEvent.MODEL_CACHE_MISSING: "ASR cache directory missing on disk",
-    StateEvent.MODEL_READY: "Model loaded successfully",
-    StateEvent.MODEL_LOADING_FAILED: "Model failed to load",
-    StateEvent.AUDIO_RECORDING_STARTED: "AudioHandler started recording",
-    StateEvent.AUDIO_RECORDING_STOPPED: "AudioHandler returned to idle",
-    StateEvent.AUDIO_RECORDING_DISCARDED: "Recorded audio discarded before transcription",
-    StateEvent.AUDIO_ERROR: "Audio subsystem reported an error",
-    StateEvent.TRANSCRIPTION_STARTED: "Transcription pipeline started",
-    StateEvent.TRANSCRIPTION_COMPLETED: "Transcription finished",
-    StateEvent.AGENT_COMMAND_COMPLETED: "Agent command completed",
-    StateEvent.SETTINGS_MISSING_RECORD_KEY: "Record hotkey is not configured",
-    StateEvent.SETTINGS_HOTKEY_START_FAILED: "KeyboardHotkeyManager failed to start",
-    StateEvent.SETTINGS_REREGISTER_FAILED: "Hotkey re-registration failed",
-    StateEvent.SETTINGS_RECOVERED: "Recovered stable hotkey registration",
-}
-
-
-AUDIO_STATE_EVENT_MAP: dict[str, StateEvent] = {
-    "RECORDING": StateEvent.AUDIO_RECORDING_STARTED,
-    "TRANSCRIBING": StateEvent.TRANSCRIPTION_STARTED,
-    "IDLE": StateEvent.AUDIO_RECORDING_STOPPED,
-    "ERROR_AUDIO": StateEvent.AUDIO_ERROR,
-}
-
-StateUpdateCallback = Callable[[StateNotification], None]
+StateUpdateCallback = Callable[[sm.StateNotification], None]
 
 
 class AppCore:
@@ -225,8 +104,8 @@ class AppCore:
 
         self.audio_handler = AudioHandler(
             config_manager=self.config_manager,
+            state_manager=self.state_manager,
             on_audio_segment_ready_callback=self._on_audio_segment_ready,
-            on_recording_state_change_callback=self._handle_recording_state_change,
         )
         self.gemini_api = GeminiAPI(self.config_manager) # Instancia o GeminiAPI
         self.transcription_handler = TranscriptionHandler(
@@ -241,16 +120,23 @@ class AppCore:
         )
         self.transcription_handler.core_instance_ref = self  # Expõe referência do núcleo ao handler
 
-        self.ui_manager = None # Será setado externamente pelo main.py
+        self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
+        self._ui_manager = None # Será setado externamente pelo main.py
         # --- Estado da Aplicação ---
-        self.current_state = STATE_LOADING_MODEL
-        self._last_notification: StateNotification | None = None
         self.shutting_down = False
         self.full_transcription = "" # Acumula transcrição completa
         self.agent_mode_active = False # Adicionado para controle do modo agente
-        self.key_detection_active = False # Flag para controle da detecção de tecla
         self.model_prompt_active = False
-        self.model_prompt_active = False
+
+    @property
+    def ui_manager(self):
+        return self._ui_manager
+
+    @ui_manager.setter
+    def ui_manager(self, ui_manager_instance):
+        self._ui_manager = ui_manager_instance
+        if ui_manager_instance:
+            self.state_manager.subscribe(ui_manager_instance.update_tray_icon)
 
         # --- Hotkey Manager ---
         self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
@@ -277,14 +163,14 @@ class AppCore:
 
             if not (model_path.is_dir() and any(model_path.iterdir())):
                 MODEL_LOGGER.warning("ASR model not found locally; waiting for user confirmation before downloading.")
-                self._set_state(STATE_ERROR_MODEL)
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
                 self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
             else:
                 self._start_model_loading_with_synced_config()
         except OSError:
             messagebox.showerror("Erro", "Diretório de cache inválido.")
-            self._set_state(
-                StateEvent.MODEL_CACHE_INVALID,
+            self.state_manager.set_state(
+                sm.StateEvent.MODEL_CACHE_INVALID,
                 details=f"Invalid cache directory reported during init: {cache_dir}",
                 source="init",
             )
@@ -357,14 +243,14 @@ class AppCore:
                         "Model",
                         "No model installed. You can install one later in the settings.",
                     )
-                    self._set_state(
-                        StateEvent.MODEL_DOWNLOAD_DECLINED,
+                    self.state_manager.set_state(
+                        sm.StateEvent.MODEL_DOWNLOAD_DECLINED,
                         details=f"User declined download for '{model_id}'",
                         source="model_prompt",
                     )
             except Exception as prompt_error:
                 MODEL_LOGGER.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
-                self._set_state(STATE_ERROR_MODEL)
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
             finally:
                 self.model_prompt_active = False
 
@@ -380,7 +266,7 @@ class AppCore:
         self._active_model_download_event = cancel_event
         
         try:
-            self._set_state(STATE_LOADING_MODEL)
+            self.state_manager.set_state(sm.STATE_LOADING_MODEL)
             
             ensure_kwargs = {
                 "quant": quant,
@@ -404,7 +290,7 @@ class AppCore:
             raise # Re-raise for the UI thread to handle
         except Exception as e:
             logging.error(f"An error occurred during model download/reload for {model_id}: {e}", exc_info=True)
-            self._set_state(STATE_ERROR_MODEL)
+            self.state_manager.set_state(sm.STATE_ERROR_MODEL)
             raise # Re-raise for the UI thread to handle
         finally:
             self._active_model_download_event = None
@@ -426,7 +312,7 @@ class AppCore:
 
         def _download():
             try:
-                self._set_state(STATE_LOADING_MODEL)
+                self.state_manager.set_state(sm.STATE_LOADING_MODEL)
                 ensure_kwargs = {
                     "quant": ct2_type,
                     "timeout": timeout,
@@ -462,8 +348,8 @@ class AppCore:
                     model_id,
                     reason,
                 )
-                self._set_state(
-                    StateEvent.MODEL_DOWNLOAD_CANCELLED,
+                self.state_manager.set_state(
+                    sm.StateEvent.MODEL_DOWNLOAD_CANCELLED,
                     details=f"Download for '{model_id}' cancelled: {reason}",
                     source="model_download",
                 )
@@ -474,11 +360,11 @@ class AppCore:
                 return
             except OSError:
                 MODEL_LOGGER.error("Invalid cache directory during model download.", exc_info=True)
-                self._set_state(STATE_ERROR_MODEL)
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", "Diretório de cache inválido. Verifique as configurações."))
             except Exception as exc:
                 MODEL_LOGGER.error(f"Model download failed: {exc}", exc_info=True)
-                self._set_state(STATE_ERROR_MODEL)
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda exc=exc: messagebox.showerror("Model", f"Download failed: {exc}"))  # noqa: F821
             else:
                 MODEL_LOGGER.info("Model download completed successfully.")
@@ -500,7 +386,7 @@ class AppCore:
         handler = getattr(self, "transcription_handler", None)
         if handler is None:
             logging.error("Cannot start model loading: transcription handler missing.")
-            self._set_state(STATE_ERROR_MODEL)
+            self.state_manager.set_state(sm.STATE_ERROR_MODEL)
             return
 
         handler.config_manager = self.config_manager
@@ -511,7 +397,7 @@ class AppCore:
             logging.error(
                 "ConfigManager mismatch detected before model loading; aborting to avoid stale settings."
             )
-            self._set_state(STATE_ERROR_SETTINGS)
+            self.state_manager.set_state(sm.STATE_ERROR_SETTINGS)
             return
 
         logging.debug(
@@ -611,15 +497,15 @@ class AppCore:
             reason,
         )
         if reason == "not_configured":
-            event = StateEvent.MODEL_CACHE_NOT_CONFIGURED
+            event = sm.StateEvent.MODEL_CACHE_NOT_CONFIGURED
             detail = "ASR cache directory not configured"
         elif reason == "missing":
-            event = StateEvent.MODEL_CACHE_MISSING
+            event = sm.StateEvent.MODEL_CACHE_MISSING
             detail = f"ASR cache directory missing: {cache_repr}"
         else:
-            event = StateEvent.MODEL_CACHE_INVALID
+            event = sm.StateEvent.MODEL_CACHE_INVALID
             detail = f"ASR cache directory issue ({reason}): {cache_repr}"
-        self._set_state(event, details=detail, source=f"cache_dir::{context}")
+        self.state_manager.set_state(event, details=detail, source=f"cache_dir::{context}")
         tooltip = (
             "Whisper Recorder - configure o diretório de modelos ASR"
             if reason == "not_configured"
@@ -663,44 +549,13 @@ class AppCore:
         for message in pending:
             self.main_tk_root.after(0, lambda msg=message: ui_manager.show_status_tooltip(msg))
 
-    def emit_state_warning(
-        self,
-        code: str,
-        details: dict | None = None,
-        *,
-        message: str | None = None,
-        level: str = "warning",
-    ) -> None:
-        """Encaminha avisos para a UI usando o callback de estado."""
-        payload = {
-            "code": code,
-            "details": details or {},
-            "level": level,
-        }
-        if message:
-            payload["message"] = message
-        callback = self.state_update_callback
-        if callback:
-            try:
-                event = {"state": self.current_state, "warning": payload}
-                self.main_tk_root.after(0, lambda evt=event: callback(evt))
-            except Exception as error:
-                logging.error(
-                    "Falha ao propagar aviso de estado (%s): %s",
-                    code,
-                    error,
-                    exc_info=True,
-                )
-        if message:
-            self._queue_tooltip_update(message)
-
     # --- Callbacks de Módulos ---
     def set_state_update_callback(self, callback: StateUpdateCallback | None) -> None:
-        """Registra um callback para receber ``StateNotification`` estruturado."""
+        """Registra um callback para receber ``sm.StateNotification`` estruturado."""
 
         if callback is not None and not callable(callback):
             raise TypeError("state_update_callback must be callable or None")
-        self.state_update_callback = callback
+        self.state_manager.subscribe(callback)
 
     def set_segment_callback(self, callback):
         self.on_segment_transcribed = callback
@@ -708,16 +563,6 @@ class AppCore:
     def set_key_detection_callback(self, callback):
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
-
-    def _handle_recording_state_change(self, audio_state: str):
-        """Normaliza notificações do ``AudioHandler`` em eventos estruturados."""
-
-        event = AUDIO_STATE_EVENT_MAP.get(audio_state)
-        if event is None:
-            logging.warning("AudioHandler emitted unknown state '%s'.", audio_state)
-            return
-        detail = f"AudioHandler signalled '{audio_state}'"
-        self._set_state(event, details=detail, source="audio_handler")
 
     def _on_audio_segment_ready(self, audio_source: str | np.ndarray):
         """Callback chamado ao finalizar a gravação (arquivo ou array)."""
@@ -738,8 +583,8 @@ class AppCore:
             logging.info(
                 f"Segmento de áudio ({duration_seconds:.2f}s) é mais curto que o mínimo configurado ({min_duration}s). Ignorando."
             )
-            self._set_state(
-                StateEvent.AUDIO_RECORDING_DISCARDED,
+            self.state_manager.set_state(
+                sm.StateEvent.AUDIO_RECORDING_DISCARDED,
                 details=f"Segment shorter than minimum ({duration_seconds:.2f}s < {min_duration}s)",
                 source="audio_handler",
             )
@@ -760,8 +605,8 @@ class AppCore:
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
         logging.info("AppCore: Model loaded successfully.")
-        self._set_state(
-            StateEvent.MODEL_READY,
+        self.state_manager.set_state(
+            sm.StateEvent.MODEL_READY,
             details="Transcription model loaded",
             source="transcription_handler",
         )
@@ -769,7 +614,7 @@ class AppCore:
 
     def notify_model_loading_started(self):
         """Expõe atualização explícita de estado para carregamento de modelo."""
-        self._set_state(STATE_LOADING_MODEL)
+        self.state_manager.set_state(sm.STATE_LOADING_MODEL)
         
         # Iniciar serviços de estabilidade de hotkey se habilitados
         if self.hotkey_stability_service_enabled:
@@ -796,8 +641,8 @@ class AppCore:
     def _on_model_load_failed(self, error_msg):
         """Callback do TranscriptionHandler quando o modelo falha ao carregar."""
         logging.error(f"AppCore: Falha ao carregar o modelo: {error_msg}")
-        self._set_state(
-            StateEvent.MODEL_LOADING_FAILED,
+        self.state_manager.set_state(
+            sm.StateEvent.MODEL_LOADING_FAILED,
             details=error_msg,
             source="transcription_handler",
         )
@@ -859,8 +704,8 @@ class AppCore:
             pass
         
         char_count = len(final_text)
-        self._set_state(
-            StateEvent.TRANSCRIPTION_COMPLETED,
+        self.state_manager.set_state(
+            sm.StateEvent.TRANSCRIPTION_COMPLETED,
             details=f"Transcription finalized ({char_count} chars)",
             source="transcription",
         )
@@ -896,8 +741,8 @@ class AppCore:
             self._log_status(f"Erro ao manusear o resultado do agente: {e}", error=True)
         finally:
             response_size = len(agent_response_text)
-            self._set_state(
-                StateEvent.AGENT_COMMAND_COMPLETED,
+            self.state_manager.set_state(
+                sm.StateEvent.AGENT_COMMAND_COMPLETED,
                 details=f"Agent response delivered ({response_size} chars)",
                 source="agent_mode",
             )
@@ -917,184 +762,10 @@ class AppCore:
 
     def start_key_detection_thread(self):
         """Inicia uma thread para detectar uma única tecla e atualizar a UI."""
-        if self.key_detection_active:
-            logging.info("Key detection is already active.")
-            return
-
-        self.key_detection_active = True
-        logging.info("Starting key detection...")
-        
-        def detect_key_task():
-            try:
-                # Temporariamente desativar hotkeys existentes para evitar conflitos
-                self._cleanup_hotkeys()
-                time.sleep(0.1) # Pequena pausa para garantir que os hooks sejam liberados
-
-                detected_key = self.ahk_manager.detect_single_key()
-                if detected_key:
-                    logging.info(f"Tecla detectada: {detected_key}")
-                    if self.key_detection_callback:
-                        self.main_tk_root.after(0, lambda: self.key_detection_callback(detected_key.upper()))
-                else:
-                    logging.warning("No key detected or stop signal received.")
-                    if self.key_detection_callback:
-                        self.main_tk_root.after(0, lambda: self.key_detection_callback("N/A")) # Ou algum valor padrão
-            except Exception as e:
-                logging.error(f"Error during key detection: {e}", exc_info=True)
-                if self.key_detection_callback:
-                    self.main_tk_root.after(0, lambda: self.key_detection_callback("ERRO"))
-            finally:
-                self.key_detection_active = False
-                # Re-registrar hotkeys após a detecção
-                self.register_hotkeys()
-                logging.info("Key detection finished. Hotkeys re-registered.")
-
-        threading.Thread(target=detect_key_task, daemon=True, name="KeyDetectionThread").start()
-
-    # --- Gerenciamento de Estado e Logs ---
-    def _set_state(self, event: StateEvent | str, *, details: str | None = None, source: str | None = None):
-        """Aplica uma transição de estado baseada em ``StateEvent`` ou nome de estado legado."""
-
-        event_obj: StateEvent | None
-        mapped_state: str
-        message: str | None
-
-        if isinstance(event, StateEvent):
-            event_obj = event
-            try:
-                mapped_state = STATE_FOR_EVENT[event_obj]
-            except KeyError as exc:
-                raise ValueError(f"No state mapping defined for event {event_obj!r}") from exc
-            message = details or EVENT_DEFAULT_DETAILS.get(event_obj)
-        elif isinstance(event, str):
-            normalized = event.strip().upper()
-            if normalized not in LEGACY_STATE_DEFAULT_DETAILS:
-                raise ValueError(f"Unsupported state event payload: {event!r}")
-            event_obj = None
-            mapped_state = normalized
-            message = details or LEGACY_STATE_DEFAULT_DETAILS.get(normalized)
-        else:
-            raise ValueError(f"Unsupported state event payload: {event!r}")
-
-        with self.state_lock:
-            previous_state = self.current_state
-            last_event = self._last_notification.event if self._last_notification else None
-            last_state = self._last_notification.state if self._last_notification else None
-            if last_event == event_obj and last_state == mapped_state:
-                logging.debug(
-                    "Duplicate state event %s suppressed "
-                    "(state=%s, source=%s).",
-                    event_obj.name if event_obj else mapped_state,
-                    mapped_state,
-                    source,
-                )
-                return
-
-            notification = StateNotification(
-                event=event_obj,
-                state=mapped_state,
-                previous_state=previous_state,
-                details=message,
-                source=source,
-            )
-            self.current_state = mapped_state
-            self._last_notification = notification
-
-        origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
-        transition_log = f"State transition via {origin_label}: {previous_state} -> {mapped_state}"
-        if message:
-            transition_log += f" ({message})"
-        if source:
-            transition_log += f" [source={source}]"
-        logging.info(transition_log)
-
-        callback = self.state_update_callback
-        if not callback:
-            return
-
-        def _notify():
-            try:
-                callback(notification)
-            except Exception as exc:  # pragma: no cover - proteção defensiva
-                logging.error(
-                    "State update callback failed for %s: %s",
-                    origin_label,
-                    exc,
-                    exc_info=True,
-                )
-
-        try:
-            self.main_tk_root.after(0, _notify)
-        except Exception:  # pragma: no cover - fallback quando Tk não estiver disponível
-            logging.debug(
-                "Tkinter scheduling failed for state event %s; calling callback directly.",
-                event.name,
-                exc_info=True,
-            )
-            _notify()
-
-    def _ensure_idle_state_notification(self):
-        """Propaga uma notificação estruturada representando o estado *idle*."""
-
-        notification: StateNotification | None = None
-        callback_to_call: StateUpdateCallback | None = None
-        should_emit_idle = False
-        should_publish_recovered = False
-
-        with self.state_lock:
-            callback_to_call = self.state_update_callback
-            if self.current_state == STATE_IDLE:
-                should_emit_idle = True
-                last_notification = self._last_notification
-                previous_state = (
-                    last_notification.state if last_notification else self.current_state
-                )
-                notification = StateNotification(
-                    event=None,
-                    state=STATE_IDLE,
-                    previous_state=previous_state,
-                    details=LEGACY_STATE_DEFAULT_DETAILS.get(STATE_IDLE),
-                    source="settings",
-                )
-                self._last_notification = notification
-            else:
-                should_publish_recovered = True
-
-        if should_publish_recovered:
-            self._set_state(
-                StateEvent.SETTINGS_RECOVERED,
-                details="Configurações aplicadas; mantendo estado IDLE.",
-                source="settings",
-            )
-            return
-
-        if not (should_emit_idle and notification and callback_to_call):
-            return
-
-        def _dispatch_idle(notification_to_emit: StateNotification = notification):
-            try:
-                assert callback_to_call is not None
-                callback_to_call(notification_to_emit)
-            except Exception as exc:  # pragma: no cover - proteção defensiva
-                logging.error(
-                    "State update callback failed while confirming idle state: %s",
-                    exc,
-                    exc_info=True,
-                )
-
-        try:
-            self.main_tk_root.after(0, _dispatch_idle)
-        except Exception:  # pragma: no cover - fallback quando Tk não estiver disponível
-            logging.debug(
-                "Tkinter scheduling failed for idle state notification; calling callback directly.",
-                exc_info=True,
-            )
-            _dispatch_idle()
 
     def is_state_transcribing(self) -> bool:
         """Indica se o estado atual é TRANSCRIBING."""
-        with self.state_lock:
-            return self.current_state == STATE_TRANSCRIBING
+        return self.state_manager.is_transcribing()
 
     def _log_status(self, text, error=False):
         if error:
@@ -1119,8 +790,8 @@ class AppCore:
                 self.ahk_running = True
                 self._log_status(f"Hotkey registered: {self.record_key.upper()} (mode: {self.record_mode})")
             else:
-                self._set_state(
-                    StateEvent.SETTINGS_HOTKEY_START_FAILED,
+                self.state_manager.set_state(
+                    sm.StateEvent.SETTINGS_HOTKEY_START_FAILED,
                     details="KeyboardHotkeyManager.start returned False",
                     source="hotkeys",
                 )
@@ -1131,8 +802,8 @@ class AppCore:
         self._cleanup_hotkeys()
         time.sleep(0.2)
         if not self.record_key:
-            self._set_state(
-                StateEvent.SETTINGS_MISSING_RECORD_KEY,
+            self.state_manager.set_state(
+                sm.StateEvent.SETTINGS_MISSING_RECORD_KEY,
                 details="Record hotkey not configured",
                 source="hotkeys",
             )
@@ -1141,15 +812,15 @@ class AppCore:
         success = self._start_autohotkey()
         if success:
             self._log_status(f"Global hotkey registered: {self.record_key.upper()} (mode: {self.record_mode})")
-            if self.current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
-                self._set_state(
-                    StateEvent.SETTINGS_RECOVERED,
+            if self.state_manager.get_current_state() not in [sm.STATE_RECORDING, sm.STATE_LOADING_MODEL]:
+                self.state_manager.set_state(
+                    sm.StateEvent.SETTINGS_RECOVERED,
                     details="Hotkeys registered successfully",
                     source="hotkeys",
                 )
         else:
-            self._set_state(
-                StateEvent.SETTINGS_HOTKEY_START_FAILED,
+            self.state_manager.set_state(
+                sm.StateEvent.SETTINGS_HOTKEY_START_FAILED,
                 details="Hotkey registration failed",
                 source="hotkeys",
             )
@@ -1196,33 +867,31 @@ class AppCore:
 
     def _periodic_reregister_task(self):
         while not self.stop_reregister_event.wait(REREGISTER_INTERVAL_SECONDS):
-            with self.state_lock:
-                current_state = self.current_state
-            if current_state == STATE_IDLE: # Re-registrar hotkeys apenas quando ocioso
+            current_state = self.state_manager.get_current_state()
+            if current_state == sm.STATE_IDLE: # Re-registrar hotkeys apenas quando ocioso
                 logging.info(f"Periodic check: State is {current_state}. Attempting hotkey re-registration.")
                 try:
                     success = self._reload_keyboard_and_suppress()
                     if success:
                         logging.info("Periodic hotkey re-registration attempt finished successfully.")
-                        with self.state_lock:
-                            should_emit = self.current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]
+                        should_emit = self.state_manager.get_current_state() not in [sm.STATE_RECORDING, sm.STATE_LOADING_MODEL]
                         if should_emit:
-                            self._set_state(
-                                StateEvent.SETTINGS_RECOVERED,
+                            self.state_manager.set_state(
+                                sm.StateEvent.SETTINGS_RECOVERED,
                                 details="Periodic hotkey re-registration succeeded",
                                 source="hotkeys",
                             )
                     else:
                         logging.warning("Periodic hotkey re-registration attempt failed.")
-                        self._set_state(
-                            StateEvent.SETTINGS_REREGISTER_FAILED,
+                        self.state_manager.set_state(
+                            sm.StateEvent.SETTINGS_REREGISTER_FAILED,
                             details="Periodic hotkey re-registration failed",
                             source="hotkeys",
                         )
                 except Exception as e:
                     logging.error(f"Error during periodic hotkey re-registration: {e}", exc_info=True)
-                    self._set_state(
-                        StateEvent.SETTINGS_REREGISTER_FAILED,
+                    self.state_manager.set_state(
+                        sm.StateEvent.SETTINGS_REREGISTER_FAILED,
                         details=f"Exception during periodic re-registration: {e}",
                         source="hotkeys",
                     )
@@ -1231,9 +900,8 @@ class AppCore:
         logging.info("Periodic hotkey re-registration thread stopped.")
 
     def force_reregister_hotkeys(self):
-        with self.state_lock:
-            current_state = self.current_state
-        if current_state not in [STATE_RECORDING, STATE_LOADING_MODEL]:
+        current_state = self.state_manager.get_current_state()
+        if current_state not in [sm.STATE_RECORDING, sm.STATE_LOADING_MODEL]:
             logging.info(f"Manual trigger: State is {current_state}. Attempting hotkey re-registration.")
             with self.hotkey_lock:
                 try:
@@ -1247,8 +915,8 @@ class AppCore:
                     if success:
                         self.ahk_running = True
                         if current_state.startswith("ERROR"):
-                            self._set_state(
-                                StateEvent.SETTINGS_RECOVERED,
+                            self.state_manager.set_state(
+                                sm.StateEvent.SETTINGS_RECOVERED,
                                 details="Manual hotkey re-registration succeeded",
                                 source="hotkeys",
                             )
@@ -1256,8 +924,8 @@ class AppCore:
                         return True
                     else:
                         self._log_status("Falha ao recarregar KeyboardHotkeyManager.", error=True)
-                        self._set_state(
-                            StateEvent.SETTINGS_REREGISTER_FAILED,
+                        self.state_manager.set_state(
+                            sm.StateEvent.SETTINGS_REREGISTER_FAILED,
                             details="Manual hotkey re-registration failed",
                             source="hotkeys",
                         )
@@ -1266,8 +934,8 @@ class AppCore:
                     self.ahk_running = False
                     logging.error(f"Exception during manual KeyboardHotkeyManager re-registration: {e}", exc_info=True)
                     self._log_status(f"Erro ao recarregar KeyboardHotkeyManager: {e}", error=True)
-                    self._set_state(
-                        StateEvent.SETTINGS_REREGISTER_FAILED,
+                    self.state_manager.set_state(
+                        sm.StateEvent.SETTINGS_REREGISTER_FAILED,
                         details=f"Exception during manual hotkey re-registration: {e}",
                         source="hotkeys",
                     )
@@ -1279,9 +947,8 @@ class AppCore:
 
     def _hotkey_health_check_task(self):
         while not self.stop_health_check_event.wait(HOTKEY_HEALTH_CHECK_INTERVAL):
-            with self.state_lock:
-                current_state = self.current_state
-            if current_state == STATE_IDLE: # Only check/fix if IDLE
+            current_state = self.state_manager.get_current_state()
+            if current_state == sm.STATE_IDLE: # Only check/fix if IDLE
                 if not self.ahk_running:
                     logging.warning("Hotkey health check: KeyboardHotkeyManager not running while IDLE. Attempting restart.")
                     self.force_reregister_hotkeys()
@@ -1298,19 +965,19 @@ class AppCore:
         with self.recording_lock:
             if self.audio_handler.is_recording:
                 return
-            with self.state_lock:
-                if self.current_state == STATE_TRANSCRIBING:
-                    self._log_status("Cannot record: Transcription running.", error=True)
-                    return
-                if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
-                    self._log_status("Cannot record: Model not loaded.", error=True)
-                    return
-                if self.current_state.startswith("ERROR"):
-                    self._log_status(
-                        f"Cannot record: App in error state ({self.current_state}).",
-                        error=True,
-                    )
-                    return
+            current_state = self.state_manager.get_current_state()
+            if current_state == sm.STATE_TRANSCRIBING:
+                self._log_status("Cannot record: Transcription running.", error=True)
+                return
+            if self.transcription_handler.pipe is None or current_state == sm.STATE_LOADING_MODEL:
+                self._log_status("Cannot record: Model not loaded.", error=True)
+                return
+            if current_state.startswith("ERROR"):
+                self._log_status(
+                    f"Cannot record: App in error state ({current_state}).",
+                    error=True,
+                )
+                return
         
         # if self.ui_manager:
         #     self.ui_manager.show_live_transcription_window()
@@ -1328,8 +995,8 @@ class AppCore:
             # nenhum processo de transcrição fique pendente.
             if hasattr(self.transcription_handler, "stop_transcription"):
                 self.transcription_handler.stop_transcription()
-            self._set_state(
-                StateEvent.AUDIO_RECORDING_DISCARDED,
+            self.state_manager.set_state(
+                sm.StateEvent.AUDIO_RECORDING_DISCARDED,
                 details="Recording discarded after stop",
                 source="audio_handler",
             )
@@ -1348,10 +1015,9 @@ class AppCore:
         if rec:
             self.stop_recording()
             return
-        with self.state_lock:
-            if self.current_state == STATE_TRANSCRIBING:
-                self._log_status("Cannot start recording, transcription in progress.", error=True)
-                return
+        if self.state_manager.get_current_state() == sm.STATE_TRANSCRIBING:
+            self._log_status("Cannot start recording, transcription in progress.", error=True)
+            return
         self.start_recording()
 
     def start_agent_command(self):
@@ -1361,16 +1027,16 @@ class AppCore:
                     self.stop_recording(agent_mode=True)
                     self.agent_mode_active = False
                 return
-        with self.state_lock:
-            if self.current_state == STATE_TRANSCRIBING:
-                self._log_status("Cannot start command: transcription in progress.", error=True)
-                return
-            if self.transcription_handler.pipe is None or self.current_state == STATE_LOADING_MODEL:
-                self._log_status("Model not loaded.", error=True)
-                return
-            if self.current_state.startswith("ERROR"):
-                self._log_status(f"Cannot start command: state {self.current_state}", error=True)
-                return
+        current_state = self.state_manager.get_current_state()
+        if current_state == sm.STATE_TRANSCRIBING:
+            self._log_status("Cannot start command: transcription in progress.", error=True)
+            return
+        if self.transcription_handler.pipe is None or current_state == sm.STATE_LOADING_MODEL:
+            self._log_status("Model not loaded.", error=True)
+            return
+        if current_state.startswith("ERROR"):
+            self._log_status(f"Cannot start command: state {current_state}", error=True)
+            return
         self.agent_mode_active = True
         self.start_recording()
 
@@ -1387,7 +1053,7 @@ class AppCore:
             self.audio_handler.is_recording
             or self.is_state_transcribing()
             or self.transcription_handler.is_text_correction_running()
-            or self.current_state == STATE_LOADING_MODEL
+            or self.state_manager.get_current_state() == sm.STATE_LOADING_MODEL
         )
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
@@ -1651,7 +1317,7 @@ class AppCore:
                 "AppCore: configuração rejeitada por validação: %s",
                 "; ".join(validation_errors),
             )
-            self._set_state(STATE_ERROR_SETTINGS)
+            self.state_manager.set_state(sm.STATE_ERROR_SETTINGS)
 
             def _show_error():
                 messagebox.showerror("Configurações inválidas", message)
@@ -1785,23 +1451,27 @@ class AppCore:
                 reload_needed = self.transcription_handler.update_config(trigger_reload=False)
             except Exception as exc:
                 logging.error("Erro ao atualizar configurações do TranscriptionHandler: %s", exc, exc_info=True)
-                self._set_state(STATE_ERROR_MODEL)
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
                 self._log_status("Erro: Falha ao aplicar configurações do modelo.", error=True)
                 return
 
             reload_required = reload_required or reload_needed
 
             if reload_required:
-                self._set_state(STATE_LOADING_MODEL)
+                self.state_manager.set_state(sm.STATE_LOADING_MODEL)
                 try:
                     self.transcription_handler.start_model_loading()
                 except Exception as exc:
                     logging.error("Falha ao iniciar recarregamento do modelo ASR: %s", exc, exc_info=True)
-                    self._set_state(STATE_ERROR_MODEL)
+                    self.state_manager.set_state(sm.STATE_ERROR_MODEL)
                     self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
                     return
             else:
-                self._ensure_idle_state_notification()
+                self.state_manager.set_state(
+                    sm.StateEvent.SETTINGS_RECOVERED,
+                    details="Configurações aplicadas; mantendo estado IDLE.",
+                    source="settings",
+                )
 
             if launch_changed:
                 from .utils.autostart import set_launch_at_startup
@@ -1899,7 +1569,7 @@ class AppCore:
             reload_needed = self.transcription_handler.update_config(trigger_reload=False)
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
             if reload_needed:
-                self._set_state(STATE_LOADING_MODEL)
+                self.state_manager.set_state(sm.STATE_LOADING_MODEL)
                 try:
                     self.transcription_handler.start_model_loading()
                 except Exception as exc:
@@ -1909,7 +1579,7 @@ class AppCore:
                         exc,
                         exc_info=True,
                     )
-                    self._set_state(STATE_ERROR_MODEL)
+                    self.state_manager.set_state(sm.STATE_ERROR_MODEL)
                     self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
                     return
 

@@ -149,7 +149,6 @@ def main() -> None:
         model_manager=app_core_instance.model_manager,
     )
     app_core_instance.ui_manager = ui_manager_instance
-    app_core_instance.set_state_update_callback(ui_manager_instance.update_tray_icon)
     ui_manager_instance.setup_tray_icon()
     app_core_instance.flush_pending_ui_notifications()
     ui_manager_instance.on_exit_app = on_exit_app_enhanced

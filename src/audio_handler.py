@@ -24,12 +24,12 @@ class AudioHandler:
     def __init__(
         self,
         config_manager,
+        state_manager,
         on_audio_segment_ready_callback,
-        on_recording_state_change_callback,
     ):
         self.config_manager = config_manager
+        self.state_manager = state_manager
         self.on_audio_segment_ready_callback = on_audio_segment_ready_callback
-        self.on_recording_state_change_callback = on_recording_state_change_callback
 
         # Initialize attributes that will be configured in `update_config`
         self.record_storage_mode = "auto"
@@ -233,11 +233,11 @@ class AudioHandler:
         except sd.PortAudioError as e:
             logging.error(f"PortAudio error during recording: {e}", exc_info=True)
             self.is_recording = False
-            self.on_recording_state_change_callback("ERROR_AUDIO")
+            self.state_manager.set_state("ERROR_AUDIO")
         except Exception as e:
             logging.error(f"Error in audio recording thread: {e}", exc_info=True)
             self.is_recording = False
-            self.on_recording_state_change_callback("ERROR_AUDIO")
+            self.state_manager.set_state("ERROR_AUDIO")
         finally:
             if self.audio_stream is not None:
                 self._close_input_stream()
@@ -356,7 +356,7 @@ class AudioHandler:
         self._vad_silence_counter = 0.0
         logging.debug("VAD reset and silence counter cleared for new recording.")
 
-        self.on_recording_state_change_callback("RECORDING")
+        self.state_manager.set_state("RECORDING")
 
         self._record_thread = threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread")
         self._record_thread.start()
@@ -403,7 +403,7 @@ class AudioHandler:
         if not stream_was_started:
             logging.warning("Stop recording called but audio stream never started. Ignoring data.")
             self._cleanup_temp_file()
-            self.on_recording_state_change_callback("IDLE")
+            self.state_manager.set_state("IDLE")
             return False
 
         recording_duration = time.time() - self.start_time
@@ -415,7 +415,7 @@ class AudioHandler:
                 f"Recording shorter than {self.min_record_duration}s or empty; discarding segment."
             )
             self._cleanup_temp_file()
-            self.on_recording_state_change_callback("IDLE")
+            self.state_manager.set_state("IDLE")
             return False
 
         if self.in_memory_mode:
@@ -454,7 +454,7 @@ class AudioHandler:
         self._audio_frames = []
         self._memory_samples = 0
         self.start_time = None
-        self.on_recording_state_change_callback("TRANSCRIBING")
+        self.state_manager.set_state("TRANSCRIBING")
         return True
 
     # ------------------------------------------------------------------

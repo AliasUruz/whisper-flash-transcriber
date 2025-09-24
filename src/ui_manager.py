@@ -1558,14 +1558,7 @@ class UIManager:
         # Logic moved from global, ajustado para lidar com payloads estruturados
         normalized_state, warning_payload, context = self._normalize_state_payload(state)
 
-        fallback_state = (
-            getattr(self.core_instance_ref, "current_state", "IDLE")
-            if self.core_instance_ref
-            else "IDLE"
-        )
-        resolved_state = normalized_state if normalized_state is not None else fallback_state
-        if resolved_state is None:
-            resolved_state = "IDLE"
+        resolved_state = normalized_state if normalized_state is not None else "IDLE"
         state_str = str(resolved_state)
 
         event_obj = context.get("event") if context else None
