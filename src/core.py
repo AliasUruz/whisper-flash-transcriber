@@ -50,6 +50,7 @@ from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from . import model_manager as model_manager_module
+from .action_orchestrator import ActionOrchestrator
 
 
 MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
@@ -242,6 +243,14 @@ class AppCore:
         self.transcription_handler.core_instance_ref = self  # Expõe referência do núcleo ao handler
 
         self.ui_manager = None # Será setado externamente pelo main.py
+        self.action_orchestrator = ActionOrchestrator(
+            config_manager=self.config_manager,
+            status_logger=self._log_status,
+            state_dispatcher=self._set_state,
+            paste_callback=self._do_paste,
+            ui_close_callback=self._close_live_transcription_window_async,
+            temp_audio_cleaner=self._delete_temp_audio_file,
+        )
         # --- Estado da Aplicação ---
         self.current_state = STATE_LOADING_MODEL
         self._last_notification: StateNotification | None = None
@@ -864,46 +873,35 @@ class AppCore:
             details=f"Transcription finalized ({char_count} chars)",
             source="transcription",
         )
-        if self.ui_manager:
-            self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
+        self._close_live_transcription_window_async()
         logging.info(f"Corrected text ready for copy/paste: {final_text}")
         self.full_transcription = ""  # Reset para a próxima gravação
         self._delete_temp_audio_file()
 
-    def _handle_agent_result_final(self, agent_response_text: str):
+    def _handle_agent_result_final(self, agent_response_text: str | None):
         """
         Lida com o resultado final do modo agente (copia, cola e reseta o estado).
         Esta função é chamada pelo TranscriptionHandler após a API Gemini ser consultada.
         """
+        self.action_orchestrator.handle_agent_result(
+            agent_response_text,
+            state_event=StateEvent.AGENT_COMMAND_COMPLETED,
+        )
+
+    def _close_live_transcription_window_async(self) -> None:
+        """Agenda o fechamento da janela de transcrição ao vivo se disponível."""
+        if not self.ui_manager:
+            return
+
         try:
-            if not agent_response_text:
-                logging.warning("Comando do agente retornou uma resposta vazia.")
-                self._log_status("Comando do agente sem resposta.", error=True)
-                return
-
-            if pyperclip:
-                pyperclip.copy(agent_response_text)
-                logging.info("Agent response copied to clipboard.")
-
-            if self.config_manager.get("agent_auto_paste", True): # Usa agent_auto_paste
-                self._do_paste()
-                self._log_status("Comando do agente executado e colado.")
-            else:
-                self._log_status("Comando do agente executado (colagem automática desativada).")
-
-        except Exception as e:
-            logging.error(f"Erro ao manusear o resultado do agente: {e}", exc_info=True)
-            self._log_status(f"Erro ao manusear o resultado do agente: {e}", error=True)
-        finally:
-            response_size = len(agent_response_text)
-            self._set_state(
-                StateEvent.AGENT_COMMAND_COMPLETED,
-                details=f"Agent response delivered ({response_size} chars)",
-                source="agent_mode",
+            self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
+        except Exception as exc:
+            logging.debug(
+                "Falha ao agendar fechamento da janela de transcrição: %s",
+                exc,
+                exc_info=True,
             )
-            if self.ui_manager:
-                self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
-            self._delete_temp_audio_file()
+            self.ui_manager.close_live_transcription_window()
 
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
