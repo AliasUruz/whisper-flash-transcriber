@@ -48,6 +48,8 @@ class AudioHandler:
         self.use_vad = False
         self.vad_threshold = 0.5
         self.vad_silence_duration = 1.0
+        self.vad_pre_speech_padding_ms = 150
+        self.vad_post_speech_padding_ms = 300
         self.vad_manager = None
 
         self.is_recording = False
@@ -59,7 +61,6 @@ class AudioHandler:
         self.sound_lock = threading.RLock()
         self.storage_lock = threading.Lock()
 
-        self._vad_silence_counter = 0.0
 
         self.temp_file_path: str | None = None
         self._sf_writer: sf.SoundFile | None = None
@@ -122,32 +123,20 @@ class AudioHandler:
                 if not self.in_memory_mode and self._sf_writer is None:
                     continue
 
-                write_data = None
                 if self.use_vad and self.vad_manager:
                     try:
-                        max_abs = float(np.max(np.abs(indata))) if indata.size else 0.0
-                        logging.debug(
-                            "VAD check chunk shape=%s dtype=%s max_abs=%.4f",
-                            indata.shape,
-                            indata.dtype,
-                            max_abs,
-                        )
-                        is_speech = self.vad_manager.is_speech(indata)
+                        frames_to_write = self.vad_manager.process_chunk(indata)
                     except Exception as exc:
                         self._handle_vad_exception(exc, indata)
-                        is_speech = True
-                    if is_speech:
-                        self._vad_silence_counter = 0.0
-                        write_data = indata
-                    else:
-                        self._vad_silence_counter += len(indata) / AUDIO_SAMPLE_RATE
-                        if self._vad_silence_counter <= self.vad_silence_duration:
-                            write_data = indata
+                        frames_to_write = [indata]
                 else:
-                    write_data = indata
+                    frames_to_write = [indata]
 
-                if write_data is not None:
-                    with self.storage_lock:
+                if not frames_to_write:
+                    continue
+
+                with self.storage_lock:
+                    for write_data in frames_to_write:
                         if self.in_memory_mode:
                             self._audio_frames.append(write_data.copy())
                             self._memory_samples += len(write_data)
@@ -161,7 +150,9 @@ class AudioHandler:
                                     total_mb = get_total_memory_mb()
                                     avail_mb = get_available_memory_mb()
                                     percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
-                                    logging.info(f"[METRIC] stage=ram_to_disk_migration reason=time_exceeded percent_free={percent_free:.1f}")
+                                    logging.info(
+                                        f"[METRIC] stage=ram_to_disk_migration reason=time_exceeded percent_free={percent_free:.1f}"
+                                    )
                                 except Exception:
                                     pass
                                 self._migrate_to_file()
@@ -178,7 +169,9 @@ class AudioHandler:
                                         f"Free RAM below {thr_percent}% of total ({percent_free:.1f}%). Moving from RAM to disk."
                                     )
                                     try:
-                                        logging.info(f"[METRIC] stage=ram_to_disk_migration reason=low_free_ram percent_free={percent_free:.1f} threshold={thr_percent}")
+                                        logging.info(
+                                            f"[METRIC] stage=ram_to_disk_migration reason=low_free_ram percent_free={percent_free:.1f} threshold={thr_percent}"
+                                        )
                                     except Exception:
                                         pass
                                     self._migrate_to_file()
@@ -187,6 +180,7 @@ class AudioHandler:
                                 self._sf_writer.write(write_data)
 
                         self._sample_count += len(write_data)
+
             except Exception as e:
                 logging.error(f"Error while processing audio queue: {e}")
 
@@ -197,7 +191,6 @@ class AudioHandler:
                 self.vad_manager.reset_states()
             except Exception:
                 logging.debug("Failed to reset VAD states after exception.", exc_info=True)
-        self._vad_silence_counter = 0.0
         try:
             max_abs = float(np.max(np.abs(chunk))) if chunk is not None and chunk.size else 0.0
             logging.debug(
@@ -353,7 +346,6 @@ class AudioHandler:
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
-        self._vad_silence_counter = 0.0
         logging.debug("VAD reset and silence counter cleared for new recording.")
 
         self.state_manager.set_state("RECORDING")
@@ -384,7 +376,6 @@ class AudioHandler:
 
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
-        self._vad_silence_counter = 0.0
         logging.debug("VAD reset and silence counter cleared when stopping recording.")
 
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
@@ -548,15 +539,30 @@ class AudioHandler:
         self.sound_volume = self.config_manager.get("sound_volume", 0.5)
         self.min_record_duration = self.config_manager.get("min_record_duration", 0.5)
 
-        self.use_vad = self.config_manager.get("use_vad", False)
-        self.vad_threshold = self.config_manager.get("vad_threshold", 0.5)
+        self.use_vad = bool(self.config_manager.get("use_vad", False))
+        self.vad_threshold = float(self.config_manager.get("vad_threshold", 0.5))
         self.vad_silence_duration = self.config_manager.get("vad_silence_duration", 1.0)
+        self.vad_pre_speech_padding_ms = int(
+            self.config_manager.get("vad_pre_speech_padding_ms", self.vad_pre_speech_padding_ms)
+        )
+        self.vad_post_speech_padding_ms = int(
+            self.config_manager.get("vad_post_speech_padding_ms", self.vad_post_speech_padding_ms)
+        )
 
         if self.use_vad:
             if self.vad_manager is None:
-                self.vad_manager = VADManager(threshold=self.vad_threshold)
+                self.vad_manager = VADManager(
+                    threshold=self.vad_threshold,
+                    sampling_rate=AUDIO_SAMPLE_RATE,
+                    pre_speech_padding_ms=self.vad_pre_speech_padding_ms,
+                    post_speech_padding_ms=self.vad_post_speech_padding_ms,
+                )
             else:
-                self.vad_manager.threshold = self.vad_threshold
+                self.vad_manager.configure(
+                    threshold=self.vad_threshold,
+                    pre_padding_ms=self.vad_pre_speech_padding_ms,
+                    post_padding_ms=self.vad_post_speech_padding_ms,
+                )
             if not self.vad_manager.enabled:
                 logging.error("VAD disabled: model not found.")
                 self.use_vad = False

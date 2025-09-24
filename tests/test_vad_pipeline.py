@@ -1,14 +1,15 @@
-import os
-import sys
 import unittest
 
 import numpy as np
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+try:
+    from src.vad_manager import VADManager
+except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
+    import os
+    import sys
 
-from src.vad_manager import VADManager  # noqa: E402
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    from src.vad_manager import VADManager
 
 
 class TestVADPipeline(unittest.TestCase):
