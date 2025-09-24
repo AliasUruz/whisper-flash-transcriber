@@ -20,6 +20,7 @@ from .config_manager import (
     GEMINI_MODEL_CONFIG_KEY,
     GEMINI_MODEL_OPTIONS_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
+    TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
@@ -3317,6 +3318,13 @@ class UIManager:
                 enabled=lambda item: self.core_instance_ref.current_state in ['RECORDING', 'IDLE']
             ),
             pystray.MenuItem(
+                '📝 Text Correction',
+                lambda: self.toggle_text_correction_from_tray(),
+                checked=lambda item: bool(
+                    self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY, False)
+                ),
+            ),
+            pystray.MenuItem(
                 '⚙️ Settings',
                 lambda: self.main_tk_root.after(0, self.run_settings_gui), # Call on main thread
                 enabled=lambda item: self.core_instance_ref.current_state not in ['LOADING_MODEL', 'RECORDING']
@@ -3370,6 +3378,40 @@ class UIManager:
         if self.tray_icon:
             self.tray_icon.stop()
         self.main_tk_root.quit()
+
+    def toggle_text_correction_from_tray(self):
+        """Toggle text correction directly from the tray menu."""
+        current_value = bool(
+            self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY, False)
+        )
+        new_value = not current_value
+
+        core = getattr(self, "core_instance_ref", None)
+        if core is None:
+            logging.error("Tray menu requested text correction toggle, but AppCore reference is unavailable.")
+            self.show_status_tooltip("Não foi possível acessar o núcleo do aplicativo.")
+            return
+
+        try:
+            core.update_setting(
+                TEXT_CORRECTION_ENABLED_CONFIG_KEY,
+                new_value,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging only
+            logging.error(
+                "Failed to toggle text correction from tray menu: %s",
+                exc,
+                exc_info=True,
+            )
+            self.show_status_tooltip("Falha ao atualizar a correção de texto.")
+            return
+
+        status_message = (
+            "Correção de texto ativada."
+            if new_value
+            else "Correção de texto desativada."
+        )
+        self.show_status_tooltip(status_message)
 
     def _prompt_for_manual_batch_size(self):
         """Prompts the user for a manual batch size and applies it."""

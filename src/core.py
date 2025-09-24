@@ -42,6 +42,8 @@ from .config_manager import (
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
+    TEXT_CORRECTION_ENABLED_CONFIG_KEY,
+    TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
@@ -1549,8 +1551,7 @@ class AppCore:
             from .utils.autostart import set_launch_at_startup
             set_launch_at_startup(bool(value))
 
-        # Propagar para TranscriptionHandler se for uma configuração relevante
-        if key in [
+        transcription_config_keys = {
             "batch_size_mode",
             "manual_batch_size",
             "gpu_index",
@@ -1564,7 +1565,19 @@ class AppCore:
             ASR_DTYPE_CONFIG_KEY,
             ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             ASR_CACHE_DIR_CONFIG_KEY,
-        ]:
+        }
+        text_correction_keys = {
+            "openrouter_api_key",
+            "openrouter_model",
+            "gemini_api_key",
+            "gemini_model",
+            "gemini_agent_model",
+            TEXT_CORRECTION_ENABLED_CONFIG_KEY,
+            TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+        }
+
+        # Propagar para TranscriptionHandler se for uma configuração relevante
+        if key in transcription_config_keys or key in text_correction_keys:
             self.transcription_handler.config_manager = self.config_manager  # Garantir que a referência esteja atualizada
             reload_needed = self.transcription_handler.update_config(trigger_reload=False)
             logging.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
@@ -1588,22 +1601,9 @@ class AppCore:
             self.audio_handler.update_config()
             logging.info(f"AudioHandler: Configurações atualizadas via update_setting para '{key}'.")
 
-        # Re-inicializar clientes API se a chave ou modelo mudou
-        if key in ["gemini_api_key", "gemini_model", "gemini_agent_model", "openrouter_api_key", "openrouter_model"]:
-            self.gemini_api.reinitialize_client()
-            if self.transcription_handler.gemini_client:
-                self.transcription_handler.gemini_client.reinitialize_client()
-            if self.transcription_handler.openrouter_client:
-                openrouter_timeout = self.config_manager.get_timeout(
-                    OPENROUTER_TIMEOUT_CONFIG_KEY,
-                    self.transcription_handler.openrouter_client.request_timeout,
-                )
-                self.transcription_handler.openrouter_client.reinitialize_client(
-                    api_key=self.config_manager.get("openrouter_api_key"),
-                    model_id=self.config_manager.get("openrouter_model"),
-                    request_timeout=openrouter_timeout,
-                )
-            logging.info(f"Clientes API re-inicializados via update_setting para '{key}'.")
+        # Re-inicializar clientes de correção de texto quando necessário
+        if key in text_correction_keys:
+            self._refresh_text_correction_clients()
 
         # Re-registrar hotkeys se as chaves ou modo mudaram
         if key in ["record_key", "agent_key", "record_mode"]:
@@ -1618,7 +1618,7 @@ class AppCore:
                     self.reregister_timer_thread = threading.Thread(target=self._periodic_reregister_task, daemon=True, name="PeriodicHotkeyReregister")
                     self.reregister_timer_thread.start()
                     logging.info("Periodic hotkey re-registration thread launched via update_setting.")
-                
+
                 if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
                     self.stop_health_check_event.clear()
                     self.health_check_thread = threading.Thread(target=self._hotkey_health_check_task, daemon=True, name="HotkeyHealthThread")
@@ -1628,8 +1628,41 @@ class AppCore:
                 self.stop_reregister_event.set()
                 self.stop_health_check_event.set()
                 logging.info("Hotkey stability services stopped via update_setting.")
-        
+
         logging.info(f"Configuração '{key}' atualizada e propagada com sucesso.")
+
+    def _refresh_text_correction_clients(self) -> None:
+        """Reinicializa clientes de correção de texto respeitando a configuração atual."""
+        try:
+            if getattr(self, "gemini_api", None):
+                self.gemini_api.reinitialize_client()
+        except Exception as exc:  # pragma: no cover - falhas são registradas apenas
+            logging.error(
+                "Falha ao reinicializar o cliente Gemini após alteração de configuração: %s",
+                exc,
+                exc_info=True,
+            )
+
+        openrouter_client = getattr(self.transcription_handler, "openrouter_client", None)
+        if not openrouter_client:
+            return
+
+        try:
+            openrouter_timeout = self.config_manager.get_timeout(
+                OPENROUTER_TIMEOUT_CONFIG_KEY,
+                getattr(openrouter_client, "request_timeout", None),
+            )
+            openrouter_client.reinitialize_client(
+                api_key=self.config_manager.get("openrouter_api_key"),
+                model_id=self.config_manager.get("openrouter_model"),
+                request_timeout=openrouter_timeout,
+            )
+        except Exception as exc:  # pragma: no cover - falhas são registradas apenas
+            logging.error(
+                "Falha ao reinicializar o cliente OpenRouter após alteração de configuração: %s",
+                exc,
+                exc_info=True,
+            )
 
     # --- Cleanup ---
     def _cleanup_old_audio_files_on_startup(self):
