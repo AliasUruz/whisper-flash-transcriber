@@ -172,6 +172,28 @@ class UIManager:
     # ------------------------------------------------------------------
     # Utilidades para gerenciamento da janela de configurações
     # ------------------------------------------------------------------
+    def _get_core_state(self) -> str:
+        """Retorna o estado atual exposto pelo ``StateManager`` do núcleo."""
+
+        core = getattr(self, "core_instance_ref", None)
+        if not core:
+            return "IDLE"
+
+        state_manager = getattr(core, "state_manager", None)
+        if state_manager and hasattr(state_manager, "get_current_state"):
+            try:
+                state = state_manager.get_current_state()
+            except Exception:
+                logging.debug(
+                    "UIManager: falha ao obter estado corrente via state_manager.",
+                    exc_info=True,
+                )
+            else:
+                if isinstance(state, str):
+                    return state
+
+        return "IDLE"
+
     def _set_settings_var(self, name: str, value: Any) -> None:
         self._settings_vars[name] = value
 
@@ -189,17 +211,59 @@ class UIManager:
         self._settings_meta.clear()
         self._pending_key_var_name = None
 
-    def _handle_detected_key(self, key: str) -> None:
+    def _handle_detected_key(self, key: str | None) -> None:
         target_var_name = self._pending_key_var_name
+        self._pending_key_var_name = None
         if not target_var_name:
             return
+
+        previous_value = self._get_settings_meta(f"{target_var_name}::previous_key")
         var = self._get_settings_var(target_var_name)
+
+        normalized_key: str | None = None
+        if isinstance(key, str) and key.strip():
+            normalized_key = key.strip().upper()
+
         if var is not None:
             try:
-                var.set(key)
+                if normalized_key:
+                    var.set(normalized_key)
+                elif previous_value is not None:
+                    var.set(previous_value)
+                else:
+                    var.set("PRESS KEY...")
             except Exception:
-                pass
-        self._pending_key_var_name = None
+                logging.debug(
+                    "UIManager: falha ao atualizar variável de tecla detectada.",
+                    exc_info=True,
+                )
+
+        self._set_settings_meta(f"{target_var_name}::previous_key", None)
+
+        core = getattr(self, "core_instance_ref", None)
+        if core and hasattr(core, "set_key_detection_callback"):
+            try:
+                core.set_key_detection_callback(None)
+            except Exception:
+                logging.debug(
+                    "UIManager: falha ao limpar callback de detecção de tecla.",
+                    exc_info=True,
+                )
+
+        if not normalized_key:
+            window = self._get_settings_var("window")
+            if window is not None:
+                try:
+                    messagebox.showinfo(
+                        "Hotkey Detection",
+                        "Nenhuma tecla detectada dentro do intervalo informado.",
+                        parent=window,
+                    )
+                except Exception:
+                    logging.debug(
+                        "UIManager: falha ao exibir alerta de detecção de tecla.",
+                        exc_info=True,
+                    )
 
     def _start_key_detection_for(self, var_name: str) -> None:
         key_var = self._get_settings_var(var_name)
@@ -221,16 +285,47 @@ class UIManager:
                 logging.error("Falha ao preparar contexto de detecção de tecla.", exc_info=True)
 
         try:
+            previous_value = key_var.get()
+        except Exception:
+            previous_value = None
+        self._set_settings_meta(f"{var_name}::previous_key", previous_value)
+        try:
             key_var.set("PRESS KEY...")
         except Exception:
+            self._set_settings_meta(f"{var_name}::previous_key", None)
             return
         try:
             window.update_idletasks()
         except Exception:
             pass
         self._pending_key_var_name = var_name
-        self.core_instance_ref.set_key_detection_callback(self._handle_detected_key)
-        self.core_instance_ref.start_key_detection_thread()
+        core = getattr(self, "core_instance_ref", None)
+        if not core or not hasattr(core, "set_key_detection_callback") or not hasattr(core, "start_key_detection_thread"):
+            if key_var is not None and previous_value is not None:
+                try:
+                    key_var.set(previous_value)
+                except Exception:
+                    pass
+            self._set_settings_meta(f"{var_name}::previous_key", None)
+            self._pending_key_var_name = None
+            logging.error("UIManager: núcleo indisponível para iniciar detecção de tecla.")
+            return
+
+        try:
+            core.set_key_detection_callback(self._handle_detected_key)
+            core.start_key_detection_thread(timeout=5.0)
+        except Exception:
+            logging.error(
+                "UIManager: falha ao iniciar detecção de tecla.",
+                exc_info=True,
+            )
+            if previous_value is not None:
+                try:
+                    key_var.set(previous_value)
+                except Exception:
+                    pass
+            self._set_settings_meta(f"{var_name}::previous_key", None)
+            self._pending_key_var_name = None
 
     def _safe_get_int(self, var, field_name: str, parent):
         """Wrapper em torno de :func:`safe_get_int` para manter logs centralizados."""
@@ -607,7 +702,7 @@ class UIManager:
 
     def _apply_settings_from_ui(self) -> None:
         settings_win = self._get_settings_var("window")
-        if self.core_instance_ref.current_state in ["RECORDING", "TRANSCRIBING", "LOADING_MODEL"]:
+        if self._get_core_state() in ["RECORDING", "TRANSCRIBING", "LOADING_MODEL"]:
             messagebox.showwarning(
                 "Apply Settings",
                 "Cannot apply while recording/transcribing/loading model.",
@@ -1155,7 +1250,6 @@ class UIManager:
                 "Reduces model precision for faster inference (float16/int8).",
             ),
         ).pack(side="left", padx=(0, 10))
-        ui_elements["quant_menu"] = quant_menu
 
         model_manager = self.model_manager
         catalog = model_manager.list_catalog()
@@ -1172,6 +1266,8 @@ class UIManager:
             )
             installed_ids = set()
         all_ids = sorted({m["id"] for m in catalog} | installed_ids)
+        id_to_display = {model_id: catalog_display_map.get(model_id, model_id) for model_id in all_ids}
+        display_to_id = {display: model_id for model_id, display in id_to_display.items()}
         ui_elements["id_to_display"] = id_to_display
         ui_elements["display_to_id"] = display_to_id
         asr_model_display_var = ctk.StringVar(
@@ -1191,7 +1287,7 @@ class UIManager:
         model_size_label = ctk.CTkLabel(asr_model_frame, text="Download: calculating... | Installed: -")
         model_size_label.pack(side="left", padx=5)
         ui_elements["model_size_label"] = model_size_label
-        ui_elements["model_size_label"] = model_size_label
+
         def _derive_backend_from_model(model_ref: str) -> str | None:
             model_id = ui_elements["display_to_id"].get(model_ref, model_ref)
             entry = next((m for m in ui_elements["catalog"] if m["id"] == model_id), None)
@@ -1328,6 +1424,7 @@ class UIManager:
         )
         asr_ct2_menu.pack(side="left", padx=5)
         Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
+        ui_elements["quant_menu"] = asr_ct2_menu
 
         asr_cache_frame = ctk.CTkFrame(asr_frame)
         _register_advanced(asr_cache_frame, fill="x", pady=5)
@@ -2243,7 +2340,7 @@ class UIManager:
                     """
                     logging.info("Apply settings clicked (in Tkinter thread).")
                     # State validations (moved to AppCore or handled via callbacks)
-                    if self.core_instance_ref.current_state in ["RECORDING", "TRANSCRIBING", "LOADING_MODEL"]:
+                    if self._get_core_state() in ["RECORDING", "TRANSCRIBING", "LOADING_MODEL"]:
                         messagebox.showwarning("Apply Settings", "Cannot apply while recording/transcribing/loading model.", parent=settings_win)
                         return
 
@@ -2434,12 +2531,15 @@ class UIManager:
                         gemini_model_menu.set(DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY])
                     gemini_model_options[:] = list(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
                     asr_model_id_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
-                    asr_model_display_var.set(
-                        id_to_display.get(
-                            DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
-                            DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                    asr_model_display_var = self._get_settings_var("asr_model_display_var")
+                    id_to_display_map = self._get_settings_meta("id_to_display", {})
+                    if asr_model_display_var is not None:
+                        asr_model_display_var.set(
+                            id_to_display_map.get(
+                                DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                                DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                            )
                         )
-                    )
                     gemini_prompt_correction_textbox.delete("1.0", "end")
                     gemini_prompt_correction_textbox.insert("1.0", DEFAULT_CONFIG[GEMINI_PROMPT_CONFIG_KEY])
                     agentico_prompt_textbox.delete("1.0", "end")
@@ -2452,12 +2552,15 @@ class UIManager:
                     batch_size_var.set(str(DEFAULT_CONFIG["batch_size"]))
                     asr_backend_var.set(DEFAULT_CONFIG[ASR_BACKEND_CONFIG_KEY])
                     asr_model_id_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
-                    asr_model_display_var.set(
-                        id_to_display.get(
-                            DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
-                            DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                    asr_model_display_var = self._get_settings_var("asr_model_display_var")
+                    id_to_display_map = self._get_settings_meta("id_to_display", {})
+                    if asr_model_display_var is not None:
+                        asr_model_display_var.set(
+                            id_to_display_map.get(
+                                DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                                DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY],
+                            )
                         )
-                    )
 
                     if DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY] == "cpu":
                         asr_compute_device_var.set("Force CPU")
@@ -2690,8 +2793,6 @@ class UIManager:
                 self._set_settings_var("transcription_frame", transcription_frame)
                 self._set_settings_var("asr_frame", asr_frame)
 
-        asr_ui_elements = {}
-
         self._build_asr_section(
             settings_win=settings_win,
             asr_frame=asr_frame,
@@ -2703,7 +2804,7 @@ class UIManager:
             asr_dtype_var=asr_dtype_var,
             asr_ct2_compute_type_var=asr_ct2_compute_type_var,
             asr_cache_dir_var=asr_cache_dir_var,
-            ui_elements=asr_ui_elements,
+            ui_elements={},
         )
 
         # New: Chunk Length Mode
@@ -2719,293 +2820,56 @@ class UIManager:
         chunk_mode_menu.pack(side="left", padx=5)
         Tooltip(chunk_mode_menu, "Choose how chunk size is determined.")
 
-                # New: Chunk Length (sec)
-                chunk_len_frame = ctk.CTkFrame(transcription_frame)
-                chunk_len_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(chunk_len_frame, text="Chunk Length (sec):").pack(side="left", padx=(5, 10))
-                chunk_len_entry = ctk.CTkEntry(chunk_len_frame, textvariable=chunk_length_sec_var, width=80)
-                chunk_len_entry.pack(side="left", padx=5)
-                self._set_settings_var("chunk_len_entry", chunk_len_entry)
-                Tooltip(chunk_len_entry, "Fixed chunk duration when in manual mode.")
-    
-                # New: Ignore Transcriptions Shorter Than
-                min_transcription_duration_frame = ctk.CTkFrame(transcription_frame)
-                min_transcription_duration_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(min_transcription_duration_frame, text="Ignore Transcriptions Shorter Than (sec):").pack(side="left", padx=(5, 10))
-                min_transcription_duration_entry = ctk.CTkEntry(min_transcription_duration_frame, textvariable=min_transcription_duration_var, width=80)
-                min_transcription_duration_entry.pack(side="left", padx=5)
-                Tooltip(min_transcription_duration_entry, "Discard segments shorter than this.")
+        # New: Chunk Length (sec)
+        chunk_len_frame = ctk.CTkFrame(transcription_frame)
+        chunk_len_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(chunk_len_frame, text="Chunk Length (sec):").pack(side="left", padx=(5, 10))
+        chunk_len_entry = ctk.CTkEntry(chunk_len_frame, textvariable=chunk_length_sec_var, width=80)
+        chunk_len_entry.pack(side="left", padx=5)
+        self._set_settings_var("chunk_len_entry", chunk_len_entry)
+        Tooltip(chunk_len_entry, "Fixed chunk duration when in manual mode.")
 
-                min_record_duration_frame = ctk.CTkFrame(transcription_frame)
-                min_record_duration_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(min_record_duration_frame, text="Minimum Record Duration (sec):").pack(side="left", padx=(5, 10))
-                min_record_duration_entry = ctk.CTkEntry(min_record_duration_frame, textvariable=min_record_duration_var, width=80)
-                min_record_duration_entry.pack(side="left", padx=5)
-                Tooltip(min_record_duration_entry, "Discard recordings shorter than this.")
+        # New: Ignore Transcriptions Shorter Than
+        min_transcription_duration_frame = ctk.CTkFrame(transcription_frame)
+        min_transcription_duration_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(
+            min_transcription_duration_frame,
+            text="Ignore Transcriptions Shorter Than (sec):",
+        ).pack(side="left", padx=(5, 10))
+        min_transcription_duration_entry = ctk.CTkEntry(
+            min_transcription_duration_frame,
+            textvariable=min_transcription_duration_var,
+            width=80,
+        )
+        min_transcription_duration_entry.pack(side="left", padx=5)
+        Tooltip(min_transcription_duration_entry, "Discard segments shorter than this.")
 
-                self._build_vad_section(settings_win, use_vad_var, vad_threshold_var, vad_silence_duration_var, vad_pre_speech_padding_ms_var, vad_post_speech_padding_ms_var)
+        min_record_duration_frame = ctk.CTkFrame(transcription_frame)
+        min_record_duration_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(
+            min_record_duration_frame,
+            text="Minimum Record Duration (sec):",
+        ).pack(side="left", padx=(5, 10))
+        min_record_duration_entry = ctk.CTkEntry(
+            min_record_duration_frame,
+            textvariable=min_record_duration_var,
+            width=80,
+        )
+        min_record_duration_entry.pack(side="left", padx=5)
+        Tooltip(min_record_duration_entry, "Discard recordings shorter than this.")
 
-                # ASR Section
-                asr_frame = ctk.CTkFrame(settings_win)
-                asr_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_frame, text="ASR Settings", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=5)
+        self._build_vad_section(
+            settings_win,
+            use_vad_var,
+            vad_threshold_var,
+            vad_silence_duration_var,
+            vad_pre_speech_padding_ms_var,
+            vad_post_speech_padding_ms_var,
+        )
 
-                def _update_model_info(model_ref: str) -> None:
-                    model_size_label.configure(text="Download: calculating... | Installed: -")
-                    model_id = display_to_id.get(model_ref, model_ref)
-                    try:
-                        d_bytes, d_files = model_manager.get_model_download_size(model_id)
-                        d_mb = d_bytes / (1024 * 1024)
-                        download_text = f"{d_mb:.1f} MB ({d_files} files)"
-                    except Exception:
-                        download_text = "?"
+        self._update_text_correction_fields()
 
-                    try:
-                        installed_models = model_manager.list_installed(asr_cache_dir_var.get())
-                    except OSError:
-                        messagebox.showerror(
-                            "Configuration",
-                            "Unable to access the model cache directory. Please review the path in Settings.",
-                        )
-                        installed_models = []
-                    entry = next((m for m in installed_models if m["id"] == model_id), None)
-                    if entry:
-                        i_bytes, i_files = model_manager.get_installed_size(entry["path"])
-                        i_mb = i_bytes / (1024 * 1024)
-                        installed_text = f"{i_mb:.1f} MB ({i_files} files)"
-                    else:
-                        installed_text = "-"
-
-                    model_size_label.configure(
-                        text=f"Download: {download_text} | Installed: {installed_text}"
-                    )
-
-                def _derive_backend_from_model(model_ref: str) -> str | None:
-                    model_id = display_to_id.get(model_ref, model_ref)
-                    entry = next((m for m in catalog if m["id"] == model_id), None)
-                    if not entry:
-                        installed = model_manager.list_installed(asr_cache_dir_var.get())
-                        entry = next((m for m in installed if m["id"] == model_id), None)
-                    backend = entry.get("backend") if entry else None
-                    if backend in ("faster-whisper", "ctranslate2"):
-                        backend = "ct2"
-                    if backend not in ("transformers", "ct2"):
-                        return None
-                    return backend
-
-                def _update_install_button_state() -> None:
-                    backend = _derive_backend_from_model(asr_model_id_var.get())
-                    if install_button is not None:
-                        install_button.configure(state="normal" if backend else "disabled")
-                    quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
-                    if install_button is not None:
-                        _apply_post_download_ui()
-
-                def _on_model_change(choice_display: str) -> None:
-                    model_id = display_to_id.get(choice_display, choice_display)
-                    asr_model_id_var.set(model_id)
-                    asr_model_display_var.set(id_to_display.get(model_id, model_id))
-                    backend = _derive_backend_from_model(model_id)
-                    if backend:
-                        asr_backend_var.set(backend)
-                        asr_backend_menu.configure(state="disabled")
-                    else:
-                        asr_backend_menu.configure(state="normal")
-                    self.config_manager.set_asr_model_id(model_id)
-                    self.config_manager.set_asr_backend(asr_backend_var.get())
-                    self.config_manager.save_config()
-                    on_backend_change(asr_backend_var.get())
-                    _update_model_info(model_id)
-                    _update_install_button_state()
-                    _apply_post_download_ui()
-
-                asr_model_menu.configure(command=_on_model_change)
-                _on_model_change(asr_model_display_var.get())
-
-                asr_device_frame = ctk.CTkFrame(asr_frame)
-                asr_device_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_device_frame, text="ASR Compute Device:").pack(side="left", padx=(5, 10))
-                asr_device_menu = ctk.CTkOptionMenu(asr_device_frame, variable=asr_compute_device_var, values=available_devices)
-                asr_device_menu.pack(side="left", padx=5)
-                Tooltip(asr_device_menu, "Select compute device for ASR model.")
-
-                asr_dtype_frame = ctk.CTkFrame(asr_frame)
-                asr_dtype_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_dtype_frame, text="ASR DType:").pack(side="left", padx=(5, 0))
-                ctk.CTkButton(
-                    asr_dtype_frame,
-                    text="?",
-                    width=20,
-                    command=lambda: messagebox.showinfo(
-                        "ASR DType",
-                        "Torch tensor precision for ASR weights and activations.",
-                    ),
-                ).pack(side="left", padx=(0, 10))
-                asr_dtype_menu = ctk.CTkOptionMenu(
-                    asr_dtype_frame, variable=asr_dtype_var, values=["auto", "float16", "float32"]
-                )
-                asr_dtype_menu.pack(side="left", padx=5)
-                Tooltip(asr_dtype_menu, "Torch dtype for ASR model.")
-
-                asr_ct2_frame = ctk.CTkFrame(transcription_frame)
-                asr_ct2_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 0))
-                ctk.CTkButton(
-                    asr_ct2_frame,
-                    text="?",
-                    width=20,
-                    command=lambda: messagebox.showinfo(
-                        "CT2 Compute Type",
-                        "Numeric precision mode for the CTranslate2 backend.",
-                    ),
-                ).pack(side="left", padx=(0, 10))
-                asr_ct2_menu = ctk.CTkOptionMenu(
-                    asr_ct2_frame,
-                    variable=asr_ct2_compute_type_var,
-                    values=["default", "float16", "float32", "int8", "int8_float16", "int8_float32"],
-                )
-                asr_ct2_menu.pack(side="left", padx=5)
-                self._set_settings_var("asr_ct2_menu", asr_ct2_menu)
-                Tooltip(asr_ct2_menu, "Compute type for CTranslate2 backend.")
-
-                asr_cache_frame = ctk.CTkFrame(transcription_frame)
-                asr_cache_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(
-                    asr_cache_frame,
-                    text="ASR Cache Directory:",
-                    width=200,
-                ).pack(side="left", padx=(5, 10))
-                asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
-                asr_cache_entry.pack(side="left", padx=5)
-                Tooltip(asr_cache_entry, "Directory used to cache ASR models.")
-
-                def _install_model():
-                    cache_dir = asr_cache_dir_var.get()
-                    try:
-                        Path(cache_dir).mkdir(parents=True, exist_ok=True)
-                    except Exception as e:
-                        messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}")
-                        return
-
-                    model_id = asr_model_id_var.get()
-                    backend = _derive_backend_from_model(model_id)
-                    if backend is None:
-                        messagebox.showerror(
-                            "Model", "Unable to determine backend for selected model.",
-                        )
-                        return
-
-                    try:
-                        size_bytes, file_count = model_manager.get_model_download_size(model_id)
-                        size_gb = size_bytes / (1024 ** 3)
-                        detail = f"approximately {size_gb:.2f} GB ({file_count} files)"
-                    except Exception:
-                        detail = "an unspecified size"
-
-                    if not messagebox.askyesno(
-                        "Model Download",
-                        f"Model '{model_id}' will download {detail}.\nContinue?",
-                    ):
-                        return
-
-                    # --- Início do download em thread ---
-                    download_frame = self._get_settings_var("download_frame")
-                    progress_label = self._get_settings_var("progress_label")
-                    progress_bar = self._get_settings_var("progress_bar")
-                    install_button = self._get_settings_var("install_button")
-                    reload_button = self._get_settings_var("reload_button")
-
-                    def download_task():
-                        # UI updates must be on main thread
-                        def _update_ui_start():
-                            progress_label.configure(text=f"Downloading {model_id}...")
-                            progress_bar.start()
-                            download_frame.pack(fill="x", pady=10, after=reload_button)
-                            install_button.configure(state="disabled")
-                            reload_button.configure(state="disabled")
-
-                        self.main_tk_root.after(0, _update_ui_start)
-
-                        try:
-                            quant = asr_ct2_compute_type_var.get() if backend == "ct2" else None
-                            # Esta é a chamada bloqueante que agora está na thread
-                            self.core_instance_ref.download_model_and_reload(model_id, backend, cache_dir, quant)
-                            self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download completed successfully."))
-
-                        except self._download_cancelled_error:
-                            self.main_tk_root.after(0, lambda: messagebox.showinfo("Model", "Download canceled."))
-                        except Exception as e:
-                            logging.error(f"Error during model download task: {e}", exc_info=True)
-                            self.main_tk_root.after(
-                                0,
-                                lambda err=e: messagebox.showerror(
-                                    "Model", f"Download failed: {err}"
-                                ),
-                            )
-                        finally:
-                            # Limpeza da UI na thread principal
-                            def _update_ui_finish():
-                                progress_bar.stop()
-                                download_frame.pack_forget()
-                                install_button.configure(state="normal")
-                                reload_button.configure(state="normal")
-                                _update_model_info(model_id) # Atualiza o tamanho instalado
-
-                            self.main_tk_root.after(0, _update_ui_finish)
-
-                    threading.Thread(target=download_task, daemon=True, name="ModelDownloadTask").start()
-
-                def _reload_model():
-                    handler = getattr(self.core_instance_ref, "transcription_handler", None)
-                    if handler:
-                        handler.reload_asr()
-
-
-                install_button = ctk.CTkButton(
-                    asr_frame, text="Install/Update", command=self._install_selected_model
-                )
-                install_button.pack(pady=5)
-                install_button_tooltip = Tooltip(
-                    install_button,
-                    "Install or update the selected ASR model.",
-                )
-                reload_button = ctk.CTkButton(
-                    asr_frame, text="Reload Model", command=self._reload_current_model
-                )
-                reload_button.pack(pady=5)
-                Tooltip(reload_button, "Reload the ASR model from disk.")
-
-                # --- Download Progress Frame (Initially Hidden) ---
-                download_frame = ctk.CTkFrame(asr_frame)
-
-                progress_label = ctk.CTkLabel(download_frame, text="Downloading model...")
-                progress_label.pack(side="left", padx=(10, 5))
-
-                progress_bar = ctk.CTkProgressBar(download_frame, mode='indeterminate')
-                progress_bar.pack(side="left", fill="x", expand=True, padx=5)
-
-                def _cancel_download_from_ui():
-                    if self.core_instance_ref:
-                        self.core_instance_ref.cancel_model_download()
-
-                cancel_button = ctk.CTkButton(download_frame, text="Cancel", command=_cancel_download_from_ui, width=80, fg_color="gray50")
-                cancel_button.pack(side="left", padx=(5, 10))
-
-                self._set_settings_var("download_frame", download_frame)
-                self._set_settings_var("progress_label", progress_label)
-                self._set_settings_var("progress_bar", progress_bar)
-                self._set_settings_var("install_button", install_button)
-                self._set_settings_var("reload_button", reload_button)
-
-                _update_model_info(asr_model_id_var.get())
-                _update_install_button_state()
-                on_backend_change(asr_backend_var.get())
-
-                _apply_post_download_ui()
-
-                self._update_text_correction_fields()
-
-            def show_status_tooltip(self, message: str) -> None:
+    def show_status_tooltip(self, message: str) -> None:
         if not message:
             return
         if self.tray_icon:
@@ -3017,7 +2881,7 @@ class UIManager:
 
     def setup_tray_icon(self):
         # Logic moved from global, adjusted to use self.
-        initial_state = self.core_instance_ref.current_state
+        initial_state = self._get_core_state()
         try:
             initial_image = Image.open("icon.png")
         except FileNotFoundError:
@@ -3056,7 +2920,7 @@ class UIManager:
     def create_dynamic_menu(self):
         # Logic moved from global, adjusted to use self.core_instance_ref
         # ...
-        current_state = self.core_instance_ref.current_state
+        current_state = self._get_core_state()
         is_recording = current_state == "RECORDING"
 
         menu_items = [
@@ -3064,7 +2928,7 @@ class UIManager:
                 '⏹️ Stop Recording' if is_recording else '▶️ Start Recording',
                 lambda: self.core_instance_ref.toggle_recording(),
                 default=True,
-                enabled=lambda item: self.core_instance_ref.current_state in ['RECORDING', 'IDLE']
+                enabled=lambda item: self._get_core_state() in ['RECORDING', 'IDLE']
             ),
             pystray.MenuItem(
                 '📝 Text Correction',
@@ -3076,7 +2940,7 @@ class UIManager:
             pystray.MenuItem(
                 '⚙️ Settings',
                 lambda: self.main_tk_root.after(0, self.run_settings_gui), # Call on main thread
-                enabled=lambda item: self.core_instance_ref.current_state not in ['LOADING_MODEL', 'RECORDING']
+                enabled=lambda item: self._get_core_state() not in ['LOADING_MODEL', 'RECORDING']
             ),
             pystray.MenuItem(
                 'Gemini Model',
