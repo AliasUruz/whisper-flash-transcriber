@@ -41,8 +41,8 @@ class VADManager:
 
         self.threshold = threshold
         self.sr = sampling_rate
-        self.vad_pre_speech_padding_ms = vad_pre_speech_padding_ms
-        self.vad_post_speech_padding_ms = vad_post_speech_padding_ms
+        self.vad_pre_speech_padding_ms = pre_speech_padding_ms
+        self.vad_post_speech_padding_ms = post_speech_padding_ms
         self.enabled = False
         self._chunk_counter = 0
         self.session = None
@@ -119,6 +119,17 @@ class VADManager:
             logging.debug("VAD received an empty chunk; returning False.")
             return False, None
 
+        if not hasattr(self, "pre_speech_buffer"):
+            self.pre_speech_buffer = np.array([], dtype=np.float32)
+        if not isinstance(self.pre_speech_buffer, np.ndarray):
+            self.pre_speech_buffer = np.asarray(self.pre_speech_buffer, dtype=np.float32)
+        if not hasattr(self, "post_speech_cooldown"):
+            self.post_speech_cooldown = 0
+        if not hasattr(self, "vad_pre_speech_padding_ms"):
+            self.vad_pre_speech_padding_ms = getattr(self, "pre_speech_padding_ms", 0)
+        if not hasattr(self, "vad_post_speech_padding_ms"):
+            self.vad_post_speech_padding_ms = getattr(self, "post_speech_padding_ms", 0)
+
         prepared, peak = self._prepare_input(raw_array)
         mono_view = prepared.reshape(-1) if prepared.size else np.empty(0, dtype=np.float32)
 
@@ -142,7 +153,15 @@ class VADManager:
                 detected, _, _, _ = self._energy_gate(mono_view, self.threshold)
 
         if detected:
-            self.post_speech_cooldown = int(self.vad_post_speech_padding_ms / 1000 * self.sr)
+            try:
+                post_padding_ms = float(self.vad_post_speech_padding_ms)
+            except (TypeError, ValueError):
+                post_padding_ms = 0.0
+            try:
+                sr_value = float(self.sr)
+            except (TypeError, ValueError):
+                sr_value = 16000.0
+            self.post_speech_cooldown = int(post_padding_ms / 1000.0 * sr_value)
             if self.pre_speech_buffer.size > 0:
                 # Retorna o buffer de pre-speech e o chunk atual
                 returning_buffer = np.concatenate([self.pre_speech_buffer, raw_array])
@@ -156,7 +175,15 @@ class VADManager:
 
             # Adiciona ao buffer de pre-speech
             self.pre_speech_buffer = np.concatenate([self.pre_speech_buffer, raw_array])
-            max_buffer_size = int(self.vad_pre_speech_padding_ms / 1000 * self.sr)
+            try:
+                pre_padding_ms = float(self.vad_pre_speech_padding_ms)
+            except (TypeError, ValueError):
+                pre_padding_ms = 0.0
+            try:
+                sr_value = float(self.sr)
+            except (TypeError, ValueError):
+                sr_value = 16000.0
+            max_buffer_size = int(pre_padding_ms / 1000.0 * sr_value)
             if self.pre_speech_buffer.size > max_buffer_size:
                 self.pre_speech_buffer = self.pre_speech_buffer[-max_buffer_size:]
             return False, None
