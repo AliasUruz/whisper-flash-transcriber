@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -29,7 +30,13 @@ class VADManager:
         """Verifica se o arquivo do modelo Silero VAD esta presente."""
         return MODEL_PATH.exists()
 
-    def __init__(self, threshold: float = 0.5, sampling_rate: int = 16000):
+    def __init__(
+        self,
+        threshold: float = 0.5,
+        sampling_rate: int = 16000,
+        pre_speech_padding_ms: int = 150,
+        post_speech_padding_ms: int = 300,
+    ):
         """Inicializa o VAD Manager."""
 
         self.threshold = threshold
@@ -39,6 +46,13 @@ class VADManager:
         self.session = None
         self._use_energy_fallback = False
         self._fallback_notified = False
+        self.pre_speech_padding_ms = max(0, int(pre_speech_padding_ms))
+        self.post_speech_padding_ms = max(0, int(post_speech_padding_ms))
+        self._pre_buffer: deque[np.ndarray] = deque()
+        self._pre_buffer_samples = 0
+        self._speech_active = False
+        self._post_silence_samples = 0
+        self._update_padding_samples()
 
         if not self.is_model_available():
             logging.error(
@@ -82,6 +96,10 @@ class VADManager:
     def reset_states(self) -> None:
         """Reseta os estados internos do modelo."""
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._pre_buffer.clear()
+        self._pre_buffer_samples = 0
+        self._speech_active = False
+        self._post_silence_samples = 0
 
     def is_speech(self, audio_chunk: np.ndarray) -> bool:
         """Retorna ``True`` se o chunk contem fala."""
@@ -152,6 +170,48 @@ class VADManager:
             prepared.shape,
         )
         return speech_prob > self.threshold
+
+    def configure(
+        self,
+        *,
+        threshold: float | None = None,
+        pre_padding_ms: int | None = None,
+        post_padding_ms: int | None = None,
+    ) -> None:
+        """Atualiza parâmetros do VAD em tempo de execução."""
+
+        if threshold is not None:
+            self.threshold = float(threshold)
+        if pre_padding_ms is not None:
+            self.pre_speech_padding_ms = max(0, int(pre_padding_ms))
+        if post_padding_ms is not None:
+            self.post_speech_padding_ms = max(0, int(post_padding_ms))
+        self._update_padding_samples()
+
+    def process_chunk(self, chunk: np.ndarray) -> list[np.ndarray]:
+        """Retorna os frames que devem ser escritos considerando padding."""
+
+        frames: list[np.ndarray] = []
+        speech_detected = self.is_speech(chunk)
+
+        if speech_detected:
+            if not self._speech_active:
+                frames.extend(self._drain_pre_buffer())
+                self._speech_active = True
+            self._post_silence_samples = 0
+            frames.append(np.asarray(chunk, dtype=np.float32).copy())
+            return frames
+
+        if self._speech_active:
+            self._post_silence_samples += len(chunk)
+            frames.append(np.asarray(chunk, dtype=np.float32).copy())
+            if self._post_silence_samples >= self._post_padding_samples:
+                self._speech_active = False
+                self._post_silence_samples = 0
+            return frames
+
+        self._append_to_pre_buffer(np.asarray(chunk, dtype=np.float32))
+        return frames
 
 
     @staticmethod
@@ -231,3 +291,24 @@ class VADManager:
             else:
                 logging.warning("VAD fallback to energy detection enabled (%s): %s", reason, exc)
             self._fallback_notified = True
+
+    def _append_to_pre_buffer(self, chunk: np.ndarray) -> None:
+        if chunk.size == 0:
+            return
+        self._pre_buffer.append(chunk.copy())
+        self._pre_buffer_samples += len(chunk)
+        while self._pre_buffer_samples > self._pre_padding_samples and self._pre_buffer:
+            removed = self._pre_buffer.popleft()
+            self._pre_buffer_samples -= len(removed)
+
+    def _drain_pre_buffer(self) -> list[np.ndarray]:
+        if not self._pre_buffer:
+            return []
+        drained = list(self._pre_buffer)
+        self._pre_buffer.clear()
+        self._pre_buffer_samples = 0
+        return [frame.copy() for frame in drained]
+
+    def _update_padding_samples(self) -> None:
+        self._pre_padding_samples = int(self.sr * (self.pre_speech_padding_ms / 1000.0))
+        self._post_padding_samples = int(self.sr * (self.post_speech_padding_ms / 1000.0))
