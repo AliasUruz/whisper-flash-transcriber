@@ -301,6 +301,11 @@ class TranscriptionHandler:
         bool
             Indica se parâmetros que exigem recarregamento foram modificados.
         """
+        previous_text_correction_enabled = getattr(self, "text_correction_enabled", False)
+        previous_text_correction_service = getattr(self, "text_correction_service", SERVICE_NONE)
+        previous_openrouter_key = getattr(self, "openrouter_api_key", "")
+        previous_openrouter_model = getattr(self, "openrouter_model", "")
+
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)
         self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY)
         self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)
@@ -352,6 +357,13 @@ class TranscriptionHandler:
             or cache_dir_changed
         )
 
+        correction_changed = (
+            previous_text_correction_enabled != self.text_correction_enabled
+            or previous_text_correction_service != self.text_correction_service
+            or previous_openrouter_key != self.openrouter_api_key
+            or previous_openrouter_model != self.openrouter_model
+        )
+
         # Atualiza internamente sem acionar recarga automática; o caller decide
         # quando reconstruir o backend.
         self._asr_backend_name = backend_value
@@ -367,6 +379,9 @@ class TranscriptionHandler:
                 "TranscriptionHandler: parâmetros críticos alterados; recarregando backend ASR.",
             )
             self.reload_asr()
+
+        if correction_changed:
+            self._init_api_clients()
 
         logging.info("TranscriptionHandler: Configurações atualizadas.")
         return reload_needed
