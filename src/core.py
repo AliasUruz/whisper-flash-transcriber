@@ -73,6 +73,9 @@ class AppCore:
         self.keyboard_lock = RLock()
         self.agent_mode_lock = RLock() # Adicionado para o modo agente
         self.model_prompt_lock = RLock()
+        self._key_detection_thread: threading.Thread | None = None
+        self._key_detection_target: str | None = None
+        self._key_detection_previous_value: str | None = None
 
         # --- Callbacks para UI (definidos externamente pelo UIManager) ---
         self.state_update_callback: StateUpdateCallback | None = None
@@ -123,11 +126,6 @@ class AppCore:
                 exc_info=True,
             )
 
-        self.action_orchestrator = ActionOrchestrator(
-            state_manager=self.state_manager,
-            transcription_handler=self.transcription_handler,
-            config_manager=self.config_manager,
-        )
         self.audio_handler = AudioHandler(
             config_manager=self.config_manager,
             state_manager=self.state_manager,
@@ -590,6 +588,41 @@ class AppCore:
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
 
+    def prepare_key_detection(self, target: str, *, current_value: str | None = None) -> None:
+        """Configura o contexto utilizado pela captura assíncrona de hotkeys."""
+
+        normalized = (target or "").strip().lower()
+        if normalized in {"record", "record_key", "detected_key_var"}:
+            normalized = "record"
+        elif normalized in {"agent", "agent_key", "agent_key_var"}:
+            normalized = "agent"
+        else:
+            logging.debug(
+                "Key detection requested for unknown target '%s'. Falling back to record hotkey.",
+                target,
+            )
+            normalized = "record"
+
+        with self.keyboard_lock:
+            self._key_detection_target = normalized
+            if current_value and current_value.strip() and current_value.strip().upper() != "PRESS KEY...":
+                self._key_detection_previous_value = current_value.strip()
+            else:
+                self._key_detection_previous_value = None
+
+    def _resolve_key_detection_fallback(self) -> str:
+        """Resolve o valor usado quando nenhuma tecla é capturada."""
+
+        with self.keyboard_lock:
+            target = self._key_detection_target or "record"
+            fallback = self._key_detection_previous_value
+
+        if fallback:
+            return fallback
+        if target == "agent":
+            return str(getattr(self, "agent_key", ""))
+        return str(getattr(self, "record_key", ""))
+
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
         logging.info("AppCore: Model loaded successfully.")
@@ -680,6 +713,66 @@ class AppCore:
 
     def start_key_detection_thread(self):
         """Inicia uma thread para detectar uma única tecla e atualizar a UI."""
+
+        manager = getattr(self, "ahk_manager", None)
+        if manager is None:
+            logging.error("Hotkey manager indisponível; não é possível detectar teclas.")
+            return
+
+        callback = getattr(self, "key_detection_callback", None)
+        if callback is None:
+            logging.debug("Key detection requested without UI callback configured.")
+            return
+
+        def _deliver(result: str) -> None:
+            try:
+                callback(result)
+            except Exception:  # pragma: no cover - UI callback defensivo
+                logging.error("Callback de detecção de tecla gerou exceção.", exc_info=True)
+
+        def _detect() -> None:
+            try:
+                detected_key = manager.detect_key(timeout=5.0)
+            except Exception as exc:  # pragma: no cover - camada de hardware
+                logging.error("Erro durante detecção de tecla: %s", exc, exc_info=True)
+                detected_key = None
+
+            if not detected_key:
+                logging.info("Nenhuma tecla detectada dentro do timeout configurado; restaurando valor anterior.")
+                detected_key = self._resolve_key_detection_fallback()
+            else:
+                detected_key = str(detected_key)
+
+            def _invoke() -> None:
+                _deliver(detected_key)
+
+            if self.main_tk_root:
+                try:
+                    self.main_tk_root.after(0, _invoke)
+                except Exception:  # pragma: no cover - entrega síncrona como fallback
+                    logging.debug(
+                        "Falha ao agendar callback de detecção no loop Tk; executando diretamente.",
+                        exc_info=True,
+                    )
+                    _invoke()
+            else:
+                _invoke()
+
+            with self.keyboard_lock:
+                self._key_detection_thread = None
+                self._key_detection_target = None
+                self._key_detection_previous_value = None
+
+        with self.keyboard_lock:
+            if self._key_detection_thread and self._key_detection_thread.is_alive():
+                logging.debug("Thread de detecção de tecla já está em execução; ignorando novo pedido.")
+                return
+            self._key_detection_thread = threading.Thread(
+                target=_detect,
+                daemon=True,
+                name="KeyDetectionThread",
+            )
+            self._key_detection_thread.start()
 
     def is_state_transcribing(self) -> bool:
         """Indica se o estado atual é TRANSCRIBING."""

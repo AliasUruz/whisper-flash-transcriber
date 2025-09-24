@@ -206,6 +206,20 @@ class UIManager:
         window = self._get_settings_var("window")
         if key_var is None or window is None:
             return
+
+        try:
+            current_value = key_var.get()
+        except Exception:
+            current_value = None
+
+        detection_target = "agent" if var_name == "agent_key_var" else "record"
+        core = getattr(self, "core_instance_ref", None)
+        if core and hasattr(core, "prepare_key_detection"):
+            try:
+                core.prepare_key_detection(detection_target, current_value=current_value)
+            except Exception:
+                logging.error("Falha ao preparar contexto de detecção de tecla.", exc_info=True)
+
         try:
             key_var.set("PRESS KEY...")
         except Exception:
