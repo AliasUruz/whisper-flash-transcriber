@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any, List
 
 import requests
-import tkinter.messagebox as messagebox
 
-from .model_manager import list_catalog, list_installed
+from .config_schema import AppConfig
+from pydantic import ValidationError
+
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -80,6 +81,8 @@ DEFAULT_CONFIG = {
     "vad_threshold": 0.5,
     # Duração máxima da pausa preservada antes que o silêncio seja descartado
     "vad_silence_duration": 1.0,
+    "vad_pre_speech_padding_ms": 200,
+    "vad_post_speech_padding_ms": 300,
     "display_transcripts_in_terminal": False,
     "gemini_model_options": [
         "gemini-2.5-flash-lite",
@@ -208,7 +211,7 @@ def _normalize_asr_backend(name: str | None) -> str | None:
 
 
 
-class ConfigManager:
+
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
         self.config_file = config_file
         self.default_config = default_config
@@ -256,26 +259,6 @@ class ConfigManager:
             loaded_config_from_file = {}
             cfg = copy.deepcopy(self.default_config)
 
-        # Migrations for older configs
-        if "vad_enabled" in loaded_config_from_file:
-            logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
-            cfg["use_vad"] = loaded_config_from_file.pop("vad_enabled")
-        if ("record_storage_mode" not in loaded_config_from_file and "record_to_memory" in loaded_config_from_file):
-            logging.info("Migrating legacy 'record_to_memory' key to 'record_storage_mode'.")
-            rec_mem = _parse_bool(loaded_config_from_file["record_to_memory"])
-            cfg["record_storage_mode"] = "memory" if rec_mem else "disk"
-        
-        old_agent_prompt = (
-            "Você é um assistente de IA que integra um sistema operacional. "
-            "Se o usuário pedir uma ação que possa ser resolvida por um comando de terminal "
-            "(como listar arquivos, verificar o IP, etc.), responda exclusivamente com o comando "
-            "dentro das tags <cmd>comando</cmd>. Para todas as outras solicitações, responda normalmente."
-        )
-        current_agent_prompt = cfg.get("prompt_agentico", "")
-        if current_agent_prompt == old_agent_prompt:
-            cfg["prompt_agentico"] = self.default_config["prompt_agentico"]
-            logging.info("Old agent prompt detected and migrated to the new standard.")
-
         # Load secrets
         secrets_loaded = {}
         try:
@@ -295,358 +278,28 @@ class ConfigManager:
             logging.error(f"An unexpected error occurred while loading {SECRETS_FILE}: {e}. API keys might be missing or invalid.", exc_info=True)
             self._secrets_hash = None
 
-        # Validate ASR cache directory
-        asr_cache_dir = cfg.get(ASR_CACHE_DIR_CONFIG_KEY, "")
-        asr_cache_dir = os.path.expanduser(str(asr_cache_dir)) if isinstance(asr_cache_dir, str) else ""
-        if not asr_cache_dir or not os.path.isdir(asr_cache_dir):
-            asr_cache_dir = os.path.expanduser(self.default_config[ASR_CACHE_DIR_CONFIG_KEY])
-            cfg[ASR_CACHE_DIR_CONFIG_KEY] = asr_cache_dir
         try:
-            os.makedirs(asr_cache_dir, exist_ok=True)
-        except Exception as e:
-            logging.warning(f"Failed to create ASR cache directory '{asr_cache_dir}': {e}")
+            validated_config = AppConfig.parse_obj(cfg)
+            self.config = validated_config.dict()
+        except ValidationError as e:
+            logging.error(f"Configuration validation error: {e}")
+            for error in e.errors():
+                field = ".".join(error["loc"])
+                logging.warning(f"Invalid value for '{field}': {error['msg']}. Using default value.")
+                # Reverter para o valor padrão para o campo específico
+                default_value = self.default_config
+                for loc in error["loc"]:
+                    default_value = default_value[loc]
+                
+                # Atualizar o dicionário de configuração com o valor padrão
+                temp_cfg = cfg
+                for i, loc in enumerate(error["loc"]):
+                    if i == len(error["loc"]) - 1:
+                        temp_cfg[loc] = default_value
+                    else:
+                        temp_cfg = temp_cfg[loc]
+            self.config = cfg
 
-        cfg["asr_curated_catalog"] = list_catalog()
-        try:
-            cfg["asr_installed_models"] = list_installed(asr_cache_dir)
-        except OSError:
-            messagebox.showerror("Configuração", "Diretório de cache inválido. Verifique as configurações.")
-            cfg["asr_installed_models"] = []
-        except Exception as e:
-            logging.warning(f"Failed to list installed models: {e}")
-            cfg["asr_installed_models"] = []
-
-        self.config = cfg
-        self._validate_and_apply_config(loaded_config_from_file)
-        self.save_config()
-
-    def _validate_and_apply_config(self, loaded_config):
-        self.config["record_key"] = str(self.config.get("record_key", self.default_config["record_key"])).lower()
-        self.config["record_mode"] = str(self.config.get("record_mode", self.default_config["record_mode"])).lower()
-        if self.config["record_mode"] not in ["toggle", "press"]:
-            logging.warning(f"Invalid record_mode '{self.config['record_mode']}'. Falling back to '{self.default_config['record_mode']}'.")
-            self.config["record_mode"] = self.default_config['record_mode']
-        
-        # Unificar auto_paste e agent_auto_paste
-        self.config["auto_paste"] = _parse_bool(
-            self.config.get("auto_paste", self.default_config["auto_paste"])
-        )
-        self.config["agent_auto_paste"] = self.config["auto_paste"]  # Garante que agent_auto_paste seja sempre igual a auto_paste
-
-        # Flag para exibir transcrições brutas no log
-        self.config[DISPLAY_TRANSCRIPTS_KEY] = _parse_bool(
-            self.config.get(
-                DISPLAY_TRANSCRIPTS_KEY,
-                self.default_config[DISPLAY_TRANSCRIPTS_KEY],
-            )
-        )
-
-        # Persistência opcional de gravações temporárias
-        self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = _parse_bool(
-            self.config.get(
-                SAVE_TEMP_RECORDINGS_CONFIG_KEY,
-                self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY],
-            )
-        )
-
-        self.config[LAUNCH_AT_STARTUP_CONFIG_KEY] = _parse_bool(
-            self.config.get(
-                LAUNCH_AT_STARTUP_CONFIG_KEY,
-                self.default_config[LAUNCH_AT_STARTUP_CONFIG_KEY],
-            )
-        )
-
-
-        self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = str(
-            self.config.get(
-                RECORD_STORAGE_MODE_CONFIG_KEY,
-                self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY],
-            )
-        ).lower()
-        if self.config[RECORD_STORAGE_MODE_CONFIG_KEY] == "hybrid":
-            logging.info("record_storage_mode 'hybrid' mapeado para 'auto'.")
-            self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = "auto"
-        allowed_storage_modes = ["disk", "memory", "auto", "hybrid"]
-        if self.config[RECORD_STORAGE_MODE_CONFIG_KEY] not in allowed_storage_modes:
-            logging.warning(
-                f"Invalid record_storage_mode '{self.config[RECORD_STORAGE_MODE_CONFIG_KEY]}'. "
-                f"Falling back to '{self.default_config[RECORD_STORAGE_MODE_CONFIG_KEY]}'."
-            )
-            self.config[RECORD_STORAGE_MODE_CONFIG_KEY] = self.default_config[
-                RECORD_STORAGE_MODE_CONFIG_KEY
-            ]
-        try:
-            self.config[RECORD_STORAGE_LIMIT_CONFIG_KEY] = int(
-                self.config.get(
-                    RECORD_STORAGE_LIMIT_CONFIG_KEY,
-                    self.default_config[RECORD_STORAGE_LIMIT_CONFIG_KEY],
-                )
-            )
-        except (ValueError, TypeError):
-            self.config[RECORD_STORAGE_LIMIT_CONFIG_KEY] = self.default_config[
-                RECORD_STORAGE_LIMIT_CONFIG_KEY
-            ]
-
-        self.config[MAX_MEMORY_SECONDS_MODE_CONFIG_KEY] = str(
-            self.config.get(
-                MAX_MEMORY_SECONDS_MODE_CONFIG_KEY,
-                self.default_config[MAX_MEMORY_SECONDS_MODE_CONFIG_KEY],
-            )
-        ).lower()
-        if self.config[MAX_MEMORY_SECONDS_MODE_CONFIG_KEY] not in ["manual", "auto"]:
-            logging.warning(
-                f"Invalid max_memory_seconds_mode '{self.config[MAX_MEMORY_SECONDS_MODE_CONFIG_KEY]}'. "
-                f"Falling back to '{self.default_config[MAX_MEMORY_SECONDS_MODE_CONFIG_KEY]}'."
-            )
-            self.config[MAX_MEMORY_SECONDS_MODE_CONFIG_KEY] = self.default_config[
-                MAX_MEMORY_SECONDS_MODE_CONFIG_KEY
-            ]
-
-        try:
-            self.config["max_memory_seconds"] = float(
-                self.config.get(
-                    "max_memory_seconds",
-                    self.default_config["max_memory_seconds"],
-                )
-            )
-        except (ValueError, TypeError):
-            self.config["max_memory_seconds"] = self.default_config["max_memory_seconds"]
-
-        try:
-            self.config["min_free_ram_mb"] = int(
-                self.config.get(
-                    "min_free_ram_mb",
-                    self.default_config["min_free_ram_mb"],
-                )
-            )
-        except (ValueError, TypeError):
-            self.config["min_free_ram_mb"] = self.default_config["min_free_ram_mb"]
-
-        # auto_ram_threshold_percent: inteiro 1..50 (limite de segurança)
-        try:
-            raw_thr = self.config.get("auto_ram_threshold_percent", self.default_config.get("auto_ram_threshold_percent", 10))
-            thr = int(raw_thr)
-            if not (1 <= thr <= 50):
-                logging.warning(f"Invalid auto_ram_threshold_percent '{thr}'. Must be between 1 and 50. Using default (10).")
-                thr = self.default_config.get("auto_ram_threshold_percent", 10)
-            self.config["auto_ram_threshold_percent"] = thr
-        except (ValueError, TypeError):
-            self.config["auto_ram_threshold_percent"] = self.default_config.get("auto_ram_threshold_percent", 10)
-
-        try:
-            self.config[CHUNK_LENGTH_SEC_CONFIG_KEY] = float(
-                self.config.get(
-                    CHUNK_LENGTH_SEC_CONFIG_KEY,
-                    self.default_config[CHUNK_LENGTH_SEC_CONFIG_KEY],
-                )
-            )
-        except (ValueError, TypeError):
-            self.config[CHUNK_LENGTH_SEC_CONFIG_KEY] = self.default_config[
-                CHUNK_LENGTH_SEC_CONFIG_KEY
-            ]
-
-        # chunk_length_mode: 'auto' | 'manual'
-        raw_chunk_mode = str(self.config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual"))).lower()
-        if raw_chunk_mode not in ["auto", "manual"]:
-            logging.warning(f"Invalid chunk_length_mode '{raw_chunk_mode}'. Falling back to 'manual'.")
-            raw_chunk_mode = "manual"
-        self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = raw_chunk_mode
-
-        # enable_torch_compile: bool
-        self.config[ENABLE_TORCH_COMPILE_CONFIG_KEY] = _parse_bool(
-            self.config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False))
-        )
-
-        self.config[ASR_BACKEND_CONFIG_KEY] = str(
-            self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
-        )
-
-        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(
-            self.config.get(ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY])
-        )
-    
-        # Para gpu_index_specified e batch_size_specified
-        self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
-        self.config["gpu_index_specified"] = GPU_INDEX_CONFIG_KEY in loaded_config
-        
-        # Lógica de validação para gpu_index
-        try:
-            raw_gpu_idx_val = loaded_config.get(GPU_INDEX_CONFIG_KEY, -1)
-            gpu_idx_val = int(raw_gpu_idx_val)
-            if gpu_idx_val < -1:
-                logging.warning(f"Invalid GPU index '{gpu_idx_val}'. Must be -1 (auto) or >= 0. Using auto (-1).")
-                self.config[GPU_INDEX_CONFIG_KEY] = -1
-            else:
-                self.config[GPU_INDEX_CONFIG_KEY] = gpu_idx_val
-        except (ValueError, TypeError):
-            logging.warning(f"Invalid GPU index value '{self.config.get(GPU_INDEX_CONFIG_KEY)}' in config. Falling back to automatic selection (-1).")
-            self.config[GPU_INDEX_CONFIG_KEY] = -1
-            self.config["gpu_index_specified"] = False # Se falhou a leitura, não foi especificado corretamente
-
-        # Lógica de validação para min_transcription_duration
-        try:
-            raw_min_duration_val = loaded_config.get(
-                MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
-                self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY],
-            )
-            min_duration_val = float(raw_min_duration_val)
-            if not (0.1 <= min_duration_val <= 10.0):  # Exemplo de range razoável
-                logging.warning(
-                    f"Invalid min_transcription_duration '{min_duration_val}'. "
-                    "Must be between 0.1 and 10.0. Using default "
-                    f"({self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]})."
-                )
-                self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = (
-                    self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
-                )
-            else:
-                self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = min_duration_val
-        except (ValueError, TypeError):
-            logging.warning(
-                "Invalid min_transcription_duration value '%s' in config. "
-                "Falling back to default (%s).",
-                self.config.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY),
-                self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY],
-            )
-            self.config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY] = (
-                self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY]
-            )
-
-        # Validação para min_record_duration
-        try:
-            raw_min_rec_val = loaded_config.get(
-                MIN_RECORDING_DURATION_CONFIG_KEY,
-                self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY],
-            )
-            min_rec_val = float(raw_min_rec_val)
-            if not (0.1 <= min_rec_val <= 10.0):
-                logging.warning(
-                    f"Invalid min_record_duration '{min_rec_val}'. "
-                    "Must be between 0.1 and 10.0. Using default "
-                    f"({self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]})."
-                )
-                self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = (
-                    self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]
-                )
-            else:
-                self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = min_rec_val
-        except (ValueError, TypeError):
-            logging.warning(
-                "Invalid min_record_duration value '%s' in config. "
-                "Falling back to default (%s).",
-                self.config.get(MIN_RECORDING_DURATION_CONFIG_KEY),
-                self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY],
-            )
-            self.config[MIN_RECORDING_DURATION_CONFIG_KEY] = (
-                self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY]
-            )
-
-        # Lógica para uso do VAD
-        self.config[USE_VAD_CONFIG_KEY] = _parse_bool(
-            self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])
-        )
-        self.config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY] = _parse_bool(
-            self.config.get(
-                DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY,
-                self.default_config[DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY]
-            )
-        )
-        try:
-            raw_threshold = self.config.get(
-                VAD_THRESHOLD_CONFIG_KEY, self.default_config[VAD_THRESHOLD_CONFIG_KEY]
-            )
-            self.config[VAD_THRESHOLD_CONFIG_KEY] = float(raw_threshold)
-        except (ValueError, TypeError):
-            logging.warning(
-                "Invalid vad_threshold value '%s' in config. Using default (%s).",
-                self.config.get(VAD_THRESHOLD_CONFIG_KEY),
-                self.default_config[VAD_THRESHOLD_CONFIG_KEY],
-            )
-            self.config[VAD_THRESHOLD_CONFIG_KEY] = (
-                self.default_config[VAD_THRESHOLD_CONFIG_KEY]
-            )
-
-        try:
-            raw_silence = self.config.get(
-                VAD_SILENCE_DURATION_CONFIG_KEY,
-                self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY],
-            )
-            silence_val = float(raw_silence)
-            if silence_val < 0.1:
-                logging.warning(
-                    "Invalid vad_silence_duration '%s'. Must be >= 0.1. Using default (%s).",
-                    silence_val,
-                    self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY],
-                )
-                silence_val = self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
-            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = silence_val
-        except (ValueError, TypeError):
-            logging.warning(
-                "Invalid vad_silence_duration value '%s' in config. Using default (%s).",
-                self.config.get(VAD_SILENCE_DURATION_CONFIG_KEY),
-                self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY],
-            )
-            self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = (
-                self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
-            )
-
-        self.config[ASR_BACKEND_CONFIG_KEY] = str(
-            self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
-        )
-        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(
-            self.config.get(ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY])
-        )
-        self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(
-            self.config.get(ASR_COMPUTE_DEVICE_CONFIG_KEY, self.default_config[ASR_COMPUTE_DEVICE_CONFIG_KEY])
-        )
-        self.config[ASR_DTYPE_CONFIG_KEY] = str(
-            self.config.get(ASR_DTYPE_CONFIG_KEY, self.default_config[ASR_DTYPE_CONFIG_KEY])
-        )
-        self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(
-            self.config.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY, self.default_config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY])
-        )
-        self.config[ASR_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(
-            self.config.get(ASR_CACHE_DIR_CONFIG_KEY, self.default_config[ASR_CACHE_DIR_CONFIG_KEY])
-        )
-        installed = self.config.get(
-            ASR_INSTALLED_MODELS_CONFIG_KEY,
-            self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY],
-        )
-        if not isinstance(installed, list):
-            installed = self.default_config[ASR_INSTALLED_MODELS_CONFIG_KEY]
-        self.config[ASR_INSTALLED_MODELS_CONFIG_KEY] = installed
-
-        curated = self.config.get(
-            ASR_CURATED_CATALOG_CONFIG_KEY,
-            self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
-        )
-        if not isinstance(curated, list):
-            curated = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
-        self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = curated
-
-        default_download_status = copy.deepcopy(
-            self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})
-        )
-        stored_status = self.config.get(
-            ASR_LAST_DOWNLOAD_STATUS_KEY,
-            default_download_status,
-        )
-        if not isinstance(stored_status, dict):
-            stored_status = default_download_status
-        sanitized_status = copy.deepcopy(default_download_status)
-        if isinstance(stored_status, dict):
-            for key, value in stored_status.items():
-                if key not in sanitized_status:
-                    sanitized_status[key] = ""
-                sanitized_status[key] = "" if value is None else str(value)
-        if not sanitized_status.get("status"):
-            sanitized_status["status"] = default_download_status.get("status", "unknown")
-        self.config[ASR_LAST_DOWNLOAD_STATUS_KEY] = sanitized_status
-
-        safe_config = self.config.copy()
-        safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
-        safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
-        logging.info(f"Settings applied: {safe_config}")
 
 
     def save_config(self):

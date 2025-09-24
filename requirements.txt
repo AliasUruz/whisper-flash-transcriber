@@ -19,4 +19,5 @@ accelerate>=0.33
 datasets[audio]>=3.0
 huggingface_hub>=0.24
 faster-whisper>=1.0
+pydantic==2.7.1
 ctranslate2>=4.6

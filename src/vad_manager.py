@@ -29,16 +29,21 @@ class VADManager:
         """Verifica se o arquivo do modelo Silero VAD esta presente."""
         return MODEL_PATH.exists()
 
-    def __init__(self, threshold: float = 0.5, sampling_rate: int = 16000):
+    def __init__(self, threshold: float = 0.5, sampling_rate: int = 16000, vad_pre_speech_padding_ms: int = 200, vad_post_speech_padding_ms: int = 300):
         """Inicializa o VAD Manager."""
 
         self.threshold = threshold
         self.sr = sampling_rate
+        self.vad_pre_speech_padding_ms = vad_pre_speech_padding_ms
+        self.vad_post_speech_padding_ms = vad_post_speech_padding_ms
         self.enabled = False
         self._chunk_counter = 0
         self.session = None
         self._use_energy_fallback = False
         self._fallback_notified = False
+
+        self.pre_speech_buffer = np.array([], dtype=np.float32)
+        self.post_speech_cooldown = 0
 
         if not self.is_model_available():
             logging.error(
@@ -82,76 +87,63 @@ class VADManager:
     def reset_states(self) -> None:
         """Reseta os estados internos do modelo."""
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self.pre_speech_buffer = np.array([], dtype=np.float32)
+        self.post_speech_cooldown = 0
 
-    def is_speech(self, audio_chunk: np.ndarray) -> bool:
+    def is_speech(self, audio_chunk: np.ndarray) -> tuple[bool, np.ndarray | None]:
         """Retorna ``True`` se o chunk contem fala."""
 
         if audio_chunk is None:
             logging.debug("VAD received chunk None; assuming speech to keep recording.")
-            return True
+            return True, None
 
         self._chunk_counter += 1
         raw_array = np.asarray(audio_chunk)
         if raw_array.size == 0:
             logging.debug("VAD received an empty chunk; returning False.")
-            return False
-
-        raw_meta = {
-            "raw_shape": list(raw_array.shape),
-            "raw_dtype": str(raw_array.dtype),
-            "raw_max_abs": float(np.max(np.abs(raw_array))),
-            "preview": raw_array.flatten()[:16].astype(float).tolist(),
-        }
+            return False, None
 
         prepared, peak = self._prepare_input(raw_array)
         mono_view = prepared.reshape(-1) if prepared.size else np.empty(0, dtype=np.float32)
 
         if self.session is None or self._use_energy_fallback:
-            detected, energy_peak, rms, threshold = self._energy_gate(mono_view, self.threshold)
-            logging.debug(
-                "VAD energy fallback chunk %s -> detected=%s peak=%.4f rms=%.4f threshold=%.4f",
-                self._chunk_counter,
-                detected,
-                energy_peak,
-                rms,
-                threshold,
-            )
-            return detected
+            detected, _, _, _ = self._energy_gate(mono_view, self.threshold)
+        else:
+            ort_inputs = {
+                "input": prepared,
+                "state": self._state,
+                "sr": np.array([self.sr], dtype=np.int64),
+            }
+            try:
+                outs = self.session.run(None, ort_inputs)
+                speech_prob = float(outs[0][0][0])
+                self._state = outs[1]
+                detected = speech_prob > self.threshold
+            except Exception as exc:
+                self.reset_states()
+                self._log_failure(exc, prepared, {})
+                self._activate_energy_fallback("inference failure", exc)
+                detected, _, _, _ = self._energy_gate(mono_view, self.threshold)
 
-        ort_inputs = {
-            "input": prepared,
-            "state": self._state,
-            "sr": np.array([self.sr], dtype=np.int64),
-        }
+        if detected:
+            self.post_speech_cooldown = int(self.vad_post_speech_padding_ms / 1000 * self.sr)
+            if self.pre_speech_buffer.size > 0:
+                # Retorna o buffer de pre-speech e o chunk atual
+                returning_buffer = np.concatenate([self.pre_speech_buffer, raw_array])
+                self.pre_speech_buffer = np.array([], dtype=np.float32)
+                return True, returning_buffer
+            return True, raw_array
+        else:
+            if self.post_speech_cooldown > 0:
+                self.post_speech_cooldown -= len(raw_array)
+                return True, raw_array
 
-        try:
-            outs = self.session.run(None, ort_inputs)
-        except Exception as exc:
-            self.reset_states()
-            self._log_failure(exc, prepared, raw_meta)
-            self._activate_energy_fallback("inference failure", exc)
-            detected, energy_peak, rms, threshold = self._energy_gate(mono_view, self.threshold)
-            logging.debug(
-                "VAD energy fallback chunk %s (after failure) -> detected=%s peak=%.4f rms=%.4f threshold=%.4f",
-                self._chunk_counter,
-                detected,
-                energy_peak,
-                rms,
-                threshold,
-            )
-            return detected
-
-        speech_prob = float(outs[0][0][0])
-        self._state = outs[1]
-
-        logging.debug(
-            "VAD chunk %s -> prob=%.4f peak=%.4f shape=%s",
-            self._chunk_counter,
-            speech_prob,
-            peak,
-            prepared.shape,
-        )
-        return speech_prob > self.threshold
+            # Adiciona ao buffer de pre-speech
+            self.pre_speech_buffer = np.concatenate([self.pre_speech_buffer, raw_array])
+            max_buffer_size = int(self.vad_pre_speech_padding_ms / 1000 * self.sr)
+            if self.pre_speech_buffer.size > max_buffer_size:
+                self.pre_speech_buffer = self.pre_speech_buffer[-max_buffer_size:]
+            return False, None
 
 
     @staticmethod

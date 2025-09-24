@@ -5,7 +5,6 @@ from tkinter import simpledialog  # Adicionado para askstring
 import logging
 import threading
 import time
-from datetime import datetime
 import pystray
 from PIL import Image, ImageDraw
 from pathlib import Path
@@ -38,7 +37,6 @@ from .config_manager import (
 
 from .utils.form_validation import safe_get_float, safe_get_int
 from .utils.tooltip import Tooltip
-from .vad_manager import VADManager
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -630,6 +628,8 @@ class UIManager:
         use_vad_var = _var("use_vad_var")
         vad_threshold_var = _var("vad_threshold_var")
         vad_silence_duration_var = _var("vad_silence_duration_var")
+        vad_pre_speech_padding_ms_var = _var("vad_pre_speech_padding_ms_var")
+        vad_post_speech_padding_ms_var = _var("vad_post_speech_padding_ms_var")
         save_temp_recordings_var = _var("save_temp_recordings_var")
         display_transcripts_var = _var("display_transcripts_var")
         record_storage_mode_var = _var("record_storage_mode_var")
@@ -697,6 +697,13 @@ class UIManager:
             return
         vad_silence_duration_to_apply = self._safe_get_float(vad_silence_duration_var, "Silence Duration", settings_win)
         if vad_silence_duration_to_apply is None:
+            return
+
+        vad_pre_speech_padding_ms_to_apply = self._safe_get_int(vad_pre_speech_padding_ms_var, "Pre-speech Padding", settings_win)
+        if vad_pre_speech_padding_ms_to_apply is None:
+            return
+        vad_post_speech_padding_ms_to_apply = self._safe_get_int(vad_post_speech_padding_ms_var, "Post-speech Padding", settings_win)
+        if vad_post_speech_padding_ms_to_apply is None:
             return
 
         save_temp_recordings_to_apply = bool(save_temp_recordings_var.get()) if save_temp_recordings_var else False
@@ -774,6 +781,8 @@ class UIManager:
             new_use_vad=use_vad_to_apply,
             new_vad_threshold=vad_threshold_to_apply,
             new_vad_silence_duration=vad_silence_duration_to_apply,
+            new_vad_pre_speech_padding_ms=vad_pre_speech_padding_ms_to_apply,
+            new_vad_post_speech_padding_ms=vad_post_speech_padding_ms_to_apply,
             new_display_transcripts_in_terminal=display_transcripts_to_apply,
             new_launch_at_startup=launch_at_startup_to_apply,
             new_chunk_length_mode=chunk_length_mode_to_apply,
@@ -839,6 +848,8 @@ class UIManager:
         _set_var("use_vad_var", defaults["use_vad"])
         _set_var("vad_threshold_var", defaults["vad_threshold"])
         _set_var("vad_silence_duration_var", defaults["vad_silence_duration"])
+        _set_var("vad_pre_speech_padding_ms_var", defaults["vad_pre_speech_padding_ms"])
+        _set_var("vad_post_speech_padding_ms_var", defaults["vad_post_speech_padding_ms"])
         _set_var("save_temp_recordings_var", defaults[SAVE_TEMP_RECORDINGS_CONFIG_KEY])
         _set_var("display_transcripts_var", defaults["display_transcripts_in_terminal"])
         _set_var("record_storage_mode_var", defaults["record_storage_mode"])
@@ -1009,6 +1020,31 @@ class UIManager:
             dc.rectangle((width // 4, height // 4, width * 3 // 4, height * 3 // 4), fill=color2)
         return image
 
+    def _build_vad_section(self, parent, use_vad_var, vad_threshold_var, vad_silence_duration_var, vad_pre_speech_padding_ms_var, vad_post_speech_padding_ms_var):
+        vad_frame = ctk.CTkFrame(parent)
+        vad_frame.pack(fill="x", pady=5)
+        ctk.CTkCheckBox(vad_frame, text="Enable Voice Activity Detection (VAD)", variable=use_vad_var).pack(side="left", padx=5)
+        Tooltip(vad_frame, "Only record when speech is detected.")
+
+        vad_options_frame = ctk.CTkFrame(parent)
+        vad_options_frame.pack(fill="x", pady=5)
+
+        ctk.CTkLabel(vad_options_frame, text="VAD Threshold:").pack(side="left", padx=5)
+        ctk.CTkEntry(vad_options_frame, textvariable=vad_threshold_var, width=50).pack(side="left", padx=5)
+        Tooltip(vad_options_frame, "Speech detection sensitivity.")
+
+        ctk.CTkLabel(vad_options_frame, text="VAD Silence Duration (s):").pack(side="left", padx=5)
+        ctk.CTkEntry(vad_options_frame, textvariable=vad_silence_duration_var, width=50).pack(side="left", padx=5)
+        Tooltip(vad_options_frame, "Duration of silence to trigger end of speech.")
+
+        ctk.CTkLabel(vad_options_frame, text="Pre-speech Padding (ms):").pack(side="left", padx=5)
+        ctk.CTkEntry(vad_options_frame, textvariable=vad_pre_speech_padding_ms_var, width=50).pack(side="left", padx=5)
+        Tooltip(vad_options_frame, "Milliseconds of audio to keep before speech is detected.")
+
+        ctk.CTkLabel(vad_options_frame, text="Post-speech Padding (ms):").pack(side="left", padx=5)
+        ctk.CTkEntry(vad_options_frame, textvariable=vad_post_speech_padding_ms_var, width=50).pack(side="left", padx=5)
+        Tooltip(vad_options_frame, "Milliseconds of audio to keep after speech ends.")
+
     def _build_asr_section(
         self,
         *,
@@ -1022,6 +1058,7 @@ class UIManager:
         asr_dtype_var,
         asr_ct2_compute_type_var,
         asr_cache_dir_var,
+        ui_elements,
     ):
         """Construct the ASR configuration widgets.
 
@@ -1103,16 +1140,11 @@ class UIManager:
                 "Reduces model precision for faster inference (float16/int8).",
             ),
         ).pack(side="left", padx=(0, 10))
-        quant_menu = ctk.CTkOptionMenu(
-            quant_frame,
-            variable=asr_ct2_compute_type_var,
-            values=["float16", "int8", "int8_float16"],
-        )
-        quant_menu.pack(side="left", padx=5)
-        Tooltip(quant_menu, "Available compute types for the CTranslate2 backend.")
+        ui_elements["quant_menu"] = quant_menu
 
         model_manager = self.model_manager
         catalog = model_manager.list_catalog()
+        ui_elements["catalog"] = catalog
         catalog_display_map = {entry["id"]: entry.get("display_name", entry["id"]) for entry in catalog}
         try:
             installed_ids = {
@@ -1125,12 +1157,12 @@ class UIManager:
             )
             installed_ids = set()
         all_ids = sorted({m["id"] for m in catalog} | installed_ids)
-        id_to_display = {mid: catalog_display_map.get(mid, mid) for mid in all_ids}
-        display_to_id = {v: k for k, v in id_to_display.items()}
+        ui_elements["id_to_display"] = id_to_display
+        ui_elements["display_to_id"] = display_to_id
         asr_model_display_var = ctk.StringVar(
             value=id_to_display.get(asr_model_id_var.get(), asr_model_id_var.get())
         )
-
+        ui_elements["asr_model_display_var"] = asr_model_display_var
         asr_model_frame = ctk.CTkFrame(asr_frame)
         asr_model_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
@@ -1139,15 +1171,15 @@ class UIManager:
             variable=asr_model_display_var,
             values=[id_to_display[mid] for mid in all_ids],
         )
-        asr_model_menu.pack(side="left", padx=5)
-        Tooltip(asr_model_menu, "Model identifier from curated catalog.")
+        ui_elements["asr_model_menu"] = asr_model_menu
 
         model_size_label = ctk.CTkLabel(asr_model_frame, text="Download: calculating... | Installed: -")
         model_size_label.pack(side="left", padx=5)
-
+        ui_elements["model_size_label"] = model_size_label
+        ui_elements["model_size_label"] = model_size_label
         def _derive_backend_from_model(model_ref: str) -> str | None:
-            model_id = display_to_id.get(model_ref, model_ref)
-            entry = next((m for m in catalog if m["id"] == model_id), None)
+            model_id = ui_elements["display_to_id"].get(model_ref, model_ref)
+            entry = next((m for m in ui_elements["catalog"] if m["id"] == model_id), None)
             if not entry:
                 installed = model_manager.list_installed(asr_cache_dir_var.get())
                 entry = next((m for m in installed if m["id"] == model_id), None)
@@ -1159,8 +1191,8 @@ class UIManager:
             return backend
 
         def _update_model_info(model_ref: str) -> None:
-            model_size_label.configure(text="Download: calculating... | Installed: -")
-            model_id = display_to_id.get(model_ref, model_ref)
+            ui_elements["model_size_label"].configure(text="Download: calculating... | Installed: -")
+            model_id = ui_elements["display_to_id"].get(model_ref, model_ref)
             try:
                 d_bytes, d_files = model_manager.get_model_download_size(model_id)
                 d_mb = d_bytes / (1024 * 1024)
@@ -1184,19 +1216,19 @@ class UIManager:
             else:
                 installed_text = "-"
 
-            model_size_label.configure(
+            ui_elements["model_size_label"].configure(
                 text=f"Download: {download_text} | Installed: {installed_text}"
             )
 
         def _update_install_button_state() -> None:
             backend = _derive_backend_from_model(asr_model_id_var.get())
             install_button.configure(state="normal" if backend else "disabled")
-            quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
+            ui_elements["quant_menu"].configure(state="normal" if backend == "ct2" else "disabled")
 
         def _on_model_change(choice_display: str) -> None:
-            model_id = display_to_id.get(choice_display, choice_display)
+            model_id = ui_elements["display_to_id"].get(choice_display, choice_display)
             asr_model_id_var.set(model_id)
-            asr_model_display_var.set(id_to_display.get(model_id, model_id))
+            ui_elements["asr_model_display_var"].set(ui_elements["id_to_display"].get(model_id, model_id))
             backend = _derive_backend_from_model(model_id)
             if backend:
                 asr_backend_var.set(backend)
@@ -1747,16 +1779,39 @@ class UIManager:
                 x_cordinate = int((screen_width / 2) - (window_width / 2))
                 y_cordinate = int((screen_height / 2) - (window_height / 2))
                 settings_win.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
-            except Exception:
-                logging.error("Failed to initialize settings UI", exc_info=True)
+            except Exception as e:
+                logging.error(f"Failed to create Toplevel for settings: {e}", exc_info=True)
                 self.settings_thread_running = False
                 if self.settings_window_instance:
-                    # Avoid deadlock: destroy directly without reacquiring the lock
                     self.settings_window_instance.destroy()
                     self.settings_window_instance = None
                 return
 
-            try:
+            finally:
+                try:
+                    button_frame = ctk.CTkFrame(settings_win)
+                    button_frame.pack(side="bottom", fill="x", padx=10, pady=(20, 10))
+
+                    apply_button = ctk.CTkButton(button_frame, text="Apply and Close", command=self._apply_settings_from_ui)
+                    apply_button.pack(side="right", padx=5)
+                    Tooltip(apply_button, "Save all settings and exit.")
+                    close_button = ctk.CTkButton(button_frame, text="Cancel", command=self._close_settings_window, fg_color="gray50")
+                    close_button.pack(side="right", padx=5)
+                    Tooltip(close_button, "Discard changes and exit.")
+
+                    restore_button = ctk.CTkButton(button_frame, text="Restore Defaults", command=self._restore_default_settings)
+                    restore_button.pack(side="left", padx=5)
+
+                    force_reregister_button = ctk.CTkButton(
+                        button_frame, text="Force Hotkey Re-registration", command=self.core_instance_ref.force_reregister_hotkeys
+                    )
+                    force_reregister_button.pack(side="left", padx=5)
+                    Tooltip(force_reregister_button, "Re-register all global hotkeys.")
+                except Exception as btn_err:
+                    logging.error(f"Failed to create action buttons: {btn_err}", exc_info=True)
+
+                settings_win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
+
                 self._clear_settings_context()
                 self._set_settings_var("window", settings_win)
                 model_manager = self.model_manager
@@ -1976,6 +2031,20 @@ class UIManager:
                         "vad_silence_duration",
                         var_name="vad_silence_duration",
                         coerce=float,
+                    )
+                )
+                vad_pre_speech_padding_ms_var = ctk.IntVar(
+                    value=self._resolve_initial_value(
+                        "vad_pre_speech_padding_ms",
+                        var_name="vad_pre_speech_padding_ms",
+                        coerce=int,
+                    )
+                )
+                vad_post_speech_padding_ms_var = ctk.IntVar(
+                    value=self._resolve_initial_value(
+                        "vad_post_speech_padding_ms",
+                        var_name="vad_post_speech_padding_ms",
+                        coerce=int,
                     )
                 )
 
@@ -2606,37 +2675,34 @@ class UIManager:
                 self._set_settings_var("transcription_frame", transcription_frame)
                 self._set_settings_var("asr_frame", asr_frame)
 
-                asr_helpers = self._build_asr_section(
-                    settings_win=settings_win,
-                    asr_frame=asr_frame,
-                    transcription_frame=transcription_frame,
-                    available_devices=available_devices,
-                    asr_backend_var=asr_backend_var,
-                    asr_model_id_var=asr_model_id_var,
-                    asr_compute_device_var=asr_compute_device_var,
-                    asr_dtype_var=asr_dtype_var,
-                    asr_ct2_compute_type_var=asr_ct2_compute_type_var,
-                    asr_cache_dir_var=asr_cache_dir_var,
-                )
-                asr_backend_menu = asr_helpers["asr_backend_menu"]
-                asr_ct2_menu = asr_helpers["asr_ct2_menu"]
-                asr_model_menu = asr_helpers["asr_model_menu"]
-                asr_model_display_var = asr_helpers["asr_model_display_var"]
-                id_to_display = asr_helpers["id_to_display"]
-                on_backend_change = asr_helpers["on_backend_change"]
+        asr_ui_elements = {}
 
-                # New: Chunk Length Mode
-                chunk_mode_frame = ctk.CTkFrame(transcription_frame)
-                chunk_mode_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(chunk_mode_frame, text="Chunk Length Mode:").pack(side="left", padx=(5, 10))
-                chunk_mode_menu = ctk.CTkOptionMenu(
-                    chunk_mode_frame,
-                    variable=chunk_length_mode_var,
-                    values=["auto", "manual"],
-                    command=self._on_chunk_mode_change,
-                )
-                chunk_mode_menu.pack(side="left", padx=5)
-                Tooltip(chunk_mode_menu, "Choose how chunk size is determined.")
+        self._build_asr_section(
+            settings_win=settings_win,
+            asr_frame=asr_frame,
+            transcription_frame=transcription_frame,
+            available_devices=available_devices,
+            asr_backend_var=asr_backend_var,
+            asr_model_id_var=asr_model_id_var,
+            asr_compute_device_var=asr_compute_device_var,
+            asr_dtype_var=asr_dtype_var,
+            asr_ct2_compute_type_var=asr_ct2_compute_type_var,
+            asr_cache_dir_var=asr_cache_dir_var,
+            ui_elements=asr_ui_elements,
+        )
+
+        # New: Chunk Length Mode
+        chunk_mode_frame = ctk.CTkFrame(transcription_frame)
+        chunk_mode_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(chunk_mode_frame, text="Chunk Length Mode:").pack(side="left", padx=(5, 10))
+        chunk_mode_menu = ctk.CTkOptionMenu(
+            chunk_mode_frame,
+            variable=chunk_length_mode_var,
+            values=["auto", "manual"],
+            command=self._on_chunk_mode_change,
+        )
+        chunk_mode_menu.pack(side="left", padx=5)
+        Tooltip(chunk_mode_menu, "Choose how chunk size is determined.")
 
                 # New: Chunk Length (sec)
                 chunk_len_frame = ctk.CTkFrame(transcription_frame)
@@ -2662,316 +2728,12 @@ class UIManager:
                 min_record_duration_entry.pack(side="left", padx=5)
                 Tooltip(min_record_duration_entry, "Discard recordings shorter than this.")
 
-                vad_enable_frame = ctk.CTkFrame(transcription_frame)
-                vad_enable_frame.pack(fill="x", pady=5)
+                self._build_vad_section(settings_win, use_vad_var, vad_threshold_var, vad_silence_duration_var, vad_pre_speech_padding_ms_var, vad_post_speech_padding_ms_var)
 
-                is_vad_available = VADManager.is_model_available()
-                if not is_vad_available:
-                    use_vad_var.set(False)
-                vad_checkbox = ctk.CTkCheckBox(
-                    vad_enable_frame,
-                    text="Use VAD",
-                    variable=use_vad_var,
-                    state="normal" if is_vad_available else "disabled",
-                )
-                vad_checkbox.pack(side="left", padx=5)
-                Tooltip(vad_checkbox, "Enable voice activity detection.")
-
-                vad_status_text = (
-                    "Silero VAD: installed" if is_vad_available else "Silero VAD: missing"
-                )
-                vad_status_label = ctk.CTkLabel(vad_enable_frame, text=vad_status_text)
-                vad_status_label.pack(side="left", padx=5)
-
-                vad_params_frame = ctk.CTkFrame(transcription_frame)
-                vad_params_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(vad_params_frame, text="VAD Threshold:").pack(side="left", padx=(5, 10))
-                vad_threshold_entry = ctk.CTkEntry(vad_params_frame, textvariable=vad_threshold_var, width=60)
-                vad_threshold_entry.pack(side="left", padx=5)
-                Tooltip(vad_threshold_entry, "Voice probability to trigger splitting.")
-                ctk.CTkLabel(vad_params_frame, text="Silence Duration (s):").pack(side="left", padx=(5, 10))
-                vad_silence_entry = ctk.CTkEntry(vad_params_frame, textvariable=vad_silence_duration_var, width=60)
-                vad_silence_entry.pack(side="left", padx=5)
-                Tooltip(vad_silence_entry, "Length of silence before a cut.")
-
-                temp_recordings_frame = ctk.CTkFrame(transcription_frame)
-                temp_recordings_frame.pack(fill="x", pady=5)
-                temp_recordings_switch = ctk.CTkSwitch(temp_recordings_frame, text="Save Temporary Recordings", variable=save_temp_recordings_var)
-                temp_recordings_switch.pack(side="left", padx=5)
-                Tooltip(temp_recordings_switch, "Keep temporary audio files after processing.")
-
-                storage_mode_frame = ctk.CTkFrame(transcription_frame)
-                storage_mode_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(storage_mode_frame, text="Record Storage Mode:").pack(side="left", padx=(5, 10))
-                storage_mode_menu = ctk.CTkOptionMenu(
-                    storage_mode_frame,
-                    variable=record_storage_mode_var,
-                    values=["auto", "memory", "disk"],
-                )
-                storage_mode_menu.pack(side="left", padx=5)
-                Tooltip(storage_mode_menu, "Where recordings are kept during capture.")
-
-                mem_time_frame = ctk.CTkFrame(transcription_frame)
-                mem_time_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(mem_time_frame, text="Max Memory Retention (s):").pack(side="left", padx=(5, 10))
-                mem_time_entry = ctk.CTkEntry(mem_time_frame, textvariable=max_memory_seconds_var, width=60)
-                mem_time_entry.pack(side="left", padx=5)
-                Tooltip(mem_time_entry, "Limit for in-memory recordings.")
-                mem_mode_menu = ctk.CTkOptionMenu(
-                    mem_time_frame,
-                    variable=max_memory_seconds_mode_var,
-                    values=["manual", "auto"],
-                    width=80,
-                )
-                mem_mode_menu.pack(side="left", padx=5)
-                Tooltip(mem_mode_menu, "Choose manual or auto calculation.")
-
-                display_transcripts_frame = ctk.CTkFrame(transcription_frame)
-                display_transcripts_frame.pack(fill="x", pady=5)
-                display_switch = ctk.CTkSwitch(display_transcripts_frame, text="Display Transcript in Terminal", variable=display_transcripts_var)
-                display_switch.pack(side="left", padx=5)
-                Tooltip(display_switch, "Print transcripts to the terminal window.")
-
-                # --- ASR Settings ---
-                asr_backend_frame = ctk.CTkFrame(asr_frame)
-                asr_backend_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 0))
-                ctk.CTkButton(
-                    asr_backend_frame,
-                    text="?",
-                    width=20,
-                    command=lambda: messagebox.showinfo(
-                        "ASR Backend",
-                        "Selects the inference engine used for speech recognition.",
-                    ),
-                ).pack(side="left", padx=(0, 10))
-
-                quant_frame = ctk.CTkFrame(transcription_frame)
-                quant_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(quant_frame, text="Quantization:").pack(side="left", padx=(5, 0))
-                ctk.CTkButton(
-                    quant_frame,
-                    text="?",
-                    width=20,
-                    command=lambda: messagebox.showinfo(
-                        "Quantization",
-                        "Reduces model precision for faster inference (float16/int8).",
-                    ),
-                ).pack(side="left", padx=(0, 10))
-                quant_menu = ctk.CTkOptionMenu(
-                    quant_frame,
-                    variable=asr_ct2_compute_type_var,
-                    values=["float16", "int8", "int8_float16"],
-                )
-                quant_menu.pack(side="left", padx=5)
-                Tooltip(quant_menu, "Available compute types for the CTranslate2 backend.")
-
-                asr_backend_menu = ctk.CTkOptionMenu(
-                    asr_backend_frame,
-                    variable=asr_backend_var,
-                    values=["auto", "transformers", "ct2"],
-                    command=self._on_backend_change,
-                )
-                asr_backend_menu.pack(side="left", padx=5)
-                self._set_settings_var("asr_backend_menu", asr_backend_menu)
-                Tooltip(
-                    asr_backend_menu,
-                    "Inference backend for speech recognition.\nDerived from selected model; override in advanced mode.",
-                )
-
-                asr_model_frame = ctk.CTkFrame(transcription_frame)
-                asr_model_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
-
-                catalog = self.model_manager.list_catalog()
-                catalog_display_map = {entry["id"]: entry.get("display_name", entry["id"]) for entry in catalog}
-                try:
-                    installed_ids = {
-                        m["id"] for m in self.model_manager.list_installed(asr_cache_dir_var.get())
-                    }
-                except OSError:
-                    messagebox.showerror(
-                        "Settings",
-                        "Unable to list installed ASR models. Please verify the cache directory.",
-                    )
-                    installed_ids = set()
-                all_ids = sorted({m["id"] for m in catalog} | installed_ids)
-                id_to_display = {mid: catalog_display_map.get(mid, mid) for mid in all_ids}
-                display_to_id = {v: k for k, v in id_to_display.items()}
-                self._set_settings_meta("id_to_display", id_to_display)
-                self._set_settings_meta("display_to_id", display_to_id)
-                asr_model_display_var = ctk.StringVar(
-                    value=id_to_display.get(asr_model_id_var.get(), asr_model_id_var.get())
-                )
-                self._set_settings_var("asr_model_display_var", asr_model_display_var)
-
-                asr_model_menu = ctk.CTkOptionMenu(
-                    asr_model_frame,
-                    variable=asr_model_display_var,
-                    values=[id_to_display[mid] for mid in all_ids],
-                    command=self._on_model_change,
-                )
-                asr_model_menu.pack(side="left", padx=5)
-                self._set_settings_var("asr_model_menu", asr_model_menu)
-                Tooltip(asr_model_menu, "Model identifier from curated catalog.")
-
-                reset_asr_button = ctk.CTkButton(
-                    asr_model_frame, text="Reset ASR", command=self._reset_asr_settings
-                )
-                reset_asr_button.pack(side="left", padx=5)
-                Tooltip(reset_asr_button, "Restore default ASR settings.")
-
-                model_size_label = ctk.CTkLabel(asr_model_frame, text="Download: calculating... | Installed: -")
-                model_size_label.pack(side="left", padx=5)
-
-                status_banner = ctk.CTkLabel(
-                    asr_frame,
-                    text="",
-                    anchor="w",
-                    justify="left",
-                    fg_color="gray25",
-                    text_color="#f0f0f0",
-                    corner_radius=6,
-                    padx=10,
-                    pady=6,
-                    wraplength=480,
-                )
-                status_banner.pack(fill="x", padx=5, pady=(5, 10))
-
-                install_button = None
-                install_button_tooltip = None
-
-                status_styles = {
-                    "success": ("#0f3620", "#d5f5dd"),
-                    "running": ("#122a44", "#dbe9ff"),
-                    "cancelled": ("#3a2d16", "#ffe6c3"),
-                    "error": ("#451c1c", "#ffd6d6"),
-                    "failed": ("#451c1c", "#ffd6d6"),
-                    "unknown": ("#2b2b2b", "#f0f0f0"),
-                }
-
-                def _normalize_download_status(data):
-                    base = {
-                        "status": "unknown",
-                        "timestamp": "",
-                        "model_id": "",
-                        "backend": "",
-                        "message": "",
-                        "details": "",
-                    }
-                    if isinstance(data, dict):
-                        for key, value in data.items():
-                            base[key] = "" if value is None else str(value)
-                    if not base.get("status"):
-                        base["status"] = "unknown"
-                    return base
-
-                def _format_download_timestamp(raw: str) -> str:
-                    if not raw:
-                        return "Unknown time"
-                    normalized = raw
-                    if raw.endswith("Z"):
-                        normalized = raw[:-1] + "+00:00"
-                    try:
-                        parsed = datetime.fromisoformat(normalized)
-                    except ValueError:
-                        return raw
-                    return parsed.strftime("%Y-%m-%d %H:%M:%S")
-
-                def _build_status_text(status_data, selected_model: str) -> str:
-                    status_value = status_data.get("status", "unknown").lower()
-                    model_id = status_data.get("model_id", "")
-                    timestamp_display = _format_download_timestamp(
-                        status_data.get("timestamp", "")
-                    )
-                    lines = []
-                    if status_value in {"unknown", ""} or not model_id:
-                        lines.append("No ASR model download attempts recorded yet.")
-                        if selected_model:
-                            lines.append(
-                                f"Select '{selected_model}' and use Install/Update to download it."
-                            )
-                        return "\n".join(lines)
-
-                    state_labels = {
-                        "success": "Download completed",
-                        "running": "Download in progress",
-                        "cancelled": "Download cancelled",
-                        "error": "Download failed",
-                        "failed": "Download failed",
-                    }
-                    summary = state_labels.get(status_value, status_value.title())
-                    summary_line = f"{summary} for '{model_id}'"
-                    if timestamp_display and timestamp_display != "Unknown time":
-                        summary_line += f" at {timestamp_display}"
-                    lines.append(summary_line)
-
-                    backend_label = status_data.get("backend")
-                    if backend_label:
-                        lines.append(f"Backend: {backend_label}")
-
-                    message_text = status_data.get("message")
-                    if message_text:
-                        lines.append(message_text)
-
-                    detail_text = status_data.get("details")
-                    if detail_text:
-                        lines.append(detail_text)
-
-                    if selected_model and selected_model != model_id:
-                        lines.append(f"Currently selected model: '{selected_model}'.")
-
-                    return "\n".join(lines)
-
-                def _apply_post_download_ui(status_override=None):
-                    status_data = (
-                        _normalize_download_status(status_override)
-                        if status_override is not None
-                        else _normalize_download_status(
-                            self.config_manager.get_last_asr_download_status()
-                        )
-                    )
-                    status_key = status_data.get("status", "unknown").lower()
-                    if status_key == "failed":
-                        status_key = "error"
-                    style_bg, style_fg = status_styles.get(
-                        status_key, status_styles["unknown"]
-                    )
-                    selected_model = asr_model_id_var.get()
-                    status_banner.configure(
-                        text=_build_status_text(status_data, selected_model),
-                        fg_color=style_bg,
-                        text_color=style_fg,
-                    )
-
-                    button_text = "Install/Update"
-                    tooltip_text = "Install or update the selected ASR model."
-                    target_model = status_data.get("model_id", "")
-                    if status_key == "success" and target_model == selected_model:
-                        button_text = "Reinstall"
-                        tooltip_text = (
-                            "Reinstall or repair the selected ASR model using the cached files."
-                        )
-                    elif status_key == "error" and target_model == selected_model:
-                        button_text = "Retry Download"
-                        tooltip_text = (
-                            "Retry downloading the selected ASR model. Check the logs for diagnostics."
-                        )
-                    elif status_key == "cancelled" and target_model == selected_model:
-                        button_text = "Resume Download"
-                        tooltip_text = (
-                            "Restart the ASR model download when you are ready."
-                        )
-                    elif status_key == "running" and target_model == selected_model:
-                        button_text = "Downloading..."
-                        tooltip_text = (
-                            "Downloading the selected ASR model. Please wait until it completes."
-                        )
-
-                    if install_button is not None:
-                        install_button.configure(text=button_text)
-                    if install_button_tooltip is not None:
-                        install_button_tooltip.text = tooltip_text
+                # ASR Section
+                asr_frame = ctk.CTkFrame(settings_win)
+                asr_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(asr_frame, text="ASR Settings", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=5)
 
                 def _update_model_info(model_ref: str) -> None:
                     model_size_label.configure(text="Download: calculating... | Installed: -")
@@ -3228,34 +2990,7 @@ class UIManager:
 
                 self._update_text_correction_fields()
 
-            except Exception as e:
-                logging.error(f"Failed to create Toplevel for settings: {e}", exc_info=True)
-            finally:
-                try:
-                    button_frame = ctk.CTkFrame(settings_win)  # Move outside scrollable_frame to keep fixed
-                    button_frame.pack(side="bottom", fill="x", padx=10, pady=(20, 10))
-
-                    apply_button = ctk.CTkButton(button_frame, text="Apply and Close", command=self._apply_settings_from_ui)
-                    apply_button.pack(side="right", padx=5)
-                    Tooltip(apply_button, "Save all settings and exit.")
-                    close_button = ctk.CTkButton(button_frame, text="Cancel", command=self._close_settings_window, fg_color="gray50")
-                    close_button.pack(side="right", padx=5)
-                    Tooltip(close_button, "Discard changes and exit.")
-
-                    restore_button = ctk.CTkButton(button_frame, text="Restore Defaults", command=self._restore_default_settings)
-                    restore_button.pack(side="left", padx=5)
-
-                    force_reregister_button = ctk.CTkButton(
-                        button_frame, text="Force Hotkey Re-registration", command=self.core_instance_ref.force_reregister_hotkeys
-                    )
-                    force_reregister_button.pack(side="left", padx=5)
-                    Tooltip(force_reregister_button, "Re-register all global hotkeys.")
-                except Exception as btn_err:
-                    logging.error(f"Failed to create action buttons: {btn_err}", exc_info=True)
-
-                settings_win.protocol("WM_DELETE_WINDOW", self._close_settings_window)
-
-    def show_status_tooltip(self, message: str) -> None:
+            def show_status_tooltip(self, message: str) -> None:
         if not message:
             return
         if self.tray_icon:

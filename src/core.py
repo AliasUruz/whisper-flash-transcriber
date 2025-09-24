@@ -13,9 +13,6 @@ except ImportError as exc:
         "Erro: a biblioteca 'pyautogui' não está instalada. "
         "Execute 'pip install -r requirements.txt' antes de executar o aplicativo."
     ) from exc
-import pyperclip # Ainda necessário para _handle_transcription_result
-import numpy as np # Adicionado para np.ndarray no callback
-import soundfile as sf
 from tkinter import messagebox # Adicionado para messagebox no _on_model_load_failed
 
 # Importar os novos módulos
@@ -44,7 +41,8 @@ from .config_manager import (
     ASR_CACHE_DIR_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
 )
-from .audio_handler import AudioHandler, AUDIO_SAMPLE_RATE # AUDIO_SAMPLE_RATE ainda é usado em _handle_transcription_result
+from .action_orchestrator import ActionOrchestrator
+from .audio_handler import AudioHandler
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
@@ -102,10 +100,15 @@ class AppCore:
                 exc_info=True,
             )
 
+        self.action_orchestrator = ActionOrchestrator(
+            state_manager=self.state_manager,
+            transcription_handler=self.transcription_handler,
+            config_manager=self.config_manager,
+        )
         self.audio_handler = AudioHandler(
             config_manager=self.config_manager,
             state_manager=self.state_manager,
-            on_audio_segment_ready_callback=self._on_audio_segment_ready,
+            on_audio_segment_ready_callback=self.action_orchestrator.handle_audio_segment,
         )
         self.gemini_api = GeminiAPI(self.config_manager) # Instancia o GeminiAPI
         self.transcription_handler = TranscriptionHandler(
@@ -113,8 +116,6 @@ class AppCore:
             gemini_api_client=self.gemini_api,  # Injeta a instância da API
             on_model_ready_callback=self._on_model_loaded,
             on_model_error_callback=self._on_model_load_failed,
-            on_transcription_result_callback=self._handle_transcription_result,
-            on_agent_result_callback=self._handle_agent_result_final, # Usa o novo callback
             on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
             is_state_transcribing_fn=self.is_state_transcribing,
         )
@@ -564,43 +565,6 @@ class AppCore:
         """Define o callback para atualizar a UI com a tecla detectada."""
         self.key_detection_callback = callback
 
-    def _on_audio_segment_ready(self, audio_source: str | np.ndarray):
-        """Callback chamado ao finalizar a gravação (arquivo ou array)."""
-        self.temp_audio_file = audio_source if isinstance(audio_source, str) else None
-        duration_seconds = 0.0
-        try:
-            if isinstance(audio_source, str):
-                with sf.SoundFile(audio_source) as f:
-                    duration_seconds = len(f) / f.samplerate
-            else:
-                duration_seconds = len(audio_source) / AUDIO_SAMPLE_RATE
-        except Exception as e:
-            logging.warning(f"Não foi possível obter duração do áudio: {e}")
-
-        min_duration = self.config_manager.get('min_transcription_duration')
-        
-        if duration_seconds < min_duration:
-            logging.info(
-                f"Segmento de áudio ({duration_seconds:.2f}s) é mais curto que o mínimo configurado ({min_duration}s). Ignorando."
-            )
-            self.state_manager.set_state(
-                sm.StateEvent.AUDIO_RECORDING_DISCARDED,
-                details=f"Segment shorter than minimum ({duration_seconds:.2f}s < {min_duration}s)",
-                source="audio_handler",
-            )
-            return  # Interrompe o processamento
-
-        with self.agent_mode_lock:
-            is_agent_mode = self.agent_mode_active
-            if is_agent_mode:
-                self.agent_mode_active = False
-
-        logging.info(
-            f"AppCore: Segmento de áudio pronto ({duration_seconds:.2f}s). Enviando para TranscriptionHandler (Modo Agente: {is_agent_mode})."
-        )
-        
-        # Passa o estado capturado para o handler de transcrição.
-        self.transcription_handler.transcribe_audio_segment(audio_source, is_agent_mode)
 
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
@@ -669,86 +633,6 @@ class AppCore:
             self.on_segment_transcribed(text)
         self.full_transcription += text + " " # Acumula a transcrição completa
 
-    def _handle_transcription_result(self, corrected_text, raw_text):
-        """Lida com o texto final de transcrição, priorizando a versão corrigida."""
-        logging.info("AppCore: Handling final transcription result.")
-        # O texto corrigido tem prioridade; se vazio, usa o acumulado durante a gravação
-        text_to_display = corrected_text
-        final_text = text_to_display.strip() if text_to_display else self.full_transcription.strip()
-
-        if self.display_transcripts_in_terminal:
-            print("\n=== COMPLETE TRANSCRIPTION ===\n" + final_text + "\n==============================\n")
-        # Métricas de correção e paste
-        try:
-            # t_corr: medido indiretamente aqui usando logs de início/fim se disponíveis; como fallback, apenas marca etapa
-            logging.info("[METRIC] stage=correction_done value_ms=0")
-        except Exception:
-            pass
-
-        if pyperclip:
-            try:
-                pyperclip.copy(final_text)
-                logging.info("Transcription copied to clipboard.")
-            except Exception as e:
-                logging.error(f"Erro ao copiar para o clipboard: {e}")
-        
-        t_clip_copy_start = time.perf_counter()
-        if self.auto_paste:
-            self._do_paste()
-        else:
-            self._log_status("Transcription complete. Auto-paste disabled.")
-        t_clip_copy_end = time.perf_counter()
-        try:
-            logging.info(f"[METRIC] stage=clipboard_paste_block value_ms={(t_clip_copy_end - t_clip_copy_start) * 1000:.2f}")
-        except Exception:
-            pass
-        
-        char_count = len(final_text)
-        self.state_manager.set_state(
-            sm.StateEvent.TRANSCRIPTION_COMPLETED,
-            details=f"Transcription finalized ({char_count} chars)",
-            source="transcription",
-        )
-        if self.ui_manager:
-            self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
-        logging.info(f"Corrected text ready for copy/paste: {final_text}")
-        self.full_transcription = ""  # Reset para a próxima gravação
-        self._delete_temp_audio_file()
-
-    def _handle_agent_result_final(self, agent_response_text: str):
-        """
-        Lida com o resultado final do modo agente (copia, cola e reseta o estado).
-        Esta função é chamada pelo TranscriptionHandler após a API Gemini ser consultada.
-        """
-        try:
-            if not agent_response_text:
-                logging.warning("Comando do agente retornou uma resposta vazia.")
-                self._log_status("Comando do agente sem resposta.", error=True)
-                return
-
-            if pyperclip:
-                pyperclip.copy(agent_response_text)
-                logging.info("Agent response copied to clipboard.")
-
-            if self.config_manager.get("agent_auto_paste", True): # Usa agent_auto_paste
-                self._do_paste()
-                self._log_status("Comando do agente executado e colado.")
-            else:
-                self._log_status("Comando do agente executado (colagem automática desativada).")
-
-        except Exception as e:
-            logging.error(f"Erro ao manusear o resultado do agente: {e}", exc_info=True)
-            self._log_status(f"Erro ao manusear o resultado do agente: {e}", error=True)
-        finally:
-            response_size = len(agent_response_text)
-            self.state_manager.set_state(
-                sm.StateEvent.AGENT_COMMAND_COMPLETED,
-                details=f"Agent response delivered ({response_size} chars)",
-                source="agent_mode",
-            )
-            if self.ui_manager:
-                self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
-            self._delete_temp_audio_file()
 
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
@@ -1057,273 +941,9 @@ class AppCore:
         )
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
-    def validate_settings_inputs(self, **kwargs) -> tuple[bool, list[str]]:
-        friendly_names: dict[str, str] = {
-            "new_key": "Tecla de gravação",
-            "new_mode": "Modo de gravação",
-            "new_auto_paste": "Colar automático",
-            "new_sound_enabled": "Som de feedback",
-            "new_sound_frequency": "Frequência do som",
-            "new_sound_duration": "Duração do som",
-            "new_sound_volume": "Volume do som",
-            "new_agent_key": "Tecla do agente",
-            "new_text_correction_enabled": "Correção de texto",
-            "new_text_correction_service": "Serviço de correção de texto",
-            "new_openrouter_api_key": "Chave da OpenRouter",
-            "new_openrouter_model": "Modelo OpenRouter",
-            "new_gemini_api_key": "Chave da Gemini",
-            "new_gemini_model": "Modelo Gemini",
-            "new_gemini_prompt": "Prompt de correção Gemini",
-            "prompt_agentico": "Prompt agêntico",
-            "new_agent_model": "Modelo do agente",
-            "new_gemini_model_options": "Lista de modelos Gemini",
-            "new_batch_size": "Tamanho do lote",
-            "new_gpu_index": "Índice da GPU",
-            "new_hotkey_stability_service_enabled": "Serviço de estabilidade das hotkeys",
-            "new_min_transcription_duration": "Duração mínima da transcrição",
-            "new_min_record_duration": "Duração mínima da gravação",
-            "new_save_temp_recordings": "Salvar gravações temporárias",
-            "new_record_storage_mode": "Modo de armazenamento da gravação",
-            "new_record_storage_limit": "Limite de armazenamento da gravação",
-            "new_record_to_memory": "Armazenar gravação em memória",
-            "new_max_memory_seconds_mode": "Modo de retenção em memória",
-            "new_max_memory_seconds": "Tempo máximo em memória",
-            "new_use_vad": "VAD",
-            "new_vad_threshold": "Limiar do VAD",
-            "new_vad_silence_duration": "Duração do silêncio (VAD)",
-            "new_display_transcripts_in_terminal": "Exibir transcrições no terminal",
-            "new_launch_at_startup": "Executar ao iniciar",
-            "new_chunk_length_mode": "Modo do tamanho de chunk",
-            "new_chunk_length_sec": "Duração do chunk",
-            "new_enable_torch_compile": "Torch compile",
-            "new_asr_backend": "Backend de ASR",
-            "new_asr_model": "Modelo de ASR",
-            "new_asr_model_id": "Modelo de ASR",
-            "new_asr_compute_device": "Dispositivo de ASR",
-            "new_asr_dtype": "DType de ASR",
-            "new_asr_ct2_compute_type": "Quantização CT2",
-            "new_ct2_quantization": "Quantização CT2",
-            "new_asr_cache_dir": "Diretório de cache do ASR",
-        }
-
-        def _label(key: str) -> str:
-            return friendly_names.get(key, key)
-
-        problems: list[str] = []
-
-        def ensure_bool(key: str) -> None:
-            if key not in kwargs:
-                return
-            value = kwargs[key]
-            if not isinstance(value, bool):
-                problems.append(f"{_label(key)} deve ser verdadeiro ou falso.")
-
-        def ensure_string(key: str, *, allow_empty: bool) -> None:
-            if key not in kwargs:
-                return
-            value = kwargs[key]
-            if not isinstance(value, str):
-                problems.append(f"{_label(key)} deve ser um texto.")
-                return
-            if not allow_empty and not value.strip():
-                problems.append(f"{_label(key)} não pode ficar em branco.")
-
-        def ensure_int(
-            key: str,
-            *,
-            min_value: int | None = None,
-            max_value: int | None = None,
-        ) -> None:
-            if key not in kwargs:
-                return
-            value = kwargs[key]
-            if not isinstance(value, int) or isinstance(value, bool):
-                problems.append(f"{_label(key)} deve ser um número inteiro.")
-                return
-            if min_value is not None and value < min_value:
-                problems.append(
-                    f"{_label(key)} deve ser maior ou igual a {min_value}."
-                )
-            if max_value is not None and value > max_value:
-                problems.append(
-                    f"{_label(key)} deve ser menor ou igual a {max_value}."
-                )
-
-        def ensure_number(
-            key: str,
-            *,
-            min_value: float | None = None,
-            max_value: float | None = None,
-            min_inclusive: bool = True,
-            max_inclusive: bool = True,
-        ) -> None:
-            if key not in kwargs:
-                return
-            value = kwargs[key]
-            if not (isinstance(value, (int, float)) and not isinstance(value, bool)):
-                problems.append(f"{_label(key)} deve ser um número.")
-                return
-            if min_value is not None:
-                if (min_inclusive and value < min_value) or (
-                    not min_inclusive and value <= min_value
-                ):
-                    operador = "maior ou igual" if min_inclusive else "maior"
-                    problems.append(
-                        f"{_label(key)} deve ser {operador} que {min_value}."
-                    )
-            if max_value is not None:
-                if (max_inclusive and value > max_value) or (
-                    not max_inclusive and value >= max_value
-                ):
-                    operador = "menor ou igual" if max_inclusive else "menor"
-                    problems.append(
-                        f"{_label(key)} deve ser {operador} que {max_value}."
-                    )
-
-        def ensure_enum(key: str, allowed: set[str]) -> None:
-            if key not in kwargs:
-                return
-            value = kwargs[key]
-            if not isinstance(value, str):
-                problems.append(f"{_label(key)} deve ser um texto.")
-                return
-            normalized = value.strip().lower()
-            if key == "new_asr_compute_device" and normalized.startswith("cuda"):
-                return
-            if normalized not in allowed:
-                opcoes = ", ".join(sorted(allowed))
-                problems.append(
-                    f"{_label(key)} possui um valor inválido. Opções permitidas: {opcoes}."
-                )
-
-        bool_fields = {
-            "new_auto_paste",
-            "new_sound_enabled",
-            "new_text_correction_enabled",
-            "new_hotkey_stability_service_enabled",
-            "new_save_temp_recordings",
-            "new_record_to_memory",
-            "new_use_vad",
-            "new_display_transcripts_in_terminal",
-            "new_launch_at_startup",
-            "new_enable_torch_compile",
-        }
-        for field in bool_fields:
-            ensure_bool(field)
-
-        for field in {
-            "new_openrouter_api_key",
-            "new_gemini_api_key",
-            "new_gemini_prompt",
-            "prompt_agentico",
-        }:
-            ensure_string(field, allow_empty=True)
-
-        for field in {
-            "new_key",
-            "new_agent_key",
-            "new_openrouter_model",
-            "new_gemini_model",
-            "new_agent_model",
-            "new_asr_model",
-            "new_asr_model_id",
-            "new_asr_cache_dir",
-        }:
-            ensure_string(field, allow_empty=False)
-
-        ensure_enum("new_mode", {"toggle", "press", "hold"})
-        ensure_enum(
-            "new_text_correction_service",
-            {"none", "openrouter", "gemini"},
-        )
-        ensure_enum(
-            "new_record_storage_mode",
-            {"auto", "disk", "memory", "hybrid"},
-        )
-        ensure_enum("new_max_memory_seconds_mode", {"auto", "manual"})
-        ensure_enum("new_chunk_length_mode", {"auto", "manual"})
-        ensure_enum(
-            "new_asr_backend",
-            {"auto", "transformers", "ct2", "ctranslate2", "faster-whisper", "faster_whisper", "whisper", "dummy"},
-        )
-        ensure_enum(
-            "new_asr_compute_device",
-            {"auto", "cpu", "cuda", "mps", "rocm", "xpu", "openvino", "dml"},
-        )
-        ensure_enum("new_asr_dtype", {"auto", "float16", "float32", "bfloat16"},)
-
-        ensure_enum("new_asr_ct2_compute_type", {"default", "float16", "float32", "int8", "int8_float16", "int8_float32"},)
-
-        ensure_enum(
-            "new_ct2_quantization",
-            {"default", "float16", "float32", "int8", "int8_float16", "int8_float32"},
-        )
-
-        ensure_int("new_batch_size", min_value=1)
-        ensure_int("new_gpu_index", min_value=-1)
-        ensure_int("new_record_storage_limit", min_value=0)
-
-        ensure_number("new_sound_frequency", min_value=1, min_inclusive=True)
-        ensure_number("new_sound_duration", min_value=0.0, min_inclusive=False)
-        ensure_number("new_sound_volume", min_value=0.0, max_value=1.0)
-        ensure_number("new_min_transcription_duration", min_value=0.0)
-        ensure_number("new_min_record_duration", min_value=0.0)
-        ensure_number("new_max_memory_seconds", min_value=0.0, min_inclusive=False)
-        ensure_number("new_vad_threshold", min_value=0.0, max_value=1.0)
-        ensure_number("new_vad_silence_duration", min_value=0.0, min_inclusive=False)
-        ensure_number("new_chunk_length_sec", min_value=0.0, min_inclusive=False)
-
-        if "new_gemini_model_options" in kwargs:
-            options = kwargs["new_gemini_model_options"]
-            if not isinstance(options, (list, tuple)):
-                problems.append(
-                    f"{_label('new_gemini_model_options')} deve ser uma lista de textos."
-                )
-            else:
-                cleaned: list[str] = []
-                invalid_options = False
-                for item in options:
-                    if not isinstance(item, str):
-                        problems.append(
-                            f"{_label('new_gemini_model_options')} contém um item não textual."
-                        )
-                        invalid_options = True
-                        break
-                    stripped = item.strip()
-                    if not stripped:
-                        problems.append(
-                            f"{_label('new_gemini_model_options')} não pode ter entradas vazias."
-                        )
-                        invalid_options = True
-                        break
-                    cleaned.append(stripped)
-                if not invalid_options and not cleaned:
-                    problems.append(
-                        f"{_label('new_gemini_model_options')} deve possuir ao menos um modelo válido."
-                    )
-
-        return (len(problems) == 0, problems)
 
     def apply_settings_from_external(self, **kwargs):
         logging.info("AppCore: Applying new configuration from external source.")
-        valid_inputs, validation_errors = self.validate_settings_inputs(**kwargs)
-        if not valid_inputs:
-            summary = "\n".join(f"- {msg}" for msg in validation_errors)
-            message = (
-                "Não foi possível aplicar as configurações devido aos seguintes "
-                f"problemas:\n\n{summary}"
-            )
-            logging.error(
-                "AppCore: configuração rejeitada por validação: %s",
-                "; ".join(validation_errors),
-            )
-            self.state_manager.set_state(sm.STATE_ERROR_SETTINGS)
-
-            def _show_error():
-                messagebox.showerror("Configurações inválidas", message)
-
-            self.main_tk_root.after(0, _show_error)
-            return
         config_changed = False
         changed_mapped_keys: set[str] = set()
 

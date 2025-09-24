@@ -125,24 +125,17 @@ class AudioHandler:
                 write_data = None
                 if self.use_vad and self.vad_manager:
                     try:
-                        max_abs = float(np.max(np.abs(indata))) if indata.size else 0.0
-                        logging.debug(
-                            "VAD check chunk shape=%s dtype=%s max_abs=%.4f",
-                            indata.shape,
-                            indata.dtype,
-                            max_abs,
-                        )
-                        is_speech = self.vad_manager.is_speech(indata)
+                        is_speech, speech_buffer = self.vad_manager.is_speech(indata)
+                        if is_speech and speech_buffer is not None:
+                            write_data = speech_buffer
+                        elif not is_speech:
+                            write_data = None
+                        else:
+                            write_data = indata # Fallback
                     except Exception as exc:
                         self._handle_vad_exception(exc, indata)
                         is_speech = True
-                    if is_speech:
-                        self._vad_silence_counter = 0.0
                         write_data = indata
-                    else:
-                        self._vad_silence_counter += len(indata) / AUDIO_SAMPLE_RATE
-                        if self._vad_silence_counter <= self.vad_silence_duration:
-                            write_data = indata
                 else:
                     write_data = indata
 
@@ -551,12 +544,20 @@ class AudioHandler:
         self.use_vad = self.config_manager.get("use_vad", False)
         self.vad_threshold = self.config_manager.get("vad_threshold", 0.5)
         self.vad_silence_duration = self.config_manager.get("vad_silence_duration", 1.0)
+        self.vad_pre_speech_padding_ms = self.config_manager.get("vad_pre_speech_padding_ms", 200)
+        self.vad_post_speech_padding_ms = self.config_manager.get("vad_post_speech_padding_ms", 300)
 
         if self.use_vad:
             if self.vad_manager is None:
-                self.vad_manager = VADManager(threshold=self.vad_threshold)
+                self.vad_manager = VADManager(
+                    threshold=self.vad_threshold,
+                    vad_pre_speech_padding_ms=self.vad_pre_speech_padding_ms,
+                    vad_post_speech_padding_ms=self.vad_post_speech_padding_ms
+                )
             else:
                 self.vad_manager.threshold = self.vad_threshold
+                self.vad_manager.vad_pre_speech_padding_ms = self.vad_pre_speech_padding_ms
+                self.vad_manager.vad_post_speech_padding_ms = self.vad_post_speech_padding_ms
             if not self.vad_manager.enabled:
                 logging.error("VAD disabled: model not found.")
                 self.use_vad = False

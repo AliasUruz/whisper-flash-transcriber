@@ -1,10 +1,9 @@
+import unittest
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-import unittest
-
 import numpy as np
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.vad_manager import VADManager
 
@@ -64,7 +63,7 @@ class TestVADPipeline(unittest.TestCase):
         manager._state = np.zeros((2, 1, 128), dtype=np.float32)
         manager._use_energy_fallback = True
         chunk = np.ones(1600, dtype=np.float32) * 0.2
-        self.assertTrue(VADManager.is_speech(manager, chunk))
+        self.assertTrue(VADManager.is_speech(manager, chunk)[0])
 
 
 if __name__ == "__main__":
