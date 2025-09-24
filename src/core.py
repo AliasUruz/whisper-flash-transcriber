@@ -698,23 +698,32 @@ class AppCore:
         Lida com o resultado final do modo agente (copia, cola e reseta o estado).
         Esta função é chamada pelo TranscriptionHandler após a API Gemini ser consultada.
         """
-        self.action_orchestrator.handle_agent_result(
-            agent_response_text,
-            state_event=StateEvent.AGENT_COMMAND_COMPLETED,
-        )
-
-    def _close_live_transcription_window_async(self) -> None:
-        """Agenda o fechamento da janela de transcrição ao vivo se disponível."""
-        if not self.ui_manager:
-            return
-
+        normalized_response = agent_response_text or ""
         try:
-            self.main_tk_root.after(0, self.ui_manager.close_live_transcription_window)
-        except Exception as exc:
-            logging.debug(
-                "Falha ao agendar fechamento da janela de transcrição: %s",
-                exc,
-                exc_info=True,
+            if not normalized_response:
+                logging.warning("Comando do agente retornou uma resposta vazia.")
+                self._log_status("Comando do agente sem resposta.", error=True)
+                return
+
+            if pyperclip:
+                pyperclip.copy(normalized_response)
+                logging.info("Agent response copied to clipboard.")
+
+            if self.config_manager.get("agent_auto_paste", True): # Usa agent_auto_paste
+                self._do_paste()
+                self._log_status("Comando do agente executado e colado.")
+            else:
+                self._log_status("Comando do agente executado (colagem automática desativada).")
+
+        except Exception as e:
+            logging.error(f"Erro ao manusear o resultado do agente: {e}", exc_info=True)
+            self._log_status(f"Erro ao manusear o resultado do agente: {e}", error=True)
+        finally:
+            response_size = len(normalized_response)
+            self._set_state(
+                StateEvent.AGENT_COMMAND_COMPLETED,
+                details=f"Agent response delivered ({response_size} chars)",
+                source="agent_mode",
             )
             self.ui_manager.close_live_transcription_window()
 
