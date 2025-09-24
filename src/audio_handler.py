@@ -6,7 +6,6 @@ import queue
 import os
 import time
 import shutil
-from collections import deque
 
 import numpy as np
 import sounddevice as sd
@@ -59,7 +58,6 @@ class AudioHandler:
         self.vad_silence_duration = 1.0
         self.vad_pre_speech_padding_ms = 0.0
         self.vad_post_speech_padding_ms = 0.0
-        self._vad_post_padding_seconds = 0.0
         self.vad_manager = None
 
         self.is_recording = False
@@ -71,12 +69,6 @@ class AudioHandler:
         self.sound_lock = threading.RLock()
         self.storage_lock = threading.Lock()
 
-        self._vad_silence_counter = 0.0
-        self._vad_cooldown_samples = 0
-        self._vad_pre_buffer: deque[np.ndarray] = deque()
-        self._vad_pre_buffer_samples = 0
-        self._vad_pre_buffer_limit = 0
-        self._vad_post_padding_samples = 0
 
         self.temp_file_path: str | None = None
         self._sf_writer: sf.SoundFile | None = None
@@ -142,27 +134,14 @@ class AudioHandler:
                 frames_to_write: list[np.ndarray] = []
                 if self.use_vad and self.vad_manager:
                     try:
-                        frames_to_write = self.vad_manager.process_chunk(indata)
+                        is_speech, vad_frames = self.vad_manager.process_chunk(indata)
                     except Exception as exc:
-                        self._handle_vad_exception(exc, indata)
-                        is_speech = True
-
-                    if is_speech:
-                        frames_to_write.extend(self._consume_pre_buffer())
-                        frames_to_write.append(indata)
-                        self._vad_cooldown_samples = self._vad_post_padding_samples
-                        self._vad_silence_counter = 0.0
-                    else:
-                        if self._vad_cooldown_samples > 0:
-                            frames_to_write.append(indata)
-                            self._vad_cooldown_samples = max(
-                                0, self._vad_cooldown_samples - len(indata)
-                            )
-                        else:
-                            self._append_to_pre_buffer(indata)
-                            self._vad_silence_counter += len(indata) / AUDIO_SAMPLE_RATE
+                        is_speech, vad_frames = self._handle_vad_exception(exc, indata)
+                    frames_to_write.extend(vad_frames)
+                    if is_speech and not vad_frames:
+                        frames_to_write.append(np.asarray(indata, dtype=np.float32).copy())
                 else:
-                    frames_to_write = [indata]
+                    frames_to_write = [np.asarray(indata, dtype=np.float32).copy()]
 
                 if not frames_to_write:
                     continue
@@ -217,17 +196,19 @@ class AudioHandler:
             except Exception as e:
                 logging.error(f"Error while processing audio queue: {e}")
 
-    def _handle_vad_exception(self, exc: Exception, chunk: np.ndarray) -> None:
+    def _handle_vad_exception(self, exc: Exception, chunk: np.ndarray) -> tuple[bool, list[np.ndarray]]:
         logging.error("Error while processing VAD: %s", exc, exc_info=True)
+        frames: list[np.ndarray] = []
+        if chunk is not None:
+            frames.append(np.asarray(chunk, dtype=np.float32).copy())
         if self.vad_manager:
             try:
                 self.vad_manager.reset_states()
+                self.vad_manager.enable_energy_fallback("pipeline exception", exc)
             except Exception:
                 logging.debug("Failed to reset VAD states after exception.", exc_info=True)
-        self._vad_silence_counter = 0.0
-        self._vad_cooldown_samples = 0
         try:
-            max_abs = float(np.max(np.abs(chunk))) if chunk is not None and chunk.size else 0.0
+            max_abs = float(np.max(np.abs(chunk))) if chunk is not None and getattr(chunk, "size", 0) else 0.0
             logging.debug(
                 "VAD fallback; chunk_shape=%s max_abs=%.4f",
                 getattr(chunk, "shape", None),
@@ -235,32 +216,7 @@ class AudioHandler:
             )
         except Exception:
             logging.debug("Unable to compute chunk diagnostics after VAD exception.", exc_info=True)
-
-    def _reset_vad_buffers(self) -> None:
-        self._vad_pre_buffer.clear()
-        self._vad_pre_buffer_samples = 0
-        self._vad_cooldown_samples = 0
-
-    def _append_to_pre_buffer(self, chunk: np.ndarray) -> None:
-        if self._vad_pre_buffer_limit <= 0:
-            return
-        chunk_copy = chunk.copy()
-        self._vad_pre_buffer.append(chunk_copy)
-        self._vad_pre_buffer_samples += len(chunk_copy)
-        while (
-            self._vad_pre_buffer_samples > self._vad_pre_buffer_limit
-            and self._vad_pre_buffer
-        ):
-            removed = self._vad_pre_buffer.popleft()
-            self._vad_pre_buffer_samples -= len(removed)
-
-    def _consume_pre_buffer(self) -> list[np.ndarray]:
-        if not self._vad_pre_buffer:
-            return []
-        buffered = list(self._vad_pre_buffer)
-        self._vad_pre_buffer.clear()
-        self._vad_pre_buffer_samples = 0
-        return buffered
+        return True, frames
 
     @staticmethod
     def _coerce_padding_ms(value, fallback: float, *, key: str) -> float:
@@ -428,10 +384,11 @@ class AudioHandler:
                 )
 
         if self.use_vad and self.vad_manager:
-            self.vad_manager.reset_states()
-        self._reset_vad_buffers()
-        self._vad_silence_counter = 0.0
-        logging.debug("VAD reset and silence counter cleared for new recording.")
+            try:
+                self.vad_manager.reset_states()
+            except Exception:
+                logging.debug("Failed to reset VAD states for new recording.", exc_info=True)
+        logging.debug("VAD reset for new recording.")
 
         self.state_manager.set_state("RECORDING")
 
@@ -460,10 +417,11 @@ class AudioHandler:
             self._processing_thread = None
 
         if self.use_vad and self.vad_manager:
-            self.vad_manager.reset_states()
-        self._reset_vad_buffers()
-        self._vad_silence_counter = 0.0
-        logging.debug("VAD reset and silence counter cleared when stopping recording.")
+            try:
+                self.vad_manager.reset_states()
+            except Exception:
+                logging.debug("Failed to reset VAD states when stopping recording.", exc_info=True)
+        logging.debug("VAD reset when stopping recording.")
 
         threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
 
@@ -662,39 +620,38 @@ class AudioHandler:
             key=VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
         )
 
-        pre_padding_seconds = self.vad_pre_speech_padding_ms / 1000.0
-        post_padding_seconds = self.vad_post_speech_padding_ms / 1000.0
-        fallback_post_seconds = max(post_padding_seconds, float(self.vad_silence_duration))
-
-        self._vad_pre_buffer_limit = int(pre_padding_seconds * AUDIO_SAMPLE_RATE)
-        self._vad_post_padding_seconds = fallback_post_seconds
-        self._vad_post_padding_samples = int(fallback_post_seconds * AUDIO_SAMPLE_RATE)
-
         if self.use_vad:
             if self.vad_manager is None:
                 self.vad_manager = VADManager(
                     threshold=self.vad_threshold,
                     sampling_rate=AUDIO_SAMPLE_RATE,
+                    pre_speech_padding_ms=int(self.vad_pre_speech_padding_ms),
+                    post_speech_padding_ms=int(self.vad_post_speech_padding_ms),
+                    config_manager=self.config_manager,
                 )
             else:
-                self.vad_manager.threshold = self.vad_threshold
                 self.vad_manager.sr = AUDIO_SAMPLE_RATE
+                self.vad_manager.configure(
+                    threshold=self.vad_threshold,
+                    pre_padding_ms=int(self.vad_pre_speech_padding_ms),
+                    post_padding_ms=int(self.vad_post_speech_padding_ms),
+                )
             if not self.vad_manager.enabled:
                 logging.error("VAD disabled: model not found.")
                 self.use_vad = False
                 self.vad_manager = None
             else:
-                self._reset_vad_buffers()
+                try:
+                    self.vad_manager.reset_states()
+                except Exception:
+                    logging.debug("Failed to reset VAD states after configuration.", exc_info=True)
         else:
             self.vad_manager = None
-            self._reset_vad_buffers()
 
         logging.debug(
-            "VAD padding configured (pre=%.1f ms, post=%.1f ms -> %.3f s buffer limit=%d samples)",
+            "VAD padding configured (pre=%.1f ms, post=%.1f ms)",
             self.vad_pre_speech_padding_ms,
             self.vad_post_speech_padding_ms,
-            self._vad_post_padding_seconds,
-            self._vad_pre_buffer_limit,
         )
 
         logging.info(
