@@ -1926,7 +1926,6 @@ class UIManager:
 
                 self._clear_settings_context()
                 self._set_settings_var("window", settings_win)
-                model_manager = self.model_manager
                 service_values_allowed = {SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI}
                 self._set_settings_meta("service_values_allowed", service_values_allowed)
 
