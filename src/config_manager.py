@@ -1,16 +1,17 @@
-import os
-import json
-import logging
 import copy
 import hashlib
+import json
+import logging
+import os
 import time
 from pathlib import Path
+from tkinter import messagebox
 from typing import Any, List
 
 import requests
 
-from .model_manager import list_catalog, list_installed
 from .config_schema import coerce_with_defaults
+from .model_manager import list_catalog, list_installed
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -29,7 +30,7 @@ def _parse_bool(value):
 
 # --- Constantes de Configuração (movidas de whisper_tkinter.py) ---
 CONFIG_FILE = "config.json"
-SECRETS_FILE = "secrets.json" # Nova constante para o arquivo de segredos
+SECRETS_FILE = "secrets.json"  # Nova constante para o arquivo de segredos
 
 DEFAULT_CONFIG = {
     "record_key": "F3",
@@ -72,17 +73,18 @@ DEFAULT_CONFIG = {
         "- Return ONLY the corrected text, with no additional comments or explanations. "
         "Transcribed speech: {text}"
     ),
-    "batch_size": 16, # Valor padrão para o modo automático
-    "batch_size_mode": "auto", # Novo: 'auto' ou 'manual'
-    "manual_batch_size": 8, # Novo: Valor para o modo manual
+    "batch_size": 16,  # Valor padrão para o modo automático
+    "batch_size_mode": "auto",  # Novo: 'auto' ou 'manual'
+    "manual_batch_size": 8,  # Novo: Valor para o modo manual
     "gpu_index": 0,
-    "hotkey_stability_service_enabled": True, # Nova configuração unificada
+    "hotkey_stability_service_enabled": True,  # Nova configuração unificada
     "use_vad": False,
     "vad_threshold": 0.5,
     # Duração máxima da pausa preservada antes que o silêncio seja descartado
     "vad_silence_duration": 1.0,
-    "vad_pre_speech_padding_ms": 200,
-    "vad_post_speech_padding_ms": 400,
+    # Valores alinhados com AppConfig em config_schema.py para coerência de VAD.
+    "vad_pre_speech_padding_ms": 150,
+    "vad_post_speech_padding_ms": 300,
     "display_transcripts_in_terminal": False,
     "gemini_model_options": [
         "gemini-2.5-flash-lite",
@@ -96,7 +98,7 @@ DEFAULT_CONFIG = {
     "max_memory_seconds": 30,
     "min_free_ram_mb": 1000,
     "auto_ram_threshold_percent": 10,
-    "min_transcription_duration": 1.0, # Nova configuração
+    "min_transcription_duration": 1.0,  # Nova configuração
     "chunk_length_sec": 30,
     "chunk_length_mode": "manual",
     "enable_torch_compile": False,
@@ -212,7 +214,8 @@ def _normalize_asr_backend(name: str | None) -> str | None:
     return normalized
 
 
-
+class ConfigManager:
+    """Gerencia persistência de configuração e segredos do aplicativo."""
 
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
         self.config_file = config_file
@@ -327,6 +330,13 @@ def _normalize_asr_backend(name: str | None) -> str | None:
 
         cfg = self.config
 
+        def _source_value(key: str, *, default: Any) -> Any:
+            if applied_updates and key in applied_updates:
+                return applied_updates[key]
+            if loaded_config and key in loaded_config:
+                return loaded_config[key]
+            return default
+
         # Normalize hotkey fields for internal consumption
         cfg["record_key"] = str(cfg.get("record_key", self.default_config["record_key"])).lower()
         cfg["record_mode"] = str(cfg.get("record_mode", self.default_config["record_mode"])).lower()
@@ -349,14 +359,21 @@ def _normalize_asr_backend(name: str | None) -> str | None:
         )
 
         # Track whether the user explicitly defined batch size / GPU index
+        batch_size_specified = bool(cfg.get("batch_size_specified"))
+        gpu_index_specified = bool(cfg.get("gpu_index_specified"))
+
         if loaded_config is not None:
-            cfg['batch_size_specified'] = BATCH_SIZE_CONFIG_KEY in loaded_config
-            cfg['gpu_index_specified'] = GPU_INDEX_CONFIG_KEY in loaded_config
-        elif applied_updates is not None:
+            batch_size_specified = BATCH_SIZE_CONFIG_KEY in loaded_config
+            gpu_index_specified = GPU_INDEX_CONFIG_KEY in loaded_config
+
+        if applied_updates is not None:
             if BATCH_SIZE_CONFIG_KEY in applied_updates:
-                cfg['batch_size_specified'] = True
+                batch_size_specified = True
             if GPU_INDEX_CONFIG_KEY in applied_updates:
-                cfg['gpu_index_specified'] = True
+                gpu_index_specified = True
+
+        cfg["batch_size_specified"] = batch_size_specified
+        cfg["gpu_index_specified"] = gpu_index_specified
 
         cache_dir_value = cfg.get(ASR_CACHE_DIR_CONFIG_KEY, self.default_config[ASR_CACHE_DIR_CONFIG_KEY])
         cache_path = Path(str(cache_dir_value)).expanduser()
@@ -429,13 +446,12 @@ def _normalize_asr_backend(name: str | None) -> str | None:
             self.config.get(ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY])
         )
     
-        # Para gpu_index_specified e batch_size_specified
-        self.config["batch_size_specified"] = BATCH_SIZE_CONFIG_KEY in loaded_config
-        self.config["gpu_index_specified"] = GPU_INDEX_CONFIG_KEY in loaded_config
-        
         # Lógica de validação para gpu_index
         try:
-            raw_gpu_idx_val = loaded_config.get(GPU_INDEX_CONFIG_KEY, -1)
+            raw_gpu_idx_val = _source_value(
+                GPU_INDEX_CONFIG_KEY,
+                default=cfg.get(GPU_INDEX_CONFIG_KEY, -1),
+            )
             gpu_idx_val = int(raw_gpu_idx_val)
             if gpu_idx_val < -1:
                 logging.warning(f"Invalid GPU index '{gpu_idx_val}'. Must be -1 (auto) or >= 0. Using auto (-1).")
@@ -445,13 +461,16 @@ def _normalize_asr_backend(name: str | None) -> str | None:
         except (ValueError, TypeError):
             logging.warning(f"Invalid GPU index value '{self.config.get(GPU_INDEX_CONFIG_KEY)}' in config. Falling back to automatic selection (-1).")
             self.config[GPU_INDEX_CONFIG_KEY] = -1
-            self.config["gpu_index_specified"] = False # Se falhou a leitura, não foi especificado corretamente
+            self.config["gpu_index_specified"] = False  # Se falhou a leitura, não foi especificado corretamente
 
         # Lógica de validação para min_transcription_duration
         try:
-            raw_min_duration_val = loaded_config.get(
+            raw_min_duration_val = _source_value(
                 MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
-                self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY],
+                default=self.config.get(
+                    MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
+                    self.default_config[MIN_TRANSCRIPTION_DURATION_CONFIG_KEY],
+                ),
             )
             min_duration_val = float(raw_min_duration_val)
             if not (0.1 <= min_duration_val <= 10.0):  # Exemplo de range razoável
@@ -478,9 +497,12 @@ def _normalize_asr_backend(name: str | None) -> str | None:
 
         # Validação para min_record_duration
         try:
-            raw_min_rec_val = loaded_config.get(
+            raw_min_rec_val = _source_value(
                 MIN_RECORDING_DURATION_CONFIG_KEY,
-                self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY],
+                default=self.config.get(
+                    MIN_RECORDING_DURATION_CONFIG_KEY,
+                    self.default_config[MIN_RECORDING_DURATION_CONFIG_KEY],
+                ),
             )
             min_rec_val = float(raw_min_rec_val)
             if not (0.1 <= min_rec_val <= 10.0):

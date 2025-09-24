@@ -41,19 +41,20 @@ class VADManager:
 
         self.threshold = threshold
         self.sr = sampling_rate
-        self.vad_pre_speech_padding_ms = vad_pre_speech_padding_ms
-        self.vad_post_speech_padding_ms = vad_post_speech_padding_ms
+        self.pre_speech_padding_ms = pre_speech_padding_ms
+        self.post_speech_padding_ms = post_speech_padding_ms
+        self.vad_pre_speech_padding_ms = pre_speech_padding_ms
+        self.vad_post_speech_padding_ms = post_speech_padding_ms
         self.enabled = False
         self._chunk_counter = 0
         self.session = None
         self._use_energy_fallback = False
         self._fallback_notified = False
-        self.pre_speech_padding_ms = max(0, int(pre_speech_padding_ms))
-        self.post_speech_padding_ms = max(0, int(post_speech_padding_ms))
         self._pre_buffer: deque[np.ndarray] = deque()
         self._pre_buffer_samples = 0
         self._speech_active = False
         self._post_silence_samples = 0
+        self._sanitize_padding()
         self._update_padding_samples()
 
         self.pre_speech_buffer = np.array([], dtype=np.float32)
@@ -109,6 +110,8 @@ class VADManager:
     def is_speech(self, audio_chunk: np.ndarray) -> tuple[bool, np.ndarray | None]:
         """Retorna ``True`` se o chunk contem fala."""
 
+        pre_padding_ms, post_padding_ms = self._ensure_runtime_state()
+
         if audio_chunk is None:
             logging.debug("VAD received chunk None; assuming speech to keep recording.")
             return True, None
@@ -142,7 +145,7 @@ class VADManager:
                 detected, _, _, _ = self._energy_gate(mono_view, self.threshold)
 
         if detected:
-            self.post_speech_cooldown = int(self.vad_post_speech_padding_ms / 1000 * self.sr)
+            self.post_speech_cooldown = int(post_padding_ms / 1000 * self.sr)
             if self.pre_speech_buffer.size > 0:
                 # Retorna o buffer de pre-speech e o chunk atual
                 returning_buffer = np.concatenate([self.pre_speech_buffer, raw_array])
@@ -156,7 +159,7 @@ class VADManager:
 
             # Adiciona ao buffer de pre-speech
             self.pre_speech_buffer = np.concatenate([self.pre_speech_buffer, raw_array])
-            max_buffer_size = int(self.vad_pre_speech_padding_ms / 1000 * self.sr)
+            max_buffer_size = int(pre_padding_ms / 1000 * self.sr)
             if self.pre_speech_buffer.size > max_buffer_size:
                 self.pre_speech_buffer = self.pre_speech_buffer[-max_buffer_size:]
             return False, None
@@ -173,9 +176,10 @@ class VADManager:
         if threshold is not None:
             self.threshold = float(threshold)
         if pre_padding_ms is not None:
-            self.pre_speech_padding_ms = max(0, int(pre_padding_ms))
+            self.pre_speech_padding_ms = pre_padding_ms
         if post_padding_ms is not None:
-            self.post_speech_padding_ms = max(0, int(post_padding_ms))
+            self.post_speech_padding_ms = post_padding_ms
+        self._sanitize_padding()
         self._update_padding_samples()
 
     def process_chunk(self, chunk: np.ndarray) -> list[np.ndarray]:
@@ -300,5 +304,54 @@ class VADManager:
         return [frame.copy() for frame in drained]
 
     def _update_padding_samples(self) -> None:
-        self._pre_padding_samples = int(self.sr * (self.pre_speech_padding_ms / 1000.0))
-        self._post_padding_samples = int(self.sr * (self.post_speech_padding_ms / 1000.0))
+        sr = int(getattr(self, "sr", 16000) or 16000)
+        pre_ms = max(0, int(getattr(self, "pre_speech_padding_ms", 0) or 0))
+        post_ms = max(0, int(getattr(self, "post_speech_padding_ms", 0) or 0))
+        self._pre_padding_samples = int(sr * (pre_ms / 1000.0))
+        self._post_padding_samples = int(sr * (post_ms / 1000.0))
+
+    def _sanitize_padding(self) -> tuple[int, int]:
+        """Normaliza os valores de padding vindos da configuração ou de ajustes dinâmicos."""
+
+        def _coerce(raw: int | float | None) -> int:
+            try:
+                value = int(float(raw))
+            except (TypeError, ValueError):
+                return 0
+            return max(0, value)
+
+        pre_raw = getattr(self, "pre_speech_padding_ms", None)
+        if pre_raw is None:
+            pre_raw = getattr(self, "vad_pre_speech_padding_ms", None)
+        post_raw = getattr(self, "post_speech_padding_ms", None)
+        if post_raw is None:
+            post_raw = getattr(self, "vad_post_speech_padding_ms", None)
+
+        pre_ms = _coerce(pre_raw)
+        post_ms = _coerce(post_raw)
+
+        self.pre_speech_padding_ms = pre_ms
+        self.post_speech_padding_ms = post_ms
+        self.vad_pre_speech_padding_ms = pre_ms
+        self.vad_post_speech_padding_ms = post_ms
+        return pre_ms, post_ms
+
+    def _ensure_runtime_state(self) -> tuple[int, int]:
+        """Garante que atributos críticos existam mesmo sem ``__init__``."""
+
+        pre_ms, post_ms = self._sanitize_padding()
+        if not hasattr(self, "pre_speech_buffer"):
+            self.pre_speech_buffer = np.array([], dtype=np.float32)
+        if not hasattr(self, "post_speech_cooldown"):
+            self.post_speech_cooldown = 0
+        if not hasattr(self, "_speech_active"):
+            self._speech_active = False
+        if not hasattr(self, "_post_silence_samples"):
+            self._post_silence_samples = 0
+        if not hasattr(self, "_pre_buffer"):
+            self._pre_buffer = deque()
+            self._pre_buffer_samples = 0
+        elif not hasattr(self, "_pre_buffer_samples"):
+            self._pre_buffer_samples = sum(len(frame) for frame in self._pre_buffer)
+        self._update_padding_samples()
+        return pre_ms, post_ms
