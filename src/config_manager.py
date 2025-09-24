@@ -80,6 +80,8 @@ DEFAULT_CONFIG = {
     "vad_threshold": 0.5,
     # Duração máxima da pausa preservada antes que o silêncio seja descartado
     "vad_silence_duration": 1.0,
+    "vad_pre_speech_padding_ms": 200,
+    "vad_post_speech_padding_ms": 400,
     "display_transcripts_in_terminal": False,
     "gemini_model_options": [
         "gemini-2.5-flash-lite",
@@ -146,6 +148,8 @@ DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
 VAD_SILENCE_DURATION_CONFIG_KEY = "vad_silence_duration"
+VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY = "vad_pre_speech_padding_ms"
+VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY = "vad_post_speech_padding_ms"
 CHUNK_LENGTH_SEC_CONFIG_KEY = "chunk_length_sec"
 LAUNCH_AT_STARTUP_CONFIG_KEY = "launch_at_startup"
 DISPLAY_TRANSCRIPTS_IN_TERMINAL_CONFIG_KEY = DISPLAY_TRANSCRIPTS_KEY
@@ -588,6 +592,58 @@ class ConfigManager:
             )
             self.config[VAD_SILENCE_DURATION_CONFIG_KEY] = (
                 self.default_config[VAD_SILENCE_DURATION_CONFIG_KEY]
+            )
+
+        try:
+            raw_pre_padding = self.config.get(
+                VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+                self.default_config[VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY],
+            )
+            pre_padding_val = float(raw_pre_padding)
+            if pre_padding_val < 0.0:
+                logging.warning(
+                    "Invalid vad_pre_speech_padding_ms '%s'. Must be >= 0. Using default (%s).",
+                    pre_padding_val,
+                    self.default_config[VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY],
+                )
+                pre_padding_val = float(
+                    self.default_config[VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY]
+                )
+            self.config[VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY] = pre_padding_val
+        except (ValueError, TypeError, KeyError):
+            logging.warning(
+                "Invalid vad_pre_speech_padding_ms value '%s' in config. Using default (%s).",
+                self.config.get(VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY),
+                self.default_config[VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY],
+            )
+            self.config[VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY] = float(
+                self.default_config[VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY]
+            )
+
+        try:
+            raw_post_padding = self.config.get(
+                VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+                self.default_config[VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY],
+            )
+            post_padding_val = float(raw_post_padding)
+            if post_padding_val < 0.0:
+                logging.warning(
+                    "Invalid vad_post_speech_padding_ms '%s'. Must be >= 0. Using default (%s).",
+                    post_padding_val,
+                    self.default_config[VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY],
+                )
+                post_padding_val = float(
+                    self.default_config[VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY]
+                )
+            self.config[VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY] = post_padding_val
+        except (ValueError, TypeError, KeyError):
+            logging.warning(
+                "Invalid vad_post_speech_padding_ms value '%s' in config. Using default (%s).",
+                self.config.get(VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY),
+                self.default_config[VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY],
+            )
+            self.config[VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY] = float(
+                self.default_config[VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY]
             )
 
         self.config[ASR_BACKEND_CONFIG_KEY] = str(
