@@ -14,6 +14,7 @@ class OpenRouterAPI:
     """
 
     DEFAULT_TIMEOUT = 30.0
+
     def __init__(
         self,
         api_key: str,
