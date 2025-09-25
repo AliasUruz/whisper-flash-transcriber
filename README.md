@@ -41,10 +41,13 @@ Whisper Flash Transcriber is a high-performance, hotkey-driven audio transcripti
    ```bash
    pip install -r requirements.txt
    ```
+   The pinned dependencies include the CPU build of PyTorch (2.5.1) so that Windows users can install the project without
+   touching custom package indexes. If you plan to leverage a GPU, install the base requirements first and then follow the
+   guidance in the section below to swap in the CUDA-enabled wheel that matches your driver.
 
 ### Optional: GPU Acceleration
 
-For significantly faster transcription you can leverage an NVIDIA GPU. Install PyTorch with CUDA support following the official instructions:
+For significantly faster transcription you can leverage an NVIDIA GPU. Install PyTorch with CUDA support following the official instructions once the base requirements are installed:
 
 1. Visit the [PyTorch installation guide](https://pytorch.org/get-started/locally/).
 2. Select the desired PyTorch build, operating system, package manager, Python version, and CUDA version.
@@ -53,6 +56,16 @@ For significantly faster transcription you can leverage an NVIDIA GPU. Install P
    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
    ```
    Always use the command suggested on the official PyTorch website for your environment.
+
+### Optional: Advanced GPU and quantization extras
+
+Install the optional requirements only when you need GPU-centric optimizations such as quantized models:
+
+```bash
+pip install -r requirements-optional.txt
+```
+
+This set contains packages such as `bitsandbytes`. Upstream only ships prebuilt wheels for Linux (including WSL) and conda-based setups, so Windows users running native `pip` should skip this step or use WSL/conda when GPU quantization is required.
 
 ## Usage
 
