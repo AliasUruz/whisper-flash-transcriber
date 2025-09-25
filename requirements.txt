@@ -1,4 +1,4 @@
-torch==2.7.1
+torch==2.5.1
 transformers>=4.44,<5
 sounddevice==0.5.2
 numpy==2.3.0
@@ -13,12 +13,10 @@ customtkinter==5.2.2
 keyboard==0.13.5
 soundfile==0.13.1
 onnxruntime==1.22.0
-bitsandbytes
 playwright==1.44.0
 accelerate>=0.33
 datasets[audio]>=3.0
 huggingface_hub>=0.24
 faster-whisper>=1.0
-pydantic==2.7.1
 ctranslate2>=4.6
 pydantic>=2.9,<3
