@@ -10,7 +10,7 @@ This section outlines the fundamental rules and user-mandated instructions that 
 
 ### Agent Operational Mandates
 - **Detailed Planning**: Always provide comprehensive plans, step-by-step guides, and detailed checklists when proposing tasks or changes.
-- **Plan Replication**: When asked to create a plan file, generate a context-rich, well-developed, and well-written plan, including checklists. Be sure that it is very well developed and contextualized.
+- **Plan Replication**: When asked to create a plan file, generate a context-rich, well-developed, and well-written plan in the "plans" folder, including checklists. Be sure that it is very well developed and contextualized.
 - **Minimalist Dependencies**: Install only the absolute minimum required dependencies for any given task. Avoid bloating the environment with unnecessary packages.
 - **Full Compliance**: Strictly and completely adhere to all user requests without deviation unless clarification is sought and granted.
 
