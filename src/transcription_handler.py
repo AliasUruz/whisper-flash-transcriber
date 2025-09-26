@@ -1610,39 +1610,22 @@ class TranscriptionHandler:
                 # Tratamento de OOM e fallback automático (reduz batch, depois chunk) – não recria a pipeline
                 try:
                     err_txt = str(e).lower()
-                    is_oom = any(tok in err_txt for tok in ["out of memory", "cuda oom", "cublas", "cudnn", "hip out of memory", "alloc"])
-                    did_change = False
+                    is_oom = any(
+                        tok in err_txt
+                        for tok in [
+                            "out of memory",
+                            "cuda oom",
+                            "cublas",
+                            "cudnn",
+                            "hip out of memory",
+                            "alloc",
+                        ]
+                    )
                     if is_oom:
-                        try:
-                            old_bs = int(dynamic_batch_size)
-                        except Exception:
-                            old_bs = None
-                        if old_bs and old_bs > 1:
-                            new_bs = max(1, old_bs // 2)
-                            try:
-                                self.last_dynamic_batch_size = new_bs
-                            except Exception:
-                                pass
-                            did_change = True
-                            logging.warning(f"OOM detectado. Reduzindo batch_size de {old_bs} para {new_bs} para próximas submissões.")
-                            try:
-                                logging.info(f"[METRIC] stage=oom_recovery action=reduce_batch from={old_bs} to={new_bs}")
-                            except Exception:
-                                pass
-                    if not did_change:
-                        # Reduz chunk_length_sec moderadamente
-                        try:
-                            old_chunk = float(self.chunk_length_sec)
-                        except Exception:
-                            old_chunk = 30.0
-                        new_chunk = max(10.0, old_chunk * 0.66)
-                        if new_chunk < old_chunk:
-                            self.chunk_length_sec = new_chunk
-                            logging.warning(f"OOM persistente. Reduzindo chunk_length_sec de {old_chunk:.1f}s para {new_chunk:.1f}s para próximas submissões.")
-                            try:
-                                logging.info(f"[METRIC] stage=oom_recovery action=reduce_chunk from={old_chunk:.1f} to={new_chunk:.1f}")
-                            except Exception:
-                                pass
+                        logging.warning(
+                            "Erro de OOM detectado durante a transcrição. Iniciando rotina de recuperação automática."
+                        )
+                        self._apply_oom_recovery(dynamic_batch_size)
                     # Continua fluxo normal de erro
                 except Exception as _oom_adj_e:
                     logging.debug(f"Falha ao ajustar parâmetros após OOM: {_oom_adj_e}")
@@ -1762,6 +1745,86 @@ class TranscriptionHandler:
             logging.debug(
                 "Cache da GPU preservado para transcrições consecutivas."
             )
+
+    def _apply_oom_recovery(self, current_batch_size: int | None) -> bool:
+        """Ajusta parâmetros internos após um OOM para a sessão atual."""
+
+        def _report(message: str) -> None:
+            core = getattr(self, "core_instance_ref", None)
+            if core and hasattr(core, "report_runtime_notice"):
+                try:
+                    core.report_runtime_notice(message, level=logging.WARNING)
+                    return
+                except Exception as exc:
+                    logging.debug("Falha ao notificar ajuste de OOM na UI: %s", exc)
+            logging.warning(message)
+
+        old_batch_size: int | None = None
+        try:
+            if current_batch_size is not None:
+                old_batch_size = int(current_batch_size)
+        except Exception:
+            old_batch_size = None
+
+        if old_batch_size is None:
+            try:
+                if self.last_dynamic_batch_size is not None:
+                    old_batch_size = int(self.last_dynamic_batch_size)
+            except Exception:
+                old_batch_size = None
+
+        if old_batch_size is not None and old_batch_size > 1:
+            new_batch_size = max(1, old_batch_size // 2)
+            if new_batch_size < old_batch_size:
+                if self.batch_size_mode == "manual":
+                    self.manual_batch_size = new_batch_size
+                else:
+                    self.batch_size = new_batch_size
+                self.last_dynamic_batch_size = new_batch_size
+                message = (
+                    "OOM detectado. Reduzindo batch_size de "
+                    f"{old_batch_size} para {new_batch_size} apenas na sessão atual."
+                )
+                _report(message)
+                try:
+                    logging.info(
+                        "[METRIC] stage=oom_recovery action=reduce_batch mode=%s from=%s to=%s", 
+                        self.batch_size_mode,
+                        old_batch_size,
+                        new_batch_size,
+                    )
+                except Exception:
+                    pass
+                return True
+
+        # Se não conseguimos reduzir batch_size, ajusta chunk_length_sec
+        try:
+            old_chunk = float(self.chunk_length_sec)
+        except Exception:
+            old_chunk = 30.0
+
+        new_chunk = max(10.0, old_chunk * 0.66)
+        if new_chunk < old_chunk:
+            self.chunk_length_sec = new_chunk
+            message = (
+                "OOM persistente. Reduzindo chunk_length_sec de "
+                f"{old_chunk:.1f}s para {new_chunk:.1f}s apenas na sessão atual."
+            )
+            _report(message)
+            try:
+                logging.info(
+                    "[METRIC] stage=oom_recovery action=reduce_chunk from=%.1f to=%.1f",
+                    old_chunk,
+                    new_chunk,
+                )
+            except Exception:
+                pass
+            return True
+
+        _report(
+            "OOM persistente. Batch_size e chunk_length_sec já estão nos limites mínimos para esta sessão."
+        )
+        return False
 
     def _effective_chunk_length(self) -> float:
         """
