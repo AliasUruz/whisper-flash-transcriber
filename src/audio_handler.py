@@ -413,7 +413,13 @@ class AudioHandler:
         except Exception:
             pass
         if self._processing_thread:
-            self._processing_thread.join()
+            processing_thread = self._processing_thread
+            if processing_thread is threading.current_thread():
+                logging.debug(
+                    "Stop recording invoked from processing thread; skipping self-join."
+                )
+            elif processing_thread.is_alive():
+                processing_thread.join()
             self._processing_thread = None
 
         if self.use_vad and self.vad_manager:
@@ -715,5 +721,11 @@ class AudioHandler:
             except Exception:
                 pass
         if self._processing_thread:
-            self._processing_thread.join(timeout=2)
+            processing_thread = self._processing_thread
+            if processing_thread is threading.current_thread():
+                logging.debug(
+                    "Cleanup invoked from processing thread; skipping self-join."
+                )
+            elif processing_thread.is_alive():
+                processing_thread.join(timeout=2)
             self._processing_thread = None
