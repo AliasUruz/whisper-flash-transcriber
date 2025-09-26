@@ -3,6 +3,7 @@ import threading
 import time
 import os
 from collections.abc import Callable
+from typing import Iterable
 from threading import RLock
 from pathlib import Path
 import atexit
@@ -1095,7 +1096,13 @@ class AppCore:
         )
 
     # --- Settings Application Logic (delegando para ConfigManager e outros) ---
-    def apply_settings_from_external(self, **kwargs):
+    def apply_settings_from_external(
+        self,
+        *,
+        force_reload: bool = False,
+        forced_keys: Iterable[str] | None = None,
+        **kwargs,
+    ):
         logging.info("AppCore: Applying new configuration from external source.")
 
         config_key_map = {
@@ -1154,6 +1161,7 @@ class AppCore:
         }
 
         normalized_updates: dict[str, object] = {}
+        forced_key_set = set(forced_keys or [])
         sentinel = object()
         for raw_key, value in kwargs.items():
             if value is None:
@@ -1172,10 +1180,19 @@ class AppCore:
             normalized_updates[mapped_key] = value
 
         if not normalized_updates:
-            logging.info("Nenhuma configuração alterada.")
+            if force_reload:
+                logging.info(
+                    "AppCore: nenhum parâmetro recebido para reaplicar as configurações forçadas.")
+            else:
+                logging.info("Nenhuma configuração alterada.")
             return
 
         changed_mapped_keys, warnings = self.config_manager.apply_updates(normalized_updates)
+        if force_reload:
+            if forced_key_set:
+                changed_mapped_keys |= forced_key_set
+            else:
+                changed_mapped_keys |= set(normalized_updates.keys())
         if warnings:
             summary = "\n".join(f"- {message}" for message in warnings)
             message = (
@@ -1188,8 +1205,18 @@ class AppCore:
 
             self.main_tk_root.after(0, _show_warning)
         if not changed_mapped_keys:
-            logging.info("Nenhuma configuração alterada.")
-            return
+            if force_reload:
+                logging.info(
+                    "AppCore: nenhuma configuração alterada, mas forçando reaplicação dos parâmetros.")
+            else:
+                logging.info("Nenhuma configuração alterada.")
+                return
+
+        if force_reload and changed_mapped_keys:
+            logging.debug(
+                "AppCore: reaplicando configurações para as chaves: %s",
+                ", ".join(sorted(changed_mapped_keys)),
+            )
 
         reload_keys = {
             ASR_BACKEND_CONFIG_KEY,
