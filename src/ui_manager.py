@@ -908,7 +908,6 @@ class UIManager:
         self._close_settings_window()
 
     def _restore_default_settings(self) -> None:
-        defaults = DEFAULT_CONFIG
         settings_win = self._get_settings_var("window")
 
         confirm_kwargs: Dict[str, Any] = {}
@@ -921,117 +920,53 @@ class UIManager:
         ):
             return
 
-        self.core_instance_ref.apply_settings_from_external(**defaults)
+        try:
+            sanitized_defaults, changed_keys = self.config_manager.reset_to_defaults()
+        except Exception as exc:  # pragma: no cover - falha defensiva
+            logging.error("UIManager: erro ao resetar configurações para o padrão.", exc_info=True)
+            messagebox.showerror(
+                "Restore Defaults",
+                "Falha ao restaurar as configurações padrão. Verifique os logs para detalhes.",
+                **confirm_kwargs,
+            )
+            return
 
-        def _set_var(name: str, value) -> None:
-            var = self._get_settings_var(name)
-            if var is not None:
-                try:
-                    var.set(value)
-                except Exception:
-                    pass
+        if changed_keys:
+            logging.info(
+                "UIManager: chaves redefinidas para padrão: %s",
+                ", ".join(sorted(changed_keys)),
+            )
 
-        _set_var("auto_paste_var", defaults["auto_paste"])
-        _set_var("mode_var", defaults["record_mode"])
-        _set_var("detected_key_var", defaults["record_key"].upper())
-        _set_var("agent_key_var", defaults["agent_key"].upper())
-        _set_var("agent_model_var", defaults["gemini_agent_model"])
-        _set_var("hotkey_stability_service_enabled_var", defaults["hotkey_stability_service_enabled"])
-        _set_var("min_transcription_duration_var", defaults["min_transcription_duration"])
-        _set_var("min_record_duration_var", defaults["min_record_duration"])
-        _set_var("sound_enabled_var", defaults["sound_enabled"])
-        _set_var("sound_frequency_var", str(defaults["sound_frequency"]))
-        _set_var("sound_duration_var", str(defaults["sound_duration"]))
-        _set_var("sound_volume_var", defaults["sound_volume"])
-        _set_var("text_correction_enabled_var", defaults["text_correction_enabled"])
-        _set_var("text_correction_service_var", defaults["text_correction_service"])
-        _set_var("openrouter_api_key_var", defaults["openrouter_api_key"])
-        _set_var("openrouter_model_var", defaults["openrouter_model"])
-        _set_var("gemini_api_key_var", defaults["gemini_api_key"])
-        _set_var("gemini_model_var", defaults["gemini_model"])
-        _set_var("batch_size_var", str(defaults["batch_size"]))
-        _set_var("asr_backend_var", defaults["asr_backend"])
-        _set_var("asr_model_id_var", defaults["asr_model_id"])
-        _set_var("asr_dtype_var", defaults["asr_dtype"])
-        _set_var("asr_ct2_compute_type_var", defaults["asr_ct2_compute_type"])
-        _set_var("asr_cache_dir_var", defaults["asr_cache_dir"])
-        _set_var("use_vad_var", defaults["use_vad"])
-        _set_var("vad_threshold_var", defaults["vad_threshold"])
-        _set_var("vad_silence_duration_var", defaults["vad_silence_duration"])
-        _set_var("vad_pre_speech_padding_ms_var", defaults["vad_pre_speech_padding_ms"])
-        _set_var("vad_post_speech_padding_ms_var", defaults["vad_post_speech_padding_ms"])
-        _set_var("save_temp_recordings_var", defaults[SAVE_TEMP_RECORDINGS_CONFIG_KEY])
-        _set_var("display_transcripts_var", defaults["display_transcripts_in_terminal"])
-        _set_var("record_storage_mode_var", defaults["record_storage_mode"])
-        _set_var("max_memory_seconds_var", defaults["max_memory_seconds"])
-        _set_var("max_memory_seconds_mode_var", defaults["max_memory_seconds_mode"])
-        _set_var("launch_at_startup_var", defaults["launch_at_startup"])
-        _set_var("chunk_length_mode_var", defaults.get("chunk_length_mode", "manual"))
-        _set_var("chunk_length_sec_var", defaults["chunk_length_sec"])
-        _set_var("enable_torch_compile_var", defaults.get("enable_torch_compile", False))
+        payload = dict(sanitized_defaults)
+        try:
+            self.core_instance_ref.apply_settings_from_external(
+                force_reload=True,
+                forced_keys=set(payload.keys()) if payload else None,
+                **payload,
+            )
+        except Exception:
+            logging.error(
+                "UIManager: erro ao reaplicar configuração após reset para padrões.",
+                exc_info=True,
+            )
+            messagebox.showerror(
+                "Restore Defaults",
+                "As configurações foram redefinidas, mas não foi possível reconfigurar o aplicativo."
+                " Reinicie a aplicação manualmente.",
+                **confirm_kwargs,
+            )
+            return
 
-        gemini_prompt_textbox = self._get_settings_var("gemini_prompt_correction_textbox")
-        if gemini_prompt_textbox is not None:
-            gemini_prompt_textbox.delete("1.0", "end")
-            gemini_prompt_textbox.insert("1.0", defaults["gemini_prompt"])
-        agentico_prompt_textbox = self._get_settings_var("agentico_prompt_textbox")
-        if agentico_prompt_textbox is not None:
-            agentico_prompt_textbox.delete("1.0", "end")
-            agentico_prompt_textbox.insert("1.0", defaults["prompt_agentico"])
-        gemini_models_textbox = self._get_settings_var("gemini_models_textbox")
-        if gemini_models_textbox is not None:
-            gemini_models_textbox.delete("1.0", "end")
-            gemini_models_textbox.insert("1.0", "\n".join(defaults["gemini_model_options"]))
+        self._close_settings_window()
 
-        service_map = self._get_settings_meta("service_display_map", {})
-        service_label = next(
-            (label for label, val in service_map.items() if val == defaults["text_correction_service"]),
-            "None",
+        messagebox.showinfo(
+            "Defaults Restored",
+            (
+                "As configurações foram restauradas para os valores padrão.\n"
+                "Reabra a janela de configurações para visualizar os valores atualizados."
+            ),
+            parent=self.main_tk_root,
         )
-        _set_var("text_correction_service_label_var", service_label)
-        service_menu = self._get_settings_var("service_menu")
-        if service_menu is not None:
-            try:
-                service_menu.set(service_label)
-            except Exception:
-                pass
-        self._on_service_menu_change(service_label)
-
-        available_devices = self._get_settings_meta("available_devices", get_available_devices_for_ui())
-        asr_compute_device_var = self._get_settings_var("asr_compute_device_var")
-        if asr_compute_device_var is not None:
-            selection = "Auto-select (Recommended)"
-            if defaults["asr_compute_device"] == "cpu":
-                selection = "Force CPU"
-            elif defaults["asr_compute_device"] == "cuda" and defaults.get("gpu_index", -1) >= 0:
-                selection = next(
-                    (dev for dev in available_devices if dev.startswith(f"GPU {defaults['gpu_index']}")),
-                    selection,
-                )
-            try:
-                asr_compute_device_var.set(selection)
-            except Exception:
-                pass
-
-        id_to_display = self._get_settings_meta("id_to_display", {})
-        default_model_display = id_to_display.get(defaults["asr_model_id"], defaults["asr_model_id"])
-        _set_var("asr_model_display_var", default_model_display)
-        asr_model_menu = self._get_settings_var("asr_model_menu")
-        if asr_model_menu is not None:
-            try:
-                asr_model_menu.set(default_model_display)
-            except Exception:
-                pass
-        self._on_model_change(default_model_display)
-
-        self.config_manager.save_config()
-
-        self._update_text_correction_fields()
-        self._update_chunk_length_state()
-        model_var = self._get_settings_var("asr_model_id_var")
-        if model_var is not None:
-            self._update_model_info(model_var.get())
-        self._update_install_button_state()
 
     def _reset_asr_settings(self) -> None:
         id_to_display = self._get_settings_meta("id_to_display", {})

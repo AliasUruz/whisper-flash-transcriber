@@ -711,6 +711,30 @@ class ConfigManager:
         }
         return changed_keys, warnings
 
+    def reset_to_defaults(self) -> tuple[dict[str, Any], set[str]]:
+        """Reset the configuration to the baked-in defaults and persist them."""
+
+        previous_config = copy.deepcopy(self.config)
+
+        sanitized_cfg, warnings = coerce_with_defaults(
+            copy.deepcopy(self.default_config),
+            self.default_config,
+        )
+        for warning in warnings:
+            logging.warning(warning)
+
+        self.config = sanitized_cfg
+        self._apply_runtime_overrides(applied_updates=self.default_config)
+        self.save_config()
+
+        changed_keys = {
+            key
+            for key, value in self.config.items()
+            if previous_config.get(key) != value
+        }
+
+        return copy.deepcopy(self.config), changed_keys
+
     def save_config(self):
         """Salva as configurações não sensíveis no config.json e as sensíveis no secrets.json."""
         config_to_save = copy.deepcopy(self.config)
