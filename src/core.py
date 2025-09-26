@@ -722,7 +722,8 @@ class AppCore:
             )
             return
 
-        if self.key_detection_callback is None:
+        callback = getattr(self, "key_detection_callback", None)
+        if callback is None:
             logging.debug(
                 "AppCore: detecção de tecla solicitada sem callback registrado; ignorando pedido."
             )
@@ -738,80 +739,20 @@ class AppCore:
                 timeout_value,
             )
 
-        with self.keyboard_lock:
-            if self._key_detection_thread and self._key_detection_thread.is_alive():
-                logging.debug("AppCore: detecção de tecla já está em execução; ignorando novo pedido.")
-                return
+        def _deliver_result(result: str | None) -> None:
+            if result is None:
+                result = self._resolve_key_detection_fallback()
+            else:
+                result = str(result)
 
-            def _deliver_result(detected_key: str | None) -> None:
-                callback = self.key_detection_callback
-                if not callback:
-                    return
-                try:
-                    callback(detected_key)
-                except Exception:
-                    logging.error(
-                        "AppCore: callback de detecção de tecla levantou exceção.",
-                        exc_info=True,
-                    )
-
-            def _detect_key() -> None:
-                try:
-                    detected_key = manager.detect_key(timeout=timeout_value)
-                except Exception as exc:
-                    logging.error(
-                        "AppCore: erro durante detecção de tecla: %s",
-                        exc,
-                        exc_info=True,
-                    )
-                    detected_key = None
-                finally:
-                    with self.keyboard_lock:
-                        self._key_detection_thread = None
-
-                if self.main_tk_root:
-                    self.main_tk_root.after(0, lambda: _deliver_result(detected_key))
-                else:
-                    _deliver_result(detected_key)
-
-            self._key_detection_thread = threading.Thread(
-                target=_detect_key,
-                name="KeyDetectionThread",
-                daemon=True,
-            )
-            self._key_detection_thread.start()
-
-        manager = getattr(self, "ahk_manager", None)
-        if manager is None:
-            logging.error("Hotkey manager indisponível; não é possível detectar teclas.")
-            return
-
-        callback = getattr(self, "key_detection_callback", None)
-        if callback is None:
-            logging.debug("Key detection requested without UI callback configured.")
-            return
-
-        def _deliver(result: str) -> None:
             try:
                 callback(result)
             except Exception:  # pragma: no cover - UI callback defensivo
                 logging.error("Callback de detecção de tecla gerou exceção.", exc_info=True)
 
-        def _detect() -> None:
-            try:
-                detected_key = manager.detect_key(timeout=5.0)
-            except Exception as exc:  # pragma: no cover - camada de hardware
-                logging.error("Erro durante detecção de tecla: %s", exc, exc_info=True)
-                detected_key = None
-
-            if not detected_key:
-                logging.info("Nenhuma tecla detectada dentro do timeout configurado; restaurando valor anterior.")
-                detected_key = self._resolve_key_detection_fallback()
-            else:
-                detected_key = str(detected_key)
-
+        def _schedule_delivery(result: str | None) -> None:
             def _invoke() -> None:
-                _deliver(detected_key)
+                _deliver_result(result)
 
             if self.main_tk_root:
                 try:
@@ -825,6 +766,24 @@ class AppCore:
             else:
                 _invoke()
 
+        def _detect_key() -> None:
+            try:
+                detected_key = manager.detect_key(timeout=timeout_value)
+            except Exception as exc:
+                logging.error(
+                    "AppCore: erro durante detecção de tecla: %s",
+                    exc,
+                    exc_info=True,
+                )
+                detected_key = None
+
+            if not detected_key:
+                logging.info(
+                    "Nenhuma tecla detectada dentro do timeout configurado; restaurando valor anterior."
+                )
+
+            _schedule_delivery(detected_key)
+
             with self.keyboard_lock:
                 self._key_detection_thread = None
                 self._key_detection_target = None
@@ -832,12 +791,15 @@ class AppCore:
 
         with self.keyboard_lock:
             if self._key_detection_thread and self._key_detection_thread.is_alive():
-                logging.debug("Thread de detecção de tecla já está em execução; ignorando novo pedido.")
+                logging.debug(
+                    "Thread de detecção de tecla já está em execução; ignorando novo pedido."
+                )
                 return
+
             self._key_detection_thread = threading.Thread(
-                target=_detect,
-                daemon=True,
+                target=_detect_key,
                 name="KeyDetectionThread",
+                daemon=True,
             )
             self._key_detection_thread.start()
 
