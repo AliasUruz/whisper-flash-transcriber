@@ -1788,7 +1788,7 @@ class TranscriptionHandler:
                 _report(message)
                 try:
                     logging.info(
-                        "[METRIC] stage=oom_recovery action=reduce_batch mode=%s from=%s to=%s", 
+                        "[METRIC] stage=oom_recovery action=reduce_batch mode=%s from=%s to=%s",
                         self.batch_size_mode,
                         old_batch_size,
                         new_batch_size,
