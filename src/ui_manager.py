@@ -113,6 +113,16 @@ def get_available_devices_for_ui():
     devices.append("Force CPU")
     return devices
 
+
+def _backend_display_value_global(value: str | None) -> str:
+    """Normalize backend label for display and configuration."""
+    normalized = (value or "").strip().lower()
+    if normalized in {"ct2", "ctranslate2"}:
+        return "ctranslate2"
+    if normalized in {"faster whisper", "faster_whisper"}:
+        return "faster-whisper"
+    return normalized
+
 class UIManager:
     def __init__(self, main_tk_root, config_manager, core_instance_ref, model_manager=None):
         self.main_tk_root = main_tk_root
@@ -1159,14 +1169,6 @@ class UIManager:
         advanced_specs = []
         toggle_button_ref = {'widget': None}
 
-        def _backend_display_value(value: str | None) -> str:
-            normalized = (value or "").strip().lower()
-            if normalized in {"ct2", "ctranslate2"}:
-                return "ctranslate2"
-            if normalized in {"faster whisper", "faster_whisper"}:
-                return "faster-whisper"
-            return normalized
-
         def _register_advanced(widget, **pack_kwargs):
             advanced_specs.append((widget, pack_kwargs))
             if advanced_state['visible']:
@@ -1282,7 +1284,7 @@ class UIManager:
             if not entry:
                 installed = model_manager.list_installed(asr_cache_dir_var.get())
                 entry = next((m for m in installed if m["id"] == model_id), None)
-            backend = _backend_display_value(entry.get("backend") if entry else None)
+            backend = _backend_display_value_global(entry.get("backend") if entry else None)
             if backend not in ("transformers", "ctranslate2", "faster-whisper"):
                 return None
             return backend
@@ -1320,7 +1322,7 @@ class UIManager:
         def _update_install_button_state() -> None:
             recommended_backend = _derive_backend_from_model(asr_model_id_var.get())
             install_button.configure(state="normal" if recommended_backend else "disabled")
-            effective_backend = _backend_display_value(asr_backend_var.get()) or recommended_backend
+            effective_backend = _backend_display_value_global(asr_backend_var.get()) or recommended_backend
             ui_elements["quant_menu"].configure(state="normal" if effective_backend == "ctranslate2" else "disabled")
 
         def _on_model_change(choice_display: str) -> None:
@@ -1329,7 +1331,7 @@ class UIManager:
             ui_elements["asr_model_display_var"].set(ui_elements["id_to_display"].get(model_id, model_id))
             backend = _derive_backend_from_model(model_id)
             if backend:
-                asr_backend_var.set(_backend_display_value(backend))
+                asr_backend_var.set(_backend_display_value_global(backend))
             asr_backend_menu.configure(state="normal")
             self.config_manager.set_asr_model_id(model_id)
             self.config_manager.set_asr_backend(asr_backend_var.get())
@@ -2211,7 +2213,7 @@ class UIManager:
                 )
 
                 backend_initial = self.config_manager.get_asr_backend()
-                backend_display = _backend_display_value(backend_initial) or DEFAULT_CONFIG.get("asr_backend", "ctranslate2")
+                backend_display = _backend_display_value_global(backend_initial) or DEFAULT_CONFIG.get("asr_backend", "ctranslate2")
                 asr_backend_var = ctk.StringVar(value=backend_display)
                 asr_model_id_var = ctk.StringVar(value=self.config_manager.get_asr_model_id())
                 # New: Chunk length controls
@@ -3025,4 +3027,6 @@ class UIManager:
                     messagebox.showerror("Input Error", "Batch size must be a positive integer.", parent=self.settings_window_instance)
             except ValueError:
                 messagebox.showerror("Input Error", "Invalid entry. Please provide an integer.", parent=self.settings_window_instance)
+
+
 
