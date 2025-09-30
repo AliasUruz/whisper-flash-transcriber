@@ -5,7 +5,6 @@ import time
 import numpy as np
 import torch
 
-
 try:  # pragma: no cover - biblioteca opcional
     from whisper_flash import make_backend  # type: ignore
 except Exception:  # pragma: no cover
@@ -63,6 +62,8 @@ from .config_manager import (
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
 )
+
+LOGGER = logging.getLogger('whisper_flash_transcriber.transcription')
 
 
 class TranscriptionHandler:
@@ -1747,7 +1748,18 @@ class TranscriptionHandler:
             )
 
     def _apply_oom_recovery(self, current_batch_size: int | None) -> bool:
-        """Ajusta parâmetros internos após um OOM para a sessão atual."""
+        """Ajusta parâmetros internos após detectar falta de memória (OOM).
+
+        Args:
+            current_batch_size: Valor positivo que representa o batch utilizado
+                no momento da falha. Informe ``None`` para reaproveitar a última
+                configuração bem-sucedida.
+
+        Returns:
+            ``True`` quando algum ajuste temporário foi realizado para manter a
+            execução atual; ``False`` caso nenhum ajuste adicional esteja
+            disponível.
+        """
 
         def _report(message: str) -> None:
             core = getattr(self, "core_instance_ref", None)

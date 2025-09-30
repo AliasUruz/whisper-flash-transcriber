@@ -90,10 +90,10 @@ class AppConfig(BaseModel):
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
     asr_model_id: str = "openai/whisper-large-v3-turbo"
-    asr_backend: str = "transformers"
+    asr_backend: str = "faster-whisper"
     asr_compute_device: str = "auto"
     asr_dtype: str = "float16"
-    asr_ct2_compute_type: str = "default"
+    asr_ct2_compute_type: str = "int8_float16"
     asr_ct2_cpu_threads: int | None = None
     asr_cache_dir: str = str((Path.home() / ".cache" / "whisper_flash_transcriber" / "asr").expanduser())
     asr_installed_models: list[str] = Field(default_factory=list)

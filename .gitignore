@@ -85,3 +85,7 @@ plans/phase-a-post-hotfix-stabilization.md
 plans/optional-test-automation-track.md
 plans/phase-e-operations-telemetry.md
 plans/MASTER PLAN.md
+docs/notes/phase-b-flake8.txt
+.gitignore
+docs/notes/phase-b-compileall.txt
+plans/ux-enhancements-iteration.md

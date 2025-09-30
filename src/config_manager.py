@@ -105,10 +105,10 @@ DEFAULT_CONFIG = {
     "launch_at_startup": False,
     "clear_gpu_cache": True,
     "asr_model_id": "openai/whisper-large-v3-turbo",
-    "asr_backend": "transformers",
+    "asr_backend": "faster-whisper",
     "asr_compute_device": "auto",
     "asr_dtype": "float16",
-    "asr_ct2_compute_type": "default",
+    "asr_ct2_compute_type": "int8_float16",
     "asr_cache_dir": str((Path.home() / ".cache" / "whisper_flash_transcriber" / "asr").expanduser()),
     "asr_installed_models": [],
     "asr_curated_catalog": [],
@@ -681,7 +681,7 @@ class ConfigManager:
             sanitized_status["status"] = default_download_status.get("status", "unknown")
         self.config[ASR_LAST_DOWNLOAD_STATUS_KEY] = sanitized_status
 
-        safe_config = self.config.copy()
+        safe_config = dict(self.config)
         safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
         safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
         logging.info("Settings applied: %s", safe_config)
