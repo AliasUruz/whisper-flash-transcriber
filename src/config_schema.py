@@ -90,7 +90,7 @@ class AppConfig(BaseModel):
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
     asr_model_id: str = "openai/whisper-large-v3-turbo"
-    asr_backend: str = "faster-whisper"
+    asr_backend: str = "ctranslate2"
     asr_compute_device: str = "auto"
     asr_dtype: str = "float16"
     asr_ct2_compute_type: str = "int8_float16"

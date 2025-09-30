@@ -105,7 +105,7 @@ DEFAULT_CONFIG = {
     "launch_at_startup": False,
     "clear_gpu_cache": True,
     "asr_model_id": "openai/whisper-large-v3-turbo",
-    "asr_backend": "faster-whisper",
+    "asr_backend": "ctranslate2",
     "asr_compute_device": "auto",
     "asr_dtype": "float16",
     "asr_ct2_compute_type": "int8_float16",
@@ -200,17 +200,16 @@ ASR_LAST_DOWNLOAD_STATUS_KEY = "asr_last_download_status"
 
 
 def _normalize_asr_backend(name: str | None) -> str | None:
-    """Return canonical backend name.
-
-    Accepts legacy aliases like "faster-whisper" or "ctranslate2" and maps
-    them to the internal identifier "ct2". The function is case-insensitive
-    and returns ``None`` unchanged.
-    """
+    """Return canonical backend name for persistence and UI consistency."""
     if not isinstance(name, str):
         return name
     normalized = name.strip().lower()
-    if normalized in {"faster-whisper", "faster_whisper", "ctranslate2"}:
-        return "ct2"
+    if normalized in {"faster whisper", "faster_whisper"}:
+        normalized = "faster-whisper"
+    if normalized in {"ct2", "ctranslate2"}:
+        return "ctranslate2"
+    if normalized == "faster-whisper":
+        return "faster-whisper"
     return normalized
 
 

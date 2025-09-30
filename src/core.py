@@ -186,13 +186,27 @@ class AppCore:
             model_id = self.asr_model_id
             backend = self.asr_backend
             ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
-            model_path = Path(cache_dir) / backend / model_id
 
+            cache_root = Path(cache_dir)
+            storage_backend = model_manager_module.backend_storage_name(backend)
+            model_path = cache_root / storage_backend / model_id
+
+            start_loading = True
             if not (model_path.is_dir() and any(model_path.iterdir())):
-                MODEL_LOGGER.warning("ASR model not found locally; waiting for user confirmation before downloading.")
-                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
-            else:
+                legacy_path = cache_root / str(backend) / model_id if backend else None
+                if legacy_path and legacy_path.is_dir() and any(legacy_path.iterdir()):
+                    MODEL_LOGGER.info(
+                        "Found legacy model directory at %s; using it for backend %s.",
+                        legacy_path,
+                        backend or storage_backend,
+                    )
+                else:
+                    MODEL_LOGGER.warning("ASR model not found locally; waiting for user confirmation before downloading.")
+                    self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+                    self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
+                    start_loading = False
+
+            if start_loading:
                 self._start_model_loading_with_synced_config()
         except OSError:
             messagebox.showerror("Erro", "Diretório de cache inválido.")
