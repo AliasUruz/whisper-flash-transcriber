@@ -92,6 +92,10 @@ During the initial startup the application will create `config.json` and `hotkey
 - Press again (or release, depending on the chosen mode) to stop.
 - The application transcribes the captured audio and, if enabled, copies the final result to the clipboard and pastes it into the active window.
 
+### Windows permissions and global hotkeys
+
+The application registers global shortcuts using the [`keyboard`](https://github.com/boppreh/keyboard) library. Key suppression is intentionally disabled so that hotkeys work without elevated privileges on Windows. If you customize the code to block the underlying key events system-wide, make sure to run the application as an administrator to satisfy the library requirements.
+
 ## Architecture Overview
 
 - **`main.py`:** Application entry point that initializes `AppCore` and the user interface.

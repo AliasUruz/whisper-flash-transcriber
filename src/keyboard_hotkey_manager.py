@@ -201,7 +201,7 @@ class KeyboardHotkeyManager:
                         keyboard.on_release_key(
                             self.record_key,
                             lambda _: self._on_release_key(),
-                            suppress=True,
+                            suppress=False,
                         )
                     except OSError as e:
                         logging.error(
@@ -217,7 +217,11 @@ class KeyboardHotkeyManager:
 
             # Usar on_press_key em vez de add_hotkey para maior confiabilidade
             try:
-                keyboard.on_press_key(self.record_key, lambda _: handler(), suppress=True)
+                keyboard.on_press_key(
+                    self.record_key,
+                    lambda _: handler(),
+                    suppress=False,
+                )
             except OSError as e:
                 logging.error(
                     f"Falha específica ao registrar hotkey de gravação: {e}"
@@ -240,7 +244,7 @@ class KeyboardHotkeyManager:
                 keyboard.on_press_key(
                     self.agent_key,
                     lambda _: self._on_agent_key(),
-                    suppress=True,
+                    suppress=False,
                 )
             except OSError as e:
                 logging.error(
