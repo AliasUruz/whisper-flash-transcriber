@@ -52,8 +52,12 @@ class FasterWhisperBackend:
         """Transcribe the provided audio and return just the text."""
         if not self.model:
             raise RuntimeError("Backend not loaded")
-        if 'chunk_length_s' in kwargs:
-            kwargs['chunk_length'] = kwargs.pop('chunk_length_s')
+        if "chunk_length_s" in kwargs:
+            kwargs["chunk_length"] = kwargs.pop("chunk_length_s")
+        # ``WhisperModel.transcribe`` does not accept ``batch_size``. The unified
+        # transcription handler still provides the value for backends that use it,
+        # so we discard it here to avoid ``TypeError``.
+        kwargs.pop("batch_size", None)
         segments, _ = self.model.transcribe(audio, **kwargs)
         text = " ".join(segment.text for segment in segments)
         return {"text": text}
