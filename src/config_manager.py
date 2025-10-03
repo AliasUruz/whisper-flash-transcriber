@@ -37,6 +37,7 @@ DEFAULT_CONFIG = {
     "record_mode": "toggle",
     "auto_paste": True,
     "agent_auto_paste": True,
+    "auto_paste_modifier": "auto",
     "min_record_duration": 0.5,
     "sound_enabled": True,
     "sound_frequency": 400,
@@ -161,6 +162,7 @@ KEYBOARD_LIB_WIN32 = "win32"
 TEXT_CORRECTION_ENABLED_CONFIG_KEY = "text_correction_enabled"
 TEXT_CORRECTION_SERVICE_CONFIG_KEY = "text_correction_service"
 ENABLE_AI_CORRECTION_CONFIG_KEY = TEXT_CORRECTION_ENABLED_CONFIG_KEY
+AUTO_PASTE_MODIFIER_CONFIG_KEY = "auto_paste_modifier"
 SERVICE_NONE = "none"
 SERVICE_OPENROUTER = "openrouter"
 SERVICE_GEMINI = "gemini"
