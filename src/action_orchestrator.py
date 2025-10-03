@@ -106,10 +106,25 @@ class ActionOrchestrator:
             )
             return
 
+        if not self._transcription_handler.is_model_ready():
+            LOGGER.error(
+                "Transcription backend is not ready to receive audio (agent_mode=%s).",
+                agent_mode,
+            )
+            if self._log_status_callback:
+                self._log_status_callback("Modelo indisponível para transcrição.", True)
+            return
+
         LOGGER.info(
             "Dispatching audio segment for transcription (duration=%.2fs, agent=%s).",
             duration_seconds,
             agent_mode,
+        )
+        details = "Transcrição iniciada no modo agente." if agent_mode else "Transcrição iniciada."
+        self._state_manager.set_state(
+            sm.StateEvent.TRANSCRIPTION_STARTED,
+            details=details,
+            source="action_orchestrator",
         )
         self._transcription_handler.transcribe_audio_segment(audio_source, agent_mode)
 
