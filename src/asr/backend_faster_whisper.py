@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import math
+
 
 class FasterWhisperBackend:
     """ASR backend powered by faster-whisper."""
@@ -58,6 +60,17 @@ class FasterWhisperBackend:
         # transcription handler still provides the value for backends that use it,
         # so we discard it here to avoid ``TypeError``.
         kwargs.pop("batch_size", None)
+
+        language_segments = kwargs.get("language_detection_segments")
+        if language_segments is not None:
+            try:
+                normalized = math.ceil(float(language_segments))
+                kwargs["language_detection_segments"] = max(1, normalized)
+            except (TypeError, ValueError):
+                # Faster-whisper expects an integer. If coercion fails, fall back to
+                # the library default by dropping the argument entirely.
+                kwargs.pop("language_detection_segments", None)
+
         segments, _ = self.model.transcribe(audio, **kwargs)
         text = " ".join(segment.text for segment in segments)
         return {"text": text}
