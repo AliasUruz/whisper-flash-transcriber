@@ -107,7 +107,7 @@ class VADManager:
 
     def reset_states(self) -> None:
         """Reseta os estados internos do modelo."""
-        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._state = self._coerce_state_tensor(None)
         self._pre_buffer.clear()
         self._pre_buffer_samples = 0
         self._speech_active = False
@@ -135,20 +135,16 @@ class VADManager:
             detected, _, _, _ = self._energy_gate(mono_view, self.threshold)
             return detected
 
-        vad_input = prepared
-        if vad_input.shape[1] < MIN_VAD_INPUT_SAMPLES:
-            pad = MIN_VAD_INPUT_SAMPLES - vad_input.shape[1]
-            vad_input = np.pad(vad_input, ((0, 0), (0, pad)), mode="constant")
-
+        self._state = self._coerce_state_tensor(self._state)
         ort_inputs = {
             "input": vad_input,
             "state": self._state,
-            "sr": np.array([self.sr], dtype=np.int64),
+            "sr": np.array(self.sr, dtype=np.int64),
         }
         try:
             outs = self.session.run(None, ort_inputs)
             speech_prob = float(outs[0][0][0])
-            self._state = outs[1]
+            self._state = self._coerce_state_tensor(outs[1])
             return speech_prob > self.threshold
         except Exception as exc:
             self.reset_states()
@@ -364,7 +360,6 @@ class VADManager:
             except (TypeError, ValueError):
                 return 0
             return max(0, value)
-
         pre_raw = getattr(self, "pre_speech_padding_ms", None)
         if pre_raw is None:
             pre_raw = getattr(self, "vad_pre_speech_padding_ms", None)
@@ -380,6 +375,31 @@ class VADManager:
         self.vad_pre_speech_padding_ms = pre_ms
         self.vad_post_speech_padding_ms = post_ms
         return pre_ms, post_ms
+
+    def _coerce_state_tensor(self, state: np.ndarray | None) -> np.ndarray:
+        base_shape = (2, 1, 128)
+        base_size = 2 * 1 * 128
+        if state is None:
+            return np.zeros(base_shape, dtype=np.float32)
+        arr = np.asarray(state, dtype=np.float32)
+        if arr.size != base_size:
+            logging.debug(
+                "Unexpected VAD state shape %s (size=%s); resetting state.",
+                arr.shape,
+                arr.size,
+            )
+            return np.zeros(base_shape, dtype=np.float32)
+        try:
+            reshaped = arr.reshape(base_shape)
+        except ValueError:
+            logging.debug(
+                "Unable to reshape VAD state %s to %s; resetting state.",
+                arr.shape,
+                base_shape,
+                exc_info=True,
+            )
+            return np.zeros(base_shape, dtype=np.float32)
+        return np.ascontiguousarray(reshaped)
 
     def _ensure_runtime_state(self) -> tuple[int, int]:
         """Garante que atributos críticos existam mesmo sem ``__init__``."""
