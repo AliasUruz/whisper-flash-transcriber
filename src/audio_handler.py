@@ -12,7 +12,7 @@ import sounddevice as sd
 import soundfile as sf
 import tempfile
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 # Observação: em ambientes WSL, a biblioteca sounddevice depende de servidores PulseAudio;
 # mantenha esta limitação em mente ao depurar gravações.
@@ -362,6 +362,8 @@ class AudioHandler:
 
         self._stop_event.clear()
 
+        self._enforce_record_storage_limit(exclude_paths=[self.temp_file_path])
+
         if self.record_storage_mode == "memory":
             self.in_memory_mode = True
             reason = "configured for memory"
@@ -502,6 +504,7 @@ class AudioHandler:
                     shutil.move(str(source_path), target_path)
                     self.temp_file_path = str(target_path)
                     self._audio_log.info(f"Temporary recording saved at {target_path}")
+                    self._enforce_record_storage_limit(exclude_paths=[target_path])
                 except Exception as e:
                     self._audio_log.error(f"Failed to save temporary recording: {e}")
                     try:
@@ -716,6 +719,109 @@ class AudioHandler:
         )
         return max(0.0, seconds)
 
+    def _enforce_record_storage_limit(
+        self,
+        *,
+        exclude_paths: Iterable[str | os.PathLike[str] | None] = (),
+    ) -> None:
+        """Ensure saved recordings do not exceed the configured storage budget."""
+
+        try:
+            limit_mb = int(self.record_storage_limit)
+        except (TypeError, ValueError):
+            limit_mb = 0
+
+        if limit_mb <= 0:
+            return
+
+        limit_bytes = limit_mb * 1024 * 1024
+        normalized_excludes: set[Path] = set()
+        for raw_path in exclude_paths or ():
+            if not raw_path:
+                continue
+            try:
+                normalized_excludes.add(Path(raw_path).resolve())
+            except Exception:
+                try:
+                    normalized_excludes.add(Path(raw_path))
+                except Exception:
+                    continue
+
+        with self.storage_lock:
+            storage_root = Path.cwd()
+            candidates: list[tuple[float, Path, int]] = []
+            total_bytes = 0
+            excluded_bytes = 0
+
+            for pattern in ("recording_*.wav", "temp_recording_*.wav"):
+                for file_path in storage_root.glob(pattern):
+                    try:
+                        resolved_path = file_path.resolve()
+                    except Exception:
+                        resolved_path = file_path
+
+                    try:
+                        stat_result = resolved_path.stat()
+                    except OSError as exc:
+                        self._audio_log.debug(
+                            "Skipping %s during storage enforcement: %s",
+                            resolved_path,
+                            exc,
+                        )
+                        continue
+
+                    total_bytes += stat_result.st_size
+                    if resolved_path in normalized_excludes:
+                        excluded_bytes += stat_result.st_size
+                        continue
+
+                    candidates.append((stat_result.st_mtime, resolved_path, stat_result.st_size))
+
+            if total_bytes <= limit_bytes:
+                return
+
+            bytes_to_free = total_bytes - limit_bytes
+            freed_bytes = 0
+            candidates.sort(key=lambda entry: entry[0])
+
+            for _, path_obj, size in candidates:
+                try:
+                    path_obj.unlink(missing_ok=True)
+                except OSError as exc:
+                    self._audio_log.warning(
+                        "Failed to delete %s while enforcing storage limit: %s",
+                        path_obj,
+                        exc,
+                    )
+                    continue
+
+                freed_bytes += size
+                self._audio_log.info(
+                    "Removed %s to respect the %s MB record storage limit.",
+                    path_obj,
+                    limit_mb,
+                )
+
+                if freed_bytes >= bytes_to_free:
+                    break
+
+            remaining_bytes = total_bytes - freed_bytes
+            if remaining_bytes > limit_bytes:
+                removable_budget = max(0, limit_bytes - excluded_bytes)
+                remaining_deletable = max(0, remaining_bytes - excluded_bytes)
+                if remaining_deletable > removable_budget:
+                    self._audio_log.warning(
+                        "Record storage still above limit after cleanup (limit=%s MB, remaining=%.2f MB).",
+                        limit_mb,
+                        remaining_bytes / (1024 * 1024),
+                    )
+                else:
+                    self._audio_log.info(
+                        "Storage limit reached with protected files only (limit=%s MB, protected=%.2f MB).",
+                        limit_mb,
+                        excluded_bytes / (1024 * 1024),
+                    )
+
     def _cleanup_temp_file(self):
         with self.storage_lock:
             if self.in_memory_mode:
@@ -728,6 +834,8 @@ class AudioHandler:
                 except Exception as e:
                     self._audio_log.error("Failed to remove temporary file %s: %s", temp_path, e)
             self.temp_file_path = None
+
+        self._enforce_record_storage_limit()
 
     def cleanup(self):
         if self.is_recording:
