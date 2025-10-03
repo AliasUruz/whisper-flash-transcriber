@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import math
+
 
 class FasterWhisperBackend:
     """ASR backend powered by faster-whisper."""
@@ -52,12 +54,22 @@ class FasterWhisperBackend:
         """Transcribe the provided audio and return just the text."""
         if not self.model:
             raise RuntimeError("Backend not loaded")
-        if "chunk_length_s" in kwargs:
-            kwargs["chunk_length"] = kwargs.pop("chunk_length_s")
+        chunk_length = _coerce_chunk_length(kwargs.pop("chunk_length_s", None))
+        if chunk_length is not None:
+            kwargs["chunk_length"] = chunk_length
         # ``WhisperModel.transcribe`` does not accept ``batch_size``. The unified
         # transcription handler still provides the value for backends that use it,
         # so we discard it here to avoid ``TypeError``.
         kwargs.pop("batch_size", None)
+        sanitized_segments = _sanitize_language_detection_segments(
+            kwargs.get("language_detection_segments")
+        )
+        if sanitized_segments is not None:
+            kwargs["language_detection_segments"] = sanitized_segments
+        else:
+            computed_segments = _segments_from_chunk_length(kwargs.get("chunk_length"))
+            if computed_segments is not None:
+                kwargs["language_detection_segments"] = computed_segments
         segments, _ = self.model.transcribe(audio, **kwargs)
         text = " ".join(segment.text for segment in segments)
         return {"text": text}
@@ -74,3 +86,40 @@ def _has_cuda() -> bool:
         return torch.cuda.is_available()
     except Exception:
         return False
+
+
+def _coerce_chunk_length(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    try:
+        chunk = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(chunk) or math.isinf(chunk):
+        return None
+    return max(0.0, chunk)
+
+
+def _sanitize_language_detection_segments(raw: Any) -> int | None:
+    if raw is None:
+        return None
+    try:
+        value = int(round(float(raw)))
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return 1
+    return value
+
+
+def _segments_from_chunk_length(chunk_length: Any) -> int | None:
+    if chunk_length is None:
+        return None
+    try:
+        chunk = float(chunk_length)
+    except (TypeError, ValueError):
+        return None
+    if chunk <= 0:
+        return 1
+    approx_segments = chunk / 30.0
+    return _sanitize_language_detection_segments(approx_segments)
