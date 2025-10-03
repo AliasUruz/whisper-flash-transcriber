@@ -173,7 +173,7 @@ class TranscriptionHandler:
                 import importlib.util
 
                 if importlib.util.find_spec("flash_attn") is not None:
-                    attn_impl = "flash_attn2"
+                    attn_impl = "flash_attention_2"
             except Exception:
                 pass
             return {
