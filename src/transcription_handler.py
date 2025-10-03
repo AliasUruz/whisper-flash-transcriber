@@ -164,6 +164,8 @@ class TranscriptionHandler:
         asr_ct2_compute_type,
         asr_cache_dir,
         transformers_device,
+        model_id,
+        effective_device,
     ) -> dict:
         """Constroi os parâmetros de ``load`` para o backend escolhido."""
         if backend_name in {"transformers", "whisper"}:
@@ -185,6 +187,8 @@ class TranscriptionHandler:
             return {
                 "ct2_compute_type": asr_ct2_compute_type,
                 "cache_dir": asr_cache_dir,
+                "model_id": model_id,
+                "device": effective_device,
             }
         return {"cache_dir": asr_cache_dir}
 
@@ -1053,6 +1057,8 @@ class TranscriptionHandler:
                     asr_ct2_compute_type=self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
                     asr_cache_dir=self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY),
                     transformers_device=transformers_device,
+                    model_id=req_model_id,
+                    effective_device=effective_device,
                 )
                 load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
                 if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
