@@ -6,7 +6,7 @@ import os
 import re
 from typing import Iterable
 
-ANSI_ESCAPE_RE = re.compile(r"[@-_][0-?]*[ -/]*[@-~]")
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 
 class _StripAnsiFilter(logging.Filter):
