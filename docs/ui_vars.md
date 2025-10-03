@@ -44,6 +44,10 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | ASR | `asr_ct2_compute_type_var` | `StringVar` | `CTkOptionMenu` (`asr_ct2_menu`) | `"asr_ct2_compute_type"` | Ajusta o compute type quando o backend é CTranslate2. |
 | ASR | `asr_cache_dir_var` | `StringVar` | `CTkEntry` (`asr_cache_entry`) | `"asr_cache_dir"` | Diretório raiz usado para armazenar modelos baixados. |
 
+## Notas adicionais
+
+- A configuração `record_storage_limit` ainda não possui `ctk.*Var` associada. Quando definida manualmente em `config.json`, o `AudioHandler` limita o total combinado de `temp_recording_*.wav` e `recording_*.wav` no diretório raiz, removendo os arquivos mais antigos assim que o teto (em MiB) é excedido.
+
 ## Duplicatas ou variáveis potencialmente obsoletas
 
 - `agent_model_var`: inicializada com `"gemini_agent_model"`, aplicada e restaurada, porém nenhum widget atual permite modificar esse valor. Sugere-se incluir um seletor explícito ou remover a variável se o parâmetro for fixo. 
