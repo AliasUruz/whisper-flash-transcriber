@@ -344,6 +344,12 @@ class AudioHandler:
                     self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
                 )
 
+        if not self.in_memory_mode:
+            try:
+                self._enforce_record_storage_limit(exclude_paths=[self.temp_file_path])
+            except Exception as exc:
+                logging.error("Failed to enforce record storage limit: %s", exc, exc_info=True)
+
         if self.use_vad and self.vad_manager:
             self.vad_manager.reset_states()
         logging.debug("VAD reset and silence counter cleared for new recording.")
@@ -588,6 +594,120 @@ class AudioHandler:
             available_mb,
         )
         return max(0.0, seconds)
+
+    def _enforce_record_storage_limit(self, *, exclude_paths: list[str | os.PathLike[str]] | None = None) -> None:
+        """Ensure cached recordings on disk stay within the configured storage budget."""
+
+        try:
+            limit_mb = int(self.record_storage_limit)
+        except (TypeError, ValueError):
+            logging.warning("Invalid record_storage_limit value: %r", self.record_storage_limit)
+            return
+
+        if limit_mb <= 0:
+            return
+
+        limit_bytes = limit_mb * 1024 * 1024
+
+        exclude: set[Path] = set()
+        for path in exclude_paths or []:
+            if not path:
+                continue
+            try:
+                exclude.add(Path(path).resolve())
+            except Exception:
+                logging.debug("Unable to resolve excluded path '%s' while enforcing storage limit.", path, exc_info=True)
+
+        # Candidate directories: the OS temp directory (where NamedTemporaryFile stores data)
+        # and the current working directory, which may receive promoted recordings when
+        # SAVE_TEMP_RECORDINGS_CONFIG_KEY is enabled.
+        candidate_dirs: set[Path] = {Path(tempfile.gettempdir())}
+        try:
+            candidate_dirs.add(Path.cwd())
+        except Exception:
+            logging.debug("Failed to resolve current working directory while enforcing storage limit.", exc_info=True)
+
+        recordings: dict[Path, tuple[int, float]] = {}
+        total_size = 0
+
+        for directory in candidate_dirs:
+            try:
+                if not directory.exists():
+                    continue
+            except Exception:
+                logging.debug("Unable to access directory '%s' while enforcing storage limit.", directory, exc_info=True)
+                continue
+
+            for pattern in ("temp_recording_*.wav", "recording_*.wav"):
+                try:
+                    for file_path in directory.glob(pattern):
+                        try:
+                            resolved = file_path.resolve()
+                        except FileNotFoundError:
+                            continue
+                        except Exception:
+                            logging.debug(
+                                "Failed to resolve path '%s' while enforcing storage limit.",
+                                file_path,
+                                exc_info=True,
+                            )
+                            continue
+
+                        if resolved in exclude or not file_path.is_file():
+                            continue
+
+                        try:
+                            stat_result = file_path.stat()
+                        except FileNotFoundError:
+                            continue
+                        except Exception:
+                            logging.debug(
+                                "Failed to stat file '%s' while enforcing storage limit.",
+                                file_path,
+                                exc_info=True,
+                            )
+                            continue
+
+                        size = int(stat_result.st_size)
+                        total_size += size
+                        recordings[resolved] = (size, stat_result.st_mtime)
+                except Exception:
+                    logging.debug(
+                        "Failed to enumerate pattern '%s' in '%s' while enforcing storage limit.",
+                        pattern,
+                        directory,
+                        exc_info=True,
+                    )
+
+        if total_size <= limit_bytes or not recordings:
+            return
+
+        # Remove the oldest recordings first until we fall below the limit.
+        sorted_candidates = sorted(recordings.items(), key=lambda item: item[1][1])
+
+        for resolved_path, (size, _) in sorted_candidates:
+            if total_size <= limit_bytes:
+                break
+
+            try:
+                resolved_path.unlink(missing_ok=True)
+                logging.info(
+                    "Deleted old recording '%s' (%.2f MB) to respect record_storage_limit=%s MB.",
+                    resolved_path,
+                    size / (1024 * 1024),
+                    limit_mb,
+                )
+            except FileNotFoundError:
+                pass
+            except Exception:
+                logging.warning(
+                    "Failed to delete recording '%s' while enforcing storage limit.",
+                    resolved_path,
+                    exc_info=True,
+                )
+                continue
+
+            total_size -= size
 
     def _cleanup_temp_file(self):
         with self.storage_lock:
