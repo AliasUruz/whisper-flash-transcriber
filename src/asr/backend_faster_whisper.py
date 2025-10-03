@@ -21,8 +21,10 @@ class FasterWhisperBackend:
         if ct2_compute_type == "default":
             ct2_compute_type = "int8_float16" if device == "cuda" else "int8"
 
+        model_id = self.model_id.split("/")[-1]
+
         self.model = WhisperModel(
-            self.model_id,
+            model_id,
             device=device,
             compute_type=ct2_compute_type,
             download_root=cache_dir or None,

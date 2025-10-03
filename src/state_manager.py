@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from enum import Enum, auto, unique
 from collections.abc import Callable
 
-LOGGER = logging.getLogger('whisper_flash_transcriber.state')
-
 # Estados da aplicação
 STATE_IDLE = "IDLE"
 STATE_LOADING_MODEL = "LOADING_MODEL"
@@ -56,7 +54,7 @@ class StateEvent(Enum):
     SETTINGS_MISSING_RECORD_KEY = auto()
     SETTINGS_HOTKEY_START_FAILED = auto()
     SETTINGS_REREGISTER_FAILED = auto()
-    SETTINGS_RECOVERED = auto()  # Hotkeys se recuperaram e voltaram a operar
+    SETTINGS_RECOVERED = auto()
 
 
 @dataclass(frozen=True)
@@ -153,7 +151,7 @@ class StateManager:
                 else:
                     callback(notification)
             except Exception as e:
-                LOGGER.error(f"Error notifying subscriber: {e}", exc_info=True)
+                logging.error(f"Error notifying subscriber: {e}", exc_info=True)
 
     def set_state(self, event: StateEvent | str, *, details: str | None = None, source: str | None = None):
         """Applies a state transition and notifies subscribers."""
@@ -183,7 +181,7 @@ class StateManager:
             last_event = self._last_notification.event if self._last_notification else None
             last_state = self._last_notification.state if self._last_notification else None
             if last_event == event_obj and last_state == mapped_state:
-                LOGGER.debug(
+                logging.debug(
                     "Duplicate state event %s suppressed (state=%s, source=%s).",
                     event_obj.name if event_obj else mapped_state,
                     mapped_state,
@@ -207,7 +205,7 @@ class StateManager:
             transition_log += f" ({message})"
         if source:
             transition_log += f" [source={source}]"
-        LOGGER.info(transition_log)
+        logging.info(transition_log)
 
         self._notify_subscribers(notification)
 

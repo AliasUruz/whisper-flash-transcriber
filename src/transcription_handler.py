@@ -5,6 +5,7 @@ import time
 import numpy as np
 import torch
 
+
 try:  # pragma: no cover - biblioteca opcional
     from whisper_flash import make_backend  # type: ignore
 except Exception:  # pragma: no cover
@@ -62,8 +63,6 @@ from .config_manager import (
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
 )
-
-LOGGER = logging.getLogger('whisper_flash_transcriber.transcription')
 
 
 class TranscriptionHandler:
@@ -472,11 +471,6 @@ class TranscriptionHandler:
 
         if dtype == "auto":
             dtype = "float16" if compute_device.startswith("cuda") else "float32"
-
-        default_gpu_model = "openai/whisper-large-v3-turbo"
-        default_cpu_model = "openai/whisper-large-v3-turbo"
-        if model_id in ("auto", default_gpu_model, default_cpu_model):
-            model_id = default_gpu_model if compute_device.startswith("cuda") else default_cpu_model
 
         return backend, model_id, compute_device, dtype
 
@@ -1748,18 +1742,7 @@ class TranscriptionHandler:
             )
 
     def _apply_oom_recovery(self, current_batch_size: int | None) -> bool:
-        """Ajusta parâmetros internos após detectar falta de memória (OOM).
-
-        Args:
-            current_batch_size: Valor positivo que representa o batch utilizado
-                no momento da falha. Informe ``None`` para reaproveitar a última
-                configuração bem-sucedida.
-
-        Returns:
-            ``True`` quando algum ajuste temporário foi realizado para manter a
-            execução atual; ``False`` caso nenhum ajuste adicional esteja
-            disponível.
-        """
+        """Ajusta parâmetros internos após um OOM para a sessão atual."""
 
         def _report(message: str) -> None:
             core = getattr(self, "core_instance_ref", None)
@@ -1800,7 +1783,7 @@ class TranscriptionHandler:
                 _report(message)
                 try:
                     logging.info(
-                        "[METRIC] stage=oom_recovery action=reduce_batch mode=%s from=%s to=%s",
+                        "[METRIC] stage=oom_recovery action=reduce_batch mode=%s from=%s to=%s", 
                         self.batch_size_mode,
                         old_batch_size,
                         new_batch_size,
@@ -1881,3 +1864,4 @@ class TranscriptionHandler:
                 logging.debug(
                     "Cache da GPU liberado no encerramento do aplicativo."
                 )
+                                                                                                                                                                                                                                                                                                          

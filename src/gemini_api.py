@@ -3,12 +3,6 @@ import logging
 import time
 from typing import Any, Optional
 
-from .config_manager import (
-    ConfigManager,
-    GEMINI_PROMPT_CONFIG_KEY,
-    GEMINI_TIMEOUT_CONFIG_KEY,
-)
-
 try:
     import google.generativeai as genai
     from google.generativeai.types import (
@@ -38,8 +32,6 @@ except ImportError:
             def __init__(self, timeout=None):
                 pass
 
-LOGGER = logging.getLogger('whisper_flash_transcriber.gemini')
-
 if google_api_exceptions is not None:
     GoogleAPIError = google_api_exceptions.GoogleAPIError
     GoogleAPITimeoutError = getattr(
@@ -54,6 +46,12 @@ else:
 
     class GoogleAPITimeoutError(GoogleAPIError):
         """Fallback genérico para timeouts quando google-api-core não está disponível."""
+
+from .config_manager import (
+    ConfigManager,
+    GEMINI_PROMPT_CONFIG_KEY,
+    GEMINI_TIMEOUT_CONFIG_KEY,
+)
 
 
 class GeminiAPI:
@@ -85,7 +83,7 @@ class GeminiAPI:
         self.is_valid: bool = False
 
         if not GEMINI_API_AVAILABLE:
-            LOGGER.warning('Google Generative AI SDK not found. Gemini features will be disabled.')
+            logging.warning("Google Generative AI SDK not found. Gemini features will be disabled.")
             self.is_valid = False
         else:
             self.reinitialize_client()
@@ -98,7 +96,9 @@ class GeminiAPI:
             self.is_valid = False
             return
 
-        LOGGER.info('Gemini API client re/initializing due to external request.')
+        logging.info(
+            "Gemini API client re/initializing due to external request."
+        )
         self._load_models_from_config()
 
     def _reset_models(self) -> None:
@@ -109,7 +109,7 @@ class GeminiAPI:
 
     def _initialize_model(self, model_id: Optional[str], purpose: str) -> Any | None:
         if not model_id:
-            LOGGER.warning(
+            logging.warning(
                 "No Gemini %s model configured.",
                 purpose,
             )
@@ -117,14 +117,14 @@ class GeminiAPI:
 
         try:
             model = genai.GenerativeModel(model_id)
-            LOGGER.info(
+            logging.info(
                 "Gemini %s model initialized: %s",
                 purpose,
                 model_id,
             )
             return model
         except Exception as e:
-            LOGGER.error(
+            logging.error(
                 "Failed to initialize the Gemini %s model '%s': %s",
                 purpose,
                 model_id,
@@ -143,7 +143,7 @@ class GeminiAPI:
         api_key = self.override_api_key or self.config_manager.get("gemini_api_key")
 
         if not api_key or "SUA_CHAVE" in api_key:
-            LOGGER.warning(
+            logging.warning(
                 "Gemini API key is missing or invalid. Text correction disabled."
             )
             self.is_valid = False
@@ -153,7 +153,7 @@ class GeminiAPI:
         try:
             genai.configure(api_key=api_key)
         except Exception as e:
-            LOGGER.error(
+            logging.error(
                 "Failed to configure the Gemini API client: %s",
                 e,
             )
@@ -220,11 +220,11 @@ class GeminiAPI:
         Executa uma requisição para a API Gemini com lógica de retry.
         """
         if not prompt:
-            LOGGER.warning("Cannot execute request: empty prompt provided.")
+            logging.warning("Cannot execute request: empty prompt provided.")
             return ""
 
         if model is None:
-            LOGGER.warning(
+            logging.warning(
                 "Cannot execute request: model '%s' is not available.",
                 model_id or "<unknown>",
             )
@@ -237,13 +237,13 @@ class GeminiAPI:
             attempt_number = attempt + 1
             should_retry = False
             try:
-                LOGGER.info(
+                logging.info(
                     "Sending prompt to the Gemini API with model %s (attempt %s/%s)",
                     model_for_log,
                     attempt_number,
                     max_retries,
                 )
-                LOGGER.debug(
+                logging.debug(
                     "Gemini prompt payload for model '%s' (attempt %s/%s): %s",
                     model_for_log,
                     attempt_number,
@@ -254,7 +254,7 @@ class GeminiAPI:
                     prompt,
                     request_options=helper_types.RequestOptions(timeout=timeout_value),
                 )
-                LOGGER.debug(
+                logging.debug(
                     "Gemini raw response for model '%s' (attempt %s/%s): %s",
                     model_for_log,
                     attempt_number,
@@ -264,12 +264,12 @@ class GeminiAPI:
 
                 if hasattr(response, 'text') and response.text:
                     generated_text = response.text.strip()
-                    LOGGER.info(
+                    logging.info(
                         "Gemini API returned a successful response."
                     )
                     return generated_text
 
-                LOGGER.warning(
+                logging.warning(
                     "Gemini API returned an empty response (attempt %s/%s)",
                     attempt_number,
                     max_retries,
@@ -277,7 +277,7 @@ class GeminiAPI:
                 should_retry = True
 
             except GoogleAPITimeoutError as e:
-                LOGGER.error(
+                logging.error(
                     "Gemini API request timed out after %.2f seconds (attempt %s/%s): %s",
                     timeout_value,
                     attempt_number,
@@ -286,7 +286,7 @@ class GeminiAPI:
                 )
                 should_retry = True
             except (BrokenResponseError, IncompleteIterationError) as e:
-                LOGGER.error(
+                logging.error(
                     "Gemini API specific error (attempt %s/%s): %s",
                     attempt_number,
                     max_retries,
@@ -294,7 +294,7 @@ class GeminiAPI:
                 )
                 should_retry = True
             except GoogleAPIError as e:
-                LOGGER.error(
+                logging.error(
                     "Gemini API returned an error response (attempt %s/%s): %s",
                     attempt_number,
                     max_retries,
@@ -302,7 +302,7 @@ class GeminiAPI:
                 )
                 should_retry = True
             except Exception as e:
-                LOGGER.error(
+                logging.error(
                     "Error while generating content with the Gemini API (attempt %s/%s): %s",
                     attempt_number,
                     max_retries,
@@ -312,23 +312,20 @@ class GeminiAPI:
                 should_retry = True
 
             if should_retry and attempt < max_retries - 1:
-                LOGGER.info(
+                logging.info(
                     "Retrying in %s seconds...",
                     retry_delay,
                 )
                 time.sleep(retry_delay)
 
-        LOGGER.error(
+        logging.error(
             "All attempts to generate content with the Gemini API failed."
         )
         return ""
 
     def get_correction(self, text: str) -> str:
-        """Formata e executa uma requisição de correção de texto.
-
-        Returns:
-            Texto corrigido quando a chamada é bem-sucedida; caso contrário,
-            o texto original recebido.
+        """
+        Formata e executa uma requisição de correção de texto.
         """
         if not text or not self.is_valid or not self.correction_model:
             return text
@@ -337,7 +334,7 @@ class GeminiAPI:
             GEMINI_PROMPT_CONFIG_KEY
         )
         if not correction_prompt_template:
-            LOGGER.warning("Gemini correction prompt template is empty.")
+            logging.warning("Gemini correction prompt template is empty.")
             return text
 
         full_prompt = correction_prompt_template.format(text=text)
@@ -349,17 +346,14 @@ class GeminiAPI:
         return corrected_text if corrected_text else text
 
     def get_agent_response(self, text: str) -> str:
-        """Formata e executa uma requisição do modo agente.
-
-        Returns:
-            Resposta gerada pelo agente ou o texto original quando a chamada
-            não pôde ser atendida.
+        """
+        Formata e executa uma requisição do modo agente.
         """
         if not text or not self.agent_model:
             return text
         agent_prompt_template = self.config_manager.get('prompt_agentico')
         if not agent_prompt_template:
-            LOGGER.warning("Gemini agent prompt template is empty.")
+            logging.warning("Gemini agent prompt template is empty.")
             return text
 
         full_prompt = f"{agent_prompt_template}\n\n{text}"
@@ -371,21 +365,15 @@ class GeminiAPI:
         return agent_response if agent_response else text
 
     def correct_text_async(self, text: str, prompt: str, api_key: str) -> str:
-        """Executa correção de texto em modo assíncrono utilizando um prompt customizado.
-
-        Returns:
-            Texto corrigido quando a chamada é concluída com sucesso ou
-            ``text`` caso ocorra falha.
-        """
         if not self.is_valid or not self.correction_model:
             return text
 
         if not prompt:
-            LOGGER.warning("Empty Gemini prompt received for async correction.")
+            logging.warning("Empty Gemini prompt received for async correction.")
             return text
 
         if api_key and self.current_api_key and api_key != self.current_api_key:
-            LOGGER.debug(
+            logging.debug(
                 "Async correction received API key different from configured key. Using configured client instead."
             )
 

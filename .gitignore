@@ -72,16 +72,9 @@ PART_1_FLAKE8_FIXES.md
 EXECUTION_PLAN.md
 GEMINI.md
 fix_ai_functions_plan.md
+plans/2025-09-24-remediation-plan.md
+plans/2025-09-24-agents-refresh-plan.md
+plans/2025-09-24-dependency-remediation.md
+plans/2025-09-25-bug-remediation-plan.md
 docs/notes/phase-b-flake8.txt
-.gitignore
 docs/notes/phase-b-compileall.txt
-plans/MASTER PLAN.md
-plans/optional-test-automation-track.md
-plans/phase-a-post-hotfix-stabilization.md
-plans/phase-b-code-quality-hygiene.md
-plans/phase-c-ux-reinforcement.md
-plans/phase-d-pyside6-migration.md
-plans/phase-e-operations-telemetry.md
-plans/phase-f-lean-simplification-roadmap.md
-plans/ux-enhancements-iteration.md
-plans/consolidated_plan.md
