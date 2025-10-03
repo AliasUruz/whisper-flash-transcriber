@@ -19,6 +19,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOGS_DIR = PROJECT_ROOT / "logs"
 FAILURE_LOG_PATH = LOGS_DIR / "vad_failure.jsonl"
 
+MIN_VAD_INPUT_SAMPLES = 512
+
 logging.info("VAD model path set to '%s'", MODEL_PATH)
 
 
@@ -133,8 +135,13 @@ class VADManager:
             detected, _, _, _ = self._energy_gate(mono_view, self.threshold)
             return detected
 
+        vad_input = prepared
+        if vad_input.shape[1] < MIN_VAD_INPUT_SAMPLES:
+            pad = MIN_VAD_INPUT_SAMPLES - vad_input.shape[1]
+            vad_input = np.pad(vad_input, ((0, 0), (0, pad)), mode="constant")
+
         ort_inputs = {
-            "input": prepared,
+            "input": vad_input,
             "state": self._state,
             "sr": np.array([self.sr], dtype=np.int64),
         }
@@ -282,11 +289,11 @@ class VADManager:
         else:
             flattened = arr.reshape(-1)
 
-        mono = np.ascontiguousarray(flattened, dtype=np.float32).reshape(1, -1)
-        peak = float(np.max(np.abs(mono)))
+        mono_array = np.ascontiguousarray(flattened, dtype=np.float32).reshape(1, -1)
+        peak = float(np.max(np.abs(mono_array))) if mono_array.size else 0.0
         if peak > 1.0:
-            mono = mono / peak
-        return mono, peak
+            mono_array = mono_array / peak
+        return mono_array, peak
 
     def _log_failure(self, exc: Exception, prepared: np.ndarray, raw_meta: dict) -> None:
         payload = {
