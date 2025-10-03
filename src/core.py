@@ -469,7 +469,9 @@ class AppCore:
         self.display_transcripts_in_terminal = self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY)
         self.asr_backend = self.config_manager.get("asr_backend")
         self.asr_model_id = self.config_manager.get("asr_model_id")
-        self.ct2_quantization = self.config_manager.get("ct2_quantization")
+        ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+        self.asr_ct2_compute_type = ct2_compute_type
+        self.ct2_quantization = ct2_compute_type
         # ... e outras configurações que AppCore precisa diretamente
 
     def _sync_installed_models(self):
@@ -1243,7 +1245,6 @@ class AppCore:
         legacy_key_aliases = {
             "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
             "asr_model": ASR_MODEL_ID_CONFIG_KEY,
-            "new_ct2_quantization": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
         }
 
         normalized_updates: dict[str, object] = {}
