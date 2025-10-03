@@ -1216,7 +1216,6 @@ class AppCore:
             "new_min_transcription_duration": "min_transcription_duration",
             "new_min_record_duration": "min_record_duration",
             "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
-            "new_record_to_memory": "record_to_memory",
             "new_max_memory_seconds_mode": "max_memory_seconds_mode",
             "new_max_memory_seconds": "max_memory_seconds",
             "new_gemini_model_options": "gemini_model_options",

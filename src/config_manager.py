@@ -693,16 +693,26 @@ class ConfigManager:
         if not updates:
             return set(), []
 
+        filtered_updates = dict(updates)
+        if "record_to_memory" in filtered_updates:
+            logging.info(
+                "Ignoring legacy 'record_to_memory' update in favor of 'record_storage_mode'."
+            )
+            filtered_updates.pop("record_to_memory", None)
+
+        if not filtered_updates:
+            return set(), []
+
         previous_config = copy.deepcopy(self.config)
         candidate = copy.deepcopy(self.config)
-        candidate.update(updates)
+        candidate.update(filtered_updates)
 
         sanitized_cfg, warnings = coerce_with_defaults(candidate, self.default_config)
         for warning in warnings:
             logging.warning(warning)
 
         self.config = sanitized_cfg
-        self._apply_runtime_overrides(applied_updates=updates)
+        self._apply_runtime_overrides(applied_updates=filtered_updates)
         self.save_config()
 
         changed_keys = {
