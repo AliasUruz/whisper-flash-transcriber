@@ -887,8 +887,6 @@ class AppCore:
         with self.keyboard_lock:
             try:
                 if self.ahk_running:
-                    if hasattr(self.ahk_manager, 'hotkey_handlers'):
-                        self.ahk_manager.hotkey_handlers.clear()
                     self.ahk_manager.stop()
                     self.ahk_running = False
                     time.sleep(0.2)
