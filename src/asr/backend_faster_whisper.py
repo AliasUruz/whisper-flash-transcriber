@@ -106,6 +106,9 @@ class FasterWhisperBackend:
         """Transcribe the provided audio and return just the text."""
         if not self.model:
             raise RuntimeError("Backend not loaded")
+        chunk_length_s = kwargs.pop("chunk_length_s", None)
+        if chunk_length_s is not None:
+            kwargs.setdefault("chunk_length", chunk_length_s)
         segments, _ = self.model.transcribe(audio, **kwargs)
         text = " ".join(segment.text for segment in segments)
         return {"text": text}
