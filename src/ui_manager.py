@@ -491,6 +491,7 @@ class UIManager:
             "openrouter_model_entry",
             "gemini_key_entry",
             "gemini_model_menu",
+            "agent_model_menu",
             "gemini_prompt_correction_textbox",
             "agentico_prompt_textbox",
             "gemini_models_textbox",
@@ -2494,6 +2495,7 @@ class UIManager:
                     openrouter_model_var.set(DEFAULT_CONFIG[OPENROUTER_MODEL_CONFIG_KEY])
                     gemini_api_key_var.set(DEFAULT_CONFIG[GEMINI_API_KEY_CONFIG_KEY])
                     gemini_model_var.set(DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY])
+                    agent_model_var.set(DEFAULT_CONFIG[GEMINI_AGENT_MODEL_CONFIG_KEY])
                     try:
                         gemini_model_menu
                     except NameError:
@@ -2501,6 +2503,13 @@ class UIManager:
                     else:
                         gemini_model_menu.configure(values=DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
                         gemini_model_menu.set(DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY])
+                    try:
+                        agent_model_menu
+                    except NameError:
+                        pass
+                    else:
+                        agent_model_menu.configure(values=DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
+                        agent_model_menu.set(DEFAULT_CONFIG[GEMINI_AGENT_MODEL_CONFIG_KEY])
                     gemini_model_options[:] = list(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
                     asr_model_id_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
                     asr_model_display_var = self._get_settings_var("asr_model_display_var")
@@ -2722,6 +2731,16 @@ class UIManager:
                 gemini_model_menu.pack(side="left", padx=5)
                 self._set_settings_var("gemini_model_menu", gemini_model_menu)
                 Tooltip(gemini_model_menu, "Modelo utilizado nas requisições Gemini.")
+
+                ctk.CTkLabel(gemini_frame, text="Modelo do Agente:").pack(side="left", padx=(5, 10))
+                agent_model_menu = ctk.CTkOptionMenu(
+                    gemini_frame,
+                    variable=agent_model_var,
+                    values=gemini_model_options,
+                )
+                agent_model_menu.pack(side="left", padx=5)
+                self._set_settings_var("agent_model_menu", agent_model_menu)
+                Tooltip(agent_model_menu, "Modelo dedicado às ações do modo agente.")
 
                 # --- Gemini Prompt ---
                 gemini_prompt_frame = ctk.CTkFrame(ai_frame)

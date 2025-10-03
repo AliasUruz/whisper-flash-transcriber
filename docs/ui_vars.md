@@ -8,7 +8,7 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Geral | `mode_var` | `StringVar` | `CTkRadioButton` (`toggle_rb`, `hold_rb`) | `"record_mode"` | Seleciona entre os modos *toggle* e *hold* de gravação. |
 | Geral | `detected_key_var` | `StringVar` | `CTkLabel` (`key_display`) | `"record_key"` | Exibe a tecla atual e recebe o valor detectado pelo listener de hotkeys. |
 | Geral | `agent_key_var` | `StringVar` | `CTkLabel` (`agent_key_display`) | `"agent_key"` | Espelha a tecla do modo agente; atualizado pelo detector dedicado. |
-| Geral | `agent_model_var` | `StringVar` | — | `"gemini_agent_model"` | Mantém o valor configurado mas não há widget para alterá-lo; apenas reaplicado no `apply_settings` e em *restore defaults*. |
+| Correção de texto | `agent_model_var` | `StringVar` | `CTkOptionMenu` (`agent_model_menu`) | `"gemini_agent_model"` | Seleciona o modelo Gemini específico para o modo agente. |
 | Geral | `hotkey_stability_service_enabled_var` | `BooleanVar` | `CTkSwitch` (`stability_switch`) | `"hotkey_stability_service_enabled"` | Liga/desliga o serviço de estabilização dos hotkeys. |
 | Geral | `launch_at_startup_var` | `BooleanVar` | `CTkSwitch` (`startup_switch`) | `"launch_at_startup"` | Habilita a inicialização automática no Windows. |
 | Som | `sound_enabled_var` | `BooleanVar` | `CTkSwitch` (`sound_switch`) | `"sound_enabled"` | Ativa os bipes de início/fim de gravação. |
@@ -46,7 +46,6 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 
 ## Duplicatas ou variáveis potencialmente obsoletas
 
-- `agent_model_var`: inicializada com `"gemini_agent_model"`, aplicada e restaurada, porém nenhum widget atual permite modificar esse valor. Sugere-se incluir um seletor explícito ou remover a variável se o parâmetro for fixo. 
 - `asr_model_display_var`: é instanciada inicialmente sem valor e, alguns blocos adiante, recebe nova instância preenchida com os rótulos do catálogo. Não há efeito funcional, mas a criação anterior é redundante.
 
 Nenhuma outra `ctk.*Var` aparece duplicada ou sem uso na interface atual.
