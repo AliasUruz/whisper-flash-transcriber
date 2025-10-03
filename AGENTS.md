@@ -40,6 +40,9 @@ This section outlines the fundamental rules and user-mandated instructions that 
 | `tests/` | The current `pytest` test suite. | Currently focused on the VAD pipeline. |
 | `config.json` / `secrets.json` | Persisted user settings and API keys. | Automatically created on the first run. |
 
+### Configuration Schema Notes
+- The legacy flag `record_to_memory` has been fully deprecated. Clients must rely on `record_storage_mode` when updating configuration payloads; any attempt to persist `record_to_memory` will be discarded during update application.
+
 ---
 
 ## 3. High-Level Architecture
