@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 import os
+import sys
 from collections.abc import Callable
 from typing import Iterable
 from threading import RLock
@@ -46,6 +47,7 @@ from .config_manager import (
     OPENROUTER_TIMEOUT_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+    AUTO_PASTE_MODIFIER_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler
 from .action_orchestrator import ActionOrchestrator
@@ -721,12 +723,81 @@ class AppCore:
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
         try:
-            pyautogui.hotkey('ctrl', 'v')
+            hotkey_sequence = self._resolve_paste_hotkey_sequence()
+            pyautogui.hotkey(*hotkey_sequence)
             LOGGER.info("Text pasted.")
             self._log_status("Text pasted.")
         except Exception as e:
             LOGGER.error(f"Erro ao colar: {e}")
             self._log_status("Erro ao colar.", error=True)
+
+    def _resolve_paste_hotkey_sequence(self) -> tuple[str, ...]:
+        """Resolve the hotkey combination used for auto-paste."""
+
+        raw_modifier = self.config_manager.get(AUTO_PASTE_MODIFIER_CONFIG_KEY, "auto")
+        modifiers = self._normalize_paste_modifiers(raw_modifier)
+
+        if not modifiers or modifiers == ("auto",):
+            default_modifier = "command" if sys.platform == "darwin" else "ctrl"
+            return (default_modifier, "v")
+
+        if "v" in modifiers:
+            return tuple(modifiers)
+
+        return modifiers + ("v",)
+
+    def _normalize_paste_modifiers(self, raw_value: object) -> tuple[str, ...]:
+        """Normalize modifiers from configuration or defaults."""
+
+        if raw_value is None:
+            return ("auto",)
+
+        mapping = {
+            "ctrl": "ctrl",
+            "control": "ctrl",
+            "command": "command",
+            "cmd": "command",
+            "option": "alt",
+            "alt": "alt",
+            "win": "win",
+            "windows": "win",
+            "meta": "command" if sys.platform == "darwin" else "win",
+            "super": "command" if sys.platform == "darwin" else "win",
+        }
+
+        if isinstance(raw_value, str):
+            value = raw_value.strip()
+            if not value:
+                return ("auto",)
+            segments = [segment for segment in value.replace("+", " ").split() if segment]
+        elif isinstance(raw_value, (list, tuple, set)):
+            segments = []
+            for item in raw_value:
+                if item is None:
+                    continue
+                segment = str(item).strip()
+                if segment:
+                    segments.extend(segment.replace("+", " ").split())
+        else:
+            segment = str(raw_value).strip()
+            if not segment:
+                return ("auto",)
+            segments = segment.replace("+", " ").split()
+
+        if not segments:
+            return ("auto",)
+
+        normalized: list[str] = []
+        for segment in segments:
+            lowered = segment.lower()
+            mapped = mapping.get(lowered, lowered)
+            if mapped:
+                normalized.append(mapped)
+
+        if not normalized:
+            return ("auto",)
+
+        return tuple(dict.fromkeys(normalized))
 
     def start_key_detection_thread(self, *, timeout: float | None = None) -> None:
         """Inicia detecção assíncrona de uma tecla pressionada para a UI."""
