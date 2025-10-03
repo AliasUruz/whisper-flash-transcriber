@@ -31,7 +31,7 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Transcrição | `use_vad_var` | `BooleanVar` | `CTkCheckBox` (`vad_checkbox`) | `"use_vad"` | Alterna o uso do VAD Silero (é desativado se o modelo não estiver disponível). |
 | Transcrição | `vad_threshold_var` | `DoubleVar` | `CTkEntry` (`vad_threshold_entry`) | `"vad_threshold"` | Probabilidade mínima para considerar fala. |
 | Transcrição | `vad_silence_duration_var` | `DoubleVar` | `CTkEntry` (`vad_silence_entry`) | `"vad_silence_duration"` | Tempo de silêncio antes de cortar o áudio. |
-| Transcrição | `save_temp_recordings_var` | `BooleanVar` | `CTkSwitch` (`temp_recordings_switch`) | `"save_temp_recordings"` | Mantém ou remove arquivos temporários após o processamento. |
+| Transcrição | `save_temp_recordings_var` | `BooleanVar` | `CTkSwitch` (`temp_recordings_switch`) | `"save_temp_recordings"` | Mantém ou remove arquivos temporários após o processamento; quando ativo, aplica a cota `record_storage_limit` (MB) e remove gravações antigas para liberar espaço. |
 | Transcrição | `record_storage_mode_var` | `StringVar` | `CTkOptionMenu` (`storage_mode_menu`) | `"record_storage_mode"` | Seleciona memória, disco ou modo automático; também define `new_record_to_memory` no `apply_settings`. |
 | Transcrição | `max_memory_seconds_var` | `DoubleVar` | `CTkEntry` (`mem_time_entry`) | `"max_memory_seconds"` | Limite máximo de áudio em memória antes de migrar para disco. |
 | Transcrição | `max_memory_seconds_mode_var` | `StringVar` | `CTkOptionMenu` (`mem_mode_menu`) | `"max_memory_seconds_mode"` | Alterna entre cálculo manual e automático do limite de memória. |
