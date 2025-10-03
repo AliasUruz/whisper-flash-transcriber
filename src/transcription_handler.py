@@ -5,7 +5,6 @@ import time
 import numpy as np
 import torch
 
-
 try:  # pragma: no cover - biblioteca opcional
     from whisper_flash import make_backend  # type: ignore
 except Exception:  # pragma: no cover
@@ -63,6 +62,8 @@ from .config_manager import (
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
 )
+
+LOGGER = logging.getLogger('whisper_flash_transcriber.transcription')
 
 
 class TranscriptionHandler:
@@ -164,8 +165,6 @@ class TranscriptionHandler:
         asr_ct2_compute_type,
         asr_cache_dir,
         transformers_device,
-        model_id,
-        effective_device,
     ) -> dict:
         """Constroi os parâmetros de ``load`` para o backend escolhido."""
         if backend_name in {"transformers", "whisper"}:
@@ -187,8 +186,6 @@ class TranscriptionHandler:
             return {
                 "ct2_compute_type": asr_ct2_compute_type,
                 "cache_dir": asr_cache_dir,
-                "model_id": model_id,
-                "device": effective_device,
             }
         return {"cache_dir": asr_cache_dir}
 
@@ -475,6 +472,11 @@ class TranscriptionHandler:
 
         if dtype == "auto":
             dtype = "float16" if compute_device.startswith("cuda") else "float32"
+
+        default_gpu_model = "openai/whisper-large-v3-turbo"
+        default_cpu_model = "openai/whisper-large-v3-turbo"
+        if model_id in ("auto", default_gpu_model, default_cpu_model):
+            model_id = default_gpu_model if compute_device.startswith("cuda") else default_cpu_model
 
         return backend, model_id, compute_device, dtype
 
@@ -1057,8 +1059,6 @@ class TranscriptionHandler:
                     asr_ct2_compute_type=self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
                     asr_cache_dir=self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY),
                     transformers_device=transformers_device,
-                    model_id=req_model_id,
-                    effective_device=effective_device,
                 )
                 load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
                 if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
@@ -1091,6 +1091,7 @@ class TranscriptionHandler:
                     chunk_length_s=float(self.chunk_length_sec),
                     batch_size=self.batch_size,
                 )
+                load_kwargs["model_id"] = req_model_id
                 try:
                     self._asr_backend.load(**load_kwargs)
                 except Exception as load_error:
@@ -1748,7 +1749,18 @@ class TranscriptionHandler:
             )
 
     def _apply_oom_recovery(self, current_batch_size: int | None) -> bool:
-        """Ajusta parâmetros internos após um OOM para a sessão atual."""
+        """Ajusta parâmetros internos após detectar falta de memória (OOM).
+
+        Args:
+            current_batch_size: Valor positivo que representa o batch utilizado
+                no momento da falha. Informe ``None`` para reaproveitar a última
+                configuração bem-sucedida.
+
+        Returns:
+            ``True`` quando algum ajuste temporário foi realizado para manter a
+            execução atual; ``False`` caso nenhum ajuste adicional esteja
+            disponível.
+        """
 
         def _report(message: str) -> None:
             core = getattr(self, "core_instance_ref", None)
@@ -1789,7 +1801,7 @@ class TranscriptionHandler:
                 _report(message)
                 try:
                     logging.info(
-                        "[METRIC] stage=oom_recovery action=reduce_batch mode=%s from=%s to=%s", 
+                        "[METRIC] stage=oom_recovery action=reduce_batch mode=%s from=%s to=%s",
                         self.batch_size_mode,
                         old_batch_size,
                         new_batch_size,

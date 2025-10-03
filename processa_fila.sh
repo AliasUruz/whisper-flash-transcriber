@@ -1,43 +1,57 @@
-# Bloco único para RECRIAR o script 'processa_fila.sh' na versão correta
+﻿#!/bin/bash
+set -euo pipefail
 
-echo "--- CONSTRUINDO O SCRIPT FINAL (VERSÃO SEM EDITOR) ---"
+# Script alinhado ao plano 2025-09-28-operational-optimization-blueprint.md
+# Objetivo: processar PRs etiquetados com "codex" em sequência, evitando conflitos manuais.
 
-# Constrói o arquivo 'processa_fila.sh' do zero com a lógica correta
-echo '#!/bin/bash' > processa_fila.sh
-echo 'set -e' >> processa_fila.sh
-echo 'REPO="AliasUruz/whisper-flash-transcriber"' >> processa_fila.sh
-echo 'PR_LABEL="codex"' >> processa_fila.sh
-echo 'TARGET_BRANCH="stable"' >> processa_fila.sh
-echo 'echo "--- INICIANDO PROCESSAMENTO (VERSÃO FINAL) ---"' >> processa_fila.sh
-echo 'git merge --abort || echo "Nenhum merge para abortar. Repositório limpo."' >> processa_fila.sh
-echo 'git checkout "$TARGET_BRANCH"' >> processa_fila.sh
-echo 'git pull origin "$TARGET_BRANCH"' >> processa_fila.sh
-echo 'echo "----------------------------------------------------"' >> processa_fila.sh
-echo 'echo "Buscando PRs com a label '\''${PR_LABEL}'\''..."' >> processa_fila.sh
-echo "PRS=\$(gh pr list --repo \"\$REPO\" --label \"\$PR_LABEL\" --state open --json number,createdAt | jq -r 'sort_by(.createdAt) | .[] | .number' | tr -d '\r')" >> processa_fila.sh
-echo 'if [ -z "$PRS" ]; then echo "Nenhum PR encontrado."; exit 0; fi' >> processa_fila.sh
-echo 'echo "Fila de PRs encontrada: \$PRS"' >> processa_fila.sh
-echo 'echo "----------------------------------------------------"' >> processa_fila.sh
-echo 'for PR in $PRS; do' >> processa_fila.sh
-echo '  echo ""' >> processa_fila.sh
-echo '  echo ">>> Processando PR #${PR}..."' >> processa_fila.sh
-echo '  if ! gh pr checkout "$PR" --repo "$REPO"; then echo "!!! AVISO: Falha no checkout do PR #${PR}. Pulando."; continue; fi' >> processa_fila.sh
-echo '  BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)' >> processa_fila.sh
-echo '  echo "Branch atual: ${BRANCH_NAME}"' >> processa_fila.sh
-echo '  echo "Mesclando '\''${TARGET_BRANCH}'\'' sem abrir o editor..."' >> processa_fila.sh
-echo '  git merge --no-edit -X ours "origin/${TARGET_BRANCH}" || true' >> processa_fila.sh
-echo '  echo "Criando commit vazio para acionar checks..."' >> processa_fila.sh
-echo '  git commit --allow-empty -m "chore: trigger CI checks"' >> processa_fila.sh
-echo '  echo "Enviando push para o branch '\''${BRANCH_NAME}'\''..."' >> processa_fila.sh
-echo '  git push origin "HEAD:${BRANCH_NAME}"' >> processa_fila.sh
-echo '  echo "Push concluído para o PR #${PR}!"' >> processa_fila.sh
-echo '  echo "PR #${PR} processado. Voltando para '\''${TARGET_BRANCH}'\''."' >> processa_fila.sh
-echo '  git checkout "$TARGET_BRANCH"' >> processa_fila.sh
-echo 'done' >> processa_fila.sh
-echo 'echo ""' >> processa_fila.sh
-echo 'echo "--- PROCESSAMENTO CONCLUÍDO COM SUCESSO ---"' >> processa_fila.sh
+REPO="AliasUruz/whisper-flash-transcriber"
+PR_LABEL="codex"
+TARGET_BRANCH="stable"
 
-# Torna o script executável
-chmod +x processa_fila.sh
+log() {
+  printf '[processa_fila] %s\n' "$1"
+}
 
-echo "✅ Script 'processa_fila.sh' recriado com sucesso!"
+log "Iniciando processamento controlado da fila (label=${PR_LABEL})."
+
+git merge --abort >/dev/null 2>&1 || true
+log "Atualizando branch base '${TARGET_BRANCH}'."
+git checkout "${TARGET_BRANCH}"
+git pull --ff-only origin "${TARGET_BRANCH}"
+
+PRS=$(gh pr list --repo "${REPO}" --label "${PR_LABEL}" --state open --json number,createdAt \\
+  | jq -r 'sort_by(.createdAt) | .[] | .number')
+
+if [[ -z "${PRS}" ]]; then
+  log "Nenhum PR pendente encontrado."
+  exit 0
+fi
+
+log "Fila obtida: ${PRS}."
+
+for PR in ${PRS}; do
+  log "Processando PR #${PR}."
+  if ! gh pr checkout "${PR}" --repo "${REPO}"; then
+    log "Aviso: checkout falhou para #${PR}; seguindo para o próximo."
+    continue
+  fi
+
+  BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
+  log "Branch atual: ${BRANCH_NAME}."
+
+  if git merge --no-edit -X ours "origin/${TARGET_BRANCH}"; then
+    log "Merge aplicado com sucesso."
+  else
+    log "Conflitos detectados; favor resolver manualmente e relançar o script."
+    exit 1
+  fi
+
+  git commit --allow-empty -m "chore: trigger CI checks"
+  git push origin "HEAD:${BRANCH_NAME}"
+  log "PR #${PR} atualizado e enviado."
+
+  git checkout "${TARGET_BRANCH}"
+  git reset --hard "origin/${TARGET_BRANCH}"
+done
+
+log "Processamento concluído sem erros. Consulte o blueprint operacional para próximos passos."

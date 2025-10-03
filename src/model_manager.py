@@ -34,7 +34,7 @@ class DownloadCancelledError(Exception):
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
 CURATED: List[Dict[str, str]] = [
-    {"id": "openai/whisper-large-v3-turbo", "backend": "transformers"},
+    {"id": "openai/whisper-large-v3-turbo", "backend": "ctranslate2"},
 ]
 
 DISPLAY_NAMES: Dict[str, str] = {
@@ -43,6 +43,27 @@ DISPLAY_NAMES: Dict[str, str] = {
 
 # Para reintroduzir outros modelos futuramente, basta estender as estruturas
 # CURATED e DISPLAY_NAMES abaixo.
+
+
+def normalize_backend_label(backend: str | None) -> str:
+    """Return a normalized backend label for UI/configuration."""
+    if not backend:
+        return ""
+    normalized = backend.strip().lower()
+    if normalized in {"ct2", "ctranslate2"}:
+        return "ctranslate2"
+    if normalized in {"faster whisper", "faster_whisper"}:
+        return "faster-whisper"
+    return normalized
+
+
+def backend_storage_name(backend: str | None) -> str:
+    """Map backend label to the directory name used on disk."""
+    normalized = normalize_backend_label(backend)
+    if normalized in {"ctranslate2", "faster-whisper"}:
+        return "ct2"
+    return normalized
+
 
 _CACHE_TTL_SECONDS = 60.0
 
@@ -74,10 +95,13 @@ def _invalidate_list_installed_cache(cache_dir: str | Path | None = None) -> Non
 
 def list_catalog() -> List[Dict[str, str]]:
     """Return curated catalog entries with display names."""
-    return [
-        {**entry, "display_name": DISPLAY_NAMES.get(entry["id"], entry["id"])}
-        for entry in CURATED
-    ]
+    catalog = []
+    for entry in CURATED:
+        normalized = {**entry}
+        normalized["backend"] = normalize_backend_label(entry.get("backend"))
+        normalized["display_name"] = DISPLAY_NAMES.get(entry["id"], entry["id"])
+        catalog.append(normalized)
+    return catalog
 
 
 def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
@@ -111,7 +135,7 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
         for backend_dir in cache_dir.iterdir():
             if not backend_dir.is_dir():
                 continue
-            backend = backend_dir.name
+            backend_label = normalize_backend_label(backend_dir.name)
             for model_dir in backend_dir.rglob("*"):
                 if not model_dir.is_dir():
                     continue
@@ -123,7 +147,7 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
                     "model.bin" in files_present or "model.onnx" in files_present
                 ):
                     continue
-                installed.append({"id": rel_id, "backend": backend, "path": str(model_dir)})
+                installed.append({"id": rel_id, "backend": backend_label, "path": str(model_dir)})
                 seen.add(rel_id)
 
     try:
@@ -300,7 +324,7 @@ def ensure_download(
     model_id: str
         Full model identifier as in the curated catalog.
     backend: str
-        Either ``"transformers"`` or ``"ct2"``.
+        Backend selected by the user (e.g., ``"ctranslate2"``, ``"faster-whisper"``, ``"transformers"``).
     cache_dir: str | Path
         Root directory where models are cached.
     quant: str | None
@@ -312,26 +336,20 @@ def ensure_download(
     """
 
     cache_dir = Path(cache_dir)
-    local_dir = cache_dir / backend / model_id
+    storage_backend = backend_storage_name(backend)
+    backend_label = normalize_backend_label(backend) or storage_backend
+
+    local_dir = cache_dir / storage_backend / model_id
     if local_dir.is_dir() and any(local_dir.iterdir()):
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
             model_id,
-            backend,
+            backend_label,
             local_dir,
         )
         return str(local_dir)
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
-
-    start_time = time.perf_counter()
-    MODEL_LOGGER.info(
-        "Starting model download: model=%s backend=%s quant=%s target=%s",
-        model_id,
-        backend,
-        quant or "default",
-        local_dir,
-    )
 
     timeout_value: float | None = None
     deadline: float | None = None
@@ -365,15 +383,6 @@ def ensure_download(
     if cancel_event is not None or deadline is not None:
         progress_class = _make_cancellable_progress(_check_abort)
 
-    start_time = time.perf_counter()
-    MODEL_LOGGER.info(
-        "Starting model download: model=%s backend=%s quant=%s target=%s",
-        model_id,
-        backend,
-        quant or "default",
-        local_dir,
-    )
-
     # Seleciona branch de quantização quando aplicável (modelos CT2).
     revision = None
     if quant:
@@ -390,14 +399,23 @@ def ensure_download(
     if revision is not None:
         download_kwargs["revision"] = revision
 
+    start_time = time.perf_counter()
+    MODEL_LOGGER.info(
+        "Starting model download: model=%s backend=%s quant=%s target=%s",
+        model_id,
+        backend_label,
+        quant or "default",
+        local_dir,
+    )
+
     try:
         _check_abort()
-        if backend == "transformers":
+        if storage_backend == "transformers":
             snapshot_download(**download_kwargs)
-        elif backend == "ct2":
+        elif storage_backend == "ct2":
             snapshot_download(**download_kwargs)
         else:
-            raise ValueError(f"Unknown backend: {backend}")
+            raise ValueError(f"Unknown backend: {backend_label}")
         _check_abort()
     except DownloadCancelledError:
         _cleanup_partial()
@@ -407,7 +425,7 @@ def ensure_download(
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=cancelled model=%s backend=%s duration_ms=%.2f",
             model_id,
-            backend,
+            backend_label,
             duration_ms,
         )
         raise DownloadCancelledError(
@@ -419,13 +437,13 @@ def ensure_download(
         MODEL_LOGGER.exception(
             "Model download failed: model=%s backend=%s target=%s",
             model_id,
-            backend,
+            backend_label,
             local_dir,
         )
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=error model=%s backend=%s duration_ms=%.2f",
             model_id,
-            backend,
+            backend_label,
             duration_ms,
         )
         raise
@@ -434,7 +452,7 @@ def ensure_download(
     MODEL_LOGGER.info(
         "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
         model_id,
-        backend,
+        backend_label,
         duration_ms,
         local_dir,
     )

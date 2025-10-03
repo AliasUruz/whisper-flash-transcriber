@@ -5,6 +5,9 @@ from tkinter import simpledialog  # Adicionado para askstring
 import logging
 import threading
 import time
+import os
+import sys
+import subprocess
 import pystray
 from PIL import Image, ImageDraw
 from pathlib import Path
@@ -33,6 +36,8 @@ from .config_manager import (
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     GPU_INDEX_CONFIG_KEY,
+    VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+    VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     DEFAULT_CONFIG,
 )
 
@@ -107,6 +112,16 @@ def get_available_devices_for_ui():
         logging.debug("torch not found, returning CPU-only devices.")
     devices.append("Force CPU")
     return devices
+
+
+def _backend_display_value_global(value: str | None) -> str:
+    """Normalize backend label for display and configuration."""
+    normalized = (value or "").strip().lower()
+    if normalized in {"ct2", "ctranslate2"}:
+        return "ctranslate2"
+    if normalized in {"faster whisper", "faster_whisper"}:
+        return "faster-whisper"
+    return normalized
 
 class UIManager:
     def __init__(self, main_tk_root, config_manager, core_instance_ref, model_manager=None):
@@ -337,6 +352,28 @@ class UIManager:
 
         return safe_get_float(var, field_name, parent)
 
+    def _open_directory_from_tray(self, target: Path) -> None:
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logging.error("UIManager: falha ao garantir diretório %s: %s", target, exc, exc_info=True)
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(target)], close_fds=True)
+            else:
+                subprocess.Popen(["xdg-open", str(target)], close_fds=True)
+        except Exception as exc:
+            logging.error("UIManager: falha ao abrir %s: %s", target, exc, exc_info=True)
+
+    def open_logs_directory(self) -> None:
+        self._open_directory_from_tray(Path("logs"))
+
+    def open_docs_directory(self) -> None:
+        self._open_directory_from_tray(Path("docs"))
+
     def _resolve_initial_value(
         self,
         config_key: str,
@@ -514,9 +551,7 @@ class UIManager:
                 installed = []
             entry = next((m for m in installed if m.get("id") == model_id), None)
         backend = entry.get("backend") if entry else None
-        if backend in ("faster-whisper", "ctranslate2"):
-            backend = "ct2"
-        if backend not in ("transformers", "ct2"):
+        if backend not in ("transformers", "ctranslate2", "faster-whisper"):
             return None
         return backend
 
@@ -533,7 +568,7 @@ class UIManager:
             pass
         if quant_menu is not None:
             try:
-                quant_menu.configure(state="normal" if backend == "ct2" else "disabled")
+                quant_menu.configure(state="normal" if backend == "ctranslate2" else "disabled")
             except Exception:
                 pass
 
@@ -678,7 +713,7 @@ class UIManager:
                 model_id,
                 backend,
                 cache_dir,
-                quant if backend == "ct2" else None,
+                quant if backend == "ctranslate2" else None,
             )
             installed_models = self.model_manager.list_installed(cache_dir)
             self.config_manager.set_asr_installed_models(installed_models)
@@ -809,12 +844,35 @@ class UIManager:
         if vad_silence_duration_to_apply is None:
             return
 
-        vad_pre_speech_padding_ms_to_apply = self._safe_get_int(vad_pre_speech_padding_ms_var, "Pre-speech Padding", settings_win)
-        if vad_pre_speech_padding_ms_to_apply is None:
-            return
-        vad_post_speech_padding_ms_to_apply = self._safe_get_int(vad_post_speech_padding_ms_var, "Post-speech Padding", settings_win)
-        if vad_post_speech_padding_ms_to_apply is None:
-            return
+        pre_padding_raw = vad_pre_speech_padding_ms_var.get() if vad_pre_speech_padding_ms_var else ""
+        if isinstance(pre_padding_raw, str) and not pre_padding_raw.strip():
+            vad_pre_speech_padding_ms_to_apply = int(self.config_manager.get(
+                VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+                DEFAULT_CONFIG.get(VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY, 150),
+            ))
+        else:
+            vad_pre_speech_padding_ms_to_apply = self._safe_get_int(
+                vad_pre_speech_padding_ms_var,
+                "Pre-speech Padding",
+                settings_win,
+            )
+            if vad_pre_speech_padding_ms_to_apply is None:
+                return
+
+        post_padding_raw = vad_post_speech_padding_ms_var.get() if vad_post_speech_padding_ms_var else ""
+        if isinstance(post_padding_raw, str) and not post_padding_raw.strip():
+            vad_post_speech_padding_ms_to_apply = int(self.config_manager.get(
+                VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+                DEFAULT_CONFIG.get(VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY, 300),
+            ))
+        else:
+            vad_post_speech_padding_ms_to_apply = self._safe_get_int(
+                vad_post_speech_padding_ms_var,
+                "Post-speech Padding",
+                settings_win,
+            )
+            if vad_post_speech_padding_ms_to_apply is None:
+                return
 
         save_temp_recordings_to_apply = bool(save_temp_recordings_var.get()) if save_temp_recordings_var else False
         display_transcripts_to_apply = bool(display_transcripts_var.get()) if display_transcripts_var else False
@@ -1068,27 +1126,24 @@ class UIManager:
     def _build_vad_section(self, parent, use_vad_var, vad_threshold_var, vad_silence_duration_var, vad_pre_speech_padding_ms_var, vad_post_speech_padding_ms_var):
         vad_frame = ctk.CTkFrame(parent)
         vad_frame.pack(fill="x", pady=5)
-        ctk.CTkCheckBox(vad_frame, text="Enable Voice Activity Detection (VAD)", variable=use_vad_var).pack(side="left", padx=5)
-        Tooltip(vad_frame, "Only record when speech is detected.")
+        ctk.CTkCheckBox(vad_frame, text="Ativar Detecção de Voz (VAD)", variable=use_vad_var).pack(side="left", padx=5)
+        Tooltip(vad_frame, "Grava apenas quando houver voz.")
 
         vad_options_frame = ctk.CTkFrame(parent)
         vad_options_frame.pack(fill="x", pady=5)
 
-        ctk.CTkLabel(vad_options_frame, text="VAD Threshold:").pack(side="left", padx=5)
+        ctk.CTkLabel(vad_options_frame, text="Limiar do VAD:").pack(side="left", padx=5)
         ctk.CTkEntry(vad_options_frame, textvariable=vad_threshold_var, width=50).pack(side="left", padx=5)
-        Tooltip(vad_options_frame, "Speech detection sensitivity.")
+        Tooltip(vad_options_frame, "Sensibilidade da detecção de voz.")
 
-        ctk.CTkLabel(vad_options_frame, text="VAD Silence Duration (s):").pack(side="left", padx=5)
+        ctk.CTkLabel(vad_options_frame, text="Duração de silêncio (s):").pack(side="left", padx=5)
         ctk.CTkEntry(vad_options_frame, textvariable=vad_silence_duration_var, width=50).pack(side="left", padx=5)
-        Tooltip(vad_options_frame, "Duration of silence to trigger end of speech.")
+        Tooltip(vad_options_frame, "Duração de silêncio para encerrar a fala.")
 
-        ctk.CTkLabel(vad_options_frame, text="Pre-speech Padding (ms):").pack(side="left", padx=5)
-        ctk.CTkEntry(vad_options_frame, textvariable=vad_pre_speech_padding_ms_var, width=50).pack(side="left", padx=5)
-        Tooltip(vad_options_frame, "Milliseconds of audio to keep before speech is detected.")
 
-        ctk.CTkLabel(vad_options_frame, text="Post-speech Padding (ms):").pack(side="left", padx=5)
+        ctk.CTkLabel(vad_options_frame, text="Padding pós-voz (ms):").pack(side="left", padx=5)
         ctk.CTkEntry(vad_options_frame, textvariable=vad_post_speech_padding_ms_var, width=50).pack(side="left", padx=5)
-        Tooltip(vad_options_frame, "Milliseconds of audio to keep after speech ends.")
+        Tooltip(vad_options_frame, "Milissegundos preservados após o fim da fala.")
 
     def _build_asr_section(
         self,
@@ -1145,14 +1200,14 @@ class UIManager:
 
         asr_backend_frame = ctk.CTkFrame(asr_frame)
         _register_advanced(asr_backend_frame, fill="x", pady=5)
-        ctk.CTkLabel(asr_backend_frame, text="ASR Backend:").pack(side="left", padx=(5, 0))
+        ctk.CTkLabel(asr_backend_frame, text="Backend ASR:").pack(side="left", padx=(5, 0))
         ctk.CTkButton(
             asr_backend_frame,
             text="?",
             width=20,
             command=lambda: messagebox.showinfo(
                 "ASR Backend",
-                "Selects the inference engine used for speech recognition.",
+                "Seleciona o mecanismo de inferência utilizado na transcrição.",
             ),
         ).pack(side="left", padx=(0, 10))
 
@@ -1164,7 +1219,7 @@ class UIManager:
         asr_backend_menu = ctk.CTkOptionMenu(
             asr_backend_frame,
             variable=asr_backend_var,
-            values=["auto", "transformers", "ct2"],
+            values=["ctranslate2", "faster-whisper", "transformers"],
             command=_on_backend_change,
         )
         asr_backend_menu.pack(side="left", padx=5)
@@ -1229,10 +1284,8 @@ class UIManager:
             if not entry:
                 installed = model_manager.list_installed(asr_cache_dir_var.get())
                 entry = next((m for m in installed if m["id"] == model_id), None)
-            backend = entry.get("backend") if entry else None
-            if backend in ("faster-whisper", "ctranslate2"):
-                backend = "ct2"
-            if backend not in ("transformers", "ct2"):
+            backend = _backend_display_value_global(entry.get("backend") if entry else None)
+            if backend not in ("transformers", "ctranslate2", "faster-whisper"):
                 return None
             return backend
 
@@ -1267,9 +1320,10 @@ class UIManager:
             )
 
         def _update_install_button_state() -> None:
-            backend = _derive_backend_from_model(asr_model_id_var.get())
-            install_button.configure(state="normal" if backend else "disabled")
-            ui_elements["quant_menu"].configure(state="normal" if backend == "ct2" else "disabled")
+            recommended_backend = _derive_backend_from_model(asr_model_id_var.get())
+            install_button.configure(state="normal" if recommended_backend else "disabled")
+            effective_backend = _backend_display_value_global(asr_backend_var.get()) or recommended_backend
+            ui_elements["quant_menu"].configure(state="normal" if effective_backend == "ctranslate2" else "disabled")
 
         def _on_model_change(choice_display: str) -> None:
             model_id = ui_elements["display_to_id"].get(choice_display, choice_display)
@@ -1277,10 +1331,8 @@ class UIManager:
             ui_elements["asr_model_display_var"].set(ui_elements["id_to_display"].get(model_id, model_id))
             backend = _derive_backend_from_model(model_id)
             if backend:
-                asr_backend_var.set(backend)
-                asr_backend_menu.configure(state="disabled")
-            else:
-                asr_backend_menu.configure(state="normal")
+                asr_backend_var.set(_backend_display_value_global(backend))
+            asr_backend_menu.configure(state="normal")
             self.config_manager.set_asr_model_id(model_id)
             self.config_manager.set_asr_backend(asr_backend_var.get())
             self.config_manager.save_config()
@@ -1408,7 +1460,7 @@ class UIManager:
                     model_id,
                     backend,
                     cache_dir,
-                    asr_ct2_compute_type_var.get() if backend == "ct2" else None,
+                    asr_ct2_compute_type_var.get() if backend == "ctranslate2" else None,
                 )
                 installed_models = model_manager.list_installed(cache_dir)
                 self.config_manager.set_asr_installed_models(installed_models)
@@ -1841,10 +1893,10 @@ class UIManager:
 
                     apply_button = ctk.CTkButton(button_frame, text="Apply and Close", command=self._apply_settings_from_ui)
                     apply_button.pack(side="right", padx=5)
-                    Tooltip(apply_button, "Save all settings and exit.")
+                    Tooltip(apply_button, "Salva todas as configurações e fecha.")
                     close_button = ctk.CTkButton(button_frame, text="Cancel", command=self._close_settings_window, fg_color="gray50")
                     close_button.pack(side="right", padx=5)
-                    Tooltip(close_button, "Discard changes and exit.")
+                    Tooltip(close_button, "Descarta as alterações e fecha.")
 
                     restore_button = ctk.CTkButton(button_frame, text="Restore Defaults", command=self._restore_default_settings)
                     restore_button.pack(side="left", padx=5)
@@ -1853,7 +1905,7 @@ class UIManager:
                         button_frame, text="Force Hotkey Re-registration", command=self.core_instance_ref.force_reregister_hotkeys
                     )
                     force_reregister_button.pack(side="left", padx=5)
-                    Tooltip(force_reregister_button, "Re-register all global hotkeys.")
+                    Tooltip(force_reregister_button, "Re-registra todos os atalhos globais.")
                 except Exception as btn_err:
                     logging.error(f"Failed to create action buttons: {btn_err}", exc_info=True)
 
@@ -2160,29 +2212,15 @@ class UIManager:
                     )
                 )
 
-                asr_backend_var = ctk.StringVar(
-                    value=self._resolve_initial_value(
-                        ASR_BACKEND_CONFIG_KEY,
-                        var_name="asr_backend",
-                        getter=self.config_manager.get_asr_backend,
-                        coerce=lambda v: str(v).lower(),
-                    )
-                )
-                asr_model_id_var = ctk.StringVar(
-                    value=self._resolve_initial_value(
-                        ASR_MODEL_ID_CONFIG_KEY,
-                        var_name="asr_model_id",
-                        getter=self.config_manager.get_asr_model_id,
-                        coerce=str,
-                    )
-                )
+                backend_initial = self.config_manager.get_asr_backend()
+                backend_display = _backend_display_value_global(backend_initial) or DEFAULT_CONFIG.get("asr_backend", "ctranslate2")
+                asr_backend_var = ctk.StringVar(value=backend_display)
+                asr_model_id_var = ctk.StringVar(value=self.config_manager.get_asr_model_id())
                 # New: Chunk length controls
                 chunk_length_mode_var = ctk.StringVar(value=self.config_manager.get_chunk_length_mode())
                 chunk_length_sec_var = ctk.DoubleVar(value=self.config_manager.get_chunk_length_sec())
                 # New: Torch compile switch variable
                 enable_torch_compile_var = ctk.BooleanVar(value=self.config_manager.get_enable_torch_compile())
-                asr_backend_var = ctk.StringVar(value=self.config_manager.get_asr_backend())
-                asr_model_id_var = ctk.StringVar(value=self.config_manager.get_asr_model_id())
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
                 asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
@@ -2537,115 +2575,115 @@ class UIManager:
                 # --- General Settings Section ---
                 general_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
                 general_frame.pack(fill="x", padx=10, pady=5)
-                ctk.CTkLabel(general_frame, text="General Settings", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+                ctk.CTkLabel(general_frame, text="Configurações Gerais", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
 
                 # Record Hotkey
                 key_frame = ctk.CTkFrame(general_frame)
                 key_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(key_frame, text="Record Hotkey:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(key_frame, text="Atalho de Gravação:").pack(side="left", padx=(5, 10))
                 key_display = ctk.CTkLabel(key_frame, textvariable=detected_key_var, fg_color="gray20", corner_radius=5, width=120)
                 key_display.pack(side="left", padx=5)
-                Tooltip(key_display, "Current hotkey for recording.")
+                Tooltip(key_display, "Atalho atual de gravação.")
                 
                 detect_key_button = ctk.CTkButton(
                     key_frame,
-                    text="Detect Key",
+                    text="Detectar Tecla",
                     command=lambda: self._start_key_detection_for("detected_key_var"),
                 )
                 detect_key_button.pack(side="left", padx=5)
-                Tooltip(detect_key_button, "Capture a new recording hotkey.")
+                Tooltip(detect_key_button, "Captura um novo atalho de gravação.")
 
                 # Agent Hotkey (Moved here)
                 agent_key_frame = ctk.CTkFrame(general_frame)
                 agent_key_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(agent_key_frame, text="Agent Hotkey:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(agent_key_frame, text="Atalho do Agente:").pack(side="left", padx=(5, 10))
                 agent_key_display = ctk.CTkLabel(agent_key_frame, textvariable=agent_key_var, fg_color="gray20", corner_radius=5, width=120)
                 agent_key_display.pack(side="left", padx=5)
-                Tooltip(agent_key_display, "Current hotkey for agent mode.")
+                Tooltip(agent_key_display, "Atalho atual do modo agente.")
                 detect_agent_key_button = ctk.CTkButton(
                     agent_key_frame,
-                    text="Detect Key",
+                    text="Detectar Tecla",
                     command=lambda: self._start_key_detection_for("agent_key_var"),
                 )
                 detect_agent_key_button.pack(side="left", padx=5)
-                Tooltip(detect_agent_key_button, "Capture a new agent hotkey.")
+                Tooltip(detect_agent_key_button, "Captura um novo atalho do agente.")
 
                 # Recording Mode
                 mode_frame = ctk.CTkFrame(general_frame)
                 mode_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(mode_frame, text="Recording Mode:").pack(side="left", padx=(5, 10))
-                toggle_rb = ctk.CTkRadioButton(mode_frame, text="Toggle", variable=mode_var, value="toggle")
+                ctk.CTkLabel(mode_frame, text="Modo de Gravação:").pack(side="left", padx=(5, 10))
+                toggle_rb = ctk.CTkRadioButton(mode_frame, text="Alternar", variable=mode_var, value="toggle")
                 toggle_rb.pack(side="left", padx=5)
-                Tooltip(toggle_rb, "Press once to start or stop recording.")
-                hold_rb = ctk.CTkRadioButton(mode_frame, text="Hold", variable=mode_var, value="hold")
+                Tooltip(toggle_rb, "Pressione uma vez para iniciar ou parar.")
+                hold_rb = ctk.CTkRadioButton(mode_frame, text="Segurar", variable=mode_var, value="hold")
                 hold_rb.pack(side="left", padx=5)
-                Tooltip(hold_rb, "Record only while the key is held down.")
+                Tooltip(hold_rb, "Grava enquanto a tecla estiver pressionada.")
 
                 # Auto-Paste
                 paste_frame = ctk.CTkFrame(general_frame)
                 paste_frame.pack(fill="x", pady=5)
-                paste_switch = ctk.CTkSwitch(paste_frame, text="Auto-Paste", variable=auto_paste_var)
+                paste_switch = ctk.CTkSwitch(paste_frame, text="Auto-colar", variable=auto_paste_var)
                 paste_switch.pack(side="left", padx=5)
-                Tooltip(paste_switch, "Automatically paste the transcription.")
+                Tooltip(paste_switch, "Cola automaticamente a transcrição.")
 
                 # Hotkey Stability Service
                 stability_service_frame = ctk.CTkFrame(general_frame)
                 stability_service_frame.pack(fill="x", pady=5)
-                stability_switch = ctk.CTkSwitch(stability_service_frame, text="Enable Hotkey Stability Service", variable=hotkey_stability_service_enabled_var)
+                stability_switch = ctk.CTkSwitch(stability_service_frame, text="Ativar Serviço de Estabilidade de Atalhos", variable=hotkey_stability_service_enabled_var)
                 stability_switch.pack(side="left", padx=5)
-                Tooltip(stability_switch, "Keep hotkeys active when focus changes.")
+                Tooltip(stability_switch, "Mantém os atalhos ativos mesmo sem foco.")
 
                 startup_frame = ctk.CTkFrame(general_frame)
                 startup_frame.pack(fill="x", pady=5)
-                startup_switch = ctk.CTkSwitch(startup_frame, text="Launch at Startup", variable=launch_at_startup_var)
+                startup_switch = ctk.CTkSwitch(startup_frame, text="Iniciar com o Windows", variable=launch_at_startup_var)
                 startup_switch.pack(side="left", padx=5)
-                Tooltip(startup_switch, "Start the app automatically with Windows.")
+                Tooltip(startup_switch, "Inicia automaticamente com o Windows.")
 
                 # --- Sound Settings Section ---
                 sound_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 sound_frame.pack(fill="x", padx=10, pady=5)
-                ctk.CTkLabel(sound_frame, text="Sound Settings", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+                ctk.CTkLabel(sound_frame, text="Alertas Sonoros", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
                 
                 sound_enabled_frame = ctk.CTkFrame(sound_frame)
                 sound_enabled_frame.pack(fill="x", pady=5)
-                sound_switch = ctk.CTkSwitch(sound_enabled_frame, text="Enable Sounds", variable=sound_enabled_var)
+                sound_switch = ctk.CTkSwitch(sound_enabled_frame, text="Ativar Sons", variable=sound_enabled_var)
                 sound_switch.pack(side="left", padx=5)
-                Tooltip(sound_switch, "Play a beep when recording starts or stops.")
+                Tooltip(sound_switch, "Reproduz um beep ao iniciar ou parar a gravação.")
 
                 sound_details_frame = ctk.CTkFrame(sound_frame)
                 sound_details_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(sound_details_frame, text="Frequency (Hz):").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(sound_details_frame, text="Frequência (Hz):").pack(side="left", padx=(5, 10))
                 freq_entry = ctk.CTkEntry(sound_details_frame, textvariable=sound_frequency_var, width=60)
                 freq_entry.pack(side="left", padx=5)
-                Tooltip(freq_entry, "Beep frequency in hertz.")
-                ctk.CTkLabel(sound_details_frame, text="Duration (s):").pack(side="left", padx=(5, 10))
+                Tooltip(freq_entry, "Frequência do beep em hertz.")
+                ctk.CTkLabel(sound_details_frame, text="Duração (s):").pack(side="left", padx=(5, 10))
                 duration_entry = ctk.CTkEntry(sound_details_frame, textvariable=sound_duration_var, width=60)
                 duration_entry.pack(side="left", padx=5)
-                Tooltip(duration_entry, "Beep duration in seconds.")
+                Tooltip(duration_entry, "Duração do beep em segundos.")
                 ctk.CTkLabel(sound_details_frame, text="Volume:").pack(side="left", padx=(5, 10))
                 volume_slider = ctk.CTkSlider(sound_details_frame, from_=0.0, to=1.0, variable=sound_volume_var)
                 volume_slider.pack(side="left", padx=5, fill="x", expand=True)
-                Tooltip(volume_slider, "Beep volume.")
+                Tooltip(volume_slider, "Volume do beep.")
 
                 # --- Text Correction (AI Services) Section ---
                 ai_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 ai_frame.pack(fill="x", padx=10, pady=5)
-                ctk.CTkLabel(ai_frame, text="Text Correction (AI Services)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+                ctk.CTkLabel(ai_frame, text="Correção de Texto (Serviços de IA)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
 
                 text_correction_frame = ctk.CTkFrame(ai_frame)
                 text_correction_frame.pack(fill="x", pady=5)
                 correction_switch = ctk.CTkSwitch(
                     text_correction_frame,
-                    text="Enable Text Correction",
+                    text="Ativar Correção de Texto",
                     variable=text_correction_enabled_var,
                     command=self._update_text_correction_fields,
                 )
                 correction_switch.pack(side="left", padx=5)
-                Tooltip(correction_switch, "Use an AI service to polish the text.")
+                Tooltip(correction_switch, "Usa um serviço de IA para refinar o texto.")
 
                 service_frame = ctk.CTkFrame(ai_frame)
                 service_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(service_frame, text="Service:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(service_frame, text="Serviço:").pack(side="left", padx=(5, 10))
                 service_menu = ctk.CTkOptionMenu(
                     service_frame,
                     variable=text_correction_service_label_var,
@@ -2654,66 +2692,66 @@ class UIManager:
                 )
                 service_menu.pack(side="left", padx=5)
                 self._set_settings_var("service_menu", service_menu)
-                Tooltip(service_menu, "Select the service for text correction.")
+                Tooltip(service_menu, "Selecione o serviço de correção de texto.")
                 service_menu.set(text_correction_service_label_var.get())
 
                 # --- OpenRouter Settings ---
                 openrouter_frame = ctk.CTkFrame(ai_frame)
                 openrouter_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(openrouter_frame, text="OpenRouter API Key:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(openrouter_frame, text="Chave OpenRouter:").pack(side="left", padx=(5, 10))
                 openrouter_key_entry = ctk.CTkEntry(openrouter_frame, textvariable=openrouter_api_key_var, show="*", width=250)
                 openrouter_key_entry.pack(side="left", padx=5)
                 self._set_settings_var("openrouter_key_entry", openrouter_key_entry)
-                Tooltip(openrouter_key_entry, "API key for the OpenRouter service.")
-                ctk.CTkLabel(openrouter_frame, text="OpenRouter Model:").pack(side="left", padx=(5, 10))
+                Tooltip(openrouter_key_entry, "Chave da API OpenRouter.")
+                ctk.CTkLabel(openrouter_frame, text="Modelo OpenRouter:").pack(side="left", padx=(5, 10))
                 openrouter_model_entry = ctk.CTkEntry(openrouter_frame, textvariable=openrouter_model_var, width=200)
                 openrouter_model_entry.pack(side="left", padx=5)
                 self._set_settings_var("openrouter_model_entry", openrouter_model_entry)
-                Tooltip(openrouter_model_entry, "Model name for OpenRouter.")
+                Tooltip(openrouter_model_entry, "Modelo utilizado no OpenRouter.")
 
                 # --- Gemini Settings ---
                 gemini_frame = ctk.CTkFrame(ai_frame)
                 gemini_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(gemini_frame, text="Gemini API Key:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(gemini_frame, text="Chave Gemini:").pack(side="left", padx=(5, 10))
                 gemini_key_entry = ctk.CTkEntry(gemini_frame, textvariable=gemini_api_key_var, show="*", width=250)
                 gemini_key_entry.pack(side="left", padx=5)
                 self._set_settings_var("gemini_key_entry", gemini_key_entry)
-                Tooltip(gemini_key_entry, "API key for the Gemini service.")
-                ctk.CTkLabel(gemini_frame, text="Gemini Model:").pack(side="left", padx=(5, 10))
+                Tooltip(gemini_key_entry, "Chave da API Gemini.")
+                ctk.CTkLabel(gemini_frame, text="Modelo Gemini:").pack(side="left", padx=(5, 10))
                 gemini_model_menu = ctk.CTkOptionMenu(gemini_frame, variable=gemini_model_var, values=gemini_model_options)
                 gemini_model_menu.pack(side="left", padx=5)
                 self._set_settings_var("gemini_model_menu", gemini_model_menu)
-                Tooltip(gemini_model_menu, "Model used for Gemini requests.")
+                Tooltip(gemini_model_menu, "Modelo utilizado nas requisições Gemini.")
 
                 # --- Gemini Prompt ---
                 gemini_prompt_frame = ctk.CTkFrame(ai_frame)
                 gemini_prompt_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(gemini_prompt_frame, text="Gemini Correction Prompt:").pack(anchor="w", pady=(5,0))
+                ctk.CTkLabel(gemini_prompt_frame, text="Prompt de Correção (Gemini):").pack(anchor="w", pady=(5,0))
                 gemini_prompt_correction_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=100, wrap="word")
                 gemini_prompt_correction_textbox.pack(fill="x", expand=True, pady=5)
                 gemini_prompt_correction_textbox.insert("1.0", gemini_prompt_initial)
                 self._set_settings_var("gemini_prompt_correction_textbox", gemini_prompt_correction_textbox)
-                Tooltip(gemini_prompt_correction_textbox, "Prompt used to refine text.")
+                Tooltip(gemini_prompt_correction_textbox, "Prompt usado para refinar o texto.")
 
-                ctk.CTkLabel(gemini_prompt_frame, text="Agent Mode Prompt:").pack(anchor="w", pady=(5,0))
+                ctk.CTkLabel(gemini_prompt_frame, text="Prompt do Modo Agente:").pack(anchor="w", pady=(5,0))
                 agentico_prompt_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
                 agentico_prompt_textbox.pack(fill="x", expand=True, pady=5)
                 agentico_prompt_textbox.insert("1.0", agent_prompt_initial)
                 self._set_settings_var("agentico_prompt_textbox", agentico_prompt_textbox)
-                Tooltip(agentico_prompt_textbox, "Prompt executed in agent mode.")
+                Tooltip(agentico_prompt_textbox, "Prompt executado no modo agente.")
 
-                ctk.CTkLabel(gemini_prompt_frame, text="Gemini Models (one per line):").pack(anchor="w", pady=(5,0))
+                ctk.CTkLabel(gemini_prompt_frame, text="Modelos Gemini (um por linha):").pack(anchor="w", pady=(5,0))
                 gemini_models_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
                 gemini_models_textbox.pack(fill="x", expand=True, pady=5)
                 gemini_models_textbox.insert("1.0", "\n".join(gemini_model_options))
                 self._set_settings_var("gemini_models_textbox", gemini_models_textbox)
-                Tooltip(gemini_models_textbox, "List of models to try, one per line.")
+                Tooltip(gemini_models_textbox, "Lista de modelos para tentativa, um por linha.")
 
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 transcription_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(
                     transcription_frame,
-                    text="Transcription Settings",
+                    text="Transcrição",
                     font=ctk.CTkFont(weight="bold"),
                 ).pack(pady=(5, 10), anchor="w")
 
@@ -2721,7 +2759,7 @@ class UIManager:
                 asr_frame.pack(fill="x", pady=5)
                 ctk.CTkLabel(
                     asr_frame,
-                    text="ASR Model",
+                    text="Modelo ASR",
                     font=ctk.CTkFont(weight="bold"),
                 ).pack(anchor="w", pady=(5, 10))
                 self._set_settings_var("transcription_frame", transcription_frame)
@@ -2744,7 +2782,7 @@ class UIManager:
         # New: Chunk Length Mode
         chunk_mode_frame = ctk.CTkFrame(transcription_frame)
         chunk_mode_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(chunk_mode_frame, text="Chunk Length Mode:").pack(side="left", padx=(5, 10))
+        ctk.CTkLabel(chunk_mode_frame, text="Modo do Tamanho do Bloco:").pack(side="left", padx=(5, 10))
         chunk_mode_menu = ctk.CTkOptionMenu(
             chunk_mode_frame,
             variable=chunk_length_mode_var,
@@ -2752,23 +2790,23 @@ class UIManager:
             command=self._on_chunk_mode_change,
         )
         chunk_mode_menu.pack(side="left", padx=5)
-        Tooltip(chunk_mode_menu, "Choose how chunk size is determined.")
+        Tooltip(chunk_mode_menu, "Define como o tamanho do bloco é calculado.")
 
         # New: Chunk Length (sec)
         chunk_len_frame = ctk.CTkFrame(transcription_frame)
         chunk_len_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(chunk_len_frame, text="Chunk Length (sec):").pack(side="left", padx=(5, 10))
+        ctk.CTkLabel(chunk_len_frame, text="Duração do Bloco (s):").pack(side="left", padx=(5, 10))
         chunk_len_entry = ctk.CTkEntry(chunk_len_frame, textvariable=chunk_length_sec_var, width=80)
         chunk_len_entry.pack(side="left", padx=5)
         self._set_settings_var("chunk_len_entry", chunk_len_entry)
-        Tooltip(chunk_len_entry, "Fixed chunk duration when in manual mode.")
+        Tooltip(chunk_len_entry, "Duração fixa do bloco quando em modo manual.")
 
         # New: Ignore Transcriptions Shorter Than
         min_transcription_duration_frame = ctk.CTkFrame(transcription_frame)
         min_transcription_duration_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(
             min_transcription_duration_frame,
-            text="Ignore Transcriptions Shorter Than (sec):",
+            text="Ignorar transcrições menores que (s):",
         ).pack(side="left", padx=(5, 10))
         min_transcription_duration_entry = ctk.CTkEntry(
             min_transcription_duration_frame,
@@ -2776,13 +2814,13 @@ class UIManager:
             width=80,
         )
         min_transcription_duration_entry.pack(side="left", padx=5)
-        Tooltip(min_transcription_duration_entry, "Discard segments shorter than this.")
+        Tooltip(min_transcription_duration_entry, "Descarta segmentos menores que isso.")
 
         min_record_duration_frame = ctk.CTkFrame(transcription_frame)
         min_record_duration_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(
             min_record_duration_frame,
-            text="Minimum Record Duration (sec):",
+            text="Duração mínima da gravação (s):",
         ).pack(side="left", padx=(5, 10))
         min_record_duration_entry = ctk.CTkEntry(
             min_record_duration_frame,
@@ -2790,7 +2828,7 @@ class UIManager:
             width=80,
         )
         min_record_duration_entry.pack(side="left", padx=5)
-        Tooltip(min_record_duration_entry, "Discard recordings shorter than this.")
+        Tooltip(min_record_duration_entry, "Descarta gravações menores que isso.")
 
         self._build_vad_section(
             settings_win,
@@ -2859,43 +2897,41 @@ class UIManager:
 
         menu_items = [
             pystray.MenuItem(
-                '⏹️ Stop Recording' if is_recording else '▶️ Start Recording',
+                '\u23f9\ufe0f Parar Gravação' if is_recording else '\u25b6\ufe0f Iniciar Gravação',
                 lambda: self.core_instance_ref.toggle_recording(),
                 default=True,
                 enabled=lambda item: self._get_core_state() in ['RECORDING', 'IDLE']
             ),
             pystray.MenuItem(
-                '📝 Text Correction',
+                '\U0001f4dd Correção de Texto',
                 lambda: self.toggle_text_correction_from_tray(),
                 checked=lambda item: bool(
                     self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY, False)
                 ),
             ),
             pystray.MenuItem(
-                '⚙️ Settings',
-                lambda: self.main_tk_root.after(0, self.run_settings_gui), # Call on main thread
+                '\u2699\ufe0f Configurações',
+                lambda: self.main_tk_root.after(0, self.run_settings_gui),
                 enabled=lambda item: self._get_core_state() not in ['LOADING_MODEL', 'RECORDING']
             ),
             pystray.MenuItem(
-                'Gemini Model',
+                'Modelo Gemini',
                 pystray.Menu(
                     *[
                         pystray.MenuItem(
                             model,
-                            # Action: Pass the menu item text, not the entire object.
                             lambda icon, item: self.core_instance_ref.apply_settings_from_external(new_gemini_model=item.text),
                             radio=True,
-                            # Check: Compare the current model with the item text.
                             checked=lambda item: self.config_manager.get('gemini_model') == item.text
                         ) for model in self.config_manager.get(GEMINI_MODEL_OPTIONS_CONFIG_KEY, [])
                     ]
                 )
             ),
             pystray.MenuItem(
-                'Batch Size',
+                '\U0001f4e6 Tamanho do Lote',
                 pystray.Menu(
                     pystray.MenuItem(
-                        'Auto (VRAM)',
+                        'Automático (VRAM)',
                         lambda icon, item: self.core_instance_ref.update_setting('batch_size_mode', 'auto'),
                         radio=True,
                         checked=lambda item: self.config_manager.get('batch_size_mode') == 'auto'
@@ -2912,8 +2948,16 @@ class UIManager:
                     )
                 )
             ),
+            pystray.MenuItem(
+                '\U0001f4c4 Abrir Logs',
+                lambda: self.main_tk_root.after(0, self.open_logs_directory)
+            ),
+            pystray.MenuItem(
+                '\U0001f4da Abrir Documentação',
+                lambda: self.main_tk_root.after(0, self.open_docs_directory)
+            ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem('❌ Exit', self.on_exit_app)
+            pystray.MenuItem('\u274c Sair', self.on_exit_app)
         ]
         return tuple(menu_items)
 
@@ -2927,7 +2971,7 @@ class UIManager:
         self.main_tk_root.quit()
 
     def toggle_text_correction_from_tray(self):
-        """Toggle text correction directly from the tray menu."""
+        """Alterna a correção de texto diretamente pelo menu da bandeja."""
         current_value = bool(
             self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY, False)
         )
@@ -2983,3 +3027,6 @@ class UIManager:
                     messagebox.showerror("Input Error", "Batch size must be a positive integer.", parent=self.settings_window_instance)
             except ValueError:
                 messagebox.showerror("Input Error", "Invalid entry. Please provide an integer.", parent=self.settings_window_instance)
+
+
+
