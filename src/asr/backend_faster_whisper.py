@@ -60,17 +60,14 @@ class FasterWhisperBackend:
         # transcription handler still provides the value for backends that use it,
         # so we discard it here to avoid ``TypeError``.
         kwargs.pop("batch_size", None)
-
         language_segments = kwargs.get("language_detection_segments")
         if language_segments is not None:
             try:
-                normalized = math.ceil(float(language_segments))
-                kwargs["language_detection_segments"] = max(1, normalized)
+                normalized_segments = int(float(language_segments))
             except (TypeError, ValueError):
-                # Faster-whisper expects an integer. If coercion fails, fall back to
-                # the library default by dropping the argument entirely.
                 kwargs.pop("language_detection_segments", None)
-
+            else:
+                kwargs["language_detection_segments"] = max(1, normalized_segments)
         segments, _ = self.model.transcribe(audio, **kwargs)
         text = " ".join(segment.text for segment in segments)
         return {"text": text}
