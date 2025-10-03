@@ -8,7 +8,7 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Geral | `mode_var` | `StringVar` | `CTkRadioButton` (`toggle_rb`, `hold_rb`) | `"record_mode"` | Seleciona entre os modos *toggle* e *hold* de gravação. |
 | Geral | `detected_key_var` | `StringVar` | `CTkLabel` (`key_display`) | `"record_key"` | Exibe a tecla atual e recebe o valor detectado pelo listener de hotkeys. |
 | Geral | `agent_key_var` | `StringVar` | `CTkLabel` (`agent_key_display`) | `"agent_key"` | Espelha a tecla do modo agente; atualizado pelo detector dedicado. |
-| Geral | `agent_model_var` | `StringVar` | — | `"gemini_agent_model"` | Mantém o valor configurado mas não há widget para alterá-lo; apenas reaplicado no `apply_settings` e em *restore defaults*. |
+| Correção de texto | `agent_model_var` | `StringVar` | `CTkOptionMenu` (`agent_model_menu`) | `"gemini_agent_model"` | Seleciona o modelo Gemini específico para o modo agente. |
 | Geral | `hotkey_stability_service_enabled_var` | `BooleanVar` | `CTkSwitch` (`stability_switch`) | `"hotkey_stability_service_enabled"` | Liga/desliga o serviço de estabilização dos hotkeys. |
 | Geral | `launch_at_startup_var` | `BooleanVar` | `CTkSwitch` (`startup_switch`) | `"launch_at_startup"` | Habilita a inicialização automática no Windows. |
 | Som | `sound_enabled_var` | `BooleanVar` | `CTkSwitch` (`sound_switch`) | `"sound_enabled"` | Ativa os bipes de início/fim de gravação. |
@@ -31,7 +31,7 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Transcrição | `use_vad_var` | `BooleanVar` | `CTkCheckBox` (`vad_checkbox`) | `"use_vad"` | Alterna o uso do VAD Silero (é desativado se o modelo não estiver disponível). |
 | Transcrição | `vad_threshold_var` | `DoubleVar` | `CTkEntry` (`vad_threshold_entry`) | `"vad_threshold"` | Probabilidade mínima para considerar fala. |
 | Transcrição | `vad_silence_duration_var` | `DoubleVar` | `CTkEntry` (`vad_silence_entry`) | `"vad_silence_duration"` | Tempo de silêncio antes de cortar o áudio. |
-| Transcrição | `save_temp_recordings_var` | `BooleanVar` | `CTkSwitch` (`temp_recordings_switch`) | `"save_temp_recordings"` | Mantém ou remove arquivos temporários após o processamento. |
+| Transcrição | `save_temp_recordings_var` | `BooleanVar` | `CTkSwitch` (`temp_recordings_switch`) | `"save_temp_recordings"` | Mantém ou remove arquivos temporários após o processamento; quando ativo, aplica a cota `record_storage_limit` (MB) e remove gravações antigas para liberar espaço. |
 | Transcrição | `record_storage_mode_var` | `StringVar` | `CTkOptionMenu` (`storage_mode_menu`) | `"record_storage_mode"` | Seleciona memória, disco ou modo automático; também define `new_record_to_memory` no `apply_settings`. |
 | Transcrição | `max_memory_seconds_var` | `DoubleVar` | `CTkEntry` (`mem_time_entry`) | `"max_memory_seconds"` | Limite máximo de áudio em memória antes de migrar para disco. |
 | Transcrição | `max_memory_seconds_mode_var` | `StringVar` | `CTkOptionMenu` (`mem_mode_menu`) | `"max_memory_seconds_mode"` | Alterna entre cálculo manual e automático do limite de memória. |
@@ -44,9 +44,12 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | ASR | `asr_ct2_compute_type_var` | `StringVar` | `CTkOptionMenu` (`asr_ct2_menu`) | `"asr_ct2_compute_type"` | Ajusta o compute type quando o backend é CTranslate2. |
 | ASR | `asr_cache_dir_var` | `StringVar` | `CTkEntry` (`asr_cache_entry`) | `"asr_cache_dir"` | Diretório raiz usado para armazenar modelos baixados. |
 
+## Notas adicionais
+
+- A configuração `record_storage_limit` ainda não possui `ctk.*Var` associada. Quando definida manualmente em `config.json`, o `AudioHandler` limita o total combinado de `temp_recording_*.wav` e `recording_*.wav` no diretório raiz, removendo os arquivos mais antigos assim que o teto (em MiB) é excedido.
+
 ## Duplicatas ou variáveis potencialmente obsoletas
 
-- `agent_model_var`: inicializada com `"gemini_agent_model"`, aplicada e restaurada, porém nenhum widget atual permite modificar esse valor. Sugere-se incluir um seletor explícito ou remover a variável se o parâmetro for fixo. 
 - `asr_model_display_var`: é instanciada inicialmente sem valor e, alguns blocos adiante, recebe nova instância preenchida com os rótulos do catálogo. Não há efeito funcional, mas a criação anterior é redundante.
 
 Nenhuma outra `ctk.*Var` aparece duplicada ou sem uso na interface atual.

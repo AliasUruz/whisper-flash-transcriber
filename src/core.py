@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 import os
+import sys
 from collections.abc import Callable
 from typing import Iterable
 from threading import RLock
@@ -46,6 +47,7 @@ from .config_manager import (
     OPENROUTER_TIMEOUT_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+    AUTO_PASTE_MODIFIER_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler
 from .action_orchestrator import ActionOrchestrator
@@ -467,7 +469,9 @@ class AppCore:
         self.display_transcripts_in_terminal = self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY)
         self.asr_backend = self.config_manager.get("asr_backend")
         self.asr_model_id = self.config_manager.get("asr_model_id")
-        self.ct2_quantization = self.config_manager.get("ct2_quantization")
+        ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+        self.asr_ct2_compute_type = ct2_compute_type
+        self.ct2_quantization = ct2_compute_type
         # ... e outras configurações que AppCore precisa diretamente
 
     def _sync_installed_models(self):
@@ -721,12 +725,81 @@ class AppCore:
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
         try:
-            pyautogui.hotkey('ctrl', 'v')
+            hotkey_sequence = self._resolve_paste_hotkey_sequence()
+            pyautogui.hotkey(*hotkey_sequence)
             LOGGER.info("Text pasted.")
             self._log_status("Text pasted.")
         except Exception as e:
             LOGGER.error(f"Erro ao colar: {e}")
             self._log_status("Erro ao colar.", error=True)
+
+    def _resolve_paste_hotkey_sequence(self) -> tuple[str, ...]:
+        """Resolve the hotkey combination used for auto-paste."""
+
+        raw_modifier = self.config_manager.get(AUTO_PASTE_MODIFIER_CONFIG_KEY, "auto")
+        modifiers = self._normalize_paste_modifiers(raw_modifier)
+
+        if not modifiers or modifiers == ("auto",):
+            default_modifier = "command" if sys.platform == "darwin" else "ctrl"
+            return (default_modifier, "v")
+
+        if "v" in modifiers:
+            return tuple(modifiers)
+
+        return modifiers + ("v",)
+
+    def _normalize_paste_modifiers(self, raw_value: object) -> tuple[str, ...]:
+        """Normalize modifiers from configuration or defaults."""
+
+        if raw_value is None:
+            return ("auto",)
+
+        mapping = {
+            "ctrl": "ctrl",
+            "control": "ctrl",
+            "command": "command",
+            "cmd": "command",
+            "option": "alt",
+            "alt": "alt",
+            "win": "win",
+            "windows": "win",
+            "meta": "command" if sys.platform == "darwin" else "win",
+            "super": "command" if sys.platform == "darwin" else "win",
+        }
+
+        if isinstance(raw_value, str):
+            value = raw_value.strip()
+            if not value:
+                return ("auto",)
+            segments = [segment for segment in value.replace("+", " ").split() if segment]
+        elif isinstance(raw_value, (list, tuple, set)):
+            segments = []
+            for item in raw_value:
+                if item is None:
+                    continue
+                segment = str(item).strip()
+                if segment:
+                    segments.extend(segment.replace("+", " ").split())
+        else:
+            segment = str(raw_value).strip()
+            if not segment:
+                return ("auto",)
+            segments = segment.replace("+", " ").split()
+
+        if not segments:
+            return ("auto",)
+
+        normalized: list[str] = []
+        for segment in segments:
+            lowered = segment.lower()
+            mapped = mapping.get(lowered, lowered)
+            if mapped:
+                normalized.append(mapped)
+
+        if not normalized:
+            return ("auto",)
+
+        return tuple(dict.fromkeys(normalized))
 
     def start_key_detection_thread(self, *, timeout: float | None = None) -> None:
         """Inicia detecção assíncrona de uma tecla pressionada para a UI."""
@@ -887,8 +960,6 @@ class AppCore:
         with self.keyboard_lock:
             try:
                 if self.ahk_running:
-                    if hasattr(self.ahk_manager, 'hotkey_handlers'):
-                        self.ahk_manager.hotkey_handlers.clear()
                     self.ahk_manager.stop()
                     self.ahk_running = False
                     time.sleep(0.2)
@@ -1025,7 +1096,7 @@ class AppCore:
             if current_state == sm.STATE_TRANSCRIBING:
                 self._log_status("Cannot record: Transcription running.", error=True)
                 return
-            if self.transcription_handler.pipe is None or current_state == sm.STATE_LOADING_MODEL:
+            if (not self.transcription_handler.is_model_ready()) or current_state == sm.STATE_LOADING_MODEL:
                 self._log_status("Cannot record: Model not loaded.", error=True)
                 return
             if current_state.startswith("ERROR"):
@@ -1085,7 +1156,7 @@ class AppCore:
         if current_state == sm.STATE_TRANSCRIBING:
             self._log_status("Cannot start command: transcription in progress.", error=True)
             return
-        if self.transcription_handler.pipe is None or current_state == sm.STATE_LOADING_MODEL:
+        if (not self.transcription_handler.is_model_ready()) or current_state == sm.STATE_LOADING_MODEL:
             self._log_status("Model not loaded.", error=True)
             return
         if current_state.startswith("ERROR"):
@@ -1143,7 +1214,6 @@ class AppCore:
             "new_min_transcription_duration": "min_transcription_duration",
             "new_min_record_duration": "min_record_duration",
             "new_save_temp_recordings": SAVE_TEMP_RECORDINGS_CONFIG_KEY,
-            "new_record_to_memory": "record_to_memory",
             "new_max_memory_seconds_mode": "max_memory_seconds_mode",
             "new_max_memory_seconds": "max_memory_seconds",
             "new_gemini_model_options": "gemini_model_options",
@@ -1158,8 +1228,8 @@ class AppCore:
             "new_use_vad": USE_VAD_CONFIG_KEY,
             "new_vad_threshold": VAD_THRESHOLD_CONFIG_KEY,
             "new_vad_silence_duration": VAD_SILENCE_DURATION_CONFIG_KEY,
-            "new_vad_pre_padding_ms": VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
-            "new_vad_post_padding_ms": VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+            "new_vad_pre_speech_padding_ms": VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+            "new_vad_post_speech_padding_ms": VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
             "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
             "new_record_storage_mode": RECORD_STORAGE_MODE_CONFIG_KEY,
             "new_record_storage_limit": RECORD_STORAGE_LIMIT_CONFIG_KEY,
@@ -1173,6 +1243,8 @@ class AppCore:
             "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
             "asr_model": ASR_MODEL_ID_CONFIG_KEY,
             "new_ct2_quantization": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            "new_vad_pre_padding_ms": VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+            "new_vad_post_padding_ms": VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
         }
 
         normalized_updates: dict[str, object] = {}

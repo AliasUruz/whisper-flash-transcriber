@@ -173,7 +173,7 @@ class TranscriptionHandler:
                 import importlib.util
 
                 if importlib.util.find_spec("flash_attn") is not None:
-                    attn_impl = "flash_attn2"
+                    attn_impl = "flash_attention_2"
             except Exception:
                 pass
             return {
@@ -963,6 +963,15 @@ class TranscriptionHandler:
         """Indica se há correção de texto em andamento."""
         return self.correction_in_progress
 
+    def is_model_ready(self) -> bool:
+        """Indica se há um backend de ASR pronto para receber áudio."""
+        if self._asr_backend is not None:
+            backend_model = getattr(self._asr_backend, "model", None)
+            if backend_model is None:
+                return False
+            return True
+        return self.pipe is not None
+
     def stop_transcription(self) -> None:
         """Sinaliza que a transcrição em andamento deve ser cancelada."""
         self.transcription_cancel_event.set()
@@ -1355,7 +1364,7 @@ class TranscriptionHandler:
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""
-        if self.pipe is None:
+        if not self.is_model_ready():
             logging.error("Transcription pipeline is not available. Model not loaded or failed to load.")
             self.on_model_error_callback("Pipeline de transcrição indisponível. O modelo não foi carregado ou falhou.")
             return

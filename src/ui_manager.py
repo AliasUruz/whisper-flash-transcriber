@@ -491,6 +491,7 @@ class UIManager:
             "openrouter_model_entry",
             "gemini_key_entry",
             "gemini_model_menu",
+            "agent_model_menu",
             "gemini_prompt_correction_textbox",
             "agentico_prompt_textbox",
             "gemini_models_textbox",
@@ -943,7 +944,6 @@ class UIManager:
             new_min_record_duration=min_record_duration_to_apply,
             new_save_temp_recordings=save_temp_recordings_to_apply,
             new_record_storage_mode=record_storage_mode_to_apply,
-            new_record_to_memory=(record_storage_mode_to_apply == "memory"),
             new_max_memory_seconds_mode=max_memory_seconds_mode_to_apply,
             new_max_memory_seconds=max_memory_seconds_to_apply,
             new_use_vad=use_vad_to_apply,
@@ -2425,7 +2425,6 @@ class UIManager:
                             "new_min_record_duration": min_record_duration_to_apply,
                             "new_save_temp_recordings": save_temp_recordings_to_apply,
                             "new_record_storage_mode": record_storage_mode_var.get(),
-                            "new_record_to_memory": (record_storage_mode_var.get() == "memory"),
                             "new_max_memory_seconds_mode": max_memory_seconds_mode_to_apply,
                             "new_max_memory_seconds": max_memory_seconds_to_apply,
                             "new_use_vad": use_vad_to_apply,
@@ -2494,6 +2493,7 @@ class UIManager:
                     openrouter_model_var.set(DEFAULT_CONFIG[OPENROUTER_MODEL_CONFIG_KEY])
                     gemini_api_key_var.set(DEFAULT_CONFIG[GEMINI_API_KEY_CONFIG_KEY])
                     gemini_model_var.set(DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY])
+                    agent_model_var.set(DEFAULT_CONFIG[GEMINI_AGENT_MODEL_CONFIG_KEY])
                     try:
                         gemini_model_menu
                     except NameError:
@@ -2501,6 +2501,13 @@ class UIManager:
                     else:
                         gemini_model_menu.configure(values=DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
                         gemini_model_menu.set(DEFAULT_CONFIG[GEMINI_MODEL_CONFIG_KEY])
+                    try:
+                        agent_model_menu
+                    except NameError:
+                        pass
+                    else:
+                        agent_model_menu.configure(values=DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
+                        agent_model_menu.set(DEFAULT_CONFIG[GEMINI_AGENT_MODEL_CONFIG_KEY])
                     gemini_model_options[:] = list(DEFAULT_CONFIG[GEMINI_MODEL_OPTIONS_CONFIG_KEY])
                     asr_model_id_var.set(DEFAULT_CONFIG[ASR_MODEL_ID_CONFIG_KEY])
                     asr_model_display_var = self._get_settings_var("asr_model_display_var")
@@ -2723,6 +2730,16 @@ class UIManager:
                 self._set_settings_var("gemini_model_menu", gemini_model_menu)
                 Tooltip(gemini_model_menu, "Modelo utilizado nas requisições Gemini.")
 
+                ctk.CTkLabel(gemini_frame, text="Modelo do Agente:").pack(side="left", padx=(5, 10))
+                agent_model_menu = ctk.CTkOptionMenu(
+                    gemini_frame,
+                    variable=agent_model_var,
+                    values=gemini_model_options,
+                )
+                agent_model_menu.pack(side="left", padx=5)
+                self._set_settings_var("agent_model_menu", agent_model_menu)
+                Tooltip(agent_model_menu, "Modelo dedicado às ações do modo agente.")
+
                 # --- Gemini Prompt ---
                 gemini_prompt_frame = ctk.CTkFrame(ai_frame)
                 gemini_prompt_frame.pack(fill="x", pady=5)
@@ -2898,20 +2915,20 @@ class UIManager:
         menu_items = [
             pystray.MenuItem(
                 '\u23f9\ufe0f Parar Gravação' if is_recording else '\u25b6\ufe0f Iniciar Gravação',
-                lambda: self.core_instance_ref.toggle_recording(),
+                lambda icon, item: self.core_instance_ref.toggle_recording(),
                 default=True,
                 enabled=lambda item: self._get_core_state() in ['RECORDING', 'IDLE']
             ),
             pystray.MenuItem(
                 '\U0001f4dd Correção de Texto',
-                lambda: self.toggle_text_correction_from_tray(),
+                lambda icon, item: self.toggle_text_correction_from_tray(),
                 checked=lambda item: bool(
                     self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY, False)
                 ),
             ),
             pystray.MenuItem(
                 '\u2699\ufe0f Configurações',
-                lambda: self.main_tk_root.after(0, self.run_settings_gui),
+                lambda icon, item: self.main_tk_root.after(0, self.run_settings_gui),
                 enabled=lambda item: self._get_core_state() not in ['LOADING_MODEL', 'RECORDING']
             ),
             pystray.MenuItem(
@@ -2950,11 +2967,11 @@ class UIManager:
             ),
             pystray.MenuItem(
                 '\U0001f4c4 Abrir Logs',
-                lambda: self.main_tk_root.after(0, self.open_logs_directory)
+                lambda icon, item: self.main_tk_root.after(0, self.open_logs_directory)
             ),
             pystray.MenuItem(
                 '\U0001f4da Abrir Documentação',
-                lambda: self.main_tk_root.after(0, self.open_docs_directory)
+                lambda icon, item: self.main_tk_root.after(0, self.open_docs_directory)
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('\u274c Sair', self.on_exit_app)
