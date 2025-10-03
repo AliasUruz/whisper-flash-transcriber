@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import logging
+
+
+LOGGER = logging.getLogger(__name__)
+
 
 class TransformersBackend:
     """ASR backend based on Hugging Face Transformers."""
@@ -21,17 +26,28 @@ class TransformersBackend:
         dtype: str | None = "auto",
         cache_dir: str | None = None,
         attn_implementation: str = "sdpa",
-        **_,
+        **kwargs,
     ) -> None:
         """Load model and processor, constructing the inference pipeline."""
         from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
         import torch
+
+        model_override = kwargs.pop("model_id", None)
+        if model_override:
+            self.model_id = model_override
 
         device = device if device not in (None, "auto") else ("cuda:0" if torch.cuda.is_available() else -1)
         torch_dtype = (
             torch.float16
             if (device != -1 and (dtype in (None, "auto", "float16", "fp16")))
             else torch.float32
+        )
+
+        LOGGER.info(
+            "Loading Transformers ASR model '%s' with device=%s and dtype=%s",
+            self.model_id,
+            device,
+            torch_dtype,
         )
 
         self.processor = AutoProcessor.from_pretrained(self.model_id, cache_dir=cache_dir)
