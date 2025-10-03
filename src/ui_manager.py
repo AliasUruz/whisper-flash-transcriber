@@ -2898,20 +2898,20 @@ class UIManager:
         menu_items = [
             pystray.MenuItem(
                 '\u23f9\ufe0f Parar Gravação' if is_recording else '\u25b6\ufe0f Iniciar Gravação',
-                lambda: self.core_instance_ref.toggle_recording(),
+                lambda icon, item: self.core_instance_ref.toggle_recording(),
                 default=True,
                 enabled=lambda item: self._get_core_state() in ['RECORDING', 'IDLE']
             ),
             pystray.MenuItem(
                 '\U0001f4dd Correção de Texto',
-                lambda: self.toggle_text_correction_from_tray(),
+                lambda icon, item: self.toggle_text_correction_from_tray(),
                 checked=lambda item: bool(
                     self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY, False)
                 ),
             ),
             pystray.MenuItem(
                 '\u2699\ufe0f Configurações',
-                lambda: self.main_tk_root.after(0, self.run_settings_gui),
+                lambda icon, item: self.main_tk_root.after(0, self.run_settings_gui),
                 enabled=lambda item: self._get_core_state() not in ['LOADING_MODEL', 'RECORDING']
             ),
             pystray.MenuItem(
@@ -2950,11 +2950,11 @@ class UIManager:
             ),
             pystray.MenuItem(
                 '\U0001f4c4 Abrir Logs',
-                lambda: self.main_tk_root.after(0, self.open_logs_directory)
+                lambda icon, item: self.main_tk_root.after(0, self.open_logs_directory)
             ),
             pystray.MenuItem(
                 '\U0001f4da Abrir Documentação',
-                lambda: self.main_tk_root.after(0, self.open_docs_directory)
+                lambda icon, item: self.main_tk_root.after(0, self.open_docs_directory)
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('\u274c Sair', self.on_exit_app)
