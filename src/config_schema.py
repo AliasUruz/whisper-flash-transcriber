@@ -43,6 +43,7 @@ class AppConfig(BaseModel):
     record_key: str = "F3"
     record_mode: str = "toggle"
     auto_paste: bool = True
+    auto_paste_modifier: str = "auto"
     agent_auto_paste: bool | None = None
     min_record_duration: float = Field(default=0.5, ge=0.0)
     sound_enabled: bool = True
@@ -114,6 +115,27 @@ class AppConfig(BaseModel):
     def _coerce_key(cls, value: Any) -> str:
         if isinstance(value, str):
             return value.strip()
+        return str(value)
+
+    @field_validator("auto_paste_modifier", mode="before")
+    @classmethod
+    def _normalize_auto_paste_modifier(cls, value: Any) -> str:
+        if value is None:
+            return "auto"
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or "auto"
+        if isinstance(value, (list, tuple, set)):
+            normalized_parts: list[str] = []
+            for item in value:
+                if item is None:
+                    continue
+                item_str = str(item).strip()
+                if item_str:
+                    normalized_parts.append(item_str)
+            if not normalized_parts:
+                return "auto"
+            return "+".join(normalized_parts)
         return str(value)
 
     @field_validator("record_mode", mode="before")
