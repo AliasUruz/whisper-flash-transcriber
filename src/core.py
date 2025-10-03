@@ -1158,8 +1158,8 @@ class AppCore:
             "new_use_vad": USE_VAD_CONFIG_KEY,
             "new_vad_threshold": VAD_THRESHOLD_CONFIG_KEY,
             "new_vad_silence_duration": VAD_SILENCE_DURATION_CONFIG_KEY,
-            "new_vad_pre_padding_ms": VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
-            "new_vad_post_padding_ms": VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+            "new_vad_pre_speech_padding_ms": VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+            "new_vad_post_speech_padding_ms": VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
             "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
             "new_record_storage_mode": RECORD_STORAGE_MODE_CONFIG_KEY,
             "new_record_storage_limit": RECORD_STORAGE_LIMIT_CONFIG_KEY,
@@ -1173,6 +1173,8 @@ class AppCore:
             "new_asr_model": ASR_MODEL_ID_CONFIG_KEY,
             "asr_model": ASR_MODEL_ID_CONFIG_KEY,
             "new_ct2_quantization": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            "new_vad_pre_padding_ms": VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+            "new_vad_post_padding_ms": VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
         }
 
         normalized_updates: dict[str, object] = {}
