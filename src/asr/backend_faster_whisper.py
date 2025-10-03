@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import math
+
 
 class FasterWhisperBackend:
     """ASR backend powered by faster-whisper."""
