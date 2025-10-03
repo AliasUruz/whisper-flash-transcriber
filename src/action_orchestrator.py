@@ -95,10 +95,15 @@ class ActionOrchestrator:
             return
 
         agent_mode = self._agent_mode_active
-        self._agent_mode_active = False
 
-        if self._transcription_handler is None:
+        handler = self._transcription_handler
+        if handler is None:
             LOGGER.error("Transcription handler is not available to receive audio.")
+            if agent_mode:
+                self._log_status(
+                    "Modo agente indisponível: aguarde o carregamento do modelo e tente novamente.",
+                    error=True,
+                )
             self._state_manager.set_state(
                 sm.StateEvent.AUDIO_ERROR,
                 details="Transcription handler unavailable",
@@ -106,27 +111,44 @@ class ActionOrchestrator:
             )
             return
 
-        if not self._transcription_handler.is_model_ready():
-            LOGGER.error(
-                "Transcription backend is not ready to receive audio (agent_mode=%s).",
-                agent_mode,
-            )
-            if self._log_status_callback:
-                self._log_status_callback("Modelo indisponível para transcrição.", True)
+        previous_future = getattr(handler, "transcription_future", None)
+        try:
+            handler.transcribe_audio_segment(audio_source, agent_mode)
+        except Exception as exc:  # pragma: no cover - defensive guard around handler
+            LOGGER.error("Failed to dispatch audio segment for transcription: %s", exc, exc_info=True)
+            if agent_mode:
+                self._agent_mode_active = True
+                self._log_status(
+                    "Falha ao engajar o modo agente. Verifique o carregamento do modelo e tente novamente.",
+                    error=True,
+                )
+            else:
+                self._agent_mode_active = False
             return
+
+        new_future = getattr(handler, "transcription_future", None)
+        successfully_enqueued = new_future is not None and new_future is not previous_future
+        if not successfully_enqueued:
+            if agent_mode:
+                self._agent_mode_active = True
+                LOGGER.warning(
+                    "Agent mode request preserved: transcription handler rejected audio segment (model likely unavailable)."
+                )
+                self._log_status(
+                    "Modo agente indisponível: o modelo ainda não está pronto para receber comandos.",
+                    error=True,
+                )
+            else:
+                self._agent_mode_active = False
+            return
+
+        self._agent_mode_active = False
 
         LOGGER.info(
             "Dispatching audio segment for transcription (duration=%.2fs, agent=%s).",
             duration_seconds,
             agent_mode,
         )
-        details = "Transcrição iniciada no modo agente." if agent_mode else "Transcrição iniciada."
-        self._state_manager.set_state(
-            sm.StateEvent.TRANSCRIPTION_STARTED,
-            details=details,
-            source="action_orchestrator",
-        )
-        self._transcription_handler.transcribe_audio_segment(audio_source, agent_mode)
 
     # ------------------------------------------------------------------
     # Result handling
