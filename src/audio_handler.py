@@ -792,8 +792,24 @@ class AudioHandler:
 
             return reclaimed_bytes
 
-    def _enforce_record_storage_limit(self, *, protected_paths: list[Path] | None = None) -> None:
-        """Enforce disk quota for persisted recordings using the configured limit (in MB)."""
+    def _enforce_record_storage_limit(
+        self,
+        *,
+        protected_paths: Iterable[Path | str] | None = None,
+        exclude_paths: Iterable[Path | str] | None = None,
+    ) -> None:
+        """Enforce disk quota for persisted recordings using the configured limit (in MB).
+
+        Parameters
+        ----------
+        protected_paths:
+            Collection of file paths that must not be deleted while enforcing the
+            storage limit.
+        exclude_paths:
+            Backwards-compatible alias for ``protected_paths``. Both arguments are
+            merged, allowing legacy callers that still reference ``exclude_paths``
+            to operate without errors.
+        """
 
         try:
             limit_mb = int(self.record_storage_limit or 0)
@@ -805,11 +821,23 @@ class AudioHandler:
 
         limit_bytes = limit_mb * 1024 * 1024
         protected: set[Path] = set()
-        for path in protected_paths or []:
-            try:
-                protected.add(path.resolve())
-            except Exception:
-                protected.add(Path(path))
+
+        def _add_protected_paths(candidates: Iterable[Path | str] | None) -> None:
+            if not candidates:
+                return
+            for candidate in candidates:
+                if candidate is None:
+                    continue
+                try:
+                    protected.add(Path(candidate).resolve())
+                except Exception:
+                    try:
+                        protected.add(Path(candidate))
+                    except Exception:
+                        continue
+
+        _add_protected_paths(protected_paths)
+        _add_protected_paths(exclude_paths)
 
         patterns = ("temp_recording_*.wav", "recording_*.wav")
         total_bytes = 0
