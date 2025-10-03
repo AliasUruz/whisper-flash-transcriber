@@ -515,6 +515,13 @@ class AudioHandler:
                     # Keep the original path so downstream consumers can still use the source file
                     self.temp_file_path = str(source_path)
             self.on_audio_segment_ready_callback(self.temp_file_path)
+            protected_paths: list[Path] = []
+            if self.temp_file_path:
+                try:
+                    protected_paths.append(Path(self.temp_file_path))
+                except Exception:
+                    pass
+            self._enforce_record_storage_limit(protected_paths=protected_paths)
 
         # Cleanup happens downstream after transcription completes when temporary
         # recordings are not being kept on disk.
@@ -719,15 +726,77 @@ class AudioHandler:
         )
         return max(0.0, seconds)
 
-    def _enforce_record_storage_limit(
-        self,
-        *,
-        exclude_paths: Iterable[str | os.PathLike[str] | None] = (),
-    ) -> None:
-        """Ensure saved recordings do not exceed the configured storage budget."""
+    def _cleanup_temp_file(self, *, target_path: str | os.PathLike[str] | None = None) -> int:
+        """Remove temporary/saved recordings and return reclaimed bytes."""
+
+        with self.storage_lock:
+            if target_path is None and self.in_memory_mode:
+                self._audio_frames = []
+                self._memory_samples = 0
+                self.temp_file_path = None
+                return 0
+
+            candidate: str | os.PathLike[str] | None
+            if target_path is None:
+                candidate = self.temp_file_path
+            else:
+                candidate = target_path
+
+            if not candidate:
+                if target_path is None:
+                    self.temp_file_path = None
+                return 0
+
+            path = Path(candidate)
+            try:
+                resolved_candidate = path.resolve()
+            except Exception:
+                resolved_candidate = path
+
+            is_current_temp = False
+            if self.temp_file_path:
+                try:
+                    is_current_temp = Path(self.temp_file_path).resolve() == resolved_candidate
+                except Exception:
+                    try:
+                        is_current_temp = Path(self.temp_file_path).absolute() == resolved_candidate.absolute()
+                    except Exception:
+                        is_current_temp = os.path.abspath(str(self.temp_file_path)) == os.path.abspath(str(path))
+
+            if not path.exists():
+                if is_current_temp:
+                    self.temp_file_path = None
+                return 0
+
+            try:
+                reclaimed_bytes = path.stat().st_size
+            except (OSError, ValueError):
+                reclaimed_bytes = 0
+
+            try:
+                path.unlink()
+                if reclaimed_bytes:
+                    self._audio_log.info(
+                        "Deleted temp audio file: %s (freed %.2f MB)",
+                        path,
+                        reclaimed_bytes / (1024 * 1024),
+                    )
+                else:
+                    self._audio_log.info("Deleted temp audio file: %s", path)
+            except Exception as e:
+                self._audio_log.error("Failed to remove temporary file %s: %s", path, e)
+                return 0
+
+            if is_current_temp or target_path is None:
+                self.temp_file_path = None
+
+            return reclaimed_bytes
+
+    def _enforce_record_storage_limit(self, *, protected_paths: list[Path] | None = None) -> None:
+        """Enforce disk quota for persisted recordings using the configured limit (in MB)."""
 
         try:
-            limit_mb = int(self.record_storage_limit)
+            limit_mb = int(self.record_storage_limit or 0)
         except (TypeError, ValueError):
             limit_mb = 0
 
@@ -735,105 +804,57 @@ class AudioHandler:
             return
 
         limit_bytes = limit_mb * 1024 * 1024
-        normalized_excludes: set[Path] = set()
-        for raw_path in exclude_paths or ():
-            if not raw_path:
-                continue
+        protected: set[Path] = set()
+        for path in protected_paths or []:
             try:
-                normalized_excludes.add(Path(raw_path).resolve())
+                protected.add(path.resolve())
             except Exception:
+                protected.add(Path(path))
+
+        patterns = ("temp_recording_*.wav", "recording_*.wav")
+        total_bytes = 0
+        candidates: list[tuple[float, Path, int]] = []
+
+        for pattern in patterns:
+            for file_path in Path.cwd().glob(pattern):
                 try:
-                    normalized_excludes.add(Path(raw_path))
-                except Exception:
+                    stat = file_path.stat()
+                except (FileNotFoundError, OSError):
                     continue
+                total_bytes += stat.st_size
+                candidates.append((stat.st_mtime, file_path, stat.st_size))
 
-        with self.storage_lock:
-            storage_root = Path.cwd()
-            candidates: list[tuple[float, Path, int]] = []
-            total_bytes = 0
-            excluded_bytes = 0
+        if total_bytes <= limit_bytes:
+            return
 
-            for pattern in ("recording_*.wav", "temp_recording_*.wav"):
-                for file_path in storage_root.glob(pattern):
-                    try:
-                        resolved_path = file_path.resolve()
-                    except Exception:
-                        resolved_path = file_path
+        self._audio_log.info(
+            "Storage quota exceeded: %.2f MB used (limit=%d MB). Pruning oldest recordings.",
+            total_bytes / (1024 * 1024),
+            limit_mb,
+        )
 
-                    try:
-                        stat_result = resolved_path.stat()
-                    except OSError as exc:
-                        self._audio_log.debug(
-                            "Skipping %s during storage enforcement: %s",
-                            resolved_path,
-                            exc,
-                        )
-                        continue
+        candidates.sort(key=lambda item: item[0])  # oldest first
 
-                    total_bytes += stat_result.st_size
-                    if resolved_path in normalized_excludes:
-                        excluded_bytes += stat_result.st_size
-                        continue
-
-                    candidates.append((stat_result.st_mtime, resolved_path, stat_result.st_size))
-
+        for _, file_path, _ in candidates:
             if total_bytes <= limit_bytes:
-                return
+                break
+            try:
+                resolved = file_path.resolve()
+            except Exception:
+                resolved = file_path
 
-            bytes_to_free = total_bytes - limit_bytes
-            freed_bytes = 0
-            candidates.sort(key=lambda entry: entry[0])
+            if resolved in protected:
+                continue
 
-            for _, path_obj, size in candidates:
-                try:
-                    path_obj.unlink(missing_ok=True)
-                except OSError as exc:
-                    self._audio_log.warning(
-                        "Failed to delete %s while enforcing storage limit: %s",
-                        path_obj,
-                        exc,
-                    )
-                    continue
+            reclaimed = self._cleanup_temp_file(target_path=file_path)
+            if reclaimed:
+                total_bytes -= reclaimed
 
-                freed_bytes += size
-                self._audio_log.info(
-                    "Removed %s to respect the %s MB record storage limit.",
-                    path_obj,
-                    limit_mb,
-                )
-
-                if freed_bytes >= bytes_to_free:
-                    break
-
-            remaining_bytes = total_bytes - freed_bytes
-            if remaining_bytes > limit_bytes:
-                removable_budget = max(0, limit_bytes - excluded_bytes)
-                remaining_deletable = max(0, remaining_bytes - excluded_bytes)
-                if remaining_deletable > removable_budget:
-                    self._audio_log.warning(
-                        "Record storage still above limit after cleanup (limit=%s MB, remaining=%.2f MB).",
-                        limit_mb,
-                        remaining_bytes / (1024 * 1024),
-                    )
-                else:
-                    self._audio_log.info(
-                        "Storage limit reached with protected files only (limit=%s MB, protected=%.2f MB).",
-                        limit_mb,
-                        excluded_bytes / (1024 * 1024),
-                    )
-
-    def _cleanup_temp_file(self):
-        with self.storage_lock:
-            if self.in_memory_mode:
-                self._audio_frames = []
-            elif self.temp_file_path and os.path.exists(self.temp_file_path):
-                temp_path = self.temp_file_path
-                try:
-                    os.remove(temp_path)
-                    self._audio_log.info("Deleted temp audio file: %s", temp_path)
-                except Exception as e:
-                    self._audio_log.error("Failed to remove temporary file %s: %s", temp_path, e)
-            self.temp_file_path = None
+        if total_bytes > limit_bytes:
+            self._audio_log.warning(
+                "Could not reduce stored recordings below limit; %.2f MB remain. Some files may be locked or protected.",
+                total_bytes / (1024 * 1024),
+            )
 
         self._enforce_record_storage_limit()
 
