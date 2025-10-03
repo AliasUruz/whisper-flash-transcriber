@@ -27,12 +27,9 @@ class TransformersBackend:
         from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
         import torch
 
-        device = device if device not in (None, "auto") else ("cuda:0" if torch.cuda.is_available() else -1)
-        torch_dtype = (
-            torch.float16
-            if (device != -1 and (dtype in (None, "auto", "float16", "fp16")))
-            else torch.float32
-        )
+        resolved_device = self._resolve_device(device, torch)
+        self.device = resolved_device
+        torch_dtype = self._resolve_dtype(dtype, resolved_device, torch)
 
         self.processor = AutoProcessor.from_pretrained(self.model_id, cache_dir=cache_dir)
         self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
@@ -48,7 +45,7 @@ class TransformersBackend:
             model=self.model,
             tokenizer=self.processor.tokenizer,
             feature_extractor=self.processor.feature_extractor,
-            device=(0 if device != -1 else -1),
+            device=(resolved_device if resolved_device.type == "cuda" else -1),
         )
         try:
             self.sample_rate = int(self.processor.feature_extractor.sampling_rate)  # type: ignore[attr-defined]
@@ -77,3 +74,49 @@ class TransformersBackend:
         self.pipe = None
         self.model = None
         self.processor = None
+
+    @staticmethod
+    def _resolve_device(device: int | str | None, torch_module: Any) -> "torch.device":
+        """Normalize a user-provided device declaration into a ``torch.device``."""
+
+        if device in (None, "auto"):
+            return torch_module.device("cuda:0" if torch_module.cuda.is_available() else "cpu")
+
+        if isinstance(device, torch_module.device):
+            return device
+
+        if isinstance(device, int):
+            return torch_module.device("cpu" if device < 0 else f"cuda:{device}")
+
+        if isinstance(device, str):
+            normalized = device.strip().lower()
+            if normalized in {"cpu", "-1"}:
+                return torch_module.device("cpu")
+            if normalized.isdigit():
+                return torch_module.device(f"cuda:{normalized}")
+            if normalized.startswith("cuda"):
+                return torch_module.device(device)
+
+        raise ValueError(f"Unsupported device specification: {device!r}")
+
+    @staticmethod
+    def _resolve_dtype(dtype: str | None, device: "torch.device", torch_module: Any) -> "torch.dtype":
+        """Determine the torch dtype honoring the execution device selection."""
+
+        if dtype in (None, "auto"):
+            return torch_module.float16 if device.type == "cuda" else torch_module.float32
+
+        normalized = dtype.lower()
+        aliases = {
+            "float16": "float16",
+            "fp16": "float16",
+            "float32": "float32",
+            "fp32": "float32",
+            "bfloat16": "bfloat16",
+            "bf16": "bfloat16",
+        }
+        try:
+            target = aliases.get(normalized, normalized)
+            return getattr(torch_module, target)
+        except AttributeError as exc:  # pragma: no cover - defensive guard
+            raise ValueError(f"Unsupported dtype specification: {dtype!r}") from exc
