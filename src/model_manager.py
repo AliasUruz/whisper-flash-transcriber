@@ -66,6 +66,34 @@ DISPLAY_NAMES: Dict[str, str] = {
 # CURATED e DISPLAY_NAMES abaixo.
 
 
+_INSTALL_METADATA_FILENAME = "install.json"
+
+
+def _write_install_metadata(
+    target_dir: Path,
+    *,
+    model_id: str,
+    backend_label: str,
+    quant_label: str,
+) -> None:
+    """Persist lightweight metadata alongside the installed model.
+
+    The metadata is used as a quick sanity check for the installation and to
+    enrich telemetry/log statements. Failures while writing metadata are
+    intentionally ignored by callers.
+    """
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = target_dir / _INSTALL_METADATA_FILENAME
+    payload = {
+        "model_id": model_id,
+        "backend": backend_label,
+        "quant": quant_label,
+        "timestamp": time.time(),
+    }
+    metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _resolve_catalog_entry(model_id: str) -> dict[str, str] | None:
     """Return the curated entry for ``model_id`` when available."""
 
@@ -150,6 +178,19 @@ def backend_storage_candidates(backend: str | None) -> list[str]:
         candidates.append(normalized)
 
     return candidates
+
+
+def _normalize_quant_label(label: str | None) -> str:
+    """Normalize the quantization branch label used for CT2 downloads."""
+
+    if label is None:
+        return "default"
+
+    normalized = str(label).strip()
+    if not normalized or normalized.lower() in {"default", "none"}:
+        return "default"
+
+    return normalized
 
 
 def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
@@ -784,16 +825,33 @@ def ensure_download(
     storage_backend = backend_storage_name(backend_label or backend)
     backend_label = backend_label or normalize_backend_label(storage_backend) or storage_backend
 
+    quant_label = _normalize_quant_label(quant if backend_label == "ctranslate2" else None)
+
     prepared = _prepare_local_installation(cache_dir, backend_label, model_id)
     local_dir = prepared.local_dir
     if prepared.ready_path is not None:
+        ready_path = prepared.ready_path
+        try:
+            _write_install_metadata(
+                ready_path,
+                model_id=model_id,
+                backend_label=backend_label,
+                quant_label=quant_label,
+            )
+        except Exception:  # pragma: no cover - metadata persistence best effort
+            MODEL_LOGGER.debug(
+                "Unable to persist metadata for model %s at %s",
+                model_id,
+                ready_path,
+                exc_info=True,
+            )
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
             model_id,
             backend_label,
-            prepared.ready_path,
+            ready_path,
         )
-        return str(prepared.ready_path)
+        return ModelDownloadResult(str(ready_path), downloaded=False)
 
     stale_local_dir = prepared.stale_local_dir
 
@@ -885,7 +943,7 @@ def ensure_download(
 
     # Seleciona branch de quantização quando aplicável (modelos CT2).
     revision = None
-    if quant_label != "default":
+    if storage_backend == "ct2" and quant_label != "default":
         revision = quant_label
 
     download_kwargs = {
@@ -957,6 +1015,13 @@ def ensure_download(
         _cleanup_partial()
         _invalidate_list_installed_cache(cache_dir)
         raise
+
+    if not _is_installation_complete(local_dir):
+        _cleanup_partial("incomplete")
+        _invalidate_list_installed_cache(cache_dir)
+        raise RuntimeError(
+            "Model download completed but installation is missing essential files."
+        )
 
     duration_ms = (time.perf_counter() - start_time) * 1000.0
     try:
