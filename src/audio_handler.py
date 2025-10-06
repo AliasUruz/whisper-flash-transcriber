@@ -226,11 +226,32 @@ class AudioHandler:
                                 total_mb = get_total_memory_mb()
                                 avail_mb = get_available_memory_mb()
                                 try:
-                                    thr_percent = max(
-                                        1, min(50, int(self.config_manager.get("auto_ram_threshold_percent")))
-                                    )
+                                    raw_threshold = self.config_manager.get("auto_ram_threshold_percent")
                                 except Exception:
+                                    self._audio_log.warning(
+                                        "Unable to read auto RAM threshold from configuration; using default.",
+                                        exc_info=True,
+                                        extra={
+                                            "event": "auto_ram_threshold_read_failed",
+                                            "stage": "storage_selection",
+                                        },
+                                    )
                                     thr_percent = 10
+                                else:
+                                    try:
+                                        thr_value = int(raw_threshold)
+                                    except (TypeError, ValueError):
+                                        self._audio_log.warning(
+                                            "Invalid auto RAM threshold '%s'; using default.",
+                                            raw_threshold,
+                                            extra={
+                                                "event": "auto_ram_threshold_invalid",
+                                                "stage": "storage_selection",
+                                            },
+                                        )
+                                        thr_percent = 10
+                                    else:
+                                        thr_percent = max(1, min(50, thr_value))
                                 percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
                                 if total_mb and percent_free < thr_percent:
                                     self._audio_log.info(
