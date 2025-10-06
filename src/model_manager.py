@@ -756,7 +756,7 @@ def ensure_download(
         _check_abort()
         if storage_backend == "transformers":
             snapshot_download(**download_kwargs)
-        elif storage_backend == "ct2":
+        elif storage_backend in {"ct2", "faster-whisper"}:
             snapshot_download(**download_kwargs)
         else:
             raise ValueError(f"Unknown backend: {backend_label}")
