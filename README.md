@@ -84,7 +84,10 @@ During the initial startup the application will create `config.json` and `hotkey
 - From the settings window you can:
   - Configure the recording hotkey.
   - Select the ASR model. If a model is missing, the application offers to download it.
-  - Choose where large assets such as downloaded models and persisted recordings are stored.
+  - Fine-tune where the application stores heavyweight assets:
+    - Set a base storage root for cached data.
+    - Override the dedicated models directory and its derived ASR cache path.
+    - Choose a separate recordings folder for WAV artifacts.
   - Configure AI services, audio feedback sounds, and additional quality-of-life options.
 
 ### Recording and Transcribing
