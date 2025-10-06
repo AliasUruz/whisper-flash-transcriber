@@ -53,6 +53,7 @@ from .config_manager import (
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     AUTO_PASTE_MODIFIER_CONFIG_KEY,
+    HOTKEY_CONFIG_FILE,
 )
 from .audio_handler import AudioHandler
 from .action_orchestrator import ActionOrchestrator
@@ -77,7 +78,7 @@ class AppCore:
         main_tk_root,
         *,
         config_manager: ConfigManager | None = None,
-        hotkey_config_path: str = "hotkey_config.json",
+        hotkey_config_path: str = HOTKEY_CONFIG_FILE,
     ):
         self.main_tk_root = main_tk_root # Referência para a raiz Tkinter
         self.hotkey_config_path = hotkey_config_path
@@ -180,7 +181,7 @@ class AppCore:
             self.state_manager.subscribe(ui_manager_instance.update_tray_icon)
 
         # --- Hotkey Manager ---
-        config_path = getattr(self, "hotkey_config_path", "hotkey_config.json")
+        config_path = getattr(self, "hotkey_config_path", HOTKEY_CONFIG_FILE)
         self.ahk_manager = KeyboardHotkeyManager(config_file=config_path)
         self.ahk_running = False
         self.last_key_press_time = 0.0
@@ -1132,7 +1133,7 @@ class AppCore:
                         self.ahk_manager.stop()
                         self.ahk_running = False
                         time.sleep(0.2)
-                    self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
+                    self.ahk_manager = KeyboardHotkeyManager(config_file=HOTKEY_CONFIG_FILE)
                     LOGGER.info("KeyboardHotkeyManager reload completed successfully.")
                     break
                 except Exception as e:

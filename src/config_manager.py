@@ -43,6 +43,43 @@ _DEFAULT_RECORDINGS_DIR = str((_BASE_STORAGE_ROOT / "recordings").expanduser())
 _DEFAULT_MODELS_STORAGE_DIR = str((_BASE_STORAGE_ROOT / "models").expanduser())
 
 
+_PROFILE_ENV_VAR = "WHISPER_FLASH_PROFILE_DIR"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_profile_dir() -> Path:
+    """Return the directory that should hold persistent profile artifacts."""
+
+    override = os.environ.get(_PROFILE_ENV_VAR)
+    if override:
+        try:
+            return Path(override).expanduser()
+        except Exception:
+            logging.warning("Invalid profile directory override '%s'; falling back to defaults.", override)
+    return _BASE_STORAGE_ROOT
+
+
+PROFILE_DIR = _resolve_profile_dir().expanduser()
+CONFIG_FILE_NAME = "config.json"
+SECRETS_FILE_NAME = "secrets.json"
+HOTKEY_CONFIG_FILE_NAME = "hotkey_config.json"
+CONFIG_FILE = str((PROFILE_DIR / CONFIG_FILE_NAME).expanduser())
+SECRETS_FILE = str((PROFILE_DIR / SECRETS_FILE_NAME).expanduser())
+HOTKEY_CONFIG_FILE = str((PROFILE_DIR / HOTKEY_CONFIG_FILE_NAME).expanduser())
+LEGACY_CONFIG_LOCATIONS: tuple[Path, ...] = (
+    (_PROJECT_ROOT / CONFIG_FILE_NAME).expanduser(),
+    (Path.cwd() / CONFIG_FILE_NAME).expanduser(),
+)
+LEGACY_SECRETS_LOCATIONS: tuple[Path, ...] = (
+    (_PROJECT_ROOT / SECRETS_FILE_NAME).expanduser(),
+    (Path.cwd() / SECRETS_FILE_NAME).expanduser(),
+)
+LEGACY_HOTKEY_LOCATIONS: tuple[Path, ...] = (
+    (_PROJECT_ROOT / HOTKEY_CONFIG_FILE_NAME).expanduser(),
+    (Path.cwd() / HOTKEY_CONFIG_FILE_NAME).expanduser(),
+)
+
+
 DEFAULT_CONFIG = {
     "record_key": "F3",
     "record_mode": "toggle",
@@ -252,30 +289,72 @@ class ConfigManager:
     """Gerencia persistência de configuração e segredos do aplicativo."""
 
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
-        self.config_file = str(config_file)
-        self.config_path = Path(self.config_file).expanduser()
-        self.secrets_path = Path(SECRETS_FILE).expanduser()
+        resolved_config_path = Path(config_file).expanduser()
+        if not resolved_config_path.is_absolute():
+            candidate_name = resolved_config_path.name
+            if candidate_name == CONFIG_FILE_NAME:
+                resolved_config_path = Path(CONFIG_FILE).expanduser()
+            else:
+                resolved_config_path = (Path.cwd() / resolved_config_path).expanduser()
+
         self.default_config = default_config
+        self.config_file = str(resolved_config_path)
+        self.config_path = resolved_config_path
+        self._config_path = resolved_config_path
+        self.secrets_path = Path(SECRETS_FILE).expanduser()
+        self._secrets_path = self.secrets_path
+        self.profile_dir = self._config_path.parent
+
+        try:
+            self.profile_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            LOGGER.warning(
+                "Unable to prepare profile directory '%s': %s", self.profile_dir, exc
+            )
+
+        config_existed = self._config_path.exists()
+        secrets_existed = self._secrets_path.exists()
+
+        migrated_config = None
+        migrated_secrets = None
+        if not config_existed:
+            migrated_config = self._maybe_migrate_profile_file(
+                target=self._config_path,
+                candidates=LEGACY_CONFIG_LOCATIONS,
+                label="config",
+            )
+            config_existed = self._config_path.exists()
+        if not secrets_existed:
+            migrated_secrets = self._maybe_migrate_profile_file(
+                target=self._secrets_path,
+                candidates=LEGACY_SECRETS_LOCATIONS,
+                label="secrets",
+            )
+            secrets_existed = self._secrets_path.exists()
+
         self.config = {}
         self._config_hash = None
         self._secrets_hash = None
         self._invalid_timeout_cache: dict[str, Any] = {}
-        self._config_path = Path(self.config_file).expanduser()
-        self._secrets_path = Path(SECRETS_FILE).expanduser()
         self._bootstrap_state: dict[str, dict[str, Any]] = {
             "config": {
                 "path": self._config_path,
-                "existed": self._config_path.exists(),
+                "existed": config_existed,
                 "written": False,
                 "error": None,
             },
             "secrets": {
                 "path": self._secrets_path,
-                "existed": self._secrets_path.exists(),
+                "existed": secrets_existed,
                 "written": False,
                 "error": None,
             },
         }
+        if migrated_config:
+            self._bootstrap_state["config"]["migrated_from"] = migrated_config
+        if migrated_secrets:
+            self._bootstrap_state["secrets"]["migrated_from"] = migrated_secrets
+
         self._bootstrap_logged = False
         self.load_config()
         url = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
@@ -1196,6 +1275,56 @@ class ConfigManager:
                 exc_info=True,
             )
             raise
+
+    def _maybe_migrate_profile_file(
+        self,
+        *,
+        target: Path,
+        candidates: tuple[Path, ...],
+        label: str,
+    ) -> str | None:
+        for candidate in candidates:
+            try:
+                if candidate.resolve() == target.resolve():
+                    return None
+            except Exception:
+                if str(candidate) == str(target):
+                    return None
+            if not candidate.exists():
+                continue
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Unable to prepare destination for %s file at '%s': %s",
+                    label,
+                    target,
+                    exc,
+                )
+                return None
+            try:
+                shutil.move(str(candidate), str(target))
+            except Exception as exc:
+                LOGGER.warning(
+                    "Failed to migrate %s file from '%s' to '%s': %s",
+                    label,
+                    candidate,
+                    target,
+                    exc,
+                )
+                return None
+            BOOTSTRAP_LOGGER.info(
+                StructuredMessage(
+                    f"{label.title()} file migrated to profile directory.",
+                    event=f"config.bootstrap.{label}_migrated",
+                    details={
+                        "source": str(candidate),
+                        "destination": str(target),
+                    },
+                )
+            )
+            return str(candidate)
+        return None
 
     def _maybe_migrate_storage_paths(
         self,

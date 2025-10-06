@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-import os
 import json
+import shutil
 import time
 import threading
 import logging
@@ -8,20 +8,24 @@ from pathlib import Path
 
 import keyboard
 
+from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
+
 class KeyboardHotkeyManager:
     """
     Gerencia hotkeys usando a biblioteca keyboard.
     Esta classe oferece uma solução mais simples para o gerenciamento de hotkeys.
     """
 
-    def __init__(self, config_file="hotkey_config.json"):
+    def __init__(self, config_file: str | Path = HOTKEY_CONFIG_FILE):
         """
         Inicializa o gerenciador de hotkeys.
 
         Args:
             config_file (str): Caminho para o arquivo de configuração
         """
-        self.config_file = config_file
+        path = Path(config_file).expanduser()
+        self.config_file = str(path)
+        self._config_path = path
         self.is_running = False
         self.callback_toggle = None
         self.callback_start = None
@@ -38,11 +42,46 @@ class KeyboardHotkeyManager:
     def _load_config(self):
         """Load configuration from disk, creating the file with defaults when it is missing."""
         try:
-            if not os.path.exists(self.config_file):
-                logging.info(f"'{self.config_file}' not found. Creating it with default values for the first launch.")
-                self._save_config()
+            path = self._config_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                migrated = False
+                for legacy in LEGACY_HOTKEY_LOCATIONS:
+                    legacy_path = Path(legacy).expanduser()
+                    try:
+                        if legacy_path.resolve() == path.resolve():
+                            continue
+                    except Exception:
+                        if str(legacy_path) == str(path):
+                            continue
+                    if not legacy_path.exists():
+                        continue
+                    try:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(legacy_path), str(path))
+                        logging.info(
+                            "Legacy hotkey configuration migrated from '%s' to '%s'.",
+                            legacy_path,
+                            path,
+                        )
+                        migrated = True
+                        break
+                    except Exception as exc:
+                        logging.warning(
+                            "Failed to migrate legacy hotkey configuration from '%s' to '%s': %s",
+                            legacy_path,
+                            path,
+                            exc,
+                        )
+                        break
+                if not migrated:
+                    logging.info(
+                        "'%s' not found. Creating it with default values for the first launch.",
+                        path,
+                    )
+                    self._save_config()
 
-            with open(self.config_file, 'r', encoding='utf-8') as f:
+            with path.open('r', encoding='utf-8') as f:
                 config = json.load(f)
                 self.record_key = config.get('record_key', self.record_key)
                 self.agent_key = config.get('agent_key', self.agent_key)
@@ -79,15 +118,21 @@ class KeyboardHotkeyManager:
     def _save_config(self):
         """Persist the current hotkey configuration to disk."""
         try:
+            path = self._config_path
+            path.parent.mkdir(parents=True, exist_ok=True)
             config = {
                 'record_key': self.record_key,
                 'agent_key': self.agent_key,
                 'record_mode': self.record_mode
             }
-            with open(self.config_file, 'w', encoding='utf-8') as f:
+            with path.open('w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
-            logging.info("Configuration saved: record_key=%s, agent_key=%s, record_mode=%s",
-                         self.record_key, self.agent_key, self.record_mode)
+            logging.info(
+                "Configuration saved: record_key=%s, agent_key=%s, record_mode=%s",
+                self.record_key,
+                self.agent_key,
+                self.record_mode,
+            )
         except Exception as e:
             logging.error(f"Failed to save hotkey configuration: {e}")
             raise RuntimeError(
