@@ -1592,14 +1592,22 @@ class TranscriptionHandler:
         if correlation_id is None:
             correlation_id = current_correlation_id()
 
+        self.transcription_cancel_event.clear()
+
         def _transcription_wrapper() -> None:
             with scoped_correlation_id(correlation_id):
-                self._transcription_task(audio_source, agent_mode)
+                try:
+                    self._transcription_task(audio_source, agent_mode)
+                except Exception as exc:  # pragma: no cover - erro inesperado
+                    self._handle_unexpected_transcription_error(
+                        exc,
+                        audio_source=audio_source,
+                        agent_mode=agent_mode,
+                    )
 
         self.transcription_future = self.transcription_executor.submit(_transcription_wrapper)
 
     def _transcription_task(self, audio_source: str | np.ndarray, agent_mode: bool) -> None:
-        self.transcription_cancel_event.clear()
         text_result: str | None = None
 
         if self.transcription_cancel_event.is_set():
@@ -2040,6 +2048,69 @@ class TranscriptionHandler:
             logging.debug(
                 "GPU cache preserved for consecutive transcriptions."
             )
+
+    def _handle_unexpected_transcription_error(
+        self,
+        error: Exception,
+        *,
+        audio_source: str | np.ndarray | bytes | bytearray | list[float] | None,
+        agent_mode: bool,
+    ) -> None:
+        """Garante tratamento uniforme para falhas não mapeadas durante a transcrição."""
+
+        error_message = f"[Transcription Error: {error}]"
+        logging.error(
+            "Unexpected error while transcribing audio: %s",
+            error,
+            exc_info=True,
+        )
+
+        try:
+            self._log_model_event(
+                "transcription_failure",
+                level=logging.ERROR,
+                size=self._format_audio_source(audio_source),
+                agent_mode=agent_mode,
+                error=str(error),
+            )
+        except Exception:  # pragma: no cover - logging defensivo
+            logging.debug("Failed to log unexpected transcription failure.", exc_info=True)
+
+        if self.on_segment_transcribed_callback:
+            try:
+                self.on_segment_transcribed_callback(error_message)
+            except Exception:  # pragma: no cover - callback externo
+                logging.debug(
+                    "Failed to propagate segment-level error callback.",
+                    exc_info=True,
+                )
+
+        if self.on_model_error_callback:
+            try:
+                self.on_model_error_callback(str(error))
+            except Exception:  # pragma: no cover - callback externo
+                logging.debug(
+                    "Failed to propagate model error callback for unexpected error.",
+                    exc_info=True,
+                )
+
+        target_callback = (
+            self.on_agent_result_callback if agent_mode else self.on_transcription_result_callback
+        )
+        should_emit = (not self.is_state_transcribing_fn) or self.is_state_transcribing_fn()
+        if target_callback and should_emit:
+            try:
+                if agent_mode:
+                    target_callback(error_message)
+                else:
+                    target_callback(error_message, error_message)
+            except Exception:  # pragma: no cover - callback externo
+                logging.debug(
+                    "Failed to propagate unexpected transcription error to consumer.",
+                    exc_info=True,
+                )
+
+        self.transcription_cancel_event.clear()
 
     def _apply_oom_recovery(self, current_batch_size: int | None) -> bool:
         """Ajusta parâmetros internos após detectar falta de memória (OOM).
