@@ -265,8 +265,17 @@ class ActionOrchestrator:
         array = np.asarray(audio_source)
         if array.size == 0:
             return 0.0
-        samples = array.shape[0]
-        return float(samples) / AUDIO_SAMPLE_RATE
+
+        if array.ndim <= 1:
+            samples = array.shape[0]
+        else:
+            meaningful_dims = [dim for dim in array.shape if dim > 1]
+            if meaningful_dims:
+                samples = max(meaningful_dims)
+            else:
+                samples = array.size
+
+        return float(samples) / float(AUDIO_SAMPLE_RATE)
 
     def _copy_to_clipboard(self, text: str) -> None:
         if not self._clipboard_module:
