@@ -34,7 +34,7 @@ class KeyboardHotkeyManager:
         self._load_config()
 
     def _load_config(self):
-        """Carrega a configuração do arquivo, criando-o com valores padrão se não existir."""
+        """Load configuration from disk, creating the file with defaults when it is missing."""
         try:
             if not os.path.exists(self.config_file):
                 logging.warning(f"'{self.config_file}' not found. Creating it with default values.")
@@ -57,7 +57,7 @@ class KeyboardHotkeyManager:
             logging.error(f"An unexpected error occurred while loading hotkey config: {e}", exc_info=True)
 
     def _save_config(self):
-        """Salva a configuração no arquivo."""
+        """Persist the current hotkey configuration to disk."""
         try:
             config = {
                 'record_key': self.record_key,
@@ -69,19 +69,19 @@ class KeyboardHotkeyManager:
             logging.info("Configuration saved: record_key=%s, agent_key=%s, record_mode=%s",
                          self.record_key, self.agent_key, self.record_mode)
         except Exception as e:
-            logging.error(f"Erro ao salvar configuração: {e}")
+            logging.error(f"Failed to save hotkey configuration: {e}")
 
     def start(self):
         """Inicia o gerenciador de hotkeys."""
         if self.is_running:
-            logging.warning("KeyboardHotkeyManager já está em execução.")
+            logging.warning("KeyboardHotkeyManager is already running.")
             return True
 
         try:
             # Registrar as hotkeys e verificar o resultado
             success = self._register_hotkeys()
             if not success:
-                logging.error("Falha ao registrar hotkeys.")
+                logging.error("Failed to register hotkeys.")
                 self.stop()
                 return False
 
@@ -89,7 +89,7 @@ class KeyboardHotkeyManager:
             logging.info("KeyboardHotkeyManager started successfully.")
             return True
         except Exception as e:
-            logging.error(f"Erro ao iniciar KeyboardHotkeyManager: {e}", exc_info=True)
+            logging.error(f"Error starting KeyboardHotkeyManager: {e}", exc_info=True)
             self.stop()
             return False
 
@@ -132,17 +132,17 @@ class KeyboardHotkeyManager:
             if was_running:
                 result = self._register_hotkeys()
                 if not result:
-                    logging.error("Falha ao registrar hotkeys após atualização.")
+                    logging.error("Failed to register hotkeys after applying the update.")
                     self.is_running = False
                     return False
                 # Retomar o estado de execução se o registro foi bem-sucedido
                 self.is_running = True
 
-            logging.info(f"Configuração atualizada: record_key={self.record_key}, agent_key={self.agent_key}, record_mode={self.record_mode}")
+            logging.info(f"Configuration saved: record_key={self.record_key}, agent_key={self.agent_key}, record_mode={self.record_mode}")
             return True
 
         except Exception as e:
-            logging.error(f"Erro ao atualizar configuração: {e}")
+            logging.error(f"Failed to update hotkey configuration: {e}")
             return False
 
     def set_callbacks(self, toggle=None, start=None, stop=None, agent=None):
@@ -208,12 +208,12 @@ class KeyboardHotkeyManager:
                         )
                     except OSError as e:
                         logging.error(
-                            f"Falha específica ao registrar hotkey release: {e}"
+                            f"Specific failure while registering release hotkey: {e}"
                         )
                         return False
                     except Exception as e:
                         logging.error(
-                            f"Erro ao registrar hotkey release: {e}", exc_info=True
+                            f"Error while registering release hotkey: {e}", exc_info=True
                         )
                         return False
                     logging.info("Release handler registered for: %s", self.record_key)
@@ -231,12 +231,12 @@ class KeyboardHotkeyManager:
                 )
             except OSError as e:
                 logging.error(
-                    f"Falha específica ao registrar hotkey de gravação: {e}"
+                    f"Specific failure while registering record hotkey: {e}"
                 )
                 return False
             except Exception as e:
                 logging.error(
-                    f"Erro ao registrar hotkey de gravação: {e}", exc_info=True
+                    f"Failed to register record hotkey: {e}", exc_info=True
                 )
                 return False
             logging.info(
@@ -258,12 +258,12 @@ class KeyboardHotkeyManager:
                 )
             except OSError as e:
                 logging.error(
-                    f"Falha específica ao registrar hotkey de comando: {e}"
+                    f"Specific failure while registering agent hotkey: {e}"
                 )
                 return False
             except Exception as e:
                 logging.error(
-                    f"Erro ao registrar hotkey de comando: {e}", exc_info=True
+                    f"Error while registering agent hotkey: {e}", exc_info=True
                 )
                 return False
             logging.info(
@@ -275,7 +275,7 @@ class KeyboardHotkeyManager:
             return True
 
         except Exception as e:
-            logging.error(f"Erro ao registrar hotkeys: {e}", exc_info=True)
+            logging.error(f"Error registering hotkeys: {e}", exc_info=True)
             return False
 
     def _unregister_hotkeys(self):
@@ -293,7 +293,7 @@ class KeyboardHotkeyManager:
                         )
                     except Exception as e:
                         logging.error(
-                            "Erro ao remover hook '%s': %s",
+                            "Error while removing hook '%s': %s",
                             handle_id,
                             e,
                             exc_info=True,
@@ -309,43 +309,43 @@ class KeyboardHotkeyManager:
             self.is_running = False
 
         except Exception as e:
-            logging.error(f"Erro ao desregistrar hotkeys: {e}", exc_info=True)
+            logging.error(f"Error unregistering hotkeys: {e}", exc_info=True)
 
     def _on_toggle_key(self):
         """Handler para a tecla de toggle."""
         try:
             if self.callback_toggle:
                 threading.Thread(target=self.callback_toggle, daemon=True, name="ToggleCallback").start()
-                logging.info("Callback de toggle chamado.")
+                logging.info("Toggle callback invoked.")
         except Exception as e:
-            logging.error(f"Erro ao chamar callback de toggle: {e}", exc_info=True)
+            logging.error(f"Error while invoking toggle callback: {e}", exc_info=True)
 
     def _on_press_key(self):
         """Handler para a tecla de press."""
         try:
             if self.callback_start:
                 threading.Thread(target=self.callback_start, daemon=True, name="StartCallback").start()
-                logging.info("Callback de start chamado.")
+                logging.info("Start callback invoked.")
         except Exception as e:
-            logging.error(f"Erro ao chamar callback de start: {e}", exc_info=True)
+            logging.error(f"Error while invoking start callback: {e}", exc_info=True)
 
     def _on_agent_key(self):
-        """Handler para a tecla de comando agêntico."""
+        """Handler for the agent command hotkey."""
         try:
             if self.callback_agent:
                 threading.Thread(target=self.callback_agent, daemon=True, name="AgentCallback").start()
-                logging.info("Callback de comando chamado.")
+                logging.info("Agent callback invoked.")
         except Exception as e:
-            logging.error(f"Erro ao chamar callback de comando: {e}", exc_info=True)
+            logging.error(f"Error while invoking agent callback: {e}", exc_info=True)
 
     def _on_release_key(self):
         """Handler para o evento de soltar a tecla no modo press."""
         try:
             if self.callback_stop:
                 threading.Thread(target=self.callback_stop, daemon=True, name="StopCallback").start()
-                logging.info("Callback de stop chamado (release key).")
+                logging.info("Stop callback invoked (release key).")
         except Exception as e:
-            logging.error(f"Erro ao chamar callback de stop (release): {e}", exc_info=True)
+            logging.error(f"Error while invoking stop callback (release): {e}", exc_info=True)
 
     def restart(self):
         """Reinicia o gerenciador de hotkeys."""
@@ -360,7 +360,7 @@ class KeyboardHotkeyManager:
         if result:
             logging.info("KeyboardHotkeyManager restarted successfully.")
         else:
-            logging.error("Falha ao reiniciar KeyboardHotkeyManager.")
+            logging.error("Failed to restart KeyboardHotkeyManager.")
 
         return result
 
@@ -375,7 +375,7 @@ class KeyboardHotkeyManager:
             str: A tecla detectada ou None se nenhuma tecla for detectada
         """
         try:
-            logging.info(f"Iniciando detecção de tecla com timeout de {timeout} segundos...")
+            logging.info(f"Starting key detection with a timeout of {timeout} seconds...")
 
             # Variáveis para armazenar a tecla detectada
             detected_key = [None]
@@ -414,7 +414,7 @@ class KeyboardHotkeyManager:
                 keyboard.unhook(hook)
 
         except Exception as e:
-            logging.error(f"Erro ao detectar tecla: {e}", exc_info=True)
+            logging.error(f"Error while detecting key: {e}", exc_info=True)
             return None
 
     def detect_single_key(self, timeout=5.0):
