@@ -80,6 +80,7 @@ class AppCore:
         hotkey_config_path: str = "hotkey_config.json",
     ):
         self.main_tk_root = main_tk_root # Referência para a raiz Tkinter
+        self.hotkey_config_path = hotkey_config_path
 
         # --- Locks ---
         self.hotkey_lock = RLock()
@@ -179,7 +180,8 @@ class AppCore:
             self.state_manager.subscribe(ui_manager_instance.update_tray_icon)
 
         # --- Hotkey Manager ---
-        self.ahk_manager = KeyboardHotkeyManager(config_file=hotkey_config_path)
+        config_path = getattr(self, "hotkey_config_path", "hotkey_config.json")
+        self.ahk_manager = KeyboardHotkeyManager(config_file=config_path)
         self.ahk_running = False
         self.last_key_press_time = 0.0
         self.reregister_timer_thread = None

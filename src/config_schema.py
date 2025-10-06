@@ -95,6 +95,7 @@ class AppConfig(BaseModel):
     enable_torch_compile: bool = False
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
+    models_storage_dir: str = str(_DEFAULT_STORAGE_ROOT)
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     models_storage_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())

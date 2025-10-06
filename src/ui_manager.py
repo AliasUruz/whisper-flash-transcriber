@@ -921,6 +921,22 @@ class UIManager:
             return
         storage_root_dir_to_apply = str(storage_root_path)
 
+        models_storage_dir_raw = models_storage_dir_var.get().strip() if models_storage_dir_var else ""
+        if not models_storage_dir_raw:
+            models_storage_path = storage_root_path
+        else:
+            try:
+                models_storage_path = Path(models_storage_dir_raw).expanduser()
+            except Exception as exc:
+                messagebox.showerror("Invalid Path", f"Models storage directory is invalid:\n{exc}", parent=settings_win)
+                return
+        try:
+            models_storage_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror("Invalid Path", f"Models storage directory is invalid:\n{exc}", parent=settings_win)
+            return
+        models_storage_dir_to_apply = str(models_storage_path)
+
         recordings_dir_raw = recordings_dir_var.get().strip() if recordings_dir_var else ""
         if not recordings_dir_raw:
             recordings_path = storage_root_path / "recordings"
@@ -936,34 +952,22 @@ class UIManager:
             messagebox.showerror("Invalid Path", f"Recordings directory is invalid:\n{exc}", parent=settings_win)
             return
         recordings_dir_to_apply = str(recordings_path)
-        asr_cache_dir_to_apply = asr_cache_dir_var.get() if asr_cache_dir_var else self.config_manager.get_asr_cache_dir()
 
+        asr_cache_dir_raw = asr_cache_dir_var.get().strip() if asr_cache_dir_var else ""
+        if not asr_cache_dir_raw:
+            asr_cache_path = models_storage_path / "asr"
+        else:
+            try:
+                asr_cache_path = Path(asr_cache_dir_raw).expanduser()
+            except Exception as exc:
+                messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{exc}", parent=settings_win)
+                return
         try:
-            Path(models_storage_dir_to_apply).mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            messagebox.showerror("Invalid Path", f"Models storage directory is invalid:\n{exc}", parent=settings_win)
-            return
-
-        try:
-            Path(asr_cache_dir_to_apply).mkdir(parents=True, exist_ok=True)
+            asr_cache_path.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
             messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{exc}", parent=settings_win)
             return
-
-        recordings_dir_to_apply = (
-            recordings_dir_var.get()
-            if recordings_dir_var
-            else self.config_manager.get_recordings_dir()
-        )
-        try:
-            Path(recordings_dir_to_apply).mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            messagebox.showerror(
-                "Invalid Path",
-                f"Recording directory is invalid:\n{exc}",
-                parent=settings_win,
-            )
-            return
+        asr_cache_dir_to_apply = str(asr_cache_path)
 
         selected_device_str = asr_compute_device_var.get() if asr_compute_device_var else "Auto-select (Recommended)"
         gpu_index_to_apply = -1
