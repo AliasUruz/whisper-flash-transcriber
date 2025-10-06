@@ -11,11 +11,12 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import contextvars
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, TextIO
+from typing import Any, Iterable, Iterator, Mapping
 from uuid import uuid4
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
@@ -598,8 +599,7 @@ def setup_logging(
 ) -> None:
     """Configure root logging with a structured, copy-friendly format."""
 
-    resolved_level = _resolve_level_value(level)
-
+    level = _determine_level()
     filters: list[logging.Filter] = [
         _StripAnsiFilter(),
         _RuntimeContextFilter(),
