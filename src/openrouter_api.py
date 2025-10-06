@@ -1,8 +1,11 @@
-import requests
+from __future__ import annotations
+
 import json
 import logging
 import time
 from typing import Optional
+
+import requests
 
 LOGGER = logging.getLogger('whisper_flash_transcriber.openrouter')
 
