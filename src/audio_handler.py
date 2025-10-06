@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import logging
-import threading
-import queue
 import os
-import time
+import queue
 import shutil
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Callable, Iterable
 
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
-import tempfile
-from pathlib import Path
-from typing import Callable, Iterable
 
 # Observação: em ambientes WSL, a biblioteca sounddevice depende de servidores PulseAudio;
 # mantenha esta limitação em mente ao depurar gravações.
@@ -26,7 +26,7 @@ from .config_manager import (
 )
 from .logging_utils import StructuredMessage
 
-LOGGER = logging.getLogger('whisper_flash_transcriber.audio')
+LOGGER = logging.getLogger("whisper_flash_transcriber.audio")
 
 
 class _AudioLoggerAdapter(logging.LoggerAdapter):
@@ -207,7 +207,7 @@ class AudioHandler:
                                 except Exception:
                                     pass
                                 self._migrate_to_file()
-                            elif self.record_storage_mode == 'auto':
+                            elif self.record_storage_mode == "auto":
                                 total_mb = get_total_memory_mb()
                                 avail_mb = get_available_memory_mb()
                                 try:
@@ -218,14 +218,14 @@ class AudioHandler:
                                     thr_percent = 10
                                 percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
                                 if total_mb and percent_free < thr_percent:
-                                self._audio_log.info(
-                                    "Free RAM below configured threshold; moving buffers to disk.",
-                                    extra={
-                                        "event": "ram_to_disk_low_memory",
-                                        "stage": "storage_selection",
-                                        "details": f"percent_free={percent_free:.1f} threshold={thr_percent}",
-                                    },
-                                )
+                                    self._audio_log.info(
+                                        "Free RAM below configured threshold; moving buffers to disk.",
+                                        extra={
+                                            "event": "ram_to_disk_low_memory",
+                                            "stage": "storage_selection",
+                                            "details": f"percent_free={percent_free:.1f} threshold={thr_percent}",
+                                        },
+                                    )
                                     try:
                                         self._audio_log.info(
                                             "In-memory storage migration due to low available RAM.",
