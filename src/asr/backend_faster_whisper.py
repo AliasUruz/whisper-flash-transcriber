@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
-
 import math
 from pathlib import Path
+from typing import Any
 
 
 class FasterWhisperBackend:
