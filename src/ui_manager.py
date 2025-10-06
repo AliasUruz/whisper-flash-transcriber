@@ -972,10 +972,27 @@ class UIManager:
             return
         models_storage_dir_to_apply = str(models_storage_dir_path)
 
+        asr_cache_dir_raw = asr_cache_dir_var.get().strip() if asr_cache_dir_var else ""
+        if not asr_cache_dir_raw:
+            asr_cache_path = storage_root_path / "asr"
+        else:
+            try:
+                asr_cache_path = Path(asr_cache_dir_raw).expanduser()
+            except Exception as exc:
+                messagebox.showerror(
+                    "Invalid Path",
+                    f"ASR cache directory is invalid:\n{exc}",
+                    parent=settings_win,
+                )
+                return
         try:
-            Path(asr_cache_dir_to_apply).mkdir(parents=True, exist_ok=True)
+            asr_cache_path.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
-            messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{exc}", parent=settings_win)
+            messagebox.showerror(
+                "Invalid Path",
+                f"ASR cache directory is invalid:\n{exc}",
+                parent=settings_win,
+            )
             return
         asr_cache_dir_to_apply = str(asr_cache_path)
 
