@@ -5,6 +5,8 @@ import logging
 import time
 from typing import Optional
 
+import requests
+
 from .logging_utils import get_logger, log_context
 
 LOGGER = get_logger('whisper_flash_transcriber.openrouter', component='OpenRouterAPI')
