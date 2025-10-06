@@ -5,9 +5,13 @@ import logging
 import os
 import re
 import threading
+import time
+import uuid
+from contextlib import contextmanager
+import contextvars
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
@@ -17,6 +21,15 @@ LOG_BACKUP_COUNT_ENV = "WHISPER_LOG_BACKUP_COUNT"
 DEFAULT_LOG_FILENAME = "whisper-flash-transcriber.log"
 DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
 DEFAULT_LOG_BACKUP_COUNT = 5
+
+
+_correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "whisper_flash_correlation_id",
+    default=None,
+)
+_operation_stack_var: contextvars.ContextVar[tuple[tuple[str, str | None], ...]] = (
+    contextvars.ContextVar("whisper_flash_operation_stack", default=())
+)
 
 
 class _StripAnsiFilter(logging.Filter):
@@ -40,6 +53,26 @@ class _RuntimeContextFilter(logging.Filter):
         return True
 
 
+class _CorrelationContextFilter(logging.Filter):
+    """Attach correlation metadata stored in context variables."""
+
+    def filter(self, record: logging.LogRecord) -> bool:  # pragma: no cover - trivial
+        correlation_id = _correlation_id_var.get()
+        if correlation_id is not None and not getattr(record, "correlation_id", None):
+            record.correlation_id = correlation_id
+
+        operation_stack = _operation_stack_var.get()
+        if operation_stack:
+            operation_id, operation_name = operation_stack[-1]
+            record.operation_id = getattr(record, "operation_id", operation_id)
+            if operation_name is not None and not getattr(record, "operation_name", None):
+                record.operation_name = operation_name
+            record.operation_depth = getattr(record, "operation_depth", len(operation_stack))
+        else:
+            record.operation_depth = getattr(record, "operation_depth", 0)
+        return True
+
+
 def _stringify_detail(value: Any) -> str:
     if isinstance(value, float):
         if abs(value) >= 100:
@@ -55,6 +88,109 @@ def _stringify_detail(value: Any) -> str:
     if value is None:
         return "<none>"
     return str(value)
+
+
+def current_correlation_id() -> str | None:
+    """Return the correlation identifier active in the current context."""
+
+    return _correlation_id_var.get()
+
+
+@contextmanager
+def scoped_correlation_id(
+    value: str | None = None,
+    *,
+    preserve_existing: bool = False,
+) -> Iterator[str | None]:
+    """Temporarily bind ``value`` as the active correlation identifier."""
+
+    current_value = _correlation_id_var.get()
+    if preserve_existing and current_value is not None:
+        yield current_value
+        return
+
+    new_value = value or uuid.uuid4().hex[:8]
+    token = _correlation_id_var.set(new_value)
+    try:
+        yield new_value
+    finally:
+        _correlation_id_var.reset(token)
+
+
+@contextmanager
+def log_operation(
+    logger: logging.Logger | logging.LoggerAdapter,
+    headline: str,
+    /,
+    *,
+    event: str | None = None,
+    details: Mapping[str, Any] | None = None,
+    start_level: int = logging.INFO,
+    success_level: int | None = None,
+    failure_level: int | None = None,
+    success_message: str | None = None,
+    failure_message: str | None = None,
+    success_details: Mapping[str, Any] | None = None,
+    failure_details: Mapping[str, Any] | None = None,
+    include_duration: bool = True,
+) -> Iterator[str]:
+    """Log the lifespan of a structured operation with automatic timing."""
+
+    operation_id = uuid.uuid4().hex[:8]
+    operation_name = event if event else headline
+    stack = _operation_stack_var.get()
+    token = _operation_stack_var.set(stack + ((operation_id, operation_name),))
+
+    start_event = f"{event}.start" if event else None
+    success_event = f"{event}.success" if event else None
+    failure_event = f"{event}.error" if event else None
+
+    start_payload = dict(details or {})
+    start_payload.setdefault("operation_id", operation_id)
+
+    logger.log(start_level, StructuredMessage(headline, event=start_event, details=start_payload))
+
+    started_at = time.perf_counter()
+
+    try:
+        yield operation_id
+    except Exception:
+        duration_ms = (time.perf_counter() - started_at) * 1000.0
+        detail_payload = dict(details or {})
+        if failure_details:
+            detail_payload.update(failure_details)
+        detail_payload.setdefault("operation_id", operation_id)
+        if include_duration:
+            detail_payload.setdefault("duration_ms", round(duration_ms, 2))
+
+        logger.log(
+            failure_level or logging.ERROR,
+            StructuredMessage(
+                failure_message or f"{headline} failed.",
+                event=failure_event,
+                details=detail_payload,
+            ),
+        )
+        raise
+    else:
+        duration_ms = (time.perf_counter() - started_at) * 1000.0
+        detail_payload = dict(details or {})
+        if success_details:
+            detail_payload.update(success_details)
+        detail_payload.setdefault("operation_id", operation_id)
+        if include_duration:
+            detail_payload.setdefault("duration_ms", round(duration_ms, 2))
+
+        logger.log(
+            success_level or start_level,
+            StructuredMessage(
+                success_message or f"{headline} completed.",
+                event=success_event,
+                details=detail_payload,
+            ),
+        )
+    finally:
+        _operation_stack_var.reset(token)
 
 
 class StructuredMessage:
@@ -128,6 +264,19 @@ class _StructuredLogFormatter(logging.Formatter):
             extras.append(f"thread={thread_name}")
         if record.funcName:
             extras.append(f"func={record.funcName}")
+
+        correlation_id = getattr(record, "correlation_id", None)
+        if correlation_id:
+            extras.append(f"corr={correlation_id}")
+        operation_id = getattr(record, "operation_id", None)
+        if operation_id:
+            extras.append(f"op={operation_id}")
+            depth = getattr(record, "operation_depth", None)
+            if isinstance(depth, int) and depth > 1:
+                extras.append(f"depth={depth}")
+        operation_name = getattr(record, "operation_name", None)
+        if operation_name:
+            extras.append(f"op_name={operation_name}")
 
         context = f" [{', '.join(extras)}]" if extras else ""
 
@@ -269,7 +418,11 @@ def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.H
 def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> None:
     """Configure root logging with a structured, copy-friendly format."""
 
-    filters: list[logging.Filter] = [_StripAnsiFilter(), _RuntimeContextFilter()]
+    filters: list[logging.Filter] = [
+        _StripAnsiFilter(),
+        _RuntimeContextFilter(),
+        _CorrelationContextFilter(),
+    ]
     if extra_filters:
         filters.extend(extra_filters)
 
@@ -340,8 +493,11 @@ def get_logger(
 __all__ = [
     "ContextualLoggerAdapter",
     "StructuredMessage",
+    "current_correlation_id",
     "get_logger",
     "log_context",
     "log_event",
+    "log_operation",
+    "scoped_correlation_id",
     "setup_logging",
 ]

@@ -7,8 +7,9 @@ import shutil
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 import numpy as np
 import sounddevice as sd
@@ -26,9 +27,15 @@ from .config_manager import (
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
 )
-from .logging_utils import StructuredMessage, get_logger, log_context
+from .logging_utils import (
+    StructuredMessage,
+    get_logger,
+    log_context,
+    log_operation,
+    scoped_correlation_id,
+)
 
-LOGGER = logging.getLogger("whisper_flash_transcriber.audio")
+LOGGER = get_logger("whisper_flash_transcriber.audio", component="AudioHandler")
 
 
 class _AudioLoggerAdapter(logging.LoggerAdapter):
@@ -40,6 +47,7 @@ class _AudioLoggerAdapter(logging.LoggerAdapter):
 
         handler = self.extra.get('handler')
         storage_mode = 'memory' if getattr(handler, 'in_memory_mode', False) else 'disk'
+        session_id = getattr(handler, "_session_id", None)
         thread_name = threading.current_thread().name
 
         detail_overrides = kwargs.pop('details', None)
@@ -51,6 +59,8 @@ class _AudioLoggerAdapter(logging.LoggerAdapter):
 
         merged_details.setdefault('storage', storage_mode)
         merged_details.setdefault('thread', thread_name)
+        if session_id:
+            merged_details.setdefault('session', session_id)
         kwargs['details'] = merged_details
 
         return msg, kwargs
@@ -113,6 +123,7 @@ class AudioHandler:
 
         self.storage_root_dir: Path | None = None
         self.recordings_dir: Path | None = None
+        self._session_id: str | None = None
 
         # Dedicated queue and thread for audio processing
         self.audio_queue = queue.Queue()
@@ -430,74 +441,79 @@ class AudioHandler:
         return numeric
 
     def _record_audio_task(self):
-        self.audio_stream = None
-        try:
-            self._audio_log.info(
-                StructuredMessage(
-                    "Audio recording thread started.",
-                    event="audio.thread.start",
-                    samplerate=AUDIO_SAMPLE_RATE,
-                    channels=AUDIO_CHANNELS,
-                )
-            )
-            if not self.is_recording:
-                LOGGER.warning("Recording flag turned off before stream start.")
-                return
-
-            self.audio_stream = sd.InputStream(
-                samplerate=AUDIO_SAMPLE_RATE,
-                channels=AUDIO_CHANNELS,
-                callback=self._audio_callback,
-                dtype="float32",
-                blocksize=self.stream_blocksize,
-            )
-            self.audio_stream.start()
-            self.stream_started = True
-            self._audio_log.info(
-                StructuredMessage(
-                    "Audio stream opened.",
-                    event="audio.stream.opened",
-                    blocksize=self.stream_blocksize,
-                )
-            )
-
-            while not self._stop_event.is_set() and self.is_recording:
-                sd.sleep(100)
-            self._audio_log.info(
-                StructuredMessage(
-                    "Recording flag lowered; stopping audio stream.",
-                    event="audio.stream.stop_requested",
-                )
-            )
-        except sd.PortAudioError as e:
-            self._audio_log.error(f"PortAudio error during recording: {e}", exc_info=True)
-            self.is_recording = False
-            self.state_manager.set_state("ERROR_AUDIO")
-        except Exception as e:
-            self._audio_log.error(f"Error in audio recording thread: {e}", exc_info=True)
-            self.is_recording = False
-            self.state_manager.set_state("ERROR_AUDIO")
-        finally:
-            if self.audio_stream is not None:
-                self._close_input_stream()
-                self.audio_stream = None
-            self.stream_started = False
-            self._stop_event.clear()
-            self._record_thread = None
-            self._audio_log.info(
-                StructuredMessage(
-                    "Audio recording thread finished.",
-                    event="audio.thread.stop",
-                )
-            )
-            # Stop overhead metric for the recording thread (event-based approximation)
+        session_id = self._session_id
+        with scoped_correlation_id(session_id, preserve_existing=True):
+            self.audio_stream = None
             try:
                 self._audio_log.info(
-                    "Recording thread cleanup completed.",
-                    extra={"stage": "recording", "event": "record_thread_finalize", "duration_ms": 0},
+                    StructuredMessage(
+                        "Audio recording thread started.",
+                        event="audio.thread.start",
+                        samplerate=AUDIO_SAMPLE_RATE,
+                        channels=AUDIO_CHANNELS,
+                    )
                 )
-            except Exception:
-                pass
+                if not self.is_recording:
+                    LOGGER.warning("Recording flag turned off before stream start.")
+                    return
+
+                self.audio_stream = sd.InputStream(
+                    samplerate=AUDIO_SAMPLE_RATE,
+                    channels=AUDIO_CHANNELS,
+                    callback=self._audio_callback,
+                    dtype="float32",
+                    blocksize=self.stream_blocksize,
+                )
+                self.audio_stream.start()
+                self.stream_started = True
+                self._audio_log.info(
+                    StructuredMessage(
+                        "Audio stream opened.",
+                        event="audio.stream.opened",
+                        blocksize=self.stream_blocksize,
+                    )
+                )
+
+                while not self._stop_event.is_set() and self.is_recording:
+                    sd.sleep(100)
+                self._audio_log.info(
+                    StructuredMessage(
+                        "Recording flag lowered; stopping audio stream.",
+                        event="audio.stream.stop_requested",
+                    )
+                )
+            except sd.PortAudioError as e:
+                self._audio_log.error(f"PortAudio error during recording: {e}", exc_info=True)
+                self.is_recording = False
+                self.state_manager.set_state("ERROR_AUDIO")
+            except Exception as e:
+                self._audio_log.error(f"Error in audio recording thread: {e}", exc_info=True)
+                self.is_recording = False
+                self.state_manager.set_state("ERROR_AUDIO")
+            finally:
+                if self.audio_stream is not None:
+                    self._close_input_stream()
+                    self.audio_stream = None
+                self.stream_started = False
+                self._stop_event.clear()
+                self._record_thread = None
+                self._audio_log.info(
+                    StructuredMessage(
+                        "Audio recording thread finished.",
+                        event="audio.thread.stop",
+                    )
+                )
+                try:
+                    self._audio_log.info(
+                        "Recording thread cleanup completed.",
+                        extra={
+                            "stage": "recording",
+                            "event": "record_thread_finalize",
+                            "duration_ms": 0,
+                        },
+                    )
+                except Exception:
+                    pass
 
     def _close_input_stream(self, timeout: float = 2.0):
         finished_event = threading.Event()
@@ -555,242 +571,311 @@ class AudioHandler:
                 )
             )
             return False
-        if not self._processing_thread or not self._processing_thread.is_alive():
-            self.audio_queue = queue.Queue()
-            self._processing_thread = threading.Thread(target=self._process_audio_queue, daemon=True)
-            self._processing_thread.start()
 
-        if self._record_thread and self._record_thread.is_alive():
-            self._audio_log.debug(
-                "Waiting for the previous recording thread to finish.",
-                extra={"event": "record_thread_join", "stage": "recording"},
-            )
-            self._stop_event.set()
-            self._record_thread.join(timeout=2)  # Timeout curto evita travamentos ao desligar threads no Windows
+        session_id = uuid.uuid4().hex[:8]
+        self._session_id = session_id
 
-        self._stop_event.clear()
-
-        self._enforce_record_storage_limit(exclude_paths=[self.temp_file_path])
-
-        if self.record_storage_mode == "memory":
-            self.in_memory_mode = True
-            reason = "configured for memory"
-        elif self.record_storage_mode == "disk":
-            self.in_memory_mode = False
-            reason = "configured for disk"
-        else:  # Automatic mode
-            available_mb = get_available_memory_mb()
-            if available_mb >= self.min_free_ram_mb and self.max_memory_seconds > 0:
-                self.in_memory_mode = True
-                reason = f"auto: free RAM {available_mb:.0f}MB >= {self.min_free_ram_mb}MB"
-            else:
-                self.in_memory_mode = False
-                reason = f"auto: free RAM {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
-        if self.max_memory_seconds_mode == "auto":
-            self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
-        else:
-            self.current_max_memory_seconds = self.max_memory_seconds
-        self._memory_limit_samples = int(self.current_max_memory_seconds * AUDIO_SAMPLE_RATE)
-
-        self._audio_log.info(
-            StructuredMessage(
-                "Recording storage mode decided.",
-                event="audio.storage_selected",
-                in_memory=self.in_memory_mode,
-                rationale=reason,
-                max_buffer_seconds=self.current_max_memory_seconds,
-            )
-        )
-
-        with self.storage_lock:
-            self.is_recording = True
-            self.start_time = time.time()
-            self._sample_count = 0
-            self._memory_samples = 0
-
-            if self.in_memory_mode:
-                self.temp_file_path = None
-                self._sf_writer = None
-                self._audio_frames = []
-            else:
-                raw_tmp = self._create_temp_wav_file()
-                self.temp_file_path = raw_tmp.name
-                raw_tmp.close()
-                self._sf_writer = sf.SoundFile(
-                    self.temp_file_path, mode="w", samplerate=AUDIO_SAMPLE_RATE, channels=AUDIO_CHANNELS
-                )
-
-        if self.use_vad and self.vad_manager:
-            try:
-                self.vad_manager.reset_states()
-            except Exception:
-                self._audio_log.debug(
-                    "Failed to reset VAD states for new recording.",
-                    exc_info=True,
-                    extra={"event": "vad_reset_failed", "stage": "recording"},
-                )
-        self._audio_log.debug(
-            "VAD reset for new recording.",
-            extra={"event": "vad_reset", "stage": "recording"},
-        )
-
-        self.state_manager.set_state("RECORDING")
-
-        self._record_thread = threading.Thread(target=self._record_audio_task, daemon=True, name="AudioRecordThread")
-        self._record_thread.start()
-
-        threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": True}, daemon=True, name="StartSoundThread").start()
-        return True
-
-    def stop_recording(self):
-        if not self.is_recording:
-            LOGGER.warning(
-                StructuredMessage(
-                    "Stop request ignored because no recording is active.",
-                    event="audio.stop_ignored",
-                )
-            )
-            return False
-
-        self.is_recording = False
-        stream_was_started = self.stream_started
-        self._stop_event.set()
-
-        # Encerra a thread consumidora
         try:
-            self.audio_queue.put(None)
-        except Exception:
-            pass
-        if self._processing_thread:
-            processing_thread = self._processing_thread
-            if processing_thread is threading.current_thread():
-                self._audio_log.debug(
-                    "Stop recording invoked from processing thread; skipping self-join."
-                )
-            elif processing_thread.is_alive():
-                processing_thread.join()
-            self._processing_thread = None
-
-        if self.use_vad and self.vad_manager:
-            try:
-                self.vad_manager.reset_states()
-            except Exception:
-                self._audio_log.debug("Failed to reset VAD states when stopping recording.", exc_info=True)
-        self._audio_log.debug("VAD reset when stopping recording.")
-
-        threading.Thread(target=self._play_generated_tone_stream, kwargs={"is_start": False}, daemon=True, name="StopSoundThread").start()
-
-        if self._record_thread:
-            self._record_thread.join(timeout=2)  # Timeout curto evita travamentos ao desligar threads no Windows
-
-        with self.storage_lock:
-            if self._sf_writer is not None:
-                writer_path = getattr(self._sf_writer, 'name', self.temp_file_path)
-                try:
-                    self._sf_writer.close()
-                except Exception as e:
-                    self._audio_log.error("Failed to close temporary file %s: %s", writer_path, e)
-                self._sf_writer = None
-
-        if not stream_was_started:
-            LOGGER.warning(
-                StructuredMessage(
-                    "Stop request ignored because audio stream never started.",
-                    event="audio.stop_without_stream",
-                )
-            )
-            self._cleanup_temp_file()
-            self.state_manager.set_state("IDLE")
-            return False
-
-        recording_duration = time.time() - self.start_time
-        if self._sample_count == 0 or recording_duration < self.min_record_duration:
-            self._audio_log.info(
-                StructuredMessage(
-                    "Recording discarded because it is shorter than the configured minimum.",
-                    event="audio.segment_too_short",
-                    captured_seconds=round(recording_duration, 2),
-                    minimum_seconds=self.min_record_duration,
-                    samples_recorded=self._sample_count,
-                )
-            )
-            LOGGER.warning(
-                StructuredMessage(
-                    "Recording discarded due to insufficient duration or missing samples.",
-                    event="audio.segment_discarded",
-                    captured_seconds=round(recording_duration, 2),
-                    minimum_seconds=self.min_record_duration,
-                    samples_recorded=self._sample_count,
-                )
-            )
-            self._cleanup_temp_file()
-            self.state_manager.set_state("IDLE")
-            return False
-
-        if self.in_memory_mode:
-            audio_data = (
-                np.concatenate(self._audio_frames, axis=0)
-                if self._audio_frames
-                else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
-            )
-            self.on_audio_segment_ready_callback(audio_data.flatten())
-        else:
-            # When not in memory mode, the temporary file already contains all data
-            if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
-                try:
-                    ts = int(time.time())
-                    filename = f"temp_recording_{ts}.wav"
-                    source_path = Path(self.temp_file_path)
-                    recordings_base = self.recordings_dir
-                    if not isinstance(recordings_base, Path):
-                        recordings_base = Path(str(recordings_base)) if recordings_base else Path.cwd()
-                    try:
-                        recordings_base.mkdir(parents=True, exist_ok=True)
-                    except Exception as exc:
-                        self._audio_log.error(
-                            "Failed to ensure recordings directory '%s': %s; using working directory.",
-                            recordings_base,
-                            exc,
+            with scoped_correlation_id(session_id):
+                with log_operation(
+                    self._audio_log,
+                    "Initializing audio recording session.",
+                    event="audio.recording.session",
+                    details={
+                        "requested_mode": self.record_storage_mode,
+                        "vad_enabled": bool(self.use_vad),
+                    },
+                ):
+                    if not self._processing_thread or not self._processing_thread.is_alive():
+                        self.audio_queue = queue.Queue()
+                        self._processing_thread = threading.Thread(
+                            target=self._process_audio_queue,
+                            daemon=True,
                         )
-                        recordings_base = Path.cwd()
-                    target_path = (recordings_base / filename).resolve()
-                    shutil.move(str(source_path), target_path)
-                    self.temp_file_path = str(target_path)
+                        self._processing_thread.start()
+
+                    if self._record_thread and self._record_thread.is_alive():
+                        self._audio_log.debug(
+                            "Waiting for the previous recording thread to finish.",
+                            extra={"event": "record_thread_join", "stage": "recording"},
+                        )
+                        self._stop_event.set()
+                        self._record_thread.join(timeout=2)
+
+                    self._stop_event.clear()
+
+                    self._enforce_record_storage_limit(exclude_paths=[self.temp_file_path])
+
+                    if self.record_storage_mode == "memory":
+                        self.in_memory_mode = True
+                        reason = "configured for memory"
+                    elif self.record_storage_mode == "disk":
+                        self.in_memory_mode = False
+                        reason = "configured for disk"
+                    else:
+                        available_mb = get_available_memory_mb()
+                        if available_mb >= self.min_free_ram_mb and self.max_memory_seconds > 0:
+                            self.in_memory_mode = True
+                            reason = (
+                                f"auto: free RAM {available_mb:.0f}MB >= {self.min_free_ram_mb}MB"
+                            )
+                        else:
+                            self.in_memory_mode = False
+                            reason = (
+                                f"auto: free RAM {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
+                            )
+
+                    if self.max_memory_seconds_mode == "auto":
+                        self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
+                    else:
+                        self.current_max_memory_seconds = self.max_memory_seconds
+                    self._memory_limit_samples = int(self.current_max_memory_seconds * AUDIO_SAMPLE_RATE)
+
                     self._audio_log.info(
                         StructuredMessage(
-                            "Temporary recording persisted to disk.",
-                            event="audio.segment_saved",
-                            path=str(target_path),
-                            size_bytes=target_path.stat().st_size if target_path.exists() else None,
+                            "Recording storage mode decided.",
+                            event="audio.storage_selected",
+                            in_memory=self.in_memory_mode,
+                            rationale=reason,
+                            max_buffer_seconds=self.current_max_memory_seconds,
                         )
                     )
-                    self._enforce_record_storage_limit(exclude_paths=[target_path])
-                except Exception as e:
-                    self._audio_log.error(f"Failed to save temporary recording: {e}")
-                    try:
-                        if "target_path" in locals() and target_path.exists():
-                            target_path.unlink()
-                    except Exception:
-                        pass
-                    # Keep the original path so downstream consumers can still use the source file
-                    self.temp_file_path = str(source_path)
-            self.on_audio_segment_ready_callback(self.temp_file_path)
-            protected_paths: list[Path] = []
-            if self.temp_file_path:
+
+                    with self.storage_lock:
+                        self.is_recording = True
+                        self.start_time = time.time()
+                        self._sample_count = 0
+                        self._memory_samples = 0
+
+                        if self.in_memory_mode:
+                            self.temp_file_path = None
+                            self._sf_writer = None
+                            self._audio_frames = []
+                        else:
+                            raw_tmp = self._create_temp_wav_file()
+                            self.temp_file_path = raw_tmp.name
+                            raw_tmp.close()
+                            self._sf_writer = sf.SoundFile(
+                                self.temp_file_path,
+                                mode="w",
+                                samplerate=AUDIO_SAMPLE_RATE,
+                                channels=AUDIO_CHANNELS,
+                            )
+
+                    if self.use_vad and self.vad_manager:
+                        try:
+                            self.vad_manager.reset_states()
+                        except Exception:
+                            self._audio_log.debug(
+                                "Failed to reset VAD states for new recording.",
+                                exc_info=True,
+                                extra={"event": "vad_reset_failed", "stage": "recording"},
+                            )
+                    self._audio_log.debug(
+                        "VAD reset for new recording.",
+                        extra={"event": "vad_reset", "stage": "recording"},
+                    )
+
+                    self.state_manager.set_state("RECORDING")
+
+                    self._record_thread = threading.Thread(
+                        target=self._record_audio_task,
+                        daemon=True,
+                        name="AudioRecordThread",
+                    )
+                    self._record_thread.start()
+
+                    threading.Thread(
+                        target=self._play_generated_tone_stream,
+                        kwargs={"is_start": True},
+                        daemon=True,
+                        name="StartSoundThread",
+                    ).start()
+                    return True
+        except Exception:
+            self._session_id = None
+            raise
+
+    def stop_recording(self):
+        session_id = self._session_id
+        try:
+            with scoped_correlation_id(session_id, preserve_existing=True):
+                if not self.is_recording:
+                    LOGGER.warning(
+                        StructuredMessage(
+                            "Stop request ignored because no recording is active.",
+                            event="audio.stop_ignored",
+                        )
+                    )
+                    return False
+
+                storage_mode = "memory" if self.in_memory_mode else "disk"
+                self._audio_log.info(
+                    log_context(
+                        "Stop recording requested.",
+                        event="audio.recording.stop_request",
+                        storage_mode=storage_mode,
+                        samples=self._sample_count,
+                    )
+                )
+
+                self.is_recording = False
+                stream_was_started = self.stream_started
+                self._stop_event.set()
+
                 try:
-                    protected_paths.append(Path(self.temp_file_path))
+                    self.audio_queue.put(None)
                 except Exception:
                     pass
-            self._enforce_record_storage_limit(protected_paths=protected_paths)
+                if self._processing_thread:
+                    processing_thread = self._processing_thread
+                    if processing_thread is threading.current_thread():
+                        self._audio_log.debug(
+                            "Stop recording invoked from processing thread; skipping self-join.",
+                        )
+                    elif processing_thread.is_alive():
+                        processing_thread.join()
+                    self._processing_thread = None
 
-        # Cleanup happens downstream after transcription completes when temporary
-        # recordings are not being kept on disk.
+                if self.use_vad and self.vad_manager:
+                    try:
+                        self.vad_manager.reset_states()
+                    except Exception:
+                        self._audio_log.debug(
+                            "Failed to reset VAD states when stopping recording.",
+                            exc_info=True,
+                        )
+                self._audio_log.debug("VAD reset when stopping recording.")
 
-        # Clear in-memory data; temporary file is kept for downstream processing
-        self._audio_frames = []
-        self._memory_samples = 0
-        self.start_time = None
-        return True
+                threading.Thread(
+                    target=self._play_generated_tone_stream,
+                    kwargs={"is_start": False},
+                    daemon=True,
+                    name="StopSoundThread",
+                ).start()
+
+                if self._record_thread:
+                    self._record_thread.join(timeout=2)
+
+                with self.storage_lock:
+                    if self._sf_writer is not None:
+                        writer_path = getattr(self._sf_writer, "name", self.temp_file_path)
+                        try:
+                            self._sf_writer.close()
+                        except Exception as e:
+                            self._audio_log.error("Failed to close temporary file %s: %s", writer_path, e)
+                        self._sf_writer = None
+
+                if not stream_was_started:
+                    LOGGER.warning(
+                        StructuredMessage(
+                            "Stop request ignored because audio stream never started.",
+                            event="audio.stop_without_stream",
+                        )
+                    )
+                    self._cleanup_temp_file()
+                    self.state_manager.set_state("IDLE")
+                    return False
+
+                recording_duration = time.time() - self.start_time
+                if self._sample_count == 0 or recording_duration < self.min_record_duration:
+                    rounded = round(recording_duration, 2)
+                    self._audio_log.info(
+                        StructuredMessage(
+                            "Recording discarded because it is shorter than the configured minimum.",
+                            event="audio.segment_too_short",
+                            captured_seconds=rounded,
+                            minimum_seconds=self.min_record_duration,
+                            samples_recorded=self._sample_count,
+                        )
+                    )
+                    LOGGER.warning(
+                        StructuredMessage(
+                            "Recording discarded due to insufficient duration or missing samples.",
+                            event="audio.segment_discarded",
+                            captured_seconds=rounded,
+                            minimum_seconds=self.min_record_duration,
+                            samples_recorded=self._sample_count,
+                        )
+                    )
+                    self._cleanup_temp_file()
+                    self.state_manager.set_state("IDLE")
+                    return False
+
+                if self.in_memory_mode:
+                    audio_data = (
+                        np.concatenate(self._audio_frames, axis=0)
+                        if self._audio_frames
+                        else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
+                    )
+                    self.on_audio_segment_ready_callback(audio_data.flatten())
+                else:
+                    if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
+                        try:
+                            ts = int(time.time())
+                            filename = f"temp_recording_{ts}.wav"
+                            source_path = Path(self.temp_file_path)
+                            recordings_base = self.recordings_dir
+                            if not isinstance(recordings_base, Path):
+                                recordings_base = (
+                                    Path(str(recordings_base)) if recordings_base else Path.cwd()
+                                )
+                            try:
+                                recordings_base.mkdir(parents=True, exist_ok=True)
+                            except Exception as exc:
+                                self._audio_log.error(
+                                    "Failed to ensure recordings directory '%s': %s; using working directory.",
+                                    recordings_base,
+                                    exc,
+                                )
+                                recordings_base = Path.cwd()
+                            target_path = (recordings_base / filename).resolve()
+                            shutil.move(str(source_path), target_path)
+                            self.temp_file_path = str(target_path)
+                            self._audio_log.info(
+                                StructuredMessage(
+                                    "Temporary recording persisted to disk.",
+                                    event="audio.segment_saved",
+                                    path=str(target_path),
+                                    size_bytes=target_path.stat().st_size
+                                    if target_path.exists()
+                                    else None,
+                                )
+                            )
+                            self._enforce_record_storage_limit(exclude_paths=[target_path])
+                        except Exception as e:
+                            self._audio_log.error(f"Failed to save temporary recording: {e}")
+                            try:
+                                if "target_path" in locals() and target_path.exists():
+                                    target_path.unlink()
+                            except Exception:
+                                pass
+                            self.temp_file_path = str(source_path)
+                    self.on_audio_segment_ready_callback(self.temp_file_path)
+                    protected_paths: list[Path] = []
+                    if self.temp_file_path:
+                        try:
+                            protected_paths.append(Path(self.temp_file_path))
+                        except Exception:
+                            pass
+                    self._enforce_record_storage_limit(protected_paths=protected_paths)
+
+                self._audio_frames = []
+                self._memory_samples = 0
+                self.start_time = None
+
+                self._audio_log.info(
+                    log_context(
+                        "Recording session finalized and dispatched for processing.",
+                        event="audio.recording.session",
+                        storage_mode=storage_mode,
+                        duration_seconds=round(recording_duration, 2),
+                        samples=self._sample_count,
+                    )
+                )
+                return True
+        finally:
+            self._session_id = None
 
     # ------------------------------------------------------------------
     # Beep notification sound
