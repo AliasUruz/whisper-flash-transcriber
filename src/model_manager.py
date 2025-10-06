@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
 import shutil
 import time
@@ -72,6 +73,18 @@ _download_size_lock = RLock()
 
 _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _list_installed_lock = RLock()
+
+
+try:  # Best effort: some huggingface_hub versions are compiled and may not expose a signature.
+    _SNAPSHOT_DOWNLOAD_PARAMS = tuple(inspect.signature(snapshot_download).parameters)
+except (TypeError, ValueError):  # pragma: no cover - defensive fallback
+    _SNAPSHOT_DOWNLOAD_PARAMS = tuple()
+
+
+def _snapshot_download_supports(param_name: str) -> bool:
+    """Return ``True`` when ``snapshot_download`` accepts ``param_name``."""
+
+    return param_name in _SNAPSHOT_DOWNLOAD_PARAMS
 
 
 def _normalize_cache_dir(cache_dir: str | Path) -> Path:
@@ -347,6 +360,7 @@ def ensure_download(
             backend_label,
             local_dir,
         )
+        _invalidate_list_installed_cache(cache_dir)
         return str(local_dir)
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -396,6 +410,12 @@ def ensure_download(
         "allow_patterns": None,
         "tqdm_class": progress_class,
     }
+    if _snapshot_download_supports("local_dir_use_symlinks"):
+        download_kwargs["local_dir_use_symlinks"] = False
+    if _snapshot_download_supports("local_dir_use_hardlinks"):
+        download_kwargs["local_dir_use_hardlinks"] = False
+    if _snapshot_download_supports("resume_download") and "resume_download" not in download_kwargs:
+        download_kwargs["resume_download"] = True
     if revision is not None:
         download_kwargs["revision"] = revision
 
@@ -419,6 +439,7 @@ def ensure_download(
         _check_abort()
     except DownloadCancelledError:
         _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise
     except KeyboardInterrupt as exc:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
@@ -446,6 +467,8 @@ def ensure_download(
             backend_label,
             duration_ms,
         )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise
 
     duration_ms = (time.perf_counter() - start_time) * 1000.0
@@ -456,6 +479,7 @@ def ensure_download(
         duration_ms,
         local_dir,
     )
+    _invalidate_list_installed_cache(cache_dir)
     return str(local_dir)
 
 
