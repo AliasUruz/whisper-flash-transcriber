@@ -33,6 +33,15 @@ class DownloadCancelledError(Exception):
         self.timed_out = timed_out
 
 
+class InsufficientSpaceError(RuntimeError):
+    """Raised when there is not enough free space to finish a download."""
+
+    def __init__(self, message: str, *, required_bytes: int, free_bytes: int) -> None:
+        super().__init__(message)
+        self.required_bytes = int(required_bytes)
+        self.free_bytes = int(free_bytes)
+
+
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
 CURATED: List[Dict[str, str]] = [
@@ -110,6 +119,56 @@ _MODEL_WEIGHT_FILE_HINTS = {
     "model.onnx",
     "model.safetensors",
 }
+
+_SNAPSHOT_SUPPORT_CACHE: dict[str, bool] = {}
+_SNAPSHOT_SUPPORT_LOCK = RLock()
+
+
+def _snapshot_download_supports(parameter: str) -> bool:
+    """Return ``True`` when ``snapshot_download`` accepts ``parameter``."""
+
+    if not parameter:
+        return False
+
+    normalized = str(parameter)
+    with _SNAPSHOT_SUPPORT_LOCK:
+        cached = _SNAPSHOT_SUPPORT_CACHE.get(normalized)
+        if cached is not None:
+            return cached
+
+        try:
+            signature = inspect.signature(snapshot_download)
+        except (TypeError, ValueError):  # pragma: no cover - interpreter specific behaviour
+            supported = False
+        else:
+            supported = normalized in signature.parameters
+
+        _SNAPSHOT_SUPPORT_CACHE[normalized] = supported
+        return supported
+
+
+def _set_snapshot_kwarg(target: dict, name: str, value) -> None:
+    """Set ``name`` in ``target`` only when ``snapshot_download`` supports it."""
+
+    if _snapshot_download_supports(name):
+        target[name] = value
+    else:
+        MODEL_LOGGER.debug(
+            "snapshot_download does not support parameter '%s'; skipping.",
+            name,
+        )
+
+
+def _format_bytes(value: int) -> str:
+    """Return a human-friendly string representation for ``value`` bytes."""
+
+    units = ["B", "KB", "MB", "GB", "TB"]
+    amount = float(max(0, int(value)))
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            return f"{amount:.2f} {unit}"
+        amount /= 1024
+    return f"{amount:.2f} PB"
 
 
 @lru_cache(maxsize=1)
@@ -504,6 +563,50 @@ def ensure_download(
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
+    estimated_bytes = 0
+    estimated_files = 0
+    try:
+        estimated_bytes, estimated_files = get_model_download_size(model_id)
+    except Exception:  # pragma: no cover - metadata retrieval best effort
+        MODEL_LOGGER.debug(
+            "Unable to compute download size metadata for model %s.",
+            model_id,
+            exc_info=True,
+        )
+    else:
+        if estimated_bytes > 0:
+            try:
+                usage = shutil.disk_usage(local_dir.parent)
+            except FileNotFoundError:
+                local_dir.parent.mkdir(parents=True, exist_ok=True)
+                usage = shutil.disk_usage(local_dir.parent)
+            free_bytes = usage.free
+            safety_margin = max(int(estimated_bytes * 0.1), 256 * 1024 * 1024)
+            required_bytes = estimated_bytes + safety_margin
+            MODEL_LOGGER.info(
+                "Model %s download estimated at %s across %d files (free space: %s).",
+                model_id,
+                _format_bytes(estimated_bytes),
+                estimated_files,
+                _format_bytes(free_bytes),
+            )
+            if free_bytes < required_bytes:
+                MODEL_LOGGER.error(
+                    "Insufficient free space for model %s: required %s (with safety margin) but only %s available.",
+                    model_id,
+                    _format_bytes(required_bytes),
+                    _format_bytes(free_bytes),
+                )
+                raise InsufficientSpaceError(
+                    (
+                        "Insufficient free space to download model %s: "
+                        "requires approximately %s (including safety margin) but only %s is available."
+                    )
+                    % (model_id, _format_bytes(required_bytes), _format_bytes(free_bytes)),
+                    required_bytes=required_bytes,
+                    free_bytes=free_bytes,
+                )
+
     timeout_value: float | None = None
     deadline: float | None = None
     if timeout is not None:
@@ -554,17 +657,14 @@ def ensure_download(
     download_kwargs = {
         "repo_id": model_id,
         "local_dir": str(local_dir),
-        "allow_patterns": None,
-        "tqdm_class": progress_class,
     }
-    if _snapshot_download_supports("resume_download"):
-        download_kwargs["resume_download"] = True
-    if _snapshot_download_supports("local_dir_use_symlinks"):
-        download_kwargs["local_dir_use_symlinks"] = False
-    if _snapshot_download_supports("local_dir_use_hardlinks"):
-        download_kwargs["local_dir_use_hardlinks"] = False
+    if progress_class is not None:
+        _set_snapshot_kwarg(download_kwargs, "tqdm_class", progress_class)
+    _set_snapshot_kwarg(download_kwargs, "resume_download", True)
+    _set_snapshot_kwarg(download_kwargs, "local_dir_use_symlinks", False)
+    _set_snapshot_kwarg(download_kwargs, "local_dir_use_hardlinks", False)
     if revision is not None:
-        download_kwargs["revision"] = revision
+        _set_snapshot_kwarg(download_kwargs, "revision", revision)
 
     if stale_local_dir:
         _cleanup_partial("stale_before_download")
