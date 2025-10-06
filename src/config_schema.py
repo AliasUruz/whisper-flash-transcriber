@@ -96,6 +96,7 @@ class AppConfig(BaseModel):
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
+    models_storage_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
     asr_model_id: str = "openai/whisper-large-v3-turbo"
     asr_backend: str = "ctranslate2"
@@ -226,7 +227,13 @@ class AppConfig(BaseModel):
             return coerced
         return [str(value)]
 
-    @field_validator("storage_root_dir", "recordings_dir", "asr_cache_dir", mode="before")
+    @field_validator(
+        "storage_root_dir",
+        "models_storage_dir",
+        "recordings_dir",
+        "asr_cache_dir",
+        mode="before",
+    )
     @classmethod
     def _expand_cache_dir(cls, value: Any) -> str:
         if isinstance(value, str):
