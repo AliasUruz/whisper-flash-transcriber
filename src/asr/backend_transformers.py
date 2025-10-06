@@ -36,17 +36,13 @@ class TransformersBackend:
         if model_override:
             self.model_id = model_override
 
-        device = device if device not in (None, "auto") else ("cuda:0" if torch.cuda.is_available() else -1)
-        torch_dtype = (
-            torch.float16
-            if (device != -1 and (dtype in (None, "auto", "float16", "fp16")))
-            else torch.float32
-        )
+        resolved_device = self._resolve_device(device, torch)
+        torch_dtype = self._resolve_dtype(dtype, resolved_device, torch)
 
         LOGGER.info(
             "Loading Transformers ASR model '%s' with device=%s and dtype=%s",
             self.model_id,
-            device,
+            resolved_device,
             torch_dtype,
         )
 
@@ -59,13 +55,19 @@ class TransformersBackend:
             use_safetensors=True,
             attn_implementation=attn_implementation,
         )
+        pipeline_device = (
+            resolved_device.index if resolved_device.type == "cuda" else -1
+        )
+        if pipeline_device is None:
+            pipeline_device = 0
         self.pipe = pipeline(
             "automatic-speech-recognition",
             model=self.model,
             tokenizer=self.processor.tokenizer,
             feature_extractor=self.processor.feature_extractor,
-            device=(resolved_device if resolved_device.type == "cuda" else -1),
+            device=pipeline_device,
         )
+        self.device = resolved_device
         try:
             self.sample_rate = int(self.processor.feature_extractor.sampling_rate)  # type: ignore[attr-defined]
         except Exception:
