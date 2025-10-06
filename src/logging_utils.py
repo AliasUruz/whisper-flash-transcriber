@@ -1,6 +1,7 @@
 """Logging helpers that keep terminal output structured and copy-friendly."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
@@ -10,10 +11,11 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import contextvars
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
@@ -21,6 +23,7 @@ LOG_DIR_ENV = "WHISPER_LOG_DIR"
 LOG_MAX_BYTES_ENV = "WHISPER_LOG_MAX_BYTES"
 LOG_BACKUP_COUNT_ENV = "WHISPER_LOG_BACKUP_COUNT"
 LOG_RUN_ID_ENV = "WHISPER_LOG_RUN_ID"
+LOG_FORMAT_ENV = "WHISPER_LOG_FORMAT"
 DEFAULT_LOG_FILENAME = "whisper-flash-transcriber.log"
 DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
 DEFAULT_LOG_BACKUP_COUNT = 5
@@ -30,6 +33,7 @@ _SESSION_MONOTONIC = time.monotonic()
 _RUN_ID = os.getenv(LOG_RUN_ID_ENV, "").strip() or f"{_SESSION_START:%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"
 _LAST_LOG_DIRECTORY: Path | None = None
 _LAST_LOG_FILE: Path | None = None
+_LAST_FORMAT_LABEL: str = "structured"
 
 
 _correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -102,6 +106,20 @@ def _stringify_detail(value: Any) -> str:
     if value is None:
         return "<none>"
     return str(value)
+
+
+def _jsonify_detail(value: Any) -> Any:
+    """Transform detail values into JSON-serialisable payloads."""
+
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _jsonify_detail(inner) for key, inner in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonify_detail(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    return _stringify_detail(value)
 
 
 def current_correlation_id() -> str | None:
@@ -249,6 +267,71 @@ def _determine_level() -> int:
     return getattr(logging, env_level, logging.INFO)
 
 
+class _JsonLogFormatter(logging.Formatter):
+    """Formatter that serialises log records as structured JSON lines."""
+
+    default_time_format = "%Y-%m-%dT%H:%M:%S"
+    default_msec_format = "%s.%03d"
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.message = record.getMessage()
+        payload: dict[str, Any] = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname.upper(),
+            "logger": record.name,
+            "message": record.message,
+        }
+
+        component = getattr(record, "component", None)
+        if component:
+            payload["component"] = component
+
+        process_id = getattr(record, "process_id", None)
+        if process_id is not None:
+            payload["process_id"] = process_id
+        thread_name = getattr(record, "thread_name", None) or getattr(record, "threadName", None)
+        if thread_name and thread_name != "MainThread":
+            payload["thread"] = thread_name
+        run_id = getattr(record, "run_id", None)
+        if run_id:
+            payload["run_id"] = run_id
+        uptime_ms = getattr(record, "uptime_ms", None)
+        if isinstance(uptime_ms, int) and uptime_ms >= 0:
+            payload["uptime_ms"] = uptime_ms
+        if record.funcName:
+            payload["function"] = record.funcName
+
+        correlation_id = getattr(record, "correlation_id", None)
+        if correlation_id:
+            payload["correlation_id"] = correlation_id
+        operation_id = getattr(record, "operation_id", None)
+        if operation_id:
+            payload["operation_id"] = operation_id
+            depth = getattr(record, "operation_depth", None)
+            if isinstance(depth, int) and depth > 1:
+                payload["operation_depth"] = depth
+        operation_name = getattr(record, "operation_name", None)
+        if operation_name:
+            payload["operation_name"] = operation_name
+
+        event = getattr(record, "event", None)
+        if event:
+            payload["event"] = event
+
+        details = getattr(record, "details", None)
+        if isinstance(details, Mapping) and details:
+            payload["details"] = {
+                str(key): _jsonify_detail(value) for key, value in sorted(details.items())
+            }
+
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            payload["stack"] = self.formatStack(record.stack_info)
+
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 class _StructuredLogFormatter(logging.Formatter):
     """Formatter that produces explicit, copy-friendly log lines."""
 
@@ -314,6 +397,22 @@ class _StructuredLogFormatter(logging.Formatter):
                 detail_segment += f" | {detail_pairs}"
 
         return f"{timestamp} | {level:<8} | {name}{context} | {message}{detail_segment}"
+
+
+def _select_formatter_factory() -> tuple[str, Callable[[], logging.Formatter]]:
+    """Resolve the active formatter factory based on environment configuration."""
+
+    choice = os.getenv(LOG_FORMAT_ENV, "").strip().lower()
+    if choice in {"json", "jsonl", "structured_json", "ndjson"}:
+        label = "json"
+        factory: Callable[[], logging.Formatter] = lambda: _JsonLogFormatter()
+    else:
+        label = "structured"
+        factory = lambda: _StructuredLogFormatter()
+
+    global _LAST_FORMAT_LABEL
+    _LAST_FORMAT_LABEL = label
+    return label, factory
 
 
 class ContextualLoggerAdapter(logging.LoggerAdapter):
@@ -399,7 +498,10 @@ def _resolve_int(value: str | None, default: int) -> int:
     return parsed if parsed >= 0 else default
 
 
-def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.Handler | None:
+def _build_rotating_file_handler(
+    filters: Iterable[logging.Filter],
+    formatter_factory: Callable[[], logging.Formatter],
+) -> logging.Handler | None:
     log_directory = Path(os.getenv(LOG_DIR_ENV, "logs")).expanduser()
     try:
         log_directory.mkdir(parents=True, exist_ok=True)
@@ -432,7 +534,7 @@ def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.H
         )
         return None
 
-    handler.setFormatter(_StructuredLogFormatter())
+    handler.setFormatter(formatter_factory())
     for filt in filters:
         handler.addFilter(filt)
     try:
@@ -445,6 +547,8 @@ def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.H
 def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> None:
     """Configure root logging with a structured, copy-friendly format."""
 
+    level = _determine_level()
+    format_label, formatter_factory = _select_formatter_factory()
     filters: list[logging.Filter] = [
         _StripAnsiFilter(),
         _RuntimeContextFilter(),
@@ -454,13 +558,13 @@ def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> N
         filters.extend(extra_filters)
 
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(_StructuredLogFormatter())
+    console_handler.setFormatter(formatter_factory())
     for filt in filters:
         console_handler.addFilter(filt)
 
     handlers: list[logging.Handler] = [console_handler]
 
-    file_handler = _build_rotating_file_handler(filters)
+    file_handler = _build_rotating_file_handler(filters, formatter_factory)
     if file_handler is not None:
         handlers.append(file_handler)
 
@@ -479,6 +583,7 @@ def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> N
             session_started=_SESSION_START.isoformat(),
             log_dir=str(_LAST_LOG_DIRECTORY) if _LAST_LOG_DIRECTORY else None,
             log_file=str(_LAST_LOG_FILE) if _LAST_LOG_FILE else None,
+            log_format=format_label,
         )
     )
 
@@ -489,6 +594,24 @@ def get_run_id() -> str:
     """Return the identifier assigned to the current logging session."""
 
     return _RUN_ID
+
+
+def get_log_directory() -> Path | None:
+    """Return the directory currently used to persist rotating log files."""
+
+    return _LAST_LOG_DIRECTORY
+
+
+def get_log_file() -> Path | None:
+    """Return the active log file path when file logging is enabled."""
+
+    return _LAST_LOG_FILE
+
+
+def get_log_format() -> str:
+    """Return the label describing the formatter in use (``structured`` or ``json``)."""
+
+    return _LAST_FORMAT_LABEL
 
 
 def emit_startup_banner(
@@ -508,6 +631,7 @@ def emit_startup_banner(
         "session_started": _SESSION_START.isoformat(),
         "log_dir": str(_LAST_LOG_DIRECTORY) if _LAST_LOG_DIRECTORY else str(Path(os.getenv(LOG_DIR_ENV, "logs")).expanduser()),
         "log_file": str(_LAST_LOG_FILE) if _LAST_LOG_FILE else None,
+        "log_format": _LAST_FORMAT_LABEL,
     }
     if extra_details:
         details.update(extra_details)
@@ -642,6 +766,9 @@ __all__ = [
     "StructuredMessage",
     "current_correlation_id",
     "get_logger",
+    "get_log_directory",
+    "get_log_file",
+    "get_log_format",
     "log_duration",
     "log_context",
     "log_event",

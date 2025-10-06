@@ -47,6 +47,7 @@ from .config_manager import (
 
 from .utils.form_validation import safe_get_float, safe_get_int
 from .utils.tooltip import Tooltip
+from .logging_utils import get_log_directory
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -381,7 +382,10 @@ class UIManager:
             logging.error("UIManager: falha ao abrir %s: %s", target, exc, exc_info=True)
 
     def open_logs_directory(self) -> None:
-        self._open_directory_from_tray(Path("logs"))
+        target = get_log_directory()
+        if target is None:
+            target = Path(os.getenv("WHISPER_LOG_DIR", "logs")).expanduser()
+        self._open_directory_from_tray(target)
 
     def open_docs_directory(self) -> None:
         self._open_directory_from_tray(Path("docs"))
