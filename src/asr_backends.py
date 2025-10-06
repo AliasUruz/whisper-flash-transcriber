@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Protocol
+from typing import Any, Callable, Protocol
 
-from .asr.backends import make_backend as _make_asr_backend
+from .asr import make_backend as _make_asr_backend
 
 
 class ASRBackend(Protocol):
@@ -52,7 +52,7 @@ class DummyBackend:
         return {"text": ""}
 
 
-backend_registry: Dict[str, Callable[[Any], ASRBackend]] = {
+backend_registry: dict[str, Callable[[Any], ASRBackend]] = {
     "whisper": WhisperBackend,
     "dummy": DummyBackend,
 }
