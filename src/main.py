@@ -22,6 +22,7 @@ import src.config_manager as config_module
 
 from src.logging_utils import (
     StructuredMessage,
+    emit_startup_banner,
     get_logger,
     setup_logging,
 )
@@ -363,6 +364,12 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
 
 def main() -> None:
     setup_logging()
+    emit_startup_banner(
+        extra_details={
+            "icon_path": str(ICON_PATH),
+            "hotkey_config": str(HOTKEY_CONFIG_PATH),
+        }
+    )
     LOGGER.info(
         StructuredMessage(
             "Whisper Flash Transcriber bootstrap sequence started.",

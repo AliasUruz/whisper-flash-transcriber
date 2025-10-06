@@ -3,20 +3,32 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import re
+import sys
 import threading
+import time
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from uuid import uuid4
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 LOG_DIR_ENV = "WHISPER_LOG_DIR"
 LOG_MAX_BYTES_ENV = "WHISPER_LOG_MAX_BYTES"
 LOG_BACKUP_COUNT_ENV = "WHISPER_LOG_BACKUP_COUNT"
+LOG_RUN_ID_ENV = "WHISPER_LOG_RUN_ID"
 DEFAULT_LOG_FILENAME = "whisper-flash-transcriber.log"
 DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
 DEFAULT_LOG_BACKUP_COUNT = 5
+
+_SESSION_START = datetime.now(timezone.utc)
+_SESSION_MONOTONIC = time.monotonic()
+_RUN_ID = os.getenv(LOG_RUN_ID_ENV, "").strip() or f"{_SESSION_START:%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"
+_LAST_LOG_DIRECTORY: Path | None = None
+_LAST_LOG_FILE: Path | None = None
 
 
 class _StripAnsiFilter(logging.Filter):
@@ -37,6 +49,11 @@ class _RuntimeContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:  # pragma: no cover - trivial
         record.process_id = os.getpid()
         record.thread_name = threading.current_thread().name
+        record.run_id = _RUN_ID
+        try:
+            record.uptime_ms = int((time.monotonic() - _SESSION_MONOTONIC) * 1000)
+        except Exception:  # pragma: no cover - defensive guard
+            record.uptime_ms = None
         return True
 
 
@@ -126,6 +143,12 @@ class _StructuredLogFormatter(logging.Formatter):
         thread_name = getattr(record, "thread_name", None) or getattr(record, "threadName", None)
         if thread_name and thread_name != "MainThread":
             extras.append(f"thread={thread_name}")
+        run_id = getattr(record, "run_id", None)
+        if run_id:
+            extras.append(f"run={run_id}")
+        uptime_ms = getattr(record, "uptime_ms", None)
+        if isinstance(uptime_ms, int) and uptime_ms >= 0:
+            extras.append(f"uptime_ms={uptime_ms}")
         if record.funcName:
             extras.append(f"func={record.funcName}")
 
@@ -242,6 +265,9 @@ def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.H
         )
         return None
 
+    global _LAST_LOG_DIRECTORY, _LAST_LOG_FILE
+    _LAST_LOG_DIRECTORY = log_directory
+
     max_bytes = _resolve_int(os.getenv(LOG_MAX_BYTES_ENV), DEFAULT_LOG_MAX_BYTES)
     backup_count = _resolve_int(os.getenv(LOG_BACKUP_COUNT_ENV), DEFAULT_LOG_BACKUP_COUNT)
 
@@ -263,12 +289,17 @@ def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.H
     handler.setFormatter(_StructuredLogFormatter())
     for filt in filters:
         handler.addFilter(filt)
+    try:
+        _LAST_LOG_FILE = Path(handler.baseFilename).resolve()
+    except Exception:
+        _LAST_LOG_FILE = Path(handler.baseFilename)
     return handler
 
 
 def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> None:
     """Configure root logging with a structured, copy-friendly format."""
 
+    level = _determine_level()
     filters: list[logging.Filter] = [_StripAnsiFilter(), _RuntimeContextFilter()]
     if extra_filters:
         filters.extend(extra_filters)
@@ -284,11 +315,61 @@ def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> N
     if file_handler is not None:
         handlers.append(file_handler)
 
-    logging.basicConfig(level=_determine_level(), handlers=handlers, force=True)
+    logging.basicConfig(level=level, handlers=handlers, force=True)
     logging.captureWarnings(True)
 
     for noisy_logger in ("google", "httpx", "urllib3", "asyncio"):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+    get_logger("whisper_flash_transcriber.logging", component="Logging").info(
+        log_context(
+            "Logging configured.",
+            event="logging.configured",
+            level=logging.getLevelName(level),
+            run_id=_RUN_ID,
+            session_started=_SESSION_START.isoformat(),
+            log_dir=str(_LAST_LOG_DIRECTORY) if _LAST_LOG_DIRECTORY else None,
+            log_file=str(_LAST_LOG_FILE) if _LAST_LOG_FILE else None,
+        )
+    )
+
+    emit_startup_banner()
+
+
+def get_run_id() -> str:
+    """Return the identifier assigned to the current logging session."""
+
+    return _RUN_ID
+
+
+def emit_startup_banner(
+    *,
+    logger: logging.Logger | ContextualLoggerAdapter | None = None,
+    extra_details: Mapping[str, Any] | None = None,
+) -> None:
+    """Emit a structured log entry summarizing runtime diagnostics."""
+
+    target = logger or get_logger("whisper_flash_transcriber.logging", component="Logging")
+    details: dict[str, Any] = {
+        "python": platform.python_version(),
+        "executable": sys.executable,
+        "platform": platform.platform(),
+        "cwd": str(Path.cwd()),
+        "run_id": _RUN_ID,
+        "session_started": _SESSION_START.isoformat(),
+        "log_dir": str(_LAST_LOG_DIRECTORY) if _LAST_LOG_DIRECTORY else str(Path(os.getenv(LOG_DIR_ENV, "logs")).expanduser()),
+        "log_file": str(_LAST_LOG_FILE) if _LAST_LOG_FILE else None,
+    }
+    if extra_details:
+        details.update(extra_details)
+
+    target.info(
+        log_context(
+            "Runtime context captured for logging session.",
+            event="logging.runtime_context",
+            details=details,
+        )
+    )
 
 
 def log_context(
@@ -340,6 +421,8 @@ def get_logger(
 __all__ = [
     "ContextualLoggerAdapter",
     "StructuredMessage",
+    "emit_startup_banner",
+    "get_run_id",
     "get_logger",
     "log_context",
     "log_event",
