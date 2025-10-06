@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, Mapping
 from pathlib import Path
 from threading import RLock
 try:
@@ -60,7 +60,13 @@ from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from . import model_manager as model_manager_module
-from .logging_utils import StructuredMessage, get_logger, log_context
+from .logging_utils import (
+    StructuredMessage,
+    get_logger,
+    log_context,
+    log_duration,
+    scoped_correlation_id,
+)
 
 
 LOGGER = get_logger('whisper_flash_transcriber.core', component='Core')
@@ -168,6 +174,8 @@ class AppCore:
         self.shutting_down = False
         self.full_transcription = "" # Acumula transcrição completa
         self.model_prompt_active = False
+        self._active_recording_correlation_id: str | None = None
+        self._recording_started_at: float | None = None
 
     @property
     def ui_manager(self):
@@ -1048,11 +1056,43 @@ class AppCore:
         """Indica se o estado atual é TRANSCRIBING."""
         return self.state_manager.is_transcribing()
 
-    def _log_status(self, text, error=False):
+    def _log_status(
+        self,
+        text: str,
+        *,
+        error: bool = False,
+        event: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        **fields: Any,
+    ) -> None:
+        payload = log_context(
+            text,
+            event=event or ("core.status.error" if error else "core.status.info"),
+            details=details,
+            **fields,
+        )
         if error:
-            LOGGER.error(text)
+            LOGGER.error(payload)
         else:
-            LOGGER.info(text)
+            LOGGER.info(payload)
+
+    def _recording_log_details(self) -> dict[str, Any]:
+        """Collect contextual information about the current recording session."""
+
+        details: dict[str, Any] = {
+            "state": self.state_manager.get_current_state(),
+            "model_ready": self.transcription_handler.is_model_ready(),
+            "agent_mode_active": bool(self.action_orchestrator.is_agent_mode_active),
+        }
+        storage_mode = getattr(self.audio_handler, "record_storage_mode", None)
+        if storage_mode is not None:
+            details["storage_mode"] = storage_mode
+        details["storage_in_memory"] = getattr(self.audio_handler, "in_memory_mode", None)
+        details["use_vad"] = getattr(self.audio_handler, "use_vad", None)
+        correlation = self._active_recording_correlation_id
+        if correlation:
+            details["correlation_id"] = correlation
+        return details
 
     # --- Hotkey Logic (movida de WhisperCore) ---
     def _start_autohotkey(self):
@@ -1243,33 +1283,116 @@ class AppCore:
     def start_recording(self):
         with self.recording_lock:
             if self.audio_handler.is_recording:
+                LOGGER.debug(
+                    log_context(
+                        "Start recording request ignored; capture already active.",
+                        event="core.recording.already_active",
+                        details=self._recording_log_details(),
+                    )
+                )
                 return
             current_state = self.state_manager.get_current_state()
             if current_state == sm.STATE_TRANSCRIBING:
-                self._log_status("Cannot record: Transcription running.", error=True)
+                details = self._recording_log_details()
+                details.update({"reason": "transcription_in_progress"})
+                self._log_status(
+                    "Cannot record: Transcription running.",
+                    error=True,
+                    event="core.recording.blocked",
+                    details=details,
+                )
                 return
             if (not self.transcription_handler.is_model_ready()) or current_state == sm.STATE_LOADING_MODEL:
-                self._log_status("Cannot record: Model not loaded.", error=True)
+                details = self._recording_log_details()
+                details.update({"reason": "model_not_ready"})
+                self._log_status(
+                    "Cannot record: Model not loaded.",
+                    error=True,
+                    event="core.recording.blocked",
+                    details=details,
+                )
                 return
             if current_state.startswith("ERROR"):
+                details = self._recording_log_details()
+                details.update({"reason": "app_in_error_state", "error_state": current_state})
                 self._log_status(
                     f"Cannot record: App in error state ({current_state}).",
                     error=True,
+                    event="core.recording.blocked",
+                    details=details,
                 )
                 return
-        
-        # if self.ui_manager:
-        #     self.ui_manager.show_live_transcription_window()
-        self.audio_handler.start_recording()
-        self._reset_full_transcription()
-        self.action_orchestrator.deactivate_agent_mode()
+
+        with scoped_correlation_id() as correlation_id:
+            self._active_recording_correlation_id = correlation_id
+            self._recording_started_at = time.monotonic()
+            base_details = self._recording_log_details()
+            base_details["correlation_id"] = correlation_id
+            with log_duration(
+                LOGGER,
+                "Recording session bootstrap.",
+                event="core.recording.start",
+                details=base_details,
+                log_start=True,
+                start_level=logging.DEBUG,
+            ) as collected:
+                start_success = self.audio_handler.start_recording()
+                collected["audio_session_id"] = getattr(self.audio_handler, "_session_id", None)
+                collected["audio_handler_ack"] = bool(start_success)
+                if start_success:
+                    self._reset_full_transcription()
+                    self.action_orchestrator.deactivate_agent_mode()
+                    collected.setdefault("status", "active")
+                    collected["storage_mode"] = getattr(self.audio_handler, "record_storage_mode", None)
+                    collected["storage_in_memory"] = getattr(self.audio_handler, "in_memory_mode", None)
+                else:
+                    collected.setdefault("status", "noop")
+            if not start_success:
+                self._active_recording_correlation_id = None
+                self._recording_started_at = None
+                self._log_status(
+                    "Audio subsystem rejected the recording start request.",
+                    error=True,
+                    event="core.recording.failed",
+                    details=self._recording_log_details(),
+                )
 
     def stop_recording(self):
         with self.recording_lock:
             if not self.audio_handler.is_recording:
+                LOGGER.debug(
+                    log_context(
+                        "Stop recording request ignored; no active capture.",
+                        event="core.recording.stop_ignored",
+                        details=self._recording_log_details(),
+                    )
+                )
                 return
 
-        was_valid = self.audio_handler.stop_recording()
+        correlation_id = self._active_recording_correlation_id
+        was_valid = False
+        with scoped_correlation_id(correlation_id, preserve_existing=True):
+            base_details = self._recording_log_details()
+            if self._recording_started_at is not None:
+                elapsed = max(time.monotonic() - self._recording_started_at, 0.0)
+                base_details["elapsed_ms"] = int(elapsed * 1000)
+            with log_duration(
+                LOGGER,
+                "Recording session shutdown.",
+                event="core.recording.stop",
+                details=base_details,
+                log_start=True,
+                start_level=logging.DEBUG,
+            ) as collected:
+                was_valid = self.audio_handler.stop_recording()
+                collected["recording_valid"] = bool(was_valid)
+                if was_valid is False:
+                    collected["status"] = "discarded"
+                else:
+                    collected.setdefault("status", "completed")
+        self._active_recording_correlation_id = None
+        self._recording_started_at = None
+
         if was_valid is False:
             if hasattr(self.transcription_handler, "stop_transcription"):
                 self.transcription_handler.stop_transcription()
@@ -1289,11 +1412,27 @@ class AppCore:
     def toggle_recording(self):
         with self.recording_lock:
             rec = self.audio_handler.is_recording
+        details = self._recording_log_details()
+        details["currently_recording"] = bool(rec)
+        LOGGER.info(
+            log_context(
+                "Toggle recording requested.",
+                event="core.recording.toggle",
+                details=details,
+            )
+        )
         if rec:
             self.stop_recording()
             return
         if self.state_manager.get_current_state() == sm.STATE_TRANSCRIBING:
-            self._log_status("Cannot start recording, transcription in progress.", error=True)
+            details = self._recording_log_details()
+            details.update({"reason": "transcription_in_progress"})
+            self._log_status(
+                "Cannot start recording, transcription in progress.",
+                error=True,
+                event="core.recording.blocked",
+                details=details,
+            )
             return
         self.start_recording()
 
