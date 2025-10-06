@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -72,6 +73,22 @@ _download_size_lock = RLock()
 
 _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _list_installed_lock = RLock()
+
+_ESSENTIAL_CONFIG_FILES = {"config.json"}
+_ESSENTIAL_WEIGHT_FILES = {
+    "model.bin",
+    "model.onnx",
+    "model.int8.bin",
+    "model.int8.onnx",
+    "model.float16.bin",
+    "model.float16.onnx",
+    "model.safetensors",
+    "pytorch_model.bin",
+    "encoder_model.bin",
+    "decoder_model.bin",
+    "encoder_model.onnx",
+    "decoder_model.onnx",
+}
 
 
 def _normalize_cache_dir(cache_dir: str | Path) -> Path:
@@ -340,7 +357,41 @@ def ensure_download(
     backend_label = normalize_backend_label(backend) or storage_backend
 
     local_dir = cache_dir / storage_backend / model_id
-    if local_dir.is_dir() and any(local_dir.iterdir()):
+
+    def _cleanup_partial() -> None:
+        try:
+            if local_dir.exists():
+                shutil.rmtree(local_dir)
+        except Exception:  # pragma: no cover - best effort cleanup
+            logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
+
+    def _local_dir_complete() -> bool:
+        if not local_dir.is_dir():
+            return False
+        try:
+            config_found = False
+            weight_found = False
+            for entry in local_dir.rglob("*"):
+                if not entry.is_file():
+                    continue
+                name = entry.name
+                if name in _ESSENTIAL_CONFIG_FILES:
+                    config_found = True
+                if name in _ESSENTIAL_WEIGHT_FILES:
+                    weight_found = True
+                if config_found and weight_found:
+                    return True
+        except OSError as exc:
+            MODEL_LOGGER.warning(
+                "Unable to inspect existing model directory %s: %s",
+                local_dir,
+                exc,
+            )
+            return False
+
+        return False
+
+    if _local_dir_complete():
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
             model_id,
@@ -348,6 +399,15 @@ def ensure_download(
             local_dir,
         )
         return str(local_dir)
+
+    if local_dir.exists():
+        MODEL_LOGGER.warning(
+            "Existing directory for model %s (backend=%s) is incomplete; cleaning up before download.",
+            model_id,
+            backend_label,
+        )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
@@ -372,13 +432,6 @@ def ensure_download(
         if cancel_event is not None and cancel_event.is_set():
             raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
 
-    def _cleanup_partial() -> None:
-        try:
-            if local_dir.exists():
-                shutil.rmtree(local_dir)
-        except Exception:  # pragma: no cover - best effort cleanup
-            logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
-
     progress_class = None
     if cancel_event is not None or deadline is not None:
         progress_class = _make_cancellable_progress(_check_abort)
@@ -396,6 +449,8 @@ def ensure_download(
         "allow_patterns": None,
         "tqdm_class": progress_class,
     }
+    if os.name == "nt":
+        download_kwargs["local_dir_use_symlinks"] = False
     if revision is not None:
         download_kwargs["revision"] = revision
 
@@ -419,6 +474,7 @@ def ensure_download(
         _check_abort()
     except DownloadCancelledError:
         _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise
     except KeyboardInterrupt as exc:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
@@ -428,6 +484,8 @@ def ensure_download(
             backend_label,
             duration_ms,
         )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise DownloadCancelledError(
             "Model download cancelled by user.",
             by_user=True,
@@ -446,6 +504,8 @@ def ensure_download(
             backend_label,
             duration_ms,
         )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise
 
     duration_ms = (time.perf_counter() - start_time) * 1000.0
@@ -456,6 +516,7 @@ def ensure_download(
         duration_ms,
         local_dir,
     )
+    _invalidate_list_installed_cache(cache_dir)
     return str(local_dir)
 
 
