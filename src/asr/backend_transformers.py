@@ -36,17 +36,17 @@ class TransformersBackend:
         if model_override:
             self.model_id = model_override
 
-        device = device if device not in (None, "auto") else ("cuda:0" if torch.cuda.is_available() else -1)
-        torch_dtype = (
-            torch.float16
-            if (device != -1 and (dtype in (None, "auto", "float16", "fp16")))
-            else torch.float32
-        )
+        requested_device = device if device not in (None, "auto") else self.device
+        if requested_device in (None, "auto"):
+            requested_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+        resolved_device = self._resolve_device(requested_device, torch)
+        torch_dtype = self._resolve_dtype(dtype, resolved_device, torch)
 
         LOGGER.info(
             "Loading Transformers ASR model '%s' with device=%s and dtype=%s",
             self.model_id,
-            device,
+            resolved_device,
             torch_dtype,
         )
 
@@ -59,12 +59,15 @@ class TransformersBackend:
             use_safetensors=True,
             attn_implementation=attn_implementation,
         )
+
+        pipeline_device = self._resolve_pipeline_device(resolved_device)
+        self.device = str(resolved_device)
         self.pipe = pipeline(
             "automatic-speech-recognition",
             model=self.model,
             tokenizer=self.processor.tokenizer,
             feature_extractor=self.processor.feature_extractor,
-            device=(resolved_device if resolved_device.type == "cuda" else -1),
+            device=pipeline_device,
         )
         try:
             self.sample_rate = int(self.processor.feature_extractor.sampling_rate)  # type: ignore[attr-defined]
@@ -111,6 +114,8 @@ class TransformersBackend:
             normalized = device.strip().lower()
             if normalized in {"cpu", "-1"}:
                 return torch_module.device("cpu")
+            if normalized in {"mps", "xpu"}:
+                return torch_module.device(normalized)
             if normalized.isdigit():
                 return torch_module.device(f"cuda:{normalized}")
             if normalized.startswith("cuda"):
@@ -139,3 +144,11 @@ class TransformersBackend:
             return getattr(torch_module, target)
         except AttributeError as exc:  # pragma: no cover - defensive guard
             raise ValueError(f"Unsupported dtype specification: {dtype!r}") from exc
+
+    @staticmethod
+    def _resolve_pipeline_device(device: "torch.device") -> object:
+        """Map a resolved device into the value expected by ``pipeline``."""
+
+        if device.type in {"cuda", "mps", "xpu"}:
+            return device
+        return -1

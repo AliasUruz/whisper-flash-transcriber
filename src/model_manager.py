@@ -93,6 +93,33 @@ def _invalidate_list_installed_cache(cache_dir: str | Path | None = None) -> Non
         _list_installed_cache.pop(cache_key, None)
 
 
+def _is_installation_complete(model_dir: Path) -> bool:
+    """Return ``True`` when the on-disk model contains essential assets."""
+
+    if not model_dir.exists():
+        return False
+
+    has_config = False
+    has_weights = False
+
+    try:
+        iterator = model_dir.rglob("*")
+    except Exception:
+        return False
+
+    for path in iterator:
+        if not path.is_file():
+            continue
+        name = path.name.lower()
+        if name == "config.json":
+            has_config = True
+        if name.endswith((".bin", ".onnx", ".safetensors")):
+            has_weights = True
+        if has_config and has_weights:
+            return True
+    return False
+
+
 def list_catalog() -> List[Dict[str, str]]:
     """Return curated catalog entries with display names."""
     catalog = []
@@ -341,13 +368,29 @@ def ensure_download(
 
     local_dir = cache_dir / storage_backend / model_id
     if local_dir.is_dir() and any(local_dir.iterdir()):
-        MODEL_LOGGER.info(
-            "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
+        if _is_installation_complete(local_dir):
+            MODEL_LOGGER.info(
+                "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
+                model_id,
+                backend_label,
+                local_dir,
+            )
+            return str(local_dir)
+
+        MODEL_LOGGER.warning(
+            "Detected incomplete installation for model=%s backend=%s at %s; cleaning up before retrying.",
             model_id,
             backend_label,
             local_dir,
         )
-        return str(local_dir)
+        try:
+            shutil.rmtree(local_dir)
+        except Exception:  # pragma: no cover - best effort cleanup
+            MODEL_LOGGER.debug(
+                "Failed to remove incomplete model directory %s before re-download.",
+                local_dir,
+                exc_info=True,
+            )
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
@@ -395,6 +438,8 @@ def ensure_download(
         "local_dir": str(local_dir),
         "allow_patterns": None,
         "tqdm_class": progress_class,
+        "resume_download": True,
+        "local_dir_use_symlinks": False,
     }
     if revision is not None:
         download_kwargs["revision"] = revision
@@ -456,6 +501,7 @@ def ensure_download(
         duration_ms,
         local_dir,
     )
+    _invalidate_list_installed_cache(cache_dir)
     return str(local_dir)
 
 
