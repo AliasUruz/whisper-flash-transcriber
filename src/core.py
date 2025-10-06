@@ -41,6 +41,8 @@ from .config_manager import (
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
+    STORAGE_ROOT_DIR_CONFIG_KEY,
+    RECORDINGS_DIR_CONFIG_KEY,
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
@@ -1349,6 +1351,8 @@ class AppCore:
             "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
             "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
+            "new_storage_root_dir": STORAGE_ROOT_DIR_CONFIG_KEY,
+            "new_recordings_dir": RECORDINGS_DIR_CONFIG_KEY,
             "new_ct2_cpu_threads": ASR_CT2_CPU_THREADS_CONFIG_KEY,
             "new_clear_gpu_cache": CLEAR_GPU_CACHE_CONFIG_KEY,
             "new_use_vad": USE_VAD_CONFIG_KEY,
@@ -1456,6 +1460,8 @@ class AppCore:
             VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
             RECORD_STORAGE_MODE_CONFIG_KEY,
             RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            STORAGE_ROOT_DIR_CONFIG_KEY,
+            RECORDINGS_DIR_CONFIG_KEY,
             MIN_RECORDING_DURATION_CONFIG_KEY,
         }
         if audio_related_keys & changed_mapped_keys:
@@ -1705,7 +1711,23 @@ class AppCore:
         removed_count = 0
         LOGGER.info("Running startup audio file cleanup...")
         try:
-            files_to_check = glob.glob("temp_recording_*.wav") + glob.glob("recording_*.wav")
+            recordings_dir_value = self.config_manager.get(RECORDINGS_DIR_CONFIG_KEY)
+            try:
+                recordings_path = Path(str(recordings_dir_value)).expanduser()
+            except Exception:
+                recordings_path = Path.cwd()
+            if not recordings_path.exists():
+                LOGGER.debug(
+                    "Cleanup (startup): recordings directory '%s' does not exist.",
+                    recordings_path,
+                )
+                return
+            patterns = [
+                recordings_path / pattern for pattern in ("temp_recording_*.wav", "recording_*.wav")
+            ]
+            files_to_check: list[str] = []
+            for pattern in patterns:
+                files_to_check.extend(str(path) for path in glob.glob(str(pattern)))
             for f in files_to_check:
                 try:
                     os.remove(f)

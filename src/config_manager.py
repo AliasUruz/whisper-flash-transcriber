@@ -33,6 +33,12 @@ def _parse_bool(value):
 CONFIG_FILE = "config.json"
 SECRETS_FILE = "secrets.json"  # Nova constante para o arquivo de segredos
 
+_BASE_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
+_DEFAULT_STORAGE_ROOT_DIR = str(_BASE_STORAGE_ROOT)
+_DEFAULT_ASR_CACHE_DIR = str((_BASE_STORAGE_ROOT / "asr").expanduser())
+_DEFAULT_RECORDINGS_DIR = str((_BASE_STORAGE_ROOT / "recordings").expanduser())
+
+
 DEFAULT_CONFIG = {
     "record_key": "F3",
     "record_mode": "toggle",
@@ -106,12 +112,14 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
+    "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
+    "recordings_dir": _DEFAULT_RECORDINGS_DIR,
     "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "ctranslate2",
     "asr_compute_device": "auto",
     "asr_dtype": "float16",
     "asr_ct2_compute_type": "int8_float16",
-    "asr_cache_dir": str((Path.home() / ".cache" / "whisper_flash_transcriber" / "asr").expanduser()),
+    "asr_cache_dir": _DEFAULT_ASR_CACHE_DIR,
     "asr_installed_models": [],
     "asr_curated_catalog": [],
     "asr_curated_catalog_url": "",
@@ -189,6 +197,8 @@ REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
 HOTKEY_HEALTH_CHECK_INTERVAL = 10
 CLEAR_GPU_CACHE_CONFIG_KEY = "clear_gpu_cache"
+STORAGE_ROOT_DIR_CONFIG_KEY = "storage_root_dir"
+RECORDINGS_DIR_CONFIG_KEY = "recordings_dir"
 ASR_BACKEND_CONFIG_KEY = "asr_backend"
 ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
 ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
@@ -377,13 +387,187 @@ class ConfigManager:
         cfg["batch_size_specified"] = batch_size_specified
         cfg["gpu_index_specified"] = gpu_index_specified
 
-        cache_dir_value = cfg.get(ASR_CACHE_DIR_CONFIG_KEY, self.default_config[ASR_CACHE_DIR_CONFIG_KEY])
-        cache_path = Path(str(cache_dir_value)).expanduser()
-        try:
-            cache_path.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:  # pragma: no cover - defensive path
-            logging.warning("Failed to create ASR cache directory '%s': %s", cache_path, exc)
+        def _coerce_path(value: Any, *, default: Path) -> Path:
+            if value in (None, ""):
+                return default
+            if isinstance(value, Path):
+                return value.expanduser()
+            try:
+                candidate = Path(str(value)).expanduser()
+            except Exception:
+                return default
+            return candidate
+
+        def _normalized_str(path: Path) -> str:
+            try:
+                return str(path.expanduser().resolve())
+            except Exception:
+                try:
+                    return str(path.expanduser().absolute())
+                except Exception:
+                    return str(path.expanduser())
+
+        def _ensure_directory(path: Path, *, fallback: Path, description: str) -> Path:
+            candidates: list[tuple[Path, str]] = [
+                (path, "requested"),
+                (fallback, "default"),
+                (Path.cwd(), "working"),
+            ]
+            normalized_seen: set[str] = set()
+            for candidate, label in candidates:
+                normalized = _normalized_str(candidate)
+                if not normalized or normalized in normalized_seen:
+                    continue
+                normalized_seen.add(normalized)
+                candidate_path = Path(normalized)
+                try:
+                    candidate_path.mkdir(parents=True, exist_ok=True)
+                except Exception as exc:
+                    logging.warning(
+                        "%s directory (%s) '%s' is not accessible: %s",
+                        description.capitalize(),
+                        label,
+                        candidate_path,
+                        exc,
+                    )
+                    continue
+                if label != "requested":
+                    logging.info(
+                        "%s directory resolved to '%s' via %s fallback.",
+                        description.capitalize(),
+                        candidate_path,
+                        label,
+                    )
+                return candidate_path
+            logging.error(
+                "Unable to secure %s directory; falling back to current working directory.",
+                description,
+            )
+            return Path.cwd()
+
+        default_storage_root_path = Path(
+            self.default_config[STORAGE_ROOT_DIR_CONFIG_KEY]
+        ).expanduser()
+        storage_root_raw = _source_value(
+            STORAGE_ROOT_DIR_CONFIG_KEY,
+            default=cfg.get(
+                STORAGE_ROOT_DIR_CONFIG_KEY,
+                self.default_config[STORAGE_ROOT_DIR_CONFIG_KEY],
+            ),
+        )
+        requested_storage_root_path = _coerce_path(
+            storage_root_raw,
+            default=default_storage_root_path,
+        )
+
+        previous_storage_root_path: Path | None = None
+        if loaded_config and STORAGE_ROOT_DIR_CONFIG_KEY in loaded_config:
+            previous_storage_root_path = _coerce_path(
+                loaded_config[STORAGE_ROOT_DIR_CONFIG_KEY],
+                default=default_storage_root_path,
+            )
+
+        storage_root_path = _ensure_directory(
+            requested_storage_root_path,
+            fallback=default_storage_root_path,
+            description="storage root",
+        )
+        cfg[STORAGE_ROOT_DIR_CONFIG_KEY] = str(storage_root_path)
+
+        derived_asr_path = storage_root_path / "asr"
+        default_asr_path = Path(self.default_config[ASR_CACHE_DIR_CONFIG_KEY]).expanduser()
+        asr_defaults = {
+            _normalized_str(derived_asr_path),
+            _normalized_str(default_asr_path),
+        }
+        if previous_storage_root_path is not None:
+            asr_defaults.add(_normalized_str(previous_storage_root_path / "asr"))
+
+        asr_override = False
+        if applied_updates and ASR_CACHE_DIR_CONFIG_KEY in applied_updates:
+            asr_override = True
+        elif loaded_config and ASR_CACHE_DIR_CONFIG_KEY in loaded_config:
+            loaded_asr_path = _normalized_str(
+                _coerce_path(
+                    loaded_config[ASR_CACHE_DIR_CONFIG_KEY],
+                    default=derived_asr_path,
+                )
+            )
+            if loaded_asr_path not in asr_defaults:
+                asr_override = True
+
+        asr_raw = _source_value(
+            ASR_CACHE_DIR_CONFIG_KEY,
+            default=cfg.get(
+                ASR_CACHE_DIR_CONFIG_KEY,
+                self.default_config[ASR_CACHE_DIR_CONFIG_KEY],
+            ),
+        )
+        if asr_override:
+            requested_asr_path = _coerce_path(asr_raw, default=derived_asr_path)
+            cache_path = _ensure_directory(
+                requested_asr_path,
+                fallback=derived_asr_path,
+                description="ASR cache",
+            )
+        else:
+            cache_path = _ensure_directory(
+                derived_asr_path,
+                fallback=default_asr_path,
+                description="ASR cache",
+            )
         cfg[ASR_CACHE_DIR_CONFIG_KEY] = str(cache_path)
+
+        derived_recordings_path = storage_root_path / "recordings"
+        default_recordings_path = Path(
+            self.default_config[RECORDINGS_DIR_CONFIG_KEY]
+        ).expanduser()
+        recordings_defaults = {
+            _normalized_str(derived_recordings_path),
+            _normalized_str(default_recordings_path),
+        }
+        if previous_storage_root_path is not None:
+            recordings_defaults.add(
+                _normalized_str(previous_storage_root_path / "recordings")
+            )
+
+        recordings_override = False
+        if applied_updates and RECORDINGS_DIR_CONFIG_KEY in applied_updates:
+            recordings_override = True
+        elif loaded_config and RECORDINGS_DIR_CONFIG_KEY in loaded_config:
+            loaded_recordings_path = _normalized_str(
+                _coerce_path(
+                    loaded_config[RECORDINGS_DIR_CONFIG_KEY],
+                    default=derived_recordings_path,
+                )
+            )
+            if loaded_recordings_path not in recordings_defaults:
+                recordings_override = True
+
+        recordings_raw = _source_value(
+            RECORDINGS_DIR_CONFIG_KEY,
+            default=cfg.get(
+                RECORDINGS_DIR_CONFIG_KEY,
+                self.default_config[RECORDINGS_DIR_CONFIG_KEY],
+            ),
+        )
+        if recordings_override:
+            requested_recordings_path = _coerce_path(
+                recordings_raw,
+                default=derived_recordings_path,
+            )
+            recordings_path = _ensure_directory(
+                requested_recordings_path,
+                fallback=derived_recordings_path,
+                description="recordings",
+            )
+        else:
+            recordings_path = _ensure_directory(
+                derived_recordings_path,
+                fallback=default_recordings_path,
+                description="recordings",
+            )
+        cfg[RECORDINGS_DIR_CONFIG_KEY] = str(recordings_path)
 
         cfg[ASR_CURATED_CATALOG_CONFIG_KEY] = list_catalog()
         default_model_id = str(self.default_config[ASR_MODEL_ID_CONFIG_KEY])
@@ -973,6 +1157,24 @@ class ConfigManager:
 
     def set_asr_ct2_compute_type(self, value: str):
         self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(value)
+
+    def get_storage_root_dir(self) -> str:
+        return self.config.get(
+            STORAGE_ROOT_DIR_CONFIG_KEY,
+            self.default_config[STORAGE_ROOT_DIR_CONFIG_KEY],
+        )
+
+    def set_storage_root_dir(self, value: str):
+        self.config[STORAGE_ROOT_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_recordings_dir(self) -> str:
+        return self.config.get(
+            RECORDINGS_DIR_CONFIG_KEY,
+            self.default_config[RECORDINGS_DIR_CONFIG_KEY],
+        )
+
+    def set_recordings_dir(self, value: str):
+        self.config[RECORDINGS_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
     def get_asr_cache_dir(self):
         return self.config.get(

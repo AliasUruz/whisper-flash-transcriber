@@ -204,7 +204,7 @@ pytest
 | Item | Location |
 | --- | --- |
 | Rotating log files | `logs/` directory (configuration is in the logger setup). |
-| Temporary audio files | Project root (`temp_recording_*.wav`, `recording_*.wav`). | Respeitam a cota configurada por `record_storage_limit` (MB); excedentes mais antigos são apagados automaticamente. |
+| Temporary audio files | Diretório configurado por `recordings_dir` (`temp_recording_*.wav`, `recording_*.wav`). | Respeitam a cota configurada por `record_storage_limit` (MB); excedentes mais antigos são apagados automaticamente. |
 | Agent action plans | `plans/` directory. |
 
 ---

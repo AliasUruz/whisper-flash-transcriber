@@ -8,7 +8,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 import numpy as np
 import sounddevice as sd
@@ -20,7 +20,9 @@ from .utils.memory import get_available_memory_mb, get_total_memory_mb
 
 from .vad_manager import VADManager
 from .config_manager import (
+    RECORDINGS_DIR_CONFIG_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    STORAGE_ROOT_DIR_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
 )
@@ -108,6 +110,9 @@ class AudioHandler:
         self._sample_count = 0
         self._memory_samples = 0
 
+        self.storage_root_dir: Path | None = None
+        self.recordings_dir: Path | None = None
+
         # Dedicated queue and thread for audio processing
         self.audio_queue = queue.Queue()
         self._processing_thread = threading.Thread(target=self._process_audio_queue, daemon=True)
@@ -164,6 +169,78 @@ class AudioHandler:
                     window_seconds=self._overflow_log_window,
                 )
             )
+
+    def _resolve_directory(self, raw: Any, *, fallback: Path, description: str) -> Path:
+        candidates: list[tuple[Path, str]] = []
+        try:
+            primary = Path(str(raw)).expanduser() if raw not in (None, "") else fallback
+        except Exception:
+            primary = fallback
+        candidates.append((primary, "requested"))
+        if fallback != primary:
+            candidates.append((fallback, "default"))
+        working_dir = Path.cwd()
+        if working_dir not in (candidate for candidate, _ in candidates):
+            candidates.append((working_dir, "working"))
+
+        seen: set[str] = set()
+        for candidate, label in candidates:
+            normalized = str(candidate.expanduser())
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            candidate_path = Path(normalized)
+            try:
+                candidate_path.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                self._audio_log.warning(
+                    "Unable to ensure %s directory (%s) '%s': %s",
+                    description,
+                    label,
+                    candidate_path,
+                    exc,
+                )
+                continue
+            if label != "requested":
+                self._audio_log.info(
+                    "Using %s directory '%s' via %s fallback.",
+                    description,
+                    candidate_path,
+                    label,
+                )
+            return candidate_path
+
+        self._audio_log.error(
+            "Failed to resolve a usable %s directory; defaulting to current working directory.",
+            description,
+        )
+        return working_dir
+
+    def _create_temp_wav_file(self) -> tempfile.NamedTemporaryFile:
+        preferred_dir = self.recordings_dir if isinstance(self.recordings_dir, Path) else None
+        if preferred_dir is not None:
+            try:
+                preferred_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                self._audio_log.error(
+                    "Unable to ensure recordings directory '%s': %s; falling back to system temp.",
+                    preferred_dir,
+                    exc,
+                )
+            else:
+                try:
+                    return tempfile.NamedTemporaryFile(
+                        delete=False,
+                        suffix=".wav",
+                        dir=str(preferred_dir),
+                    )
+                except Exception as exc:
+                    self._audio_log.error(
+                        "Failed to create temporary recording inside '%s': %s; using system temp.",
+                        preferred_dir,
+                        exc,
+                    )
+        return tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
 
     def _process_audio_queue(self):
         while True:
@@ -447,7 +524,7 @@ class AudioHandler:
 
     def _migrate_to_file(self):
         """Move in-memory frames into a temporary audio file."""
-        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        raw_tmp = self._create_temp_wav_file()
         self.temp_file_path = raw_tmp.name
         raw_tmp.close()
         self._sf_writer = sf.SoundFile(
@@ -530,7 +607,7 @@ class AudioHandler:
                 self._sf_writer = None
                 self._audio_frames = []
             else:
-                raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                raw_tmp = self._create_temp_wav_file()
                 self.temp_file_path = raw_tmp.name
                 raw_tmp.close()
                 self._sf_writer = sf.SoundFile(
@@ -658,7 +735,19 @@ class AudioHandler:
                     ts = int(time.time())
                     filename = f"temp_recording_{ts}.wav"
                     source_path = Path(self.temp_file_path)
-                    target_path = (Path.cwd() / filename).resolve()
+                    recordings_base = self.recordings_dir
+                    if not isinstance(recordings_base, Path):
+                        recordings_base = Path(str(recordings_base)) if recordings_base else Path.cwd()
+                    try:
+                        recordings_base.mkdir(parents=True, exist_ok=True)
+                    except Exception as exc:
+                        self._audio_log.error(
+                            "Failed to ensure recordings directory '%s': %s; using working directory.",
+                            recordings_base,
+                            exc,
+                        )
+                        recordings_base = Path.cwd()
+                    target_path = (recordings_base / filename).resolve()
                     shutil.move(str(source_path), target_path)
                     self.temp_file_path = str(target_path)
                     self._audio_log.info(
@@ -795,6 +884,27 @@ class AudioHandler:
         self.max_memory_seconds_mode = self.config_manager.get("max_memory_seconds_mode", "manual")
         self.max_memory_seconds = self.config_manager.get("max_memory_seconds", 30)
         self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb", 1000)
+
+        storage_root_default = Path(
+            self.config_manager.default_config.get(
+                STORAGE_ROOT_DIR_CONFIG_KEY,
+                str(Path.cwd()),
+            )
+        ).expanduser()
+        storage_root_value = self.config_manager.get_storage_root_dir()
+        self.storage_root_dir = self._resolve_directory(
+            storage_root_value,
+            fallback=storage_root_default,
+            description="storage root",
+        )
+
+        recordings_fallback = self.storage_root_dir / "recordings"
+        recordings_value = self.config_manager.get_recordings_dir()
+        self.recordings_dir = self._resolve_directory(
+            recordings_value,
+            fallback=recordings_fallback,
+            description="recordings",
+        )
 
         self.sound_enabled = self.config_manager.get("sound_enabled", True)
         self.sound_frequency = self.config_manager.get("sound_frequency", 400)
@@ -1019,12 +1129,38 @@ class AudioHandler:
         _add_protected_paths(protected_paths)
         _add_protected_paths(exclude_paths)
 
+        base_dir = self.recordings_dir if isinstance(self.recordings_dir, Path) else None
+        if base_dir is None:
+            raw_dir = self.recordings_dir
+            if raw_dir:
+                try:
+                    base_dir = Path(str(raw_dir))
+                except Exception:
+                    self._audio_log.error(
+                        "Invalid recordings directory '%s'; skipping storage enforcement.",
+                        raw_dir,
+                    )
+                    return
+        if base_dir is None:
+            self._audio_log.debug(
+                "Recordings directory not configured; skipping storage enforcement.",
+            )
+            return
+
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._audio_log.error(
+                "Unable to ensure recordings directory '%s': %s", base_dir, exc
+            )
+            return
+
         patterns = ("temp_recording_*.wav", "recording_*.wav")
         total_bytes = 0
         candidates: list[tuple[float, Path, int]] = []
 
         for pattern in patterns:
-            for file_path in Path.cwd().glob(pattern):
+            for file_path in base_dir.glob(pattern):
                 try:
                     stat = file_path.stat()
                 except (FileNotFoundError, OSError):
@@ -1036,7 +1172,8 @@ class AudioHandler:
             return
 
         self._audio_log.info(
-            "Storage quota exceeded: %.2f MB used (limit=%d MB). Pruning oldest recordings.",
+            "Storage quota exceeded in '%s': %.2f MB used (limit=%d MB). Pruning oldest recordings.",
+            base_dir,
             total_bytes / (1024 * 1024),
             limit_mb,
         )

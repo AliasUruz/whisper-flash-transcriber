@@ -11,6 +11,8 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Correção de texto | `agent_model_var` | `StringVar` | `CTkOptionMenu` (`agent_model_menu`) | `"gemini_agent_model"` | Seleciona o modelo Gemini específico para o modo agente. |
 | Geral | `hotkey_stability_service_enabled_var` | `BooleanVar` | `CTkSwitch` (`stability_switch`) | `"hotkey_stability_service_enabled"` | Liga/desliga o serviço de estabilização dos hotkeys. |
 | Geral | `launch_at_startup_var` | `BooleanVar` | `CTkSwitch` (`startup_switch`) | `"launch_at_startup"` | Habilita a inicialização automática no Windows. |
+| Armazenamento | `storage_root_dir_var` | `StringVar` | `CTkEntry` (`storage_root_entry`) | `"storage_root_dir"` | Diretório base usado para modelos e outros artefatos pesados. |
+| Armazenamento | `recordings_dir_var` | `StringVar` | `CTkEntry` (`recordings_dir_entry`) | `"recordings_dir"` | Pasta onde arquivos WAV temporários e salvos são armazenados. |
 | Som | `sound_enabled_var` | `BooleanVar` | `CTkSwitch` (`sound_switch`) | `"sound_enabled"` | Ativa os bipes de início/fim de gravação. |
 | Som | `sound_frequency_var` | `StringVar` | `CTkEntry` (`freq_entry`) | `"sound_frequency"` | Entrada textual convertida para inteiro ao aplicar as configurações. |
 | Som | `sound_duration_var` | `StringVar` | `CTkEntry` (`duration_entry`) | `"sound_duration"` | Texto convertido para float durante a validação. |
@@ -46,7 +48,7 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 
 ## Notas adicionais
 
-- A configuração `record_storage_limit` ainda não possui `ctk.*Var` associada. Quando definida manualmente em `config.json`, o `AudioHandler` limita o total combinado de `temp_recording_*.wav` e `recording_*.wav` no diretório raiz, removendo os arquivos mais antigos assim que o teto (em MiB) é excedido.
+- A configuração `record_storage_limit` ainda não possui `ctk.*Var` associada. Quando definida manualmente em `config.json`, o `AudioHandler` limita o total combinado de `temp_recording_*.wav` e `recording_*.wav` no diretório configurado por `recordings_dir`, removendo os arquivos mais antigos assim que o teto (em MiB) é excedido.
 
 ## Duplicatas ou variáveis potencialmente obsoletas
 

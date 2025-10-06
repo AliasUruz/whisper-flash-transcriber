@@ -13,6 +13,9 @@ from .logging_utils import get_logger, log_context
 LOGGER = get_logger(__name__, component='ConfigSchema')
 
 
+_DEFAULT_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
+
+
 class ASRDownloadStatus(BaseModel):
     """Structured status for the last ASR download attempt."""
 
@@ -92,13 +95,15 @@ class AppConfig(BaseModel):
     enable_torch_compile: bool = False
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
+    storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
+    recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
     asr_model_id: str = "openai/whisper-large-v3-turbo"
     asr_backend: str = "ctranslate2"
     asr_compute_device: str = "auto"
     asr_dtype: str = "float16"
     asr_ct2_compute_type: str = "int8_float16"
     asr_ct2_cpu_threads: int | None = None
-    asr_cache_dir: str = str((Path.home() / ".cache" / "whisper_flash_transcriber" / "asr").expanduser())
+    asr_cache_dir: str = str((_DEFAULT_STORAGE_ROOT / "asr").expanduser())
     asr_installed_models: list[str] = Field(default_factory=list)
     asr_curated_catalog: list[str] = Field(default_factory=list)
     asr_curated_catalog_url: str = ""
@@ -221,14 +226,17 @@ class AppConfig(BaseModel):
             return coerced
         return [str(value)]
 
-    @field_validator("asr_cache_dir", mode="before")
+    @field_validator("storage_root_dir", "recordings_dir", "asr_cache_dir", mode="before")
     @classmethod
     def _expand_cache_dir(cls, value: Any) -> str:
         if isinstance(value, str):
-            return str(Path(value).expanduser())
+            normalized = value.strip()
+            if not normalized:
+                return ""
+            return str(Path(normalized).expanduser())
         if isinstance(value, Path):
             return str(value.expanduser())
-        raise ValueError("asr_cache_dir must be a string or Path")
+        raise ValueError("Storage paths must be provided as strings or Path objects")
 
     @field_validator("asr_installed_models", "asr_curated_catalog", mode="before")
     @classmethod
