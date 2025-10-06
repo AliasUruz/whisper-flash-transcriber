@@ -157,6 +157,51 @@ def _model_relative_path(model_id: str) -> Path:
     return Path(*parts)
 
 
+def get_installation_dir(
+    cache_dir: str | Path,
+    backend: str | None,
+    model_id: str,
+) -> Path:
+    """Return the canonical directory where ``model_id`` should live locally."""
+
+    normalized_cache = _normalize_cache_dir(cache_dir)
+    relative_model_path = _model_relative_path(model_id)
+    storage_backend = backend_storage_name(backend)
+    return normalized_cache / storage_backend / relative_model_path
+
+
+def find_existing_installation(
+    cache_dir: str | Path | None,
+    backend: str | None,
+    model_id: str,
+) -> Path | None:
+    """Return the first complete installation of ``model_id`` found on disk."""
+
+    if not cache_dir:
+        return None
+
+    normalized_cache = _normalize_cache_dir(cache_dir)
+    relative_model_path = _model_relative_path(model_id)
+    candidate_names = backend_storage_candidates(backend)
+    seen: set[Path] = set()
+
+    for name in candidate_names:
+        candidate_dir = normalized_cache / name / relative_model_path
+        if candidate_dir in seen:
+            continue
+        seen.add(candidate_dir)
+        try:
+            if _is_installation_complete(candidate_dir):
+                return candidate_dir
+        except Exception:  # pragma: no cover - best effort probing
+            MODEL_LOGGER.debug(
+                "Unable to probe installation directory %s", candidate_dir, exc_info=True
+            )
+            continue
+
+    return None
+
+
 def normalize_backend_label(backend: str | None) -> str:
     """Return a normalized backend label for UI/configuration."""
     if not backend:
