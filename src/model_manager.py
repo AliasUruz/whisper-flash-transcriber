@@ -5,9 +5,9 @@ from __future__ import annotations
 import copy
 import inspect
 import logging
-import os
 import shutil
 import time
+from functools import lru_cache
 from pathlib import Path
 from threading import Event, RLock
 from typing import Dict, List
@@ -80,6 +80,44 @@ _MODEL_WEIGHT_FILE_HINTS = {
     "model.onnx",
     "model.safetensors",
 }
+
+
+@lru_cache(maxsize=1)
+def _snapshot_download_signature() -> inspect.Signature | None:
+    """Return the resolved signature for :func:`snapshot_download`."""
+
+    func = snapshot_download
+    seen = set()
+    while hasattr(func, "__wrapped__"):
+        wrapped = getattr(func, "__wrapped__", None)
+        if wrapped is None or wrapped in seen:
+            break
+        seen.add(func)
+        func = wrapped
+
+    try:
+        return inspect.signature(func)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
+
+
+def _snapshot_download_supports(parameter: str) -> bool:
+    """Return ``True`` when ``snapshot_download`` accepts ``parameter``."""
+
+    if not parameter:
+        return False
+
+    signature = _snapshot_download_signature()
+    if signature is None:
+        return False
+
+    if parameter in signature.parameters:
+        return True
+
+    return any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in signature.parameters.values()
+    )
 
 
 def _model_dir_is_complete(path: Path) -> bool:
@@ -488,15 +526,13 @@ def ensure_download(
         "local_dir": str(local_dir),
         "allow_patterns": None,
         "tqdm_class": progress_class,
-        "resume_download": True,
-        "local_dir_use_symlinks": False,
     }
+    if _snapshot_download_supports("resume_download"):
+        download_kwargs["resume_download"] = True
     if _snapshot_download_supports("local_dir_use_symlinks"):
         download_kwargs["local_dir_use_symlinks"] = False
     if _snapshot_download_supports("local_dir_use_hardlinks"):
         download_kwargs["local_dir_use_hardlinks"] = False
-    if _snapshot_download_supports("resume_download") and "resume_download" not in download_kwargs:
-        download_kwargs["resume_download"] = True
     if revision is not None:
         download_kwargs["revision"] = revision
 
