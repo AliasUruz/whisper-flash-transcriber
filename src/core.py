@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
+from typing import Any
 from pathlib import Path
 from threading import RLock
 try:
@@ -21,6 +22,7 @@ from tkinter import messagebox  # Added for message boxes in _on_model_load_fail
 from . import state_manager as sm
 from .config_manager import (
     ConfigManager,
+    ConfigPersistenceError,
     REREGISTER_INTERVAL_SECONDS,
     HOTKEY_HEALTH_CHECK_INTERVAL,
     DISPLAY_TRANSCRIPTS_KEY,
@@ -40,12 +42,14 @@ from .config_manager import (
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
+    MODELS_STORAGE_DIR_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     STORAGE_ROOT_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
+    RECORDINGS_DIR_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     AUTO_PASTE_MODIFIER_CONFIG_KEY,
@@ -56,7 +60,7 @@ from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from . import model_manager as model_manager_module
-from .logging_utils import get_logger, log_context
+from .logging_utils import StructuredMessage, get_logger, log_context
 
 
 LOGGER = get_logger('whisper_flash_transcriber.core', component='Core')
@@ -68,7 +72,13 @@ StateUpdateCallback = Callable[[sm.StateNotification], None]
 
 
 class AppCore:
-    def __init__(self, main_tk_root):
+    def __init__(
+        self,
+        main_tk_root,
+        *,
+        config_manager: ConfigManager | None = None,
+        hotkey_config_path: str = "hotkey_config.json",
+    ):
         self.main_tk_root = main_tk_root # Referência para a raiz Tkinter
 
         # --- Locks ---
@@ -88,7 +98,7 @@ class AppCore:
         self.on_segment_transcribed = None # Callback para UI ao vivo
 
         # --- Módulos ---
-        self.config_manager = ConfigManager()
+        self.config_manager = config_manager or ConfigManager()
         self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
         self._ui_manager = None  # Será setado externamente pelo main.py
         self._pending_tray_tooltips: list[str] = []
@@ -169,7 +179,7 @@ class AppCore:
             self.state_manager.subscribe(ui_manager_instance.update_tray_icon)
 
         # --- Hotkey Manager ---
-        self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
+        self.ahk_manager = KeyboardHotkeyManager(config_file=hotkey_config_path)
         self.ahk_running = False
         self.last_key_press_time = 0.0
         self.reregister_timer_thread = None
@@ -184,6 +194,17 @@ class AppCore:
 
         self._active_model_download_event: threading.Event | None = None
         self.model_download_timeout = self._resolve_model_download_timeout()
+
+    def build_bootstrap_report(self) -> dict[str, Any]:
+        """Retorna um relatório consolidado do bootstrap inicial."""
+
+        report: dict[str, Any] = {
+            "config": self.config_manager.describe_persistence_state(),
+        }
+        ahk_manager = getattr(self, "ahk_manager", None)
+        if ahk_manager is not None:
+            report["hotkeys"] = ahk_manager.describe_persistence_state()
+        return report
 
         try:
             cache_dir = self.config_manager.get("asr_cache_dir")
@@ -577,6 +598,7 @@ class AppCore:
         ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         self.asr_ct2_compute_type = ct2_compute_type
         self.ct2_quantization = ct2_compute_type
+        self.models_storage_dir = self.config_manager.get(MODELS_STORAGE_DIR_CONFIG_KEY)
         # ... e outras configurações que AppCore precisa diretamente
 
     def _sync_installed_models(self):
@@ -1350,6 +1372,7 @@ class AppCore:
             "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
             "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
             "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            "new_models_storage_dir": MODELS_STORAGE_DIR_CONFIG_KEY,
             "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
             "new_storage_root_dir": STORAGE_ROOT_DIR_CONFIG_KEY,
             "new_recordings_dir": RECORDINGS_DIR_CONFIG_KEY,
@@ -1363,6 +1386,7 @@ class AppCore:
             "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
             "new_record_storage_mode": RECORD_STORAGE_MODE_CONFIG_KEY,
             "new_record_storage_limit": RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            "new_recordings_dir": RECORDINGS_DIR_CONFIG_KEY,
             "new_launch_at_startup": LAUNCH_AT_STARTUP_CONFIG_KEY,
             "new_chunk_length_mode": "chunk_length_mode",
             "new_chunk_length_sec": "chunk_length_sec",
@@ -1443,6 +1467,7 @@ class AppCore:
             ASR_DTYPE_CONFIG_KEY,
             ASR_CT2_CPU_THREADS_CONFIG_KEY,
             ASR_CACHE_DIR_CONFIG_KEY,
+            MODELS_STORAGE_DIR_CONFIG_KEY,
         }
         reload_required = bool(changed_mapped_keys & reload_keys)
         launch_changed = LAUNCH_AT_STARTUP_CONFIG_KEY in changed_mapped_keys
@@ -1463,6 +1488,7 @@ class AppCore:
             STORAGE_ROOT_DIR_CONFIG_KEY,
             RECORDINGS_DIR_CONFIG_KEY,
             MIN_RECORDING_DURATION_CONFIG_KEY,
+            MODELS_STORAGE_DIR_CONFIG_KEY,
         }
         if audio_related_keys & changed_mapped_keys:
             self.audio_handler.update_config()

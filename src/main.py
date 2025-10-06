@@ -1,10 +1,11 @@
 import atexit
 import importlib.util
-import logging
+import json
 import os
 import sys
 import threading
 import tkinter as tk
+from pathlib import Path
 
 # Add project root to path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -14,12 +15,14 @@ if PROJECT_ROOT not in sys.path:
 
 
 ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
+HOTKEY_CONFIG_PATH = Path(PROJECT_ROOT, "hotkey_config.json")
 
+
+import src.config_manager as config_module
 
 from src.logging_utils import (
     StructuredMessage,
     get_logger,
-    log_context,
     setup_logging,
 )
 
@@ -195,6 +198,169 @@ def patch_tk_variable_cleanup() -> None:
     tk.Variable.__del__ = _safe_variable_del
 
 
+def _ensure_hotkey_payload(data: dict[str, object]) -> dict[str, object]:
+    defaults = {"record_key": "f3", "agent_key": "f4", "record_mode": "toggle"}
+    updated = dict(defaults)
+    updated.update({k: v for k, v in data.items() if k in defaults})
+    return updated
+
+
+def _ensure_json_file(
+    path: Path,
+    payload: dict[str, object],
+    *,
+    description: str,
+    recover_on_error: bool = True,
+) -> bool:
+    """Persist ``payload`` when ``path`` is missing; return True if file was created."""
+
+    created = False
+    try:
+        if not path.exists():
+            path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+            created = True
+        else:
+            with path.open("r", encoding="utf-8") as handle:
+                json.load(handle)
+    except json.JSONDecodeError as exc:
+        if recover_on_error:
+            LOGGER.warning(
+                StructuredMessage(
+                    f"{description.capitalize()} file corrupted; restoring defaults.",
+                    event="startup.artifact_recreated",
+                    path=str(path),
+                    error=str(exc),
+                )
+            )
+            path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+            return True
+        LOGGER.error(
+            StructuredMessage(
+                f"Failed to validate {description} file.",
+                event="startup.artifact_validation_failed",
+                path=str(path),
+                error=str(exc),
+            ),
+            exc_info=True,
+        )
+        raise
+    except Exception as exc:
+        LOGGER.error(
+            StructuredMessage(
+                f"Failed to validate {description} file.",
+                event="startup.artifact_validation_failed",
+                path=str(path),
+                error=str(exc),
+            ),
+            exc_info=True,
+        )
+        raise
+    return created
+
+
+def _ensure_hotkey_config(path: Path) -> bool:
+    """Validate the hotkey configuration file, recreating it when needed."""
+
+    defaults: dict[str, object] = {"record_key": "f3", "agent_key": "f4", "record_mode": "toggle"}
+    try:
+        if not path.exists():
+            path.write_text(json.dumps(defaults, indent=4), encoding="utf-8")
+            return True
+
+        with path.open("r", encoding="utf-8") as handle:
+            try:
+                current = json.load(handle)
+            except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+                LOGGER.warning(
+                    StructuredMessage(
+                        "Hotkey configuration corrupted; restoring defaults.",
+                        event="startup.hotkey_config_recreated",
+                        path=str(path),
+                        error=str(exc),
+                    )
+                )
+                path.write_text(json.dumps(defaults, indent=4), encoding="utf-8")
+                return True
+
+        payload = _ensure_hotkey_payload(current if isinstance(current, dict) else {})
+        if payload != current:
+            path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+            return True
+    except Exception as exc:
+        LOGGER.error(
+            StructuredMessage(
+                "Failed to prepare hotkey configuration file.",
+                event="startup.hotkey_config_failed",
+                path=str(path),
+                error=str(exc),
+            ),
+            exc_info=True,
+        )
+        raise
+
+    return False
+
+
+def _log_artifact_ready(description: str, path: Path, *, created: bool) -> None:
+    exists = path.exists()
+    size_bytes = 0
+    if exists:
+        try:
+            size_bytes = path.stat().st_size
+        except OSError:
+            size_bytes = 0
+
+    LOGGER.info(
+        StructuredMessage(
+            f"{description} available.",
+            event="startup.artifact_ready",
+            path=str(path),
+            created=created,
+            exists=exists,
+            size_bytes=size_bytes,
+        )
+    )
+
+
+def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
+    """Ensure essential artifacts exist before continuing with the UI bootstrap."""
+
+    LOGGER.info(
+        StructuredMessage(
+            "Running startup preflight checks.",
+            event="startup.preflight.begin",
+        )
+    )
+
+    config_path = Path(config_manager.config_file).resolve()
+    config_pre_exists = config_path.exists()
+    config_manager.save_config()
+    config_created = not config_pre_exists and config_path.exists()
+    _log_artifact_ready("Configuration", config_path, created=config_created)
+    if not config_path.exists():
+        raise RuntimeError(f"Configuration file missing after preflight: {config_path}")
+
+    secrets_path = Path(config_module.SECRETS_FILE).resolve()
+    secrets_created = _ensure_json_file(secrets_path, {}, description="secrets")
+    _log_artifact_ready("Secrets", secrets_path, created=secrets_created)
+    if not secrets_path.exists():
+        raise RuntimeError(f"Secrets file missing after preflight: {secrets_path}")
+
+    hotkey_created = _ensure_hotkey_config(hotkey_config_path)
+    _log_artifact_ready("Hotkey configuration", hotkey_config_path, created=hotkey_created)
+    if not hotkey_config_path.exists():
+        raise RuntimeError(
+            f"Hotkey configuration missing after preflight: {hotkey_config_path}"
+        )
+
+    LOGGER.info(
+        StructuredMessage(
+            "Startup preflight checks completed.",
+            event="startup.preflight.complete",
+        )
+    )
+
+
 def main() -> None:
     setup_logging()
     LOGGER.info(
@@ -205,88 +371,108 @@ def main() -> None:
             working_directory=PROJECT_ROOT,
         )
     )
-    configure_environment()
-    ensure_display_available()
-    configure_cuda_logging()
-    patch_tk_variable_cleanup()
 
-    from src.core import AppCore  # noqa: E402
-    from src.ui_manager import UIManager  # noqa: E402
+    try:
+        configure_environment()
+        ensure_display_available()
+        configure_cuda_logging()
+        patch_tk_variable_cleanup()
 
-    app_core_instance = None
-    ui_manager_instance = None
+        from src.config_manager import ConfigManager  # noqa: E402
+        from src.core import AppCore  # noqa: E402
+        from src.ui_manager import UIManager  # noqa: E402
 
-    def on_exit_app_enhanced(*_):
-        LOGGER.info(
-            StructuredMessage(
-                "Exit requested from tray icon.",
-                event="ui.exit_requested",
+        config_manager = ConfigManager()
+        run_startup_preflight(config_manager, hotkey_config_path=HOTKEY_CONFIG_PATH)
+
+        app_core_instance = None
+        ui_manager_instance = None
+
+        def on_exit_app_enhanced(*_):
+            LOGGER.info(
+                StructuredMessage(
+                    "Exit requested from tray icon.",
+                    event="ui.exit_requested",
+                )
+            )
+            if app_core_instance:
+                app_core_instance.shutdown()
+            if ui_manager_instance and ui_manager_instance.tray_icon:
+                ui_manager_instance.tray_icon.stop()
+            main_tk_root.after(0, main_tk_root.quit)
+
+        atexit.register(
+            lambda: LOGGER.info(
+                StructuredMessage(
+                    "Application terminated.",
+                    event="shutdown.complete",
+                )
             )
         )
-        if app_core_instance:
-            app_core_instance.shutdown()
-        if ui_manager_instance and ui_manager_instance.tray_icon:
-            ui_manager_instance.tray_icon.stop()
-        main_tk_root.after(0, main_tk_root.quit)
 
-    atexit.register(
-        lambda: LOGGER.info(
-            StructuredMessage(
-                "Application terminated.",
-                event="shutdown.complete",
-            )
-        )
-    )
-
-    main_tk_root = tk.Tk()
-    main_tk_root.withdraw()
-    icon_path = ICON_PATH
-    if not os.path.exists(icon_path):
-        LOGGER.warning(
-            StructuredMessage(
-                "Main window icon not found on disk.",
-                event="ui.icon_missing",
-                path=icon_path,
-            )
-        )
-    else:
-        try:
-            main_tk_root.iconbitmap(icon_path)
-        except Exception:
+        main_tk_root = tk.Tk()
+        main_tk_root.withdraw()
+        icon_path = ICON_PATH
+        if not os.path.exists(icon_path):
             LOGGER.warning(
                 StructuredMessage(
-                    "Failed to set main window icon.",
-                    event="ui.icon_application_failed",
+                    "Main window icon not found on disk.",
+                    event="ui.icon_missing",
                     path=icon_path,
                 )
             )
+        else:
+            try:
+                main_tk_root.iconbitmap(icon_path)
+            except Exception:
+                LOGGER.warning(
+                    StructuredMessage(
+                        "Failed to set main window icon.",
+                        event="ui.icon_application_failed",
+                        path=icon_path,
+                    )
+                )
 
-    app_core_instance = AppCore(main_tk_root)
-    ui_manager_instance = UIManager(
-        main_tk_root,
-        app_core_instance.config_manager,
-        app_core_instance,
-        model_manager=app_core_instance.model_manager,
-    )
-    app_core_instance.ui_manager = ui_manager_instance
-    ui_manager_instance.setup_tray_icon()
-    app_core_instance.flush_pending_ui_notifications()
-    ui_manager_instance.on_exit_app = on_exit_app_enhanced
+        app_core_instance = AppCore(
+            main_tk_root,
+            config_manager=config_manager,
+            hotkey_config_path=str(HOTKEY_CONFIG_PATH),
+        )
+        ui_manager_instance = UIManager(
+            main_tk_root,
+            app_core_instance.config_manager,
+            app_core_instance,
+            model_manager=app_core_instance.model_manager,
+        )
+        app_core_instance.ui_manager = ui_manager_instance
+        ui_manager_instance.setup_tray_icon()
+        app_core_instance.flush_pending_ui_notifications()
+        ui_manager_instance.on_exit_app = on_exit_app_enhanced
 
-    LOGGER.info(
-        StructuredMessage(
-            "Starting Tkinter mainloop.",
-            event="ui.mainloop.start",
-            thread=threading.current_thread().name,
+        LOGGER.info(
+            StructuredMessage(
+                "Starting Tkinter mainloop.",
+                event="ui.mainloop.start",
+                thread=threading.current_thread().name,
+            )
         )
-    )
-    main_tk_root.mainloop()
-    LOGGER.info(
-        StructuredMessage(
-            "Tkinter mainloop finished; application will exit.",
-            event="ui.mainloop.stop",
+        main_tk_root.mainloop()
+        LOGGER.info(
+            StructuredMessage(
+                "Tkinter mainloop finished; application will exit.",
+                event="ui.mainloop.stop",
+            )
         )
-    )
+    except Exception as exc:
+        LOGGER.critical(
+            StructuredMessage(
+                "Fatal error during application startup.",
+                event="bootstrap.failure",
+                error=str(exc),
+            ),
+            exc_info=True,
+        )
+        raise
 
 
 if __name__ == "__main__":

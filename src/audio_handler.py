@@ -109,6 +109,7 @@ class AudioHandler:
         self._audio_frames: list[np.ndarray] = []
         self._sample_count = 0
         self._memory_samples = 0
+        self.recordings_dir = str(Path.cwd())
 
         self.storage_root_dir: Path | None = None
         self.recordings_dir: Path | None = None
@@ -119,6 +120,11 @@ class AudioHandler:
         self._processing_thread.start()
 
         self._audio_log = _AudioLoggerAdapter(LOGGER, {'handler': self})
+        self.models_storage_dir = (
+            self.config_manager.get_models_storage_dir()
+            if hasattr(self.config_manager, "get_models_storage_dir")
+            else None
+        )
 
         self.stream_blocksize = int(AUDIO_SAMPLE_RATE / 10)  # ~100ms buffers
         self._overflow_log_window = 5.0  # seconds
@@ -1158,6 +1164,11 @@ class AudioHandler:
         patterns = ("temp_recording_*.wav", "recording_*.wav")
         total_bytes = 0
         candidates: list[tuple[float, Path, int]] = []
+
+        try:
+            recordings_root = Path(self.recordings_dir).expanduser()
+        except Exception:
+            recordings_root = Path.cwd()
 
         for pattern in patterns:
             for file_path in base_dir.glob(pattern):
