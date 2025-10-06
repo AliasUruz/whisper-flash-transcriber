@@ -13,11 +13,10 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import contextvars
-from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping
-from uuid import uuid4
+from types import TracebackType
+from typing import Any, Callable, Iterable, Iterator, Mapping, MutableMapping, TextIO
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
@@ -43,6 +42,10 @@ _RUN_ID = (
 _LAST_LOG_DIRECTORY: Path | None = None
 _LAST_LOG_FILE: Path | None = None
 _ACTIVE_FORMAT: str = _FORMAT_STRUCTURED
+_CURRENT_LEVEL: int | None = None
+_SYS_EXCEPTHOOK: Callable[[type[BaseException], BaseException, TracebackType | None], None] | None = None
+_THREAD_EXCEPTHOOK: Callable[[threading.ExceptHookArgs], None] | None = None  # type: ignore[attr-defined]
+_EXCEPTION_HOOKS_INSTALLED = False
 
 
 _correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -491,7 +494,9 @@ class ContextualLoggerAdapter(logging.LoggerAdapter):
             default_event=default_event,
         )
 
-    def process(self, msg: Any, kwargs: Mapping[str, Any]) -> tuple[Any, Mapping[str, Any]]:
+    def process(
+        self, msg: Any, kwargs: MutableMapping[str, Any]
+    ) -> tuple[Any, MutableMapping[str, Any]]:
         if not isinstance(kwargs, dict):
             kwargs = dict(kwargs)
         event_override = kwargs.pop("event", None)
@@ -543,6 +548,27 @@ def _resolve_int(value: str | None, default: int) -> int:
     except ValueError:
         return default
     return parsed if parsed >= 0 else default
+
+
+def _resolve_log_format(value: str | None) -> tuple[str, str | None]:
+    if value is None:
+        return _FORMAT_STRUCTURED, None
+
+    candidate = value.strip()
+    if not candidate:
+        return _FORMAT_STRUCTURED, None
+
+    normalized = candidate.replace("-", "_").lower()
+    if normalized in _SUPPORTED_FORMATS:
+        return normalized, None
+
+    return _FORMAT_STRUCTURED, candidate
+
+
+def _build_formatter(format_id: str) -> logging.Formatter:
+    if format_id == _FORMAT_JSON:
+        return _JsonLogFormatter()
+    return _StructuredLogFormatter()
 
 
 def _build_rotating_file_handler(
@@ -599,7 +625,14 @@ def setup_logging(
 ) -> None:
     """Configure root logging with a structured, copy-friendly format."""
 
-    level = _determine_level()
+    resolved_level = _resolve_level_value(level)
+    global _CURRENT_LEVEL
+    _CURRENT_LEVEL = resolved_level
+
+    log_format_env = os.getenv(LOG_FORMAT_ENV)
+    log_format, invalid_choice = _resolve_log_format(log_format_env)
+    global _ACTIVE_FORMAT
+    _ACTIVE_FORMAT = log_format
     filters: list[logging.Filter] = [
         _StripAnsiFilter(),
         _RuntimeContextFilter(),
@@ -609,7 +642,7 @@ def setup_logging(
         filters.extend(extra_filters)
 
     console_handler = logging.StreamHandler(stream=console_stream)
-    console_handler.setFormatter(_StructuredLogFormatter())
+    console_handler.setFormatter(_build_formatter(log_format))
     for filt in filters:
         console_handler.addFilter(filt)
 
@@ -660,6 +693,26 @@ def get_log_format() -> str:
     """Return the active log output format."""
 
     return _ACTIVE_FORMAT
+
+
+def get_current_log_level() -> int:
+    """Return the last configured logging level."""
+
+    if _CURRENT_LEVEL is not None:
+        return _CURRENT_LEVEL
+    return logging.getLogger().getEffectiveLevel()
+
+
+def get_log_directory() -> Path | None:
+    """Return the directory currently configured for log files."""
+
+    return _LAST_LOG_DIRECTORY
+
+
+def get_log_file() -> Path | None:
+    """Return the active log file path, if any."""
+
+    return _LAST_LOG_FILE
 
 
 def get_log_paths() -> tuple[Path | None, Path | None]:
@@ -749,7 +802,7 @@ def log_duration(
     failure_level: int | None = None,
     log_start: bool = False,
     start_level: int | None = None,
-) -> Iterable[dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     """Context manager that logs the duration of an operation.
 
     The context yields a mutable ``dict`` that can be populated with additional
@@ -849,7 +902,7 @@ def install_exception_hooks(
 
     def _log_uncaught(
         exc_type: type[BaseException],
-        exc: BaseException,
+        exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
         target.critical(
@@ -858,10 +911,10 @@ def install_exception_hooks(
                 event="runtime.uncaught_exception",
                 exception_type=getattr(exc_type, "__name__", str(exc_type)),
             ),
-            exc_info=(exc_type, exc, tb),
+            exc_info=(exc_type, exc or exc_type(), tb),
         )
         if propagate and _SYS_EXCEPTHOOK not in (None, _log_uncaught):
-            _SYS_EXCEPTHOOK(exc_type, exc, tb)
+            _SYS_EXCEPTHOOK(exc_type, exc or exc_type(), tb)
 
     def _log_thread_exception(args: threading.ExceptHookArgs) -> None:  # type: ignore[attr-defined]
         exc_type = args.exc_type
@@ -875,7 +928,7 @@ def install_exception_hooks(
                 thread=thread_name,
                 exception_type=getattr(exc_type, "__name__", str(exc_type)),
             ),
-            exc_info=(exc_type, exc, tb),
+            exc_info=(exc_type, exc or exc_type(), tb),
         )
         if propagate and _THREAD_EXCEPTHOOK not in (None, _log_thread_exception):
             _THREAD_EXCEPTHOOK(args)
