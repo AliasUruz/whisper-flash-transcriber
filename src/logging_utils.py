@@ -15,8 +15,8 @@ import contextvars
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from types import TracebackType
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any, Iterable, Iterator, Mapping, TextIO
+from uuid import uuid4
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
@@ -281,21 +281,33 @@ def _determine_level() -> int:
     return getattr(logging, env_level, logging.INFO)
 
 
-def _determine_log_format() -> tuple[str, str | None]:
-    """Return the desired log format and any warning about invalid choices."""
+def _resolve_level_value(level: int | str | None) -> int:
+    """Normalize ``level`` into a valid logging level integer."""
 
-    raw_value = (os.getenv(LOG_FORMAT_ENV) or "").strip().lower()
-    if not raw_value:
-        return _FORMAT_STRUCTURED, None
-    if raw_value in _SUPPORTED_FORMATS:
-        return raw_value, None
-    return _FORMAT_STRUCTURED, raw_value
+    if isinstance(level, int):
+        return level
 
+    if isinstance(level, str):
+        candidate = level.strip()
+        if not candidate:
+            return _determine_level()
 
-def _build_formatter(log_format: str) -> logging.Formatter:
-    if log_format == _FORMAT_JSON:
-        return _JsonLogFormatter()
-    return _StructuredLogFormatter()
+        if candidate.lstrip("+-").isdigit():
+            try:
+                return int(candidate, 10)
+            except ValueError:  # pragma: no cover - defensive guard
+                return _determine_level()
+
+        mapping = logging.getLevelNamesMapping()
+        upper_candidate = candidate.upper()
+        if upper_candidate in mapping:
+            return mapping[upper_candidate]
+        if candidate in mapping:
+            return mapping[candidate]
+
+        return getattr(logging, upper_candidate, _determine_level())
+
+    return _determine_level()
 
 
 class _StructuredLogFormatter(logging.Formatter):
@@ -580,15 +592,13 @@ def _build_rotating_file_handler(
 
 def setup_logging(
     *,
-    extra_filters: Iterable[logging.Filter] | None = None,
     level: int | str | None = None,
+    extra_filters: Iterable[logging.Filter] | None = None,
+    console_stream: TextIO | None = None,
 ) -> None:
     """Configure root logging with a structured, copy-friendly format."""
 
-    level = _determine_level()
-    log_format, invalid_choice = _determine_log_format()
-    global _ACTIVE_FORMAT
-    _ACTIVE_FORMAT = log_format
+    resolved_level = _resolve_level_value(level)
 
     filters: list[logging.Filter] = [
         _StripAnsiFilter(),
@@ -598,8 +608,8 @@ def setup_logging(
     if extra_filters:
         filters.extend(extra_filters)
 
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(_build_formatter(log_format))
+    console_handler = logging.StreamHandler(stream=console_stream)
+    console_handler.setFormatter(_StructuredLogFormatter())
     for filt in filters:
         console_handler.addFilter(filt)
 
@@ -610,10 +620,7 @@ def setup_logging(
     if file_handler is not None:
         handlers.append(file_handler)
 
-    resolved_level = _coerce_level(level)
     logging.basicConfig(level=resolved_level, handlers=handlers, force=True)
-    global _CURRENT_LEVEL
-    _CURRENT_LEVEL = resolved_level
     logging.captureWarnings(True)
 
     if invalid_choice is not None:
@@ -671,9 +678,15 @@ def emit_startup_banner(
     target = logger or get_logger("whisper_flash_transcriber.logging", component="Logging")
     details: dict[str, Any] = {
         "python": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
         "executable": sys.executable,
         "platform": platform.platform(),
+        "hostname": platform.node(),
         "cwd": str(Path.cwd()),
+        "process_id": os.getpid(),
+        "argv": tuple(sys.argv),
+        "effective_log_level": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
+        "env_log_level": os.getenv("WHISPER_LOG_LEVEL"),
         "run_id": _RUN_ID,
         "session_started": _SESSION_START.isoformat(),
         "log_level": logging.getLevelName(_CURRENT_LEVEL)
