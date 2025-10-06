@@ -245,10 +245,13 @@ class TranscriptionHandler:
         state_mgr = getattr(core_ref, "state_manager", None) if core_ref is not None else None
 
         logging.info(
-            "Iniciando recarga do backend ASR (backend=%s, model=%s, device=%s).",
-            self._asr_backend_name,
-            self._asr_model_id,
-            self.asr_compute_device,
+            "Starting ASR backend reload.",
+            extra={
+                "event": "asr_reload",
+                "details": (
+                    f"backend={self._asr_backend_name} model={self._asr_model_id} device={self.asr_compute_device}"
+                ),
+            },
         )
 
         def _signal_loading_state() -> None:
@@ -258,7 +261,7 @@ class TranscriptionHandler:
                     return
                 except Exception as state_error:
                     logging.debug(
-                        "Falha ao acionar notify_model_loading_started durante reload: %s",
+                        "Failed to call notify_model_loading_started during reload: %s",
                         state_error,
                         exc_info=True,
                     )
@@ -271,7 +274,7 @@ class TranscriptionHandler:
                     )
                 except Exception as state_error:
                     logging.debug(
-                        "Falha ao sinalizar estado LOADING_MODEL durante reload: %s",
+                        "Failed to emit LOADING_MODEL state during reload: %s",
                         state_error,
                         exc_info=True,
                     )
@@ -283,7 +286,7 @@ class TranscriptionHandler:
                 self._asr_backend.unload()
             except Exception as unload_error:
                 logging.warning(
-                    "Falha ao descarregar backend ASR atual antes do reload: %s",
+                    "Unable to unload existing ASR backend before reload: %s",
                     unload_error,
                 )
             finally:
@@ -296,7 +299,7 @@ class TranscriptionHandler:
                 torch.cuda.empty_cache()
             except Exception as cache_error:
                 logging.debug(
-                    "Falha ao limpar cache CUDA antes do reload: %s",
+                    "Failed to clear CUDA cache before reload: %s",
                     cache_error,
                     exc_info=True,
                 )
@@ -305,9 +308,10 @@ class TranscriptionHandler:
             model, processor = self._initialize_model_and_processor()
         except Exception as exc:  # salvaguarda contra erros inesperados
             logging.error(
-                "Erro inesperado durante o reload do backend ASR: %s",
+                "Unexpected error while reloading the ASR backend: %s",
                 exc,
                 exc_info=True,
+                extra={"event": "asr_reload", "status": "error"},
             )
             if state_mgr is not None:
                 try:
@@ -318,7 +322,7 @@ class TranscriptionHandler:
                     )
                 except Exception as state_error:
                     logging.debug(
-                        "Falha ao sinalizar erro inesperado de recarga: %s",
+                        "Failed to report reload error to state manager: %s",
                         state_error,
                         exc_info=True,
                     )
@@ -327,7 +331,7 @@ class TranscriptionHandler:
                     self.on_model_error_callback(str(exc))
                 except Exception as callback_error:
                     logging.debug(
-                        "Falha ao notificar erro inesperado de recarga: %s",
+                        "Failed to notify reload error callback: %s",
                         callback_error,
                         exc_info=True,
                     )
@@ -335,7 +339,8 @@ class TranscriptionHandler:
 
         if model is None and processor is None:
             logging.error(
-                "Recarga do backend ASR não produziu artefatos; verifique configurações e logs anteriores.",
+                "ASR backend reload produced no artifacts; check configuration and earlier logs.",
+                extra={"event": "asr_reload", "status": "no_artifacts"},
             )
             if state_mgr is not None:
                 try:
@@ -346,16 +351,21 @@ class TranscriptionHandler:
                     )
                 except Exception as state_error:
                     logging.debug(
-                        "Falha ao sinalizar ausência de artefatos no reload: %s",
+                        "Failed to report missing artifacts after reload: %s",
                         state_error,
                         exc_info=True,
                     )
             return False
 
         logging.info(
-            "Backend ASR recarregado com sucesso (backend=%s, device=%s).",
-            self.backend_resolved or self._asr_backend_name,
-            self.device_in_use or "unknown",
+            "ASR backend reloaded successfully.",
+            extra={
+                "event": "asr_reload",
+                "status": "complete",
+                "details": (
+                    f"backend={self.backend_resolved or self._asr_backend_name} device={self.device_in_use or 'unknown'}"
+                ),
+            },
         )
         return True
 
@@ -448,14 +458,17 @@ class TranscriptionHandler:
 
         if reload_needed and trigger_reload:
             logging.info(
-                "TranscriptionHandler: parâmetros críticos alterados; recarregando backend ASR.",
+                "Transcription handler detected critical changes; reloading ASR backend.",
             )
             self.reload_asr()
 
         if correction_changed:
             self._init_api_clients()
 
-        logging.info("TranscriptionHandler: Configurações atualizadas.")
+        logging.info(
+            "Transcription handler configuration refreshed.",
+            extra={"event": "transcription_config_update"},
+        )
         return reload_needed
 
     def _resolve_asr_settings(self):
@@ -574,19 +587,19 @@ class TranscriptionHandler:
                     torch.cuda.empty_cache()
                 except Exception:
                     logging.debug(
-                        "Falha ao limpar cache CUDA antes do carregamento do modelo.",
+                        "Failed to clear CUDA cache before model load.",
                         exc_info=True,
                     )
             model, processor = self._load_model_task()
         except Exception as exc:
-            error_message = f"Erro na inicialização da pipeline: {exc}"
+            error_message = f"Pipeline initialization error: {exc}"
             logging.error(error_message, exc_info=True)
             if self.on_model_error_callback:
                 try:
                     self.on_model_error_callback(error_message)
                 except Exception:
                     logging.debug(
-                        "Falha ao notificar erro na inicialização do modelo.",
+                        "Failed to notify model initialization error.",
                         exc_info=True,
                     )
             return None, None
@@ -602,9 +615,13 @@ class TranscriptionHandler:
                 self.pipe = getattr(model, "pipe", None) or model
                 self._asr_loaded = True
                 logging.info(
-                    "ASR backend '%s' inicializado (device=%s).",
-                    self.backend_resolved or self._asr_backend_name,
-                    self.device_in_use or "unknown",
+                    "ASR backend initialized.",
+                    extra={
+                        "event": "asr_init",
+                        "details": (
+                            f"backend={self.backend_resolved or self._asr_backend_name} device={self.device_in_use or 'unknown'}"
+                        ),
+                    },
                 )
                 if self.on_model_ready_callback:
                     self.on_model_ready_callback()
@@ -621,12 +638,15 @@ class TranscriptionHandler:
             try:
                 if hasattr(model, "eval"):
                     model.eval()
-                    logging.info("[METRIC] stage=model_eval_applied value_ms=0")
+                    logging.info(
+                        "Model moved to eval mode.",
+                        extra={"event": "model_eval_applied", "duration_ms": 0},
+                    )
                     training_flag = getattr(model, "training", None)
                     if training_flag is not None:
-                        logging.debug("Model.training=%s (esperado False)", training_flag)
+                        logging.debug("Model.training=%s (expected False)", training_flag)
             except Exception as eval_error:
-                logging.warning("Falha ao aplicar model.eval(): %s", eval_error)
+                logging.warning("Unable to apply model.eval(): %s", eval_error)
 
             if (
                 self.enable_torch_compile
@@ -635,16 +655,20 @@ class TranscriptionHandler:
             ):
                 try:
                     model = torch.compile(model)  # type: ignore[attr-defined]
-                    logging.info("torch.compile aplicado ao modelo (experimental).")
+                    logging.info(
+                        "torch.compile applied to the model (experimental).",
+                        extra={"event": "torch_compile", "status": "applied"},
+                    )
                 except Exception as compile_error:
                     logging.warning(
-                        "Falha ao aplicar torch.compile: %s. Seguindo sem compile.",
+                        "Failed to apply torch.compile: %s. Continuing without compilation.",
                         compile_error,
                         exc_info=True,
                     )
             else:
                 logging.info(
-                    "torch.compile desativado ou indisponível; seguindo sem compile."
+                    "torch.compile disabled or unavailable; continuing without compilation.",
+                    extra={"event": "torch_compile", "status": "skipped"},
                 )
 
             if self.chunk_length_mode == "auto":
@@ -652,14 +676,14 @@ class TranscriptionHandler:
                     effective_chunk = float(self._effective_chunk_length())
                     if effective_chunk != self.chunk_length_sec:
                         logging.info(
-                            "Chunk length ajustado automaticamente: %.1fs -> %.1fs",
+                            "Chunk length adjusted automatically: %.1fs -> %.1fs",
                             self.chunk_length_sec,
                             effective_chunk,
                         )
                     self.chunk_length_sec = effective_chunk
                 except Exception as chunk_error:
                     logging.warning(
-                        "Falha ao calcular chunk_length auto: %s. Mantendo valor atual %.1fs.",
+                        "Failed to compute auto chunk_length: %s. Keeping current value %.1fs.",
                         chunk_error,
                         self.chunk_length_sec,
                     )
@@ -676,8 +700,8 @@ class TranscriptionHandler:
                 generate_kwargs=generate_kwargs_init,
             )
             logging.info(
-                "Pipeline de transcrição inicializada com sucesso (device=%s).",
-                device,
+                "Transcription pipeline initialized successfully.",
+                extra={"event": "transcription_pipeline", "status": "ready", "details": f"device={device}"},
             )
 
             try:
@@ -699,28 +723,29 @@ class TranscriptionHandler:
                     )
                 t1 = time.perf_counter()
                 logging.info(
-                    "[METRIC] stage=warmup_infer value_ms=%.2f device=%s chunk=%.2f batch=%s",
-                    (t1 - t0) * 1000,
-                    device,
-                    self.chunk_length_sec,
-                    self.batch_size,
+                    "Warmup inference completed.",
+                    extra={
+                        "event": "warmup_infer",
+                        "duration_ms": (t1 - t0) * 1000,
+                        "details": f"device={device} chunk={self.chunk_length_sec:.2f}s batch={self.batch_size}",
+                    },
                 )
             except Exception as warmup_error:
-                logging.warning("Warmup da pipeline falhou: %s", warmup_error)
+                logging.warning("Pipeline warmup failed: %s", warmup_error)
 
             self._asr_loaded = True
             if self.on_model_ready_callback:
                 self.on_model_ready_callback()
             return model, processor
         except Exception as exc:
-            error_message = f"Erro na inicialização da pipeline: {exc}"
+            error_message = f"Pipeline initialization error: {exc}"
             logging.error(error_message, exc_info=True)
             if self.on_model_error_callback:
                 try:
                     self.on_model_error_callback(error_message)
                 except Exception:
                     logging.debug(
-                        "Falha ao notificar erro de pipeline.",
+                        "Failed to propagate pipeline initialization error.",
                         exc_info=True,
                     )
             return None, None
@@ -751,7 +776,7 @@ class TranscriptionHandler:
         try:
             return self.gemini_client.get_correction(text)
         except Exception as e:
-            logging.error(f"Erro ao chamar get_correction da API Gemini: {e}")
+            logging.error(f"Failed to call Gemini API get_correction: {e}")
             return text
 
     def _process_ai_pipeline(self, transcribed_text: str, is_agent_mode: bool) -> str:
@@ -761,16 +786,20 @@ class TranscriptionHandler:
 
         if is_agent_mode:
             if not self.gemini_api or not getattr(self.gemini_api, "is_valid", False):
-                logging.warning("Modo agente ativado, mas o cliente Gemini está indisponível.")
+                logging.warning(
+                    "Agent mode requested but the Gemini client is unavailable.",
+                    extra={"event": "agent_mode_correction", "status": "unavailable"},
+                )
                 return transcribed_text
             try:
                 agent_response = self.gemini_api.get_agent_response(transcribed_text)
                 return agent_response or transcribed_text
             except Exception as exc:
                 logging.error(
-                    "Erro ao obter resposta do agente Gemini: %s",
+                    "Failed to fetch response from Gemini agent: %s",
                     exc,
                     exc_info=True,
+                    extra={"event": "agent_mode_correction", "status": "error"},
                 )
                 return transcribed_text
 
@@ -779,17 +808,26 @@ class TranscriptionHandler:
 
         active_provider = self._get_text_correction_service()
         if active_provider == SERVICE_NONE:
-            logging.info("Correção de texto desativada ou provedor indisponível.")
+            logging.info(
+                "Text correction disabled or no provider available.",
+                extra={"event": "text_correction", "status": "skipped"},
+            )
             return transcribed_text
 
         if active_provider == SERVICE_GEMINI and (
             not self.gemini_api or not getattr(self.gemini_api, "is_valid", False)
         ):
-            logging.warning("Cliente Gemini indisponível para correção de texto.")
+            logging.warning(
+                "Gemini client unavailable for text correction.",
+                extra={"event": "text_correction", "provider": "gemini", "status": "unavailable"},
+            )
             return transcribed_text
 
         if active_provider == SERVICE_OPENROUTER and not self.openrouter_api:
-            logging.warning("Cliente OpenRouter indisponível para correção de texto.")
+            logging.warning(
+                "OpenRouter client unavailable for text correction.",
+                extra={"event": "text_correction", "provider": "openrouter", "status": "unavailable"},
+            )
             return transcribed_text
 
         processed_text = transcribed_text
@@ -801,7 +839,8 @@ class TranscriptionHandler:
                 api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
                 if not api_key:
                     logging.warning(
-                        "Nenhuma chave de API encontrada para o provedor OpenRouter. Pulando correção de texto."
+                        "No API key configured for the OpenRouter provider. Skipping text correction.",
+                        extra={"event": "text_correction", "provider": "openrouter", "status": "no_api_key"},
                     )
                     return transcribed_text
 
@@ -811,9 +850,10 @@ class TranscriptionHandler:
                     self.openrouter_api.reinitialize_client(api_key=api_key, model_id=model)
                 except Exception as exc:
                     logging.error(
-                        "Erro ao reconfigurar o cliente OpenRouter: %s",
+                        "Failed to reconfigure the OpenRouter client: %s",
                         exc,
                         exc_info=True,
+                        extra={"event": "text_correction", "provider": "openrouter", "status": "reconfigure_failed"},
                     )
                 if prompt:
                     processed_text = self.openrouter_api.correct_text_async(
@@ -825,11 +865,11 @@ class TranscriptionHandler:
                 else:
                     processed_text = self.openrouter_api.correct_text(transcribed_text)
             else:
-                logging.error(f"Provedor de IA desconhecido: {active_provider}")
+                logging.error(f"Unknown AI provider: {active_provider}")
                 return transcribed_text
         except Exception as exc:
             logging.error(
-                "Erro ao processar texto com o provedor %s: %s",
+                "Error while processing text with provider %s: %s",
                 active_provider,
                 exc,
                 exc_info=True,
@@ -839,20 +879,27 @@ class TranscriptionHandler:
             self.correction_in_progress = False
 
         if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
-            logging.info(f"Transcrição corrigida: {processed_text}")
+            logging.info(
+                "Text correction produced a result.",
+                extra={"event": "text_correction", "status": "completed", "details": f"chars={len(processed_text)}"},
+            )
 
         return processed_text or transcribed_text
 
     def _get_dynamic_batch_size(self) -> int:
         device_in_use = (str(self.device_in_use or "").lower())
         if not (torch.cuda.is_available() and device_in_use.startswith("cuda")):
-            logging.info("GPU não disponível ou não selecionada, usando batch size de CPU (4).")
+            logging.info(
+                "GPU unavailable or not selected; using CPU batch size (4).",
+                extra={"event": "batch_size", "status": "cpu_fallback"},
+            )
             self.last_dynamic_batch_size = 4
             return 4
 
         if self.batch_size_mode == "manual":
             logging.info(
-                f"Modo de batch size manual selecionado. Usando valor configurado: {self.manual_batch_size}"
+                f"Manual batch size mode selected. Using configured value: {self.manual_batch_size}",
+                extra={"event": "batch_size", "status": "manual"},
             )
             self.last_dynamic_batch_size = self.manual_batch_size
             return self.manual_batch_size
@@ -869,9 +916,9 @@ class TranscriptionHandler:
 
     def _emit_device_warning(self, preferred: str, actual: str, reason: str, *, level: str = "warning") -> None:
         """Registra e propaga avisos de fallback de dispositivo."""
-        assert reason, "Fallback de dispositivo sem motivo documentado."
+        assert reason, "Device fallback without documented reason."
         message = (
-            f"Configuração de dispositivo '{preferred}' não aplicada; utilizando '{actual}'. Motivo: {reason}."
+            f"Configured device '{preferred}' not applied; using '{actual}'. Reason: {reason}."
         )
         log_level = logging.WARNING if level == "warning" else logging.INFO
         logging.log(log_level, message)
@@ -886,7 +933,7 @@ class TranscriptionHandler:
                 )
             except Exception as callback_error:
                 logging.error(
-                    "Falha ao propagar aviso de fallback de dispositivo: %s",
+                    "Failed to propagate device fallback warning: %s",
                     callback_error,
                     exc_info=True,
                 )
@@ -905,7 +952,7 @@ class TranscriptionHandler:
         # CPU ou dispositivo desconhecido: garantir float32 para evitar falhas.
         if dtype_lower not in {"float32", "auto"}:
             logging.info(
-                "Ajustando dtype para float32 porque o dispositivo ativo é %s (dtype configurado: %s).",
+                "Forcing dtype to float32 because active device is %s (configured=%s).",
                 device_lower or "cpu",
                 dtype_lower,
             )
@@ -919,7 +966,7 @@ class TranscriptionHandler:
                 core.notify_model_loading_started()
             except Exception as exc:
                 logging.debug(
-                    "Falha ao notificar início de carregamento via AppCore: %s",
+                    "Failed to signal model loading start via AppCore: %s",
                     exc,
                     exc_info=True,
                 )
@@ -932,7 +979,7 @@ class TranscriptionHandler:
                         )
                     except Exception:
                         logging.debug(
-                            "Falha ao atualizar estado para LOADING_MODEL diretamente.",
+                            "Failed to update state manager to LOADING_MODEL directly.",
                             exc_info=True,
                         )
         elif state_mgr is not None:
@@ -944,7 +991,7 @@ class TranscriptionHandler:
                 )
             except Exception:
                 logging.debug(
-                    "Falha ao atualizar estado para LOADING_MODEL diretamente.",
+                    "Failed to update state manager to LOADING_MODEL directly.",
                     exc_info=True,
                 )
         threading.Thread(
@@ -1001,7 +1048,7 @@ class TranscriptionHandler:
                 except Exception as backend_error:
                     if backend_name != "transformers":
                         logging.warning(
-                            "Falha ao instanciar backend '%s': %s. Aplicando fallback 'transformers'.",
+                            "Failed to instantiate backend '%s': %s. Falling back to 'transformers'.",
                             backend_name,
                             backend_error,
                         )
@@ -1130,7 +1177,7 @@ class TranscriptionHandler:
                     self._asr_backend.warmup()
                 except Exception as warmup_error:
                     warmup_failed = warmup_error
-                    logging.debug("Falha no warmup do backend ASR: %s", warmup_error)
+                    logging.debug("ASR backend warmup failed: %s", warmup_error)
 
                 duration_ms = (time.perf_counter() - load_started_at) * 1000.0
                 resolved_device = getattr(self._asr_backend, "device", effective_device)
@@ -1160,7 +1207,7 @@ class TranscriptionHandler:
                 )
                 self._model_load_started_at = None
                 logging.info(
-                    "Backend '%s' inicializado no dispositivo %s.",
+                    "Backend '%s' initialized on device %s.",
                     self.backend_resolved,
                     self.device_in_use,
                 )
@@ -1177,7 +1224,7 @@ class TranscriptionHandler:
             )
             if model_dir is None:
                 raise FileNotFoundError(
-                    f"Modelo '{model_id}' não encontrado. Instale-o nas configurações."
+                    f"Model '{model_id}' not found. Install it through the application settings."
                 )
             canonical_dir = model_manager_module.get_installation_dir(
                 self.asr_cache_dir,
@@ -1213,9 +1260,9 @@ class TranscriptionHandler:
             )
 
             if AutoProcessor is None or AutoModelForSpeechSeq2Seq is None:
-                raise RuntimeError("Transformers não estão disponíveis neste ambiente.")
+                raise RuntimeError("Transformers are not available in this environment.")
 
-            logging.info("Carregando processador de %s...", model_id)
+            logging.info("Loading processor for %s...", model_id)
             processor = AutoProcessor.from_pretrained(str(model_path))
 
             if torch.cuda.is_available():
@@ -1231,12 +1278,12 @@ class TranscriptionHandler:
                                 best_gpu_index = i
                         self.gpu_index = best_gpu_index
                         logging.info(
-                            "Auto-seleção de GPU (maior VRAM total): %s (%s)",
+                            "Auto-selected GPU with highest total VRAM: %s (%s)",
                             self.gpu_index,
                             torch.cuda.get_device_name(self.gpu_index),
                         )
                     else:
-                        logging.info("Nenhuma GPU disponível, usando CPU.")
+                        logging.info("No GPU available; using CPU.")
                         self.gpu_index = -1
                         level = (
                             "warning"
@@ -1246,7 +1293,7 @@ class TranscriptionHandler:
                         self._emit_device_warning(
                             str(compute_device or "auto"),
                             "cpu",
-                            "Nenhuma GPU disponível para carregamento.",
+                            "No GPU available for loading.",
                             level=level,
                         )
 
@@ -1261,7 +1308,7 @@ class TranscriptionHandler:
             resolved_dtype_label = str(torch_dtype_local).replace("torch.", "")
             self._update_model_log_context(device=resolved_device, dtype=resolved_dtype_label)
 
-            logging.info("Dispositivo de carregamento do modelo definido explicitamente como: %s", device)
+            logging.info("Model load device explicitly set to: %s", device)
 
             try:
                 if (
@@ -1279,7 +1326,7 @@ class TranscriptionHandler:
                                 best_idx = i
                         except Exception as _e:
                             logging.debug(
-                                "Falha ao consultar mem_get_info para GPU %s: %s",
+                                "Failed to query mem_get_info for GPU %s: %s",
                                 i,
                                 _e,
                             )
@@ -1288,13 +1335,14 @@ class TranscriptionHandler:
                         free_gb = best_free / (1024 ** 3) if best_free > 0 else 0.0
                         total_gb = torch.cuda.get_device_properties(self.gpu_index).total_memory / (1024 ** 3)
                         logging.info(
-                            "[METRIC] stage=gpu_autoselect gpu=%s free_gb=%.2f total_gb=%.2f",
-                            self.gpu_index,
-                            free_gb,
-                            total_gb,
+                            "Automatic GPU selection completed.",
+                            extra={
+                                "event": "gpu_autoselect",
+                                "details": f"gpu={self.gpu_index} free_gb={free_gb:.2f} total_gb={total_gb:.2f}",
+                            },
                         )
             except Exception as _gpu_sel_e:
-                logging.warning("Falha ao escolher GPU por memória livre: %s", _gpu_sel_e)
+                logging.warning("Failed to select GPU by free memory: %s", _gpu_sel_e)
 
             quant_config = None
             if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0:
@@ -1339,7 +1387,7 @@ class TranscriptionHandler:
             self._model_load_started_at = None
             return model, processor
         except OSError:
-            error_message = "Diretório de cache inválido. Verifique as configurações."
+            error_message = "Invalid cache directory. Check your configuration."
             if self._model_load_started_at is not None:
                 duration_ms = (time.perf_counter() - self._model_load_started_at) * 1000.0
                 self._log_model_event(
@@ -1355,12 +1403,12 @@ class TranscriptionHandler:
                     self.on_model_error_callback(error_message)
             except Exception:
                 logging.debug(
-                    "Falha ao notificar erro de diretório inválido.",
+                    "Failed to report invalid directory error.",
                     exc_info=True,
                 )
             return None, None
         except Exception as e:
-            error_message = f"Falha ao carregar o modelo: {e}"
+            error_message = f"Failed to load the model: {e}"
             if self._model_load_started_at is not None:
                 duration_ms = (time.perf_counter() - self._model_load_started_at) * 1000.0
                 self._log_model_event(
@@ -1375,14 +1423,16 @@ class TranscriptionHandler:
                 if self.on_model_error_callback:
                     self.on_model_error_callback(error_message)
             except Exception:
-                logging.debug("Falha ao notificar erro de carregamento.", exc_info=True)
+                logging.debug("Failed to notify load error.", exc_info=True)
             return None, None
 
     def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""
         if not self.is_model_ready():
             logging.error("Transcription pipeline is not available. Model not loaded or failed to load.")
-            self.on_model_error_callback("Pipeline de transcrição indisponível. O modelo não foi carregado ou falhou.")
+            self.on_model_error_callback(
+                "Transcription pipeline unavailable. The model is not loaded or failed to load."
+            )
             return
         self.transcription_future = self.transcription_executor.submit(
             self._transcription_task, audio_source, agent_mode
@@ -1398,7 +1448,10 @@ class TranscriptionHandler:
                 status="pre_start",
                 agent_mode=agent_mode,
             )
-            logging.info("Transcrição interrompida por stop signal antes do início do processamento.")
+            logging.info(
+                "Transcription cancelled by stop signal before processing began.",
+                extra={"event": "transcription_cancel", "stage": "preprocess"},
+            )
             return
 
         dynamic_batch_size = None
@@ -1448,7 +1501,10 @@ class TranscriptionHandler:
                     duration_ms=duration_ms,
                     error=str(transcribe_error),
                 )
-                logging.error(f"Erro durante a transcrição via backend unificado: {transcribe_error}", exc_info=True)
+                logging.error(
+                    f"Error during transcription via unified backend: {transcribe_error}",
+                    exc_info=True,
+                )
                 return
             else:
                 duration_ms = (time.perf_counter() - start_ts) * 1000.0
@@ -1492,7 +1548,10 @@ class TranscriptionHandler:
                         agent_mode=agent_mode,
                         duration_ms=duration_ms,
                     )
-                    logging.info("Transcrição via CTranslate2 concluída.")
+                    logging.info(
+                        "CTranslate2 transcription pipeline finished.",
+                        extra={"event": "transcription_backend", "status": "complete", "details": "ctranslate2"},
+                    )
                 else:
                     if self.pipe is None:
                         error_message = "Pipeline de transcrição indisponível. Modelo não carregado ou falhou."
@@ -1534,7 +1593,9 @@ class TranscriptionHandler:
                         size=size_descriptor,
                         agent_mode=agent_mode,
                     )
-                    logging.info(f"Iniciando transcrição de segmento com batch_size={dynamic_batch_size}...")
+                    logging.info(
+                        f"Starting segment transcription with batch_size={dynamic_batch_size}..."
+                    )
 
                     generate_kwargs = {
                         "task": "transcribe",
@@ -1589,10 +1650,13 @@ class TranscriptionHandler:
                         if not text_result:
                             text_result = "[No speech detected]"
                         else:
-                            logging.info("Transcrição de segmento bem-sucedida.")
+                            logging.info(
+                                "Segment transcription succeeded.",
+                                extra={"event": "segment_transcription", "status": "success"},
+                            )
                     else:
                         text_result = "[Transcription failed: Bad format]"
-                        logging.error(f"Formato de resultado inesperado: {result}")
+                        logging.error(f"Unexpected transcription result format: {result}")
 
                     t_post_end = time.perf_counter()
                     t_post_ms = (t_post_end - t_post_start) * 1000.0
@@ -1609,24 +1673,52 @@ class TranscriptionHandler:
 
                     try:
                         logging.info(
-                            f"[METRIC] stage=t_pre value_ms={t_pre_ms:.2f} device={device} "
-                            f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
-                            f"dtype={dtype} attn={attn_impl}"
+                            "Segment preprocessing completed.",
+                            extra={
+                                "event": "segment_timing",
+                                "stage": "pre",
+                                "duration_ms": t_pre_ms,
+                                "details": (
+                                    f"device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
+                                    f"dtype={dtype} attn={attn_impl}"
+                                ),
+                            },
                         )
                         logging.info(
-                            f"[METRIC] stage=t_infer value_ms={t_infer_ms:.2f} device={device} "
-                            f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
-                            f"dtype={dtype} attn={attn_impl}"
+                            "Segment inference completed.",
+                            extra={
+                                "event": "segment_timing",
+                                "stage": "infer",
+                                "duration_ms": t_infer_ms,
+                                "details": (
+                                    f"device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
+                                    f"dtype={dtype} attn={attn_impl}"
+                                ),
+                            },
                         )
                         logging.info(
-                            f"[METRIC] stage=t_post value_ms={t_post_ms:.2f} device={device} "
-                            f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
-                            f"dtype={dtype} attn={attn_impl}"
+                            "Segment post-processing completed.",
+                            extra={
+                                "event": "segment_timing",
+                                "stage": "post",
+                                "duration_ms": t_post_ms,
+                                "details": (
+                                    f"device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
+                                    f"dtype={dtype} attn={attn_impl}"
+                                ),
+                            },
                         )
                         logging.info(
-                            f"[METRIC] stage=segment_total value_ms={t_total_ms:.2f} device={device} "
-                            f"chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
-                            f"dtype={dtype} attn={attn_impl}"
+                            "Segment total duration recorded.",
+                            extra={
+                                "event": "segment_timing",
+                                "stage": "total",
+                                "duration_ms": t_total_ms,
+                                "details": (
+                                    f"device={device} chunk={self.chunk_length_sec} batch={dynamic_batch_size} "
+                                    f"dtype={dtype} attn={attn_impl}"
+                                ),
+                            },
                         )
                     except Exception:
                         pass
@@ -1650,12 +1742,12 @@ class TranscriptionHandler:
                     )
                     if is_oom:
                         logging.warning(
-                            "Erro de OOM detectado durante a transcrição. Iniciando rotina de recuperação automática."
+                            "Out-of-memory detected during transcription. Initiating automatic recovery routine."
                         )
                         self._apply_oom_recovery(dynamic_batch_size)
                     # Continua fluxo normal de erro
                 except Exception as _oom_adj_e:
-                    logging.debug(f"Falha ao ajustar parâmetros após OOM: {_oom_adj_e}")
+                    logging.debug(f"Failed to adjust parameters after OOM: {_oom_adj_e}")
 
                 if not logged_failure:
                     if legacy_started_at is not None:
@@ -1681,7 +1773,7 @@ class TranscriptionHandler:
                             error=str(e),
                         )
 
-                logging.error(f"Erro durante a transcrição de segmento: {e}", exc_info=True)
+                logging.error(f"Error during segment transcription: {e}", exc_info=True)
                 text_result = f"[Transcription Error: {e}]"
 
         if self.transcription_cancel_event.is_set():
@@ -1690,19 +1782,25 @@ class TranscriptionHandler:
                 status="inference_cancelled",
                 agent_mode=agent_mode,
             )
-            logging.info("Transcrição interrompida por stop signal. Resultado descartado.")
+            logging.info(
+                "Transcription cancelled by stop signal; result discarded.",
+                extra={"event": "transcription_cancel", "stage": "postprocess"},
+            )
             self.transcription_cancel_event.clear()
             return
 
         if text_result and self.config_manager.get(DISPLAY_TRANSCRIPTS_KEY):
-            logging.info(f"Transcrição bruta: {text_result}")
+            logging.info(
+                "Raw transcription generated.",
+                extra={"event": "transcription_output", "details": f"chars={len(text_result or '')}"},
+            )
 
         if (
             not text_result
             or text_result == "[No speech detected]"
             or text_result.strip().startswith("[Transcription Error:")
         ):
-            logging.warning(f"Segmento processado sem texto significativo ou com erro: {text_result}")
+            logging.warning(f"Segment processed without meaningful text or with error: {text_result}")
             if text_result and self.on_segment_transcribed_callback:
                 self.on_segment_transcribed_callback(text_result or "")
             if (
@@ -1717,7 +1815,7 @@ class TranscriptionHandler:
                     self.on_transcription_result_callback(text_result, text_result)
             elif not agent_mode and text_result:
                 logging.warning(
-                    "Estado mudou antes do resultado de transcrição. UI não será atualizada."
+                    "Application state changed before transcription result. UI will not be updated."
                 )
             return
 
@@ -1741,36 +1839,41 @@ class TranscriptionHandler:
                 t_ec_ms = (time.perf_counter() - t_ec_start) * 1000.0
                 freed_mb = max(0.0, (before_b - after_b) / (1024 ** 2))
                 logging.info(
-                    f"[METRIC] stage=empty_cache value_ms={t_ec_ms:.2f} freed_estimate_mb={freed_mb:.1f}"
+                    "CUDA cache cleared after transcription.",
+                    extra={
+                        "event": "empty_cache",
+                        "duration_ms": t_ec_ms,
+                        "details": f"freed_estimate_mb={freed_mb:.1f}",
+                    },
                 )
         except Exception as _ec_e:
-            logging.debug(f"Falha ao executar empty_cache opcional: {_ec_e}")
+            logging.debug(f"Failed to execute optional empty_cache: {_ec_e}")
 
         final_text = self._process_ai_pipeline(text_result, agent_mode)
 
         if agent_mode:
             if not self.on_agent_result_callback:
-                logging.debug("Callback de resultado do agente não configurado.")
+                logging.debug("Agent result callback not configured.")
                 return
             if not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
                 self.on_agent_result_callback(final_text)
             else:
                 logging.warning(
-                    "Estado mudou antes do resultado do agente. UI não será atualizada."
+                    "Application state changed before agent result. UI will not be updated."
                 )
         else:
             if not self.on_transcription_result_callback:
-                logging.debug("Callback de resultado de transcrição não configurado.")
+                logging.debug("Transcription result callback not configured.")
             elif not self.is_state_transcribing_fn or self.is_state_transcribing_fn():
                 self.on_transcription_result_callback(final_text, text_result)
             else:
                 logging.warning(
-                    "Estado mudou antes do resultado de transcrição. UI não será atualizada."
+                    "Application state changed before transcription result. UI will not be updated."
                 )
 
         if torch.cuda.is_available():
             logging.debug(
-                "Cache da GPU preservado para transcrições consecutivas."
+                "GPU cache preserved for consecutive transcriptions."
             )
 
     def _apply_oom_recovery(self, current_batch_size: int | None) -> bool:
@@ -1794,7 +1897,7 @@ class TranscriptionHandler:
                     core.report_runtime_notice(message, level=logging.WARNING)
                     return
                 except Exception as exc:
-                    logging.debug("Falha ao notificar ajuste de OOM na UI: %s", exc)
+                    logging.debug("Failed to notify UI about OOM adjustment: %s", exc)
             logging.warning(message)
 
         old_batch_size: int | None = None
@@ -1820,16 +1923,18 @@ class TranscriptionHandler:
                     self.batch_size = new_batch_size
                 self.last_dynamic_batch_size = new_batch_size
                 message = (
-                    "OOM detectado. Reduzindo batch_size de "
-                    f"{old_batch_size} para {new_batch_size} apenas na sessão atual."
+                    "OOM detected. Reducing batch_size from "
+                    f"{old_batch_size} to {new_batch_size} for this session only."
                 )
                 _report(message)
                 try:
                     logging.info(
-                        "[METRIC] stage=oom_recovery action=reduce_batch mode=%s from=%s to=%s",
-                        self.batch_size_mode,
-                        old_batch_size,
-                        new_batch_size,
+                        "OOM recovery adjusted batch size.",
+                        extra={
+                            "event": "oom_recovery",
+                            "action": "reduce_batch",
+                            "details": f"mode={self.batch_size_mode} from={old_batch_size} to={new_batch_size}",
+                        },
                     )
                 except Exception:
                     pass
@@ -1845,22 +1950,25 @@ class TranscriptionHandler:
         if new_chunk < old_chunk:
             self.chunk_length_sec = new_chunk
             message = (
-                "OOM persistente. Reduzindo chunk_length_sec de "
-                f"{old_chunk:.1f}s para {new_chunk:.1f}s apenas na sessão atual."
+                "Persistent OOM. Reducing chunk_length_sec from "
+                f"{old_chunk:.1f}s to {new_chunk:.1f}s for this session only."
             )
             _report(message)
             try:
                 logging.info(
-                    "[METRIC] stage=oom_recovery action=reduce_chunk from=%.1f to=%.1f",
-                    old_chunk,
-                    new_chunk,
+                    "OOM recovery adjusted chunk length.",
+                    extra={
+                        "event": "oom_recovery",
+                        "action": "reduce_chunk",
+                        "details": f"from={old_chunk:.1f}s to={new_chunk:.1f}s",
+                    },
                 )
             except Exception:
                 pass
             return True
 
         _report(
-            "OOM persistente. Batch_size e chunk_length_sec já estão nos limites mínimos para esta sessão."
+            "Persistent OOM. Batch size and chunk length are already at their minimum for this session."
         )
         return False
 

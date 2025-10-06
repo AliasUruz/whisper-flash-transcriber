@@ -57,11 +57,17 @@ class ActionOrchestrator:
     # Agent mode management
     # ------------------------------------------------------------------
     def activate_agent_mode(self) -> None:
-        LOGGER.debug("ActionOrchestrator: agent mode activated.")
+        LOGGER.debug(
+            "ActionOrchestrator: agent mode activated.",
+            extra={"event": "agent_mode_toggle", "status": "enabled"},
+        )
         self._agent_mode_active = True
 
     def deactivate_agent_mode(self) -> None:
-        LOGGER.debug("ActionOrchestrator: agent mode deactivated.")
+        LOGGER.debug(
+            "ActionOrchestrator: agent mode deactivated.",
+            extra={"event": "agent_mode_toggle", "status": "disabled"},
+        )
         self._agent_mode_active = False
 
     @property
@@ -98,10 +104,13 @@ class ActionOrchestrator:
 
         handler = self._transcription_handler
         if handler is None:
-            LOGGER.error("Transcription handler is not available to receive audio.")
+            LOGGER.error(
+                "Transcription handler is not available to receive audio.",
+                extra={"event": "dispatch_failed", "stage": "transcription"},
+            )
             if agent_mode:
                 self._log_status(
-                    "Agent mode is unavailable while the model is loading. Please wait and try again.",
+                    "Agent mode unavailable: wait for the model to finish loading and try again.",
                     error=True,
                 )
             self._state_manager.set_state(
@@ -115,11 +124,16 @@ class ActionOrchestrator:
         try:
             handler.transcribe_audio_segment(audio_source, agent_mode)
         except Exception as exc:  # pragma: no cover - defensive guard around handler
-            LOGGER.error("Failed to dispatch audio segment for transcription: %s", exc, exc_info=True)
+            LOGGER.error(
+                "Failed to dispatch audio segment for transcription: %s",
+                exc,
+                exc_info=True,
+                extra={"event": "dispatch_failed", "stage": "transcription"},
+            )
             if agent_mode:
                 self._agent_mode_active = True
                 self._log_status(
-                    "Agent mode activation failed. Ensure the model is loaded and try again.",
+                    "Failed to engage agent mode. Verify the model load status and try again.",
                     error=True,
                 )
             else:
@@ -132,10 +146,11 @@ class ActionOrchestrator:
             if agent_mode:
                 self._agent_mode_active = True
                 LOGGER.warning(
-                    "Agent mode request preserved: transcription handler rejected audio segment (model likely unavailable)."
+                    "Agent mode request preserved: transcription handler rejected audio segment (model likely unavailable).",
+                    extra={"event": "agent_mode_wait", "stage": "transcription"},
                 )
                 self._log_status(
-                    "Agent mode is unavailable: the model is not ready to receive commands.",
+                    "Agent mode unavailable: the model is not ready to receive commands yet.",
                     error=True,
                 )
             else:
@@ -145,9 +160,12 @@ class ActionOrchestrator:
         self._agent_mode_active = False
 
         LOGGER.info(
-            "Dispatching audio segment for transcription (duration=%.2fs, agent=%s).",
-            duration_seconds,
-            agent_mode,
+            "Dispatching audio segment for transcription.",
+            extra={
+                "event": "segment_dispatched",
+                "stage": "transcription",
+                "details": f"duration={duration_seconds:.2f}s agent_mode={agent_mode}",
+            },
         )
 
     # ------------------------------------------------------------------
@@ -183,7 +201,10 @@ class ActionOrchestrator:
         if self._delete_temp_audio_callback:
             self._delete_temp_audio_callback()
 
-        LOGGER.info("Transcription ready for consumption (chars=%d).", len(final_text))
+        LOGGER.info(
+            "Transcription ready for consumption.",
+            extra={"event": "transcription_ready", "details": f"chars={len(final_text)}"},
+        )
 
     def handle_agent_result(self, agent_response_text: str) -> None:
         """Trata o resultado do modo agente."""
@@ -191,7 +212,10 @@ class ActionOrchestrator:
         response = (agent_response_text or "").strip()
         if not response:
             self._log_status("Agent command returned an empty response.", error=True)
-            LOGGER.warning("Agent command returned an empty response.")
+            LOGGER.warning(
+                "Agent command returned an empty response.",
+                extra={"event": "agent_response_empty"},
+            )
             return
 
         self._copy_to_clipboard(response)
@@ -232,13 +256,19 @@ class ActionOrchestrator:
             return
         try:
             self._clipboard_module.copy(text)
-            LOGGER.info("Text copied to clipboard (%d chars).", len(text))
+            LOGGER.info(
+                "Text copied to clipboard.",
+                extra={"event": "clipboard_copy", "details": f"chars={len(text)}"},
+            )
         except Exception as exc:  # pragma: no cover - ambiente pode não suportar
             LOGGER.error("Failed to copy text to clipboard: %s", exc, exc_info=True)
 
     def _paste_and_log(self, success_message: str | None = None) -> None:
         if not self._paste_callback:
-            LOGGER.debug("Paste callback not configured; skipping auto-paste.")
+            LOGGER.debug(
+                "Paste callback not configured; skipping auto-paste.",
+                extra={"event": "auto_paste_skipped", "status": "callback_missing"},
+            )
             return
         try:
             self._paste_callback()
@@ -247,8 +277,13 @@ class ActionOrchestrator:
             else:
                 self._log_status("Text pasted.")
         except Exception as exc:  # pragma: no cover - dependente de ambiente
-            LOGGER.error("Failed to simulate paste action: %s", exc, exc_info=True)
-            self._log_status("Erro ao colar.", error=True)
+            LOGGER.error(
+                "Failed to simulate paste action: %s",
+                exc,
+                exc_info=True,
+                extra={"event": "auto_paste_failed"},
+            )
+            self._log_status("Failed to paste content.", error=True)
 
     def _log_status(self, message: str, *, error: bool = False) -> None:
         callback = self._log_status_callback

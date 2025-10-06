@@ -38,13 +38,9 @@ LOGGER = get_logger("whisper_flash_transcriber.bootstrap", component="Bootstrap"
 
 def ensure_display_available() -> None:
     if os.name != "nt" and not os.environ.get("DISPLAY"):
-        LOGGER.warning(
-            log_context(
-                "DISPLAY environment variable is not set; running in headless mode.",
-                event="bootstrap.display_missing",
-                action="abort_gui_startup",
-                os_name=os.name,
-            )
+        logging.warning(
+            "DISPLAY environment variable missing; aborting GUI startup for test mode.",
+            extra={"event": "display_validation", "status": "missing"},
         )
         sys.exit(0)
 
@@ -52,36 +48,11 @@ def ensure_display_available() -> None:
 def configure_environment() -> None:
     applied_defaults = 0
     for key, value in ENV_DEFAULTS.items():
-        if key in os.environ:
-            LOGGER.debug(
-                log_context(
-                    "Environment variable already defined; keeping existing value.",
-                    event="bootstrap.env.skipped",
-                    variable=key,
-                    current_value=os.environ.get(key),
-                )
-            )
-            continue
-
-        os.environ[key] = value
-        applied_defaults += 1
-        LOGGER.debug(
-            log_context(
-                "Default environment variable applied.",
-                event="bootstrap.env.default",
-                variable=key,
-                value=value,
-            )
-        )
-    transformers_verbosity_before = os.environ.get("TRANSFORMERS_VERBOSITY")
-    os.environ.setdefault("TRANSFORMERS_VERBOSITY", transformers_verbosity_before or "error")
-    LOGGER.info(
-        log_context(
-            "Environment configuration completed.",
-            event="bootstrap.env.ready",
-            applied_defaults=applied_defaults,
-            transformers_verbosity=os.environ.get("TRANSFORMERS_VERBOSITY"),
-        )
+        os.environ.setdefault(key, value)
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", os.environ.get("TRANSFORMERS_VERBOSITY", "error"))
+    logging.info(
+        "Environment defaults applied.",
+        extra={"event": "environment_config", "details": ",".join(sorted(ENV_DEFAULTS.keys()))},
     )
 
 
@@ -89,12 +60,9 @@ def configure_cuda_logging() -> None:
     try:
         torch_spec = importlib.util.find_spec("torch")
         if torch_spec is None:
-            LOGGER.debug(
-                log_context(
-                    "PyTorch not available; skipping CUDA diagnostics.",
-                    event="bootstrap.cuda.skip",
-                    reason="torch_not_installed",
-                )
+            logging.debug(
+                "torch not available; skipping CUDA diagnostics.",
+                extra={"event": "cuda_diagnostics", "status": "torch_missing"},
             )
             return
 
@@ -103,33 +71,25 @@ def configure_cuda_logging() -> None:
         if torch.cuda.is_available():
             try:
                 torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
-                LOGGER.info(
-                    log_context(
-                        "cudnn.benchmark enabled for CUDA backend.",
-                        event="bootstrap.cuda.cudnn_benchmark",
-                        status="enabled",
-                    )
+                logging.info(
+                    "cudnn.benchmark enabled (CUDA available).",
+                    extra={"event": "cuda_optimization", "status": "enabled"},
                 )
             except Exception as exc:
-                LOGGER.warning(
-                    log_context(
-                        "Failed to enable cudnn.benchmark.",
-                        event="bootstrap.cuda.cudnn_benchmark",
-                        status="failed",
-                        details=str(exc),
-                    ),
-                    exc_info=True,
+                logging.warning(
+                    "Unable to enable cudnn.benchmark: %s",
+                    exc,
+                    extra={"event": "cuda_optimization", "status": "failed"},
                 )
 
             try:
                 num_gpus = torch.cuda.device_count()
-                LOGGER.info(
-                    log_context(
-                        "CUDA runtime detected.",
-                        event="bootstrap.cuda.detected",
-                        cuda_version=torch.version.cuda,
-                        gpu_count=num_gpus,
-                    )
+                logging.info(
+                    "CUDA runtime detected.",
+                    extra={
+                        "event": "cuda_detected",
+                        "details": f"version={torch.version.cuda} gpu_count={num_gpus}",
+                    },
                 )
                 for idx in range(num_gpus):
                     try:
@@ -137,65 +97,47 @@ def configure_cuda_logging() -> None:
                         props = torch.cuda.get_device_properties(idx)
                         total_mem_gb = props.total_memory / (1024 ** 3)
                         capability = f"{props.major}.{props.minor}"
-                        LOGGER.info(
-                            log_context(
-                                "GPU diagnostics collected.",
-                                event="bootstrap.cuda.gpu_profile",
-                                gpu_index=idx,
-                                gpu_name=name,
-                                total_vram_gb=round(total_mem_gb, 2),
-                                compute_capability=capability,
-                            )
+                        logging.info(
+                            "GPU inventory report.",
+                            extra={
+                                "event": "cuda_gpu_profile",
+                                "details": (
+                                    f"index={idx} name={name} vram_gb={total_mem_gb:.2f} capability={capability}"
+                                ),
+                            },
                         )
                     except Exception as gpu_exc:
-                        LOGGER.warning(
-                            log_context(
-                                "Unable to query GPU properties.",
-                                event="bootstrap.cuda.gpu_profile",
-                                gpu_index=idx,
-                                status="failed",
-                                details=str(gpu_exc),
-                            ),
-                            exc_info=True,
+                        logging.warning(
+                            "Unable to query GPU properties: %s",
+                            gpu_exc,
+                            extra={"event": "cuda_gpu_profile", "status": "failed", "details": f"index={idx}"},
                         )
 
                 try:
                     has_flash_attn = importlib.util.find_spec("flash_attn") is not None
                 except Exception:
                     has_flash_attn = False
-                LOGGER.info(
-                    log_context(
-                        "FlashAttention 2 availability checked.",
-                        event="bootstrap.cuda.flash_attn",
-                        available=has_flash_attn,
-                    )
+                logging.info(
+                    "FlashAttention 2 availability assessed.",
+                    extra={"event": "flash_attention_check", "status": str(has_flash_attn).lower()},
                 )
             except Exception as diag_exc:
-                LOGGER.warning(
-                    log_context(
-                        "Failed to gather CUDA capabilities.",
-                        event="bootstrap.cuda.diagnostics_failed",
-                        details=str(diag_exc),
-                    ),
-                    exc_info=True,
+                logging.warning(
+                    "Unable to gather CUDA capabilities: %s",
+                    diag_exc,
+                    extra={"event": "cuda_diagnostics", "status": "failed"},
                 )
         else:
-            LOGGER.info(
-                log_context(
-                    "CUDA runtime unavailable; defaulting to CPU execution.",
-                    event="bootstrap.device_selection",
-                    device="cpu",
-                    reason="no_cuda_available",
-                )
+            logging.info(
+                "CUDA runtime not available; defaulting to CPU execution.",
+                extra={"event": "device_select", "status": "cpu"},
             )
     except Exception as exc:  # pragma: no cover - defensive guard
-        LOGGER.warning(
-            log_context(
-                "Skipping CUDA diagnostics due to unexpected error.",
-                event="bootstrap.cuda.diagnostics_failed",
-                details=str(exc),
-            ),
+        logging.warning(
+            "Skipping CUDA diagnostics due to error: %s",
+            exc,
             exc_info=True,
+            extra={"event": "cuda_diagnostics", "status": "error"},
         )
 
 
@@ -249,11 +191,9 @@ def main() -> None:
     ui_manager_instance = None
 
     def on_exit_app_enhanced(*_):
-        LOGGER.info(
-            log_context(
-                "Exit requested from tray icon.",
-                event="bootstrap.exit_requested",
-            )
+        logging.info(
+            "Exit requested from tray icon.",
+            extra={"event": "shutdown", "status": "requested"},
         )
         if app_core_instance:
             app_core_instance.shutdown()
@@ -261,39 +201,31 @@ def main() -> None:
             ui_manager_instance.tray_icon.stop()
         main_tk_root.after(0, main_tk_root.quit)
 
-    atexit.register(
-        lambda: LOGGER.info(
-            log_context(
-                "Application terminated.",
-                event="bootstrap.terminated",
-            )
+    def _log_process_shutdown() -> None:
+        logging.info(
+            "Application terminated.",
+            extra={"event": "shutdown", "status": "complete"},
         )
-    )
+
+    atexit.register(_log_process_shutdown)
 
     main_tk_root = tk.Tk()
     main_tk_root.withdraw()
     icon_path = ICON_PATH
     if not os.path.exists(icon_path):
-        LOGGER.warning(
-            log_context(
-                "Failed to set main window icon: file not found.",
-                event="bootstrap.icon",
-                status="missing",
-                path=icon_path,
-            )
+        logging.warning(
+            "Failed to set main window icon. File not found: %s",
+            icon_path,
+            extra={"event": "icon_setup", "status": "missing"},
         )
     else:
         try:
             main_tk_root.iconbitmap(icon_path)
         except Exception:
-            LOGGER.warning(
-                log_context(
-                    "Failed to apply main window icon; the file may be invalid.",
-                    event="bootstrap.icon",
-                    status="invalid",
-                    path=icon_path,
-                ),
-                exc_info=True,
+            logging.warning(
+                "Failed to set main window icon. icon.ico may be missing or invalid at %s.",
+                icon_path,
+                extra={"event": "icon_setup", "status": "error"},
             )
 
     app_core_instance = AppCore(main_tk_root)
@@ -308,19 +240,14 @@ def main() -> None:
     app_core_instance.flush_pending_ui_notifications()
     ui_manager_instance.on_exit_app = on_exit_app_enhanced
 
-    LOGGER.info(
-        log_context(
-            "Starting Tkinter mainloop.",
-            event="bootstrap.mainloop_start",
-            thread=threading.current_thread().name,
-        )
+    logging.info(
+        "Starting Tkinter mainloop on the main thread.",
+        extra={"event": "tk_mainloop", "status": "starting"},
     )
     main_tk_root.mainloop()
-    LOGGER.info(
-        log_context(
-            "Tkinter mainloop finished; application will exit.",
-            event="bootstrap.mainloop_end",
-        )
+    logging.info(
+        "Tkinter mainloop finished. The application will exit.",
+        extra={"event": "tk_mainloop", "status": "finished"},
     )
 
 

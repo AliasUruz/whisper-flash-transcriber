@@ -143,12 +143,13 @@ class AudioHandler:
             self._last_overflow_sample = (now, count)
 
             LOGGER.warning(
-                StructuredMessage(
-                    "Audio input overflow detected.",
-                    event="audio.callback_overflow",
-                    occurrences=count,
-                    window_seconds=self._overflow_log_window,
-                )
+                "Audio input overflow detected.",
+                extra={
+                    "event": "audio_input_overflow",
+                    "details": f"occurrences={count}",
+                    "duration_ms": int(self._overflow_log_window * 1000),
+                    "status": status_str,
+                },
             )
 
     def _process_audio_queue(self):
@@ -185,14 +186,24 @@ class AudioHandler:
                             max_samples = self._memory_limit_samples
                             if self.record_storage_mode == 'auto' and self._memory_samples > max_samples:
                                 self._audio_log.info(
-                                    f"Recording duration exceeded {self.current_max_memory_seconds}s. Moving from RAM to disk."
+                                    "Recording duration exceeded in-memory threshold; moving buffers to disk.",
+                                    extra={
+                                        "event": "ram_to_disk_threshold",
+                                        "details": f"threshold_seconds={self.current_max_memory_seconds}",
+                                        "stage": "storage_selection",
+                                    },
                                 )
                                 try:
                                     total_mb = get_total_memory_mb()
                                     avail_mb = get_available_memory_mb()
                                     percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
                                     self._audio_log.info(
-                                        f"[METRIC] stage=ram_to_disk_migration reason=time_exceeded percent_free={percent_free:.1f}"
+                                        "In-memory storage migration due to recording length.",
+                                        extra={
+                                            "stage": "ram_to_disk_migration",
+                                            "status": "duration_exceeded",
+                                            "details": f"percent_free_ram={percent_free:.1f}",
+                                        },
                                     )
                                 except Exception:
                                     pass
@@ -208,12 +219,22 @@ class AudioHandler:
                                     thr_percent = 10
                                 percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
                                 if total_mb and percent_free < thr_percent:
-                                    self._audio_log.info(
-                                        f"Free RAM below {thr_percent}% of total ({percent_free:.1f}%). Moving from RAM to disk."
-                                    )
+                                self._audio_log.info(
+                                    "Free RAM below configured threshold; moving buffers to disk.",
+                                    extra={
+                                        "event": "ram_to_disk_low_memory",
+                                        "stage": "storage_selection",
+                                        "details": f"percent_free={percent_free:.1f} threshold={thr_percent}",
+                                    },
+                                )
                                     try:
                                         self._audio_log.info(
-                                            f"[METRIC] stage=ram_to_disk_migration reason=low_free_ram percent_free={percent_free:.1f} threshold={thr_percent}"
+                                            "In-memory storage migration due to low available RAM.",
+                                            extra={
+                                                "stage": "ram_to_disk_migration",
+                                                "status": "low_free_ram",
+                                                "details": f"percent_free={percent_free:.1f} threshold={thr_percent}",
+                                            },
                                         )
                                     except Exception:
                                         pass
@@ -224,14 +245,21 @@ class AudioHandler:
 
                         self._sample_count += len(frame)
             except Exception as e:
-                self._audio_log.error(f"Error while processing audio queue: {e}")
+                self._audio_log.error(
+                    f"Error while processing audio queue: {e}",
+                    extra={"event": "audio_queue_error", "stage": "processing_loop"},
+                )
                 with self.storage_lock:
                     self._sf_writer = None
                 self._audio_frames = []
                 self._memory_samples = 0
 
     def _handle_vad_exception(self, exc: Exception, chunk: np.ndarray) -> tuple[bool, list[np.ndarray]]:
-        self._audio_log.error("Error while processing VAD: %s", exc, exc_info=True)
+        self._audio_log.error(
+            "Error while processing VAD chunk.",
+            exc_info=True,
+            extra={"event": "vad_processing_error", "stage": "vad", "details": str(exc)},
+        )
         frames: list[np.ndarray] = []
         if chunk is not None:
             frames.append(np.asarray(chunk, dtype=np.float32).copy())
@@ -240,7 +268,11 @@ class AudioHandler:
                 self.vad_manager.reset_states()
                 self.vad_manager.enable_energy_fallback("pipeline exception", exc)
             except Exception:
-                self._audio_log.debug("Failed to reset VAD states after exception.", exc_info=True)
+                self._audio_log.debug(
+                    "Failed to reset VAD states after exception.",
+                    exc_info=True,
+                    extra={"event": "vad_reset_failed", "stage": "vad"},
+                )
         try:
             max_abs = float(np.max(np.abs(chunk))) if chunk is not None and getattr(chunk, "size", 0) else 0.0
             self._audio_log.debug(
@@ -249,7 +281,11 @@ class AudioHandler:
                 max_abs,
             )
         except Exception:
-            self._audio_log.debug("Unable to compute chunk diagnostics after VAD exception.", exc_info=True)
+            self._audio_log.debug(
+                "Unable to compute chunk diagnostics after VAD exception.",
+                exc_info=True,
+                extra={"stage": "vad", "event": "vad_chunk_diagnostics_failed"},
+            )
         return True, frames
 
     @staticmethod
@@ -278,12 +314,8 @@ class AudioHandler:
         self.audio_stream = None
         try:
             self._audio_log.info(
-                StructuredMessage(
-                    "Audio recording thread started.",
-                    event="audio.thread.start",
-                    samplerate=AUDIO_SAMPLE_RATE,
-                    channels=AUDIO_CHANNELS,
-                )
+                "Audio recording thread started.",
+                extra={"event": "record_thread_start", "stage": "recording"},
             )
             if not self.is_recording:
                 LOGGER.warning("Recording flag turned off before stream start.")
@@ -299,20 +331,15 @@ class AudioHandler:
             self.audio_stream.start()
             self.stream_started = True
             self._audio_log.info(
-                StructuredMessage(
-                    "Audio stream opened.",
-                    event="audio.stream.opened",
-                    blocksize=self.stream_blocksize,
-                )
+                "Audio stream started.",
+                extra={"event": "input_stream_started", "stage": "recording"},
             )
 
             while not self._stop_event.is_set() and self.is_recording:
                 sd.sleep(100)
             self._audio_log.info(
-                StructuredMessage(
-                    "Recording flag lowered; stopping audio stream.",
-                    event="audio.stream.stop_requested",
-                )
+                "Recording flag is off. Stopping audio stream.",
+                extra={"event": "record_stop_signal", "stage": "recording"},
             )
         except sd.PortAudioError as e:
             self._audio_log.error(f"PortAudio error during recording: {e}", exc_info=True)
@@ -330,14 +357,15 @@ class AudioHandler:
             self._stop_event.clear()
             self._record_thread = None
             self._audio_log.info(
-                StructuredMessage(
-                    "Audio recording thread finished.",
-                    event="audio.thread.stop",
-                )
+                "Audio recording thread finished.",
+                extra={"event": "record_thread_stop", "stage": "recording"},
             )
             # Stop overhead metric for the recording thread (event-based approximation)
             try:
-                self._audio_log.info("[METRIC] stage=record_thread_finalize value_ms=0")
+                self._audio_log.info(
+                    "Recording thread cleanup completed.",
+                    extra={"stage": "recording", "event": "record_thread_finalize", "duration_ms": 0},
+                )
             except Exception:
                 pass
 
@@ -350,10 +378,8 @@ class AudioHandler:
                     self.audio_stream.stop()
                 self.audio_stream.close()
                 self._audio_log.info(
-                    StructuredMessage(
-                        "Audio stream stopped and closed.",
-                        event="audio.stream.closed",
-                    )
+                    "Audio stream stopped and closed.",
+                    extra={"event": "input_stream_closed", "stage": "recording"},
                 )
             except Exception as e:
                 self._audio_log.error(f"Error stopping/closing audio stream: {e}")
@@ -365,7 +391,10 @@ class AudioHandler:
         finished_event.wait(timeout)
         t.join(timeout)
         if t.is_alive():
-            self._audio_log.error("Close thread did not finish within %ss", timeout)
+            self._audio_log.error(
+                "Close thread did not finish within timeout.",
+                extra={"event": "close_stream_timeout", "duration_ms": int(timeout * 1000)},
+            )
 
     def _migrate_to_file(self):
         """Move in-memory frames into a temporary audio file."""
@@ -388,10 +417,8 @@ class AudioHandler:
     def start_recording(self):
         if self.is_recording:
             LOGGER.warning(
-                StructuredMessage(
-                    "Recording request ignored because capture is already active.",
-                    event="audio.recording_already_active",
-                )
+                "Recording is already active.",
+                extra={"event": "record_start_skipped", "stage": "recording"},
             )
             return False
         if not self._processing_thread or not self._processing_thread.is_alive():
@@ -400,7 +427,10 @@ class AudioHandler:
             self._processing_thread.start()
 
         if self._record_thread and self._record_thread.is_alive():
-            self._audio_log.debug("Waiting for the previous recording thread to finish.")
+            self._audio_log.debug(
+                "Waiting for the previous recording thread to finish.",
+                extra={"event": "record_thread_join", "stage": "recording"},
+            )
             self._stop_event.set()
             self._record_thread.join(timeout=2)  # Timeout curto evita travamentos ao desligar threads no Windows
 
@@ -422,6 +452,16 @@ class AudioHandler:
             else:
                 self.in_memory_mode = False
                 reason = f"auto: free RAM {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
+        self._audio_log.info(
+            "Storage decision resolved.",
+            extra={
+                "event": "storage_decision",
+                "stage": "recording",
+                "status": "memory" if self.in_memory_mode else "disk",
+                "details": reason,
+            },
+        )
+
         if self.max_memory_seconds_mode == "auto":
             self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
         else:
@@ -460,8 +500,15 @@ class AudioHandler:
             try:
                 self.vad_manager.reset_states()
             except Exception:
-                self._audio_log.debug("Failed to reset VAD states for new recording.", exc_info=True)
-        self._audio_log.debug("VAD reset for new recording.")
+                self._audio_log.debug(
+                    "Failed to reset VAD states for new recording.",
+                    exc_info=True,
+                    extra={"event": "vad_reset_failed", "stage": "recording"},
+                )
+        self._audio_log.debug(
+            "VAD reset for new recording.",
+            extra={"event": "vad_reset", "stage": "recording"},
+        )
 
         self.state_manager.set_state("RECORDING")
 
@@ -474,10 +521,8 @@ class AudioHandler:
     def stop_recording(self):
         if not self.is_recording:
             LOGGER.warning(
-                StructuredMessage(
-                    "Stop request ignored because no recording is active.",
-                    event="audio.stop_ignored",
-                )
+                "Recording is not active and cannot be stopped.",
+                extra={"event": "record_stop_skipped", "stage": "recording"},
             )
             return False
 
