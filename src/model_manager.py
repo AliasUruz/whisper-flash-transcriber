@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
 import os
 import shutil
@@ -89,6 +90,18 @@ _ESSENTIAL_WEIGHT_FILES = {
     "encoder_model.onnx",
     "decoder_model.onnx",
 }
+
+
+try:  # Best effort: some huggingface_hub versions are compiled and may not expose a signature.
+    _SNAPSHOT_DOWNLOAD_PARAMS = tuple(inspect.signature(snapshot_download).parameters)
+except (TypeError, ValueError):  # pragma: no cover - defensive fallback
+    _SNAPSHOT_DOWNLOAD_PARAMS = tuple()
+
+
+def _snapshot_download_supports(param_name: str) -> bool:
+    """Return ``True`` when ``snapshot_download`` accepts ``param_name``."""
+
+    return param_name in _SNAPSHOT_DOWNLOAD_PARAMS
 
 
 def _normalize_cache_dir(cache_dir: str | Path) -> Path:
@@ -398,6 +411,7 @@ def ensure_download(
             backend_label,
             local_dir,
         )
+        _invalidate_list_installed_cache(cache_dir)
         return str(local_dir)
 
     if local_dir.exists():
@@ -449,8 +463,12 @@ def ensure_download(
         "allow_patterns": None,
         "tqdm_class": progress_class,
     }
-    if os.name == "nt":
+    if _snapshot_download_supports("local_dir_use_symlinks"):
         download_kwargs["local_dir_use_symlinks"] = False
+    if _snapshot_download_supports("local_dir_use_hardlinks"):
+        download_kwargs["local_dir_use_hardlinks"] = False
+    if _snapshot_download_supports("resume_download") and "resume_download" not in download_kwargs:
+        download_kwargs["resume_download"] = True
     if revision is not None:
         download_kwargs["revision"] = revision
 
