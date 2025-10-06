@@ -4,7 +4,6 @@ import os
 import sys
 import threading
 import tkinter as tk
-import threading
 
 # Add project root to path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,10 +15,15 @@ if PROJECT_ROOT not in sys.path:
 ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
 
 
-from src.logging_utils import StructuredMessage, setup_logging
+from src.logging_utils import (
+    StructuredMessage,
+    get_logger,
+    log_context,
+    setup_logging,
+)
 
 
-LOGGER = logging.getLogger("whisper_flash_transcriber.bootstrap")
+LOGGER = get_logger("whisper_flash_transcriber.bootstrap", component="Bootstrap")
 
 
 ENV_DEFAULTS = {
@@ -28,12 +32,6 @@ ENV_DEFAULTS = {
     "TRANSFORMERS_NO_ADVISORY_WARNINGS": "1",
     "BITSANDBYTES_NOWELCOME": "1",
 }
-
-
-from src.logging_utils import get_logger, log_context, setup_logging
-
-
-LOGGER = get_logger("whisper_flash_transcriber.bootstrap", component="Bootstrap")
 
 
 def ensure_display_available() -> None:
