@@ -1043,7 +1043,16 @@ class AudioHandler:
                 total_bytes / (1024 * 1024),
             )
 
-        self._enforce_record_storage_limit()
+        # Final sanity check: if some protected or locked files prevent us from
+        # freeing enough space, log the situation but avoid unbounded
+        # recursion. The caller can attempt cleanup again later once the files
+        # become available.
+        if total_bytes > limit_bytes:
+            self._audio_log.debug(
+                "Storage cleanup incomplete; remaining usage=%.2f MB (limit=%d MB).",
+                total_bytes / (1024 * 1024),
+                limit_mb,
+            )
 
     def cleanup(self):
         if self.is_recording:
