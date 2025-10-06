@@ -1,7 +1,7 @@
 """Logging helpers that keep terminal output structured and copy-friendly."""
 from __future__ import annotations
 
-import json
+import contextvars
 import logging
 import os
 import platform
@@ -12,10 +12,10 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import contextvars
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping
+from types import TracebackType
+from typing import Any, Iterable, Iterator, Mapping
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
@@ -30,10 +30,16 @@ DEFAULT_LOG_BACKUP_COUNT = 5
 
 _SESSION_START = datetime.now(timezone.utc)
 _SESSION_MONOTONIC = time.monotonic()
-_RUN_ID = os.getenv(LOG_RUN_ID_ENV, "").strip() or f"{_SESSION_START:%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"
+_RUN_ID = (
+    os.getenv(LOG_RUN_ID_ENV, "").strip()
+    or f"{_SESSION_START:%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
+)
 _LAST_LOG_DIRECTORY: Path | None = None
 _LAST_LOG_FILE: Path | None = None
-_LAST_FORMAT_LABEL: str = "structured"
+_CURRENT_LEVEL: int | None = None
+_SYS_EXCEPTHOOK: Any | None = None
+_THREAD_EXCEPTHOOK: Any | None = None
+_EXCEPTION_HOOKS_INSTALLED = False
 
 
 _correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -264,72 +270,27 @@ class StructuredMessage:
 
 def _determine_level() -> int:
     env_level = os.getenv("WHISPER_LOG_LEVEL", "INFO").upper()
+    if env_level.isdigit():
+        try:
+            numeric = int(env_level)
+        except ValueError:
+            return logging.INFO
+        return numeric
     return getattr(logging, env_level, logging.INFO)
 
 
-class _JsonLogFormatter(logging.Formatter):
-    """Formatter that serialises log records as structured JSON lines."""
-
-    default_time_format = "%Y-%m-%dT%H:%M:%S"
-    default_msec_format = "%s.%03d"
-
-    def format(self, record: logging.LogRecord) -> str:
-        record.message = record.getMessage()
-        payload: dict[str, Any] = {
-            "timestamp": self.formatTime(record, self.datefmt),
-            "level": record.levelname.upper(),
-            "logger": record.name,
-            "message": record.message,
-        }
-
-        component = getattr(record, "component", None)
-        if component:
-            payload["component"] = component
-
-        process_id = getattr(record, "process_id", None)
-        if process_id is not None:
-            payload["process_id"] = process_id
-        thread_name = getattr(record, "thread_name", None) or getattr(record, "threadName", None)
-        if thread_name and thread_name != "MainThread":
-            payload["thread"] = thread_name
-        run_id = getattr(record, "run_id", None)
-        if run_id:
-            payload["run_id"] = run_id
-        uptime_ms = getattr(record, "uptime_ms", None)
-        if isinstance(uptime_ms, int) and uptime_ms >= 0:
-            payload["uptime_ms"] = uptime_ms
-        if record.funcName:
-            payload["function"] = record.funcName
-
-        correlation_id = getattr(record, "correlation_id", None)
-        if correlation_id:
-            payload["correlation_id"] = correlation_id
-        operation_id = getattr(record, "operation_id", None)
-        if operation_id:
-            payload["operation_id"] = operation_id
-            depth = getattr(record, "operation_depth", None)
-            if isinstance(depth, int) and depth > 1:
-                payload["operation_depth"] = depth
-        operation_name = getattr(record, "operation_name", None)
-        if operation_name:
-            payload["operation_name"] = operation_name
-
-        event = getattr(record, "event", None)
-        if event:
-            payload["event"] = event
-
-        details = getattr(record, "details", None)
-        if isinstance(details, Mapping) and details:
-            payload["details"] = {
-                str(key): _jsonify_detail(value) for key, value in sorted(details.items())
-            }
-
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
-        if record.stack_info:
-            payload["stack"] = self.formatStack(record.stack_info)
-
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+def _coerce_level(level: int | str | None) -> int:
+    if level is None:
+        return _determine_level()
+    if isinstance(level, int):
+        return level
+    candidate = level.upper()
+    if candidate.isdigit():
+        try:
+            return int(candidate)
+        except ValueError:
+            return _determine_level()
+    return getattr(logging, candidate, _determine_level())
 
 
 class _StructuredLogFormatter(logging.Formatter):
@@ -544,7 +505,11 @@ def _build_rotating_file_handler(
     return handler
 
 
-def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> None:
+def setup_logging(
+    *,
+    extra_filters: Iterable[logging.Filter] | None = None,
+    level: int | str | None = None,
+) -> None:
     """Configure root logging with a structured, copy-friendly format."""
 
     level = _determine_level()
@@ -568,7 +533,10 @@ def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> N
     if file_handler is not None:
         handlers.append(file_handler)
 
-    logging.basicConfig(level=level, handlers=handlers, force=True)
+    resolved_level = _coerce_level(level)
+    logging.basicConfig(level=resolved_level, handlers=handlers, force=True)
+    global _CURRENT_LEVEL
+    _CURRENT_LEVEL = resolved_level
     logging.captureWarnings(True)
 
     for noisy_logger in ("google", "httpx", "urllib3", "asyncio"):
@@ -578,12 +546,12 @@ def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> N
         log_context(
             "Logging configured.",
             event="logging.configured",
-            level=logging.getLevelName(level),
+            level=logging.getLevelName(resolved_level),
             run_id=_RUN_ID,
             session_started=_SESSION_START.isoformat(),
             log_dir=str(_LAST_LOG_DIRECTORY) if _LAST_LOG_DIRECTORY else None,
             log_file=str(_LAST_LOG_FILE) if _LAST_LOG_FILE else None,
-            log_format=format_label,
+            handlers=tuple(handler.__class__.__name__ for handler in handlers),
         )
     )
 
@@ -597,21 +565,21 @@ def get_run_id() -> str:
 
 
 def get_log_directory() -> Path | None:
-    """Return the directory currently used to persist rotating log files."""
+    """Return the directory where rotating log files are stored."""
 
     return _LAST_LOG_DIRECTORY
 
 
 def get_log_file() -> Path | None:
-    """Return the active log file path when file logging is enabled."""
+    """Return the most recently configured log file path, if available."""
 
     return _LAST_LOG_FILE
 
 
-def get_log_format() -> str:
-    """Return the label describing the formatter in use (``structured`` or ``json``)."""
+def get_current_log_level() -> int | None:
+    """Return the log level resolved during the last :func:`setup_logging` call."""
 
-    return _LAST_FORMAT_LABEL
+    return _CURRENT_LEVEL
 
 
 def emit_startup_banner(
@@ -629,6 +597,9 @@ def emit_startup_banner(
         "cwd": str(Path.cwd()),
         "run_id": _RUN_ID,
         "session_started": _SESSION_START.isoformat(),
+        "log_level": logging.getLevelName(_CURRENT_LEVEL)
+        if _CURRENT_LEVEL is not None
+        else logging.getLevelName(_determine_level()),
         "log_dir": str(_LAST_LOG_DIRECTORY) if _LAST_LOG_DIRECTORY else str(Path(os.getenv(LOG_DIR_ENV, "logs")).expanduser()),
         "log_file": str(_LAST_LOG_FILE) if _LAST_LOG_FILE else None,
         "log_format": _LAST_FORMAT_LABEL,
@@ -761,18 +732,85 @@ def get_logger(
     )
 
 
+def _resolve_logger(
+    logger: logging.Logger | ContextualLoggerAdapter | None,
+) -> ContextualLoggerAdapter:
+    if isinstance(logger, ContextualLoggerAdapter):
+        return logger
+    if logger is None:
+        return get_logger("whisper_flash_transcriber", component="Runtime")
+    return ContextualLoggerAdapter(logger)
+
+
+def install_exception_hooks(
+    *,
+    logger: logging.Logger | ContextualLoggerAdapter | None = None,
+    propagate: bool = True,
+) -> None:
+    """Install structured logging hooks for uncaught exceptions."""
+
+    global _SYS_EXCEPTHOOK, _THREAD_EXCEPTHOOK, _EXCEPTION_HOOKS_INSTALLED
+    if _EXCEPTION_HOOKS_INSTALLED:
+        return
+
+    target = _resolve_logger(logger)
+
+    def _log_uncaught(
+        exc_type: type[BaseException],
+        exc: BaseException,
+        tb: TracebackType | None,
+    ) -> None:
+        target.critical(
+            log_context(
+                "Unhandled exception captured by sys.excepthook.",
+                event="runtime.uncaught_exception",
+                exception_type=getattr(exc_type, "__name__", str(exc_type)),
+            ),
+            exc_info=(exc_type, exc, tb),
+        )
+        if propagate and _SYS_EXCEPTHOOK not in (None, _log_uncaught):
+            _SYS_EXCEPTHOOK(exc_type, exc, tb)
+
+    def _log_thread_exception(args: threading.ExceptHookArgs) -> None:  # type: ignore[attr-defined]
+        exc_type = args.exc_type
+        exc = args.exc_value
+        tb = args.exc_traceback
+        thread_name = getattr(args.thread, "name", None)
+        target.critical(
+            log_context(
+                "Unhandled exception in thread.",
+                event="runtime.thread_exception",
+                thread=thread_name,
+                exception_type=getattr(exc_type, "__name__", str(exc_type)),
+            ),
+            exc_info=(exc_type, exc, tb),
+        )
+        if propagate and _THREAD_EXCEPTHOOK not in (None, _log_thread_exception):
+            _THREAD_EXCEPTHOOK(args)
+
+    _SYS_EXCEPTHOOK = sys.excepthook
+    sys.excepthook = _log_uncaught  # type: ignore[assignment]
+
+    if hasattr(threading, "excepthook"):
+        _THREAD_EXCEPTHOOK = threading.excepthook  # type: ignore[attr-defined]
+        threading.excepthook = _log_thread_exception  # type: ignore[attr-defined,assignment]
+
+    _EXCEPTION_HOOKS_INSTALLED = True
+
+
 __all__ = [
     "ContextualLoggerAdapter",
     "StructuredMessage",
     "current_correlation_id",
     "get_logger",
+    "get_current_log_level",
     "get_log_directory",
     "get_log_file",
-    "get_log_format",
     "log_duration",
     "log_context",
     "log_event",
     "log_operation",
+    "install_exception_hooks",
     "scoped_correlation_id",
     "setup_logging",
 ]
