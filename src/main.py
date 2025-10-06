@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 import tkinter as tk
+from tkinter import messagebox
 
 # Add project root to path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,6 +17,7 @@ if PROJECT_ROOT not in sys.path:
 ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
 
 
+from src.config_manager import ConfigPersistenceError
 from src.logging_utils import (
     StructuredMessage,
     get_logger,
@@ -261,7 +263,44 @@ def main() -> None:
                 )
             )
 
-    app_core_instance = AppCore(main_tk_root)
+    try:
+        app_core_instance = AppCore(main_tk_root)
+    except ConfigPersistenceError as exc:
+        LOGGER.critical(
+            StructuredMessage(
+                "Configuration bootstrap failed; aborting startup.",
+                event="bootstrap.config_error",
+                error=str(exc),
+            ),
+            exc_info=True,
+        )
+        messagebox.showerror(
+            "Whisper Flash Transcriber",
+            (
+                "Failed to create the configuration files required for the first launch.\n"
+                f"Details: {exc}"
+            ),
+        )
+        main_tk_root.destroy()
+        return
+    except Exception as exc:
+        LOGGER.critical(
+            StructuredMessage(
+                "Unhandled error while initializing the core subsystem.",
+                event="bootstrap.core_unhandled_exception",
+                error=str(exc),
+            ),
+            exc_info=True,
+        )
+        messagebox.showerror(
+            "Whisper Flash Transcriber",
+            (
+                "An unexpected error prevented the application from starting.\n"
+                f"Details: {exc}"
+            ),
+        )
+        main_tk_root.destroy()
+        return
     ui_manager_instance = UIManager(
         main_tk_root,
         app_core_instance.config_manager,
@@ -272,6 +311,14 @@ def main() -> None:
     ui_manager_instance.setup_tray_icon()
     app_core_instance.flush_pending_ui_notifications()
     ui_manager_instance.on_exit_app = on_exit_app_enhanced
+
+    LOGGER.info(
+        StructuredMessage(
+            "Bootstrap sequence completed successfully.",
+            event="bootstrap.ready",
+            details=app_core_instance.build_bootstrap_report(),
+        )
+    )
 
     LOGGER.info(
         StructuredMessage(
