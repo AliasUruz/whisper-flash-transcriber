@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import inspect
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -73,6 +74,22 @@ _download_size_lock = RLock()
 
 _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _list_installed_lock = RLock()
+
+_ESSENTIAL_CONFIG_FILES = {"config.json"}
+_ESSENTIAL_WEIGHT_FILES = {
+    "model.bin",
+    "model.onnx",
+    "model.int8.bin",
+    "model.int8.onnx",
+    "model.float16.bin",
+    "model.float16.onnx",
+    "model.safetensors",
+    "pytorch_model.bin",
+    "encoder_model.bin",
+    "decoder_model.bin",
+    "encoder_model.onnx",
+    "decoder_model.onnx",
+}
 
 
 try:  # Best effort: some huggingface_hub versions are compiled and may not expose a signature.
@@ -353,7 +370,41 @@ def ensure_download(
     backend_label = normalize_backend_label(backend) or storage_backend
 
     local_dir = cache_dir / storage_backend / model_id
-    if local_dir.is_dir() and any(local_dir.iterdir()):
+
+    def _cleanup_partial() -> None:
+        try:
+            if local_dir.exists():
+                shutil.rmtree(local_dir)
+        except Exception:  # pragma: no cover - best effort cleanup
+            logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
+
+    def _local_dir_complete() -> bool:
+        if not local_dir.is_dir():
+            return False
+        try:
+            config_found = False
+            weight_found = False
+            for entry in local_dir.rglob("*"):
+                if not entry.is_file():
+                    continue
+                name = entry.name
+                if name in _ESSENTIAL_CONFIG_FILES:
+                    config_found = True
+                if name in _ESSENTIAL_WEIGHT_FILES:
+                    weight_found = True
+                if config_found and weight_found:
+                    return True
+        except OSError as exc:
+            MODEL_LOGGER.warning(
+                "Unable to inspect existing model directory %s: %s",
+                local_dir,
+                exc,
+            )
+            return False
+
+        return False
+
+    if _local_dir_complete():
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
             model_id,
@@ -362,6 +413,15 @@ def ensure_download(
         )
         _invalidate_list_installed_cache(cache_dir)
         return str(local_dir)
+
+    if local_dir.exists():
+        MODEL_LOGGER.warning(
+            "Existing directory for model %s (backend=%s) is incomplete; cleaning up before download.",
+            model_id,
+            backend_label,
+        )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
@@ -385,13 +445,6 @@ def ensure_download(
             )
         if cancel_event is not None and cancel_event.is_set():
             raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
-
-    def _cleanup_partial() -> None:
-        try:
-            if local_dir.exists():
-                shutil.rmtree(local_dir)
-        except Exception:  # pragma: no cover - best effort cleanup
-            logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
 
     progress_class = None
     if cancel_event is not None or deadline is not None:
@@ -449,6 +502,8 @@ def ensure_download(
             backend_label,
             duration_ms,
         )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise DownloadCancelledError(
             "Model download cancelled by user.",
             by_user=True,
