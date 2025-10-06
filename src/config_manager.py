@@ -38,6 +38,7 @@ _BASE_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expa
 _DEFAULT_STORAGE_ROOT_DIR = str(_BASE_STORAGE_ROOT)
 _DEFAULT_ASR_CACHE_DIR = str((_BASE_STORAGE_ROOT / "asr").expanduser())
 _DEFAULT_RECORDINGS_DIR = str((_BASE_STORAGE_ROOT / "recordings").expanduser())
+_DEFAULT_MODELS_STORAGE_DIR = str((_BASE_STORAGE_ROOT / "models").expanduser())
 
 
 DEFAULT_CONFIG = {
@@ -116,6 +117,7 @@ DEFAULT_CONFIG = {
     "clear_gpu_cache": True,
     "models_storage_dir": _DEFAULT_STORAGE_ROOT_DIR,
     "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
+    "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
     "recordings_dir": _DEFAULT_RECORDINGS_DIR,
     "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "ctranslate2",
@@ -720,6 +722,57 @@ class ConfigManager:
                 description="recordings",
             )
         cfg[RECORDINGS_DIR_CONFIG_KEY] = str(recordings_path)
+
+        derived_models_path = storage_root_path / "models"
+        default_models_path = Path(
+            self.default_config[MODELS_STORAGE_DIR_CONFIG_KEY]
+        ).expanduser()
+        models_defaults = {
+            _normalized_str(derived_models_path),
+            _normalized_str(default_models_path),
+        }
+        if previous_storage_root_path is not None:
+            models_defaults.add(
+                _normalized_str(previous_storage_root_path / "models")
+            )
+
+        models_override = False
+        if applied_updates and MODELS_STORAGE_DIR_CONFIG_KEY in applied_updates:
+            models_override = True
+        elif loaded_config and MODELS_STORAGE_DIR_CONFIG_KEY in loaded_config:
+            loaded_models_path = _normalized_str(
+                _coerce_path(
+                    loaded_config[MODELS_STORAGE_DIR_CONFIG_KEY],
+                    default=derived_models_path,
+                )
+            )
+            if loaded_models_path not in models_defaults:
+                models_override = True
+
+        models_raw = _source_value(
+            MODELS_STORAGE_DIR_CONFIG_KEY,
+            default=cfg.get(
+                MODELS_STORAGE_DIR_CONFIG_KEY,
+                self.default_config[MODELS_STORAGE_DIR_CONFIG_KEY],
+            ),
+        )
+        if models_override:
+            requested_models_path = _coerce_path(
+                models_raw,
+                default=derived_models_path,
+            )
+            models_path = _ensure_directory(
+                requested_models_path,
+                fallback=derived_models_path,
+                description="models storage",
+            )
+        else:
+            models_path = _ensure_directory(
+                derived_models_path,
+                fallback=default_models_path,
+                description="models storage",
+            )
+        cfg[MODELS_STORAGE_DIR_CONFIG_KEY] = str(models_path)
 
         cfg[ASR_CURATED_CATALOG_CONFIG_KEY] = list_catalog()
         default_model_id = str(self.default_config[ASR_MODEL_ID_CONFIG_KEY])
@@ -1493,6 +1546,15 @@ class ConfigManager:
 
     def set_storage_root_dir(self, value: str):
         self.config[STORAGE_ROOT_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_models_storage_dir(self) -> str:
+        return self.config.get(
+            MODELS_STORAGE_DIR_CONFIG_KEY,
+            self.default_config[MODELS_STORAGE_DIR_CONFIG_KEY],
+        )
+
+    def set_models_storage_dir(self, value: str) -> None:
+        self.config[MODELS_STORAGE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
     def get_recordings_dir(self) -> str:
         return self.config.get(
