@@ -15,13 +15,20 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
+from typing import Mapping, cast
+
 import src.config_manager as config_module
 
 
 ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
-HOTKEY_CONFIG_PATH = Path(config_module.HOTKEY_CONFIG_FILE).expanduser()
+HOTKEY_CONFIG_PATH = Path(
+    cast(str, getattr(config_module, "HOTKEY_CONFIG_FILE"))
+).expanduser()
 LEGACY_HOTKEY_CONFIG_PATHS = tuple(
-    Path(path).expanduser() for path in config_module.LEGACY_HOTKEY_LOCATIONS
+    path.expanduser()
+    for path in cast(
+        tuple[Path, ...], getattr(config_module, "LEGACY_HOTKEY_LOCATIONS")
+    )
 )
 
 from src.logging_utils import (
@@ -105,11 +112,14 @@ def configure_cuda_logging() -> None:
 
             try:
                 num_gpus = torch.cuda.device_count()
+                cuda_runtime_version = getattr(
+                    getattr(torch, "version", None), "cuda", None
+                )
                 LOGGER.info(
                     StructuredMessage(
                         "CUDA runtime detected.",
                         event="cuda.runtime_detected",
-                        cuda_version=torch.version.cuda,
+                        cuda_version=cuda_runtime_version,
                         gpu_count=num_gpus,
                     )
                 )
@@ -204,9 +214,13 @@ def patch_tk_variable_cleanup() -> None:
     tk.Variable.__del__ = _safe_variable_del
 
 
-def _ensure_hotkey_payload(data: dict[str, object]) -> dict[str, object]:
-    defaults = {"record_key": "f3", "agent_key": "f4", "record_mode": "toggle"}
-    updated = dict(defaults)
+def _ensure_hotkey_payload(data: Mapping[str, object]) -> dict[str, object]:
+    defaults: dict[str, object] = {
+        "record_key": "f3",
+        "agent_key": "f4",
+        "record_mode": "toggle",
+    }
+    updated: dict[str, object] = dict(defaults)
     updated.update({k: v for k, v in data.items() if k in defaults})
     return updated
 
@@ -261,7 +275,7 @@ def _maybe_migrate_hotkey_config(target: Path, candidates: tuple[Path, ...]) -> 
 
 def _ensure_json_file(
     path: Path,
-    payload: dict[str, object],
+    payload: Mapping[str, object],
     *,
     description: str,
     recover_on_error: bool = True,
@@ -272,7 +286,7 @@ def _ensure_json_file(
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+            path.write_text(json.dumps(dict(payload), indent=4), encoding="utf-8")
             created = True
         else:
             with path.open("r", encoding="utf-8") as handle:
@@ -287,7 +301,7 @@ def _ensure_json_file(
                     error=str(exc),
                 )
             )
-            path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+            path.write_text(json.dumps(dict(payload), indent=4), encoding="utf-8")
             return True
         LOGGER.error(
             StructuredMessage(
@@ -404,7 +418,7 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
         )
 
     secrets_path = Path(config_module.SECRETS_FILE).resolve()
-    secrets_payload = {
+    secrets_payload: dict[str, object] = {
         config_module.GEMINI_API_KEY_CONFIG_KEY: "",
         config_module.OPENROUTER_API_KEY_CONFIG_KEY: "",
     }
