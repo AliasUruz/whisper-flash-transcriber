@@ -75,7 +75,12 @@ Launch the application for the first time with:
 ```bash
 python src/main.py
 ```
-During the initial startup the application will create `config.json` and `hotkey_config.json` in the project root.
+During the initial startup the application will create the persistent profile under
+`~/.cache/whisper_flash_transcriber/` (or the directory pointed to by the
+`WHISPER_FLASH_PROFILE_DIR` environment variable). The preflight stage ensures that
+`config.json`, `secrets.json`, and `hotkey_config.json` exist inside that profile
+folder before continuing, so the bootstrap completes successfully even when the
+installation directory is read-only.
 
 ### Configuration
 

@@ -2,6 +2,7 @@ import atexit
 import importlib.util
 import json
 import os
+import shutil
 import sys
 import threading
 import tkinter as tk
@@ -14,11 +15,14 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
-ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
-HOTKEY_CONFIG_PATH = Path(PROJECT_ROOT, "hotkey_config.json")
-
-
 import src.config_manager as config_module
+
+
+ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
+HOTKEY_CONFIG_PATH = Path(config_module.HOTKEY_CONFIG_FILE).expanduser()
+LEGACY_HOTKEY_CONFIG_PATHS = tuple(
+    Path(path).expanduser() for path in config_module.LEGACY_HOTKEY_LOCATIONS
+)
 
 from src.logging_utils import (
     StructuredMessage,
@@ -207,6 +211,54 @@ def _ensure_hotkey_payload(data: dict[str, object]) -> dict[str, object]:
     return updated
 
 
+def _maybe_migrate_hotkey_config(target: Path, candidates: tuple[Path, ...]) -> None:
+    if target.exists():
+        return
+    for candidate in candidates:
+        try:
+            if candidate.resolve() == target.resolve():
+                return
+        except Exception:
+            if str(candidate) == str(target):
+                return
+        if not candidate.exists():
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            LOGGER.warning(
+                StructuredMessage(
+                    "Unable to prepare destination for hotkey configuration.",
+                    event="startup.hotkey_config_migration_failed",
+                    destination=str(target),
+                    error=str(exc),
+                )
+            )
+            return
+        try:
+            shutil.move(str(candidate), str(target))
+        except Exception as exc:
+            LOGGER.warning(
+                StructuredMessage(
+                    "Failed to migrate legacy hotkey configuration.",
+                    event="startup.hotkey_config_migration_failed",
+                    source=str(candidate),
+                    destination=str(target),
+                    error=str(exc),
+                )
+            )
+            return
+        LOGGER.info(
+            StructuredMessage(
+                "Hotkey configuration migrated to profile directory.",
+                event="startup.hotkey_config_migrated",
+                source=str(candidate),
+                destination=str(target),
+            )
+        )
+        return
+
+
 def _ensure_json_file(
     path: Path,
     payload: dict[str, object],
@@ -266,6 +318,7 @@ def _ensure_hotkey_config(path: Path) -> bool:
 
     defaults: dict[str, object] = {"record_key": "f3", "agent_key": "f4", "record_mode": "toggle"}
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_text(json.dumps(defaults, indent=4), encoding="utf-8")
             return True
@@ -350,10 +403,16 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
             "Configuration file could not be verified after save operation."
         )
 
-    secrets_path = Path(persistence.secrets.path).resolve()
-    secrets_created_via_save = persistence.secrets.created
-    secrets_created = _ensure_json_file(secrets_path, {}, description="secrets")
-    secrets_created = secrets_created or secrets_created_via_save
+    secrets_path = Path(config_module.SECRETS_FILE).resolve()
+    secrets_payload = {
+        config_module.GEMINI_API_KEY_CONFIG_KEY: "",
+        config_module.OPENROUTER_API_KEY_CONFIG_KEY: "",
+    }
+    secrets_created = _ensure_json_file(
+        secrets_path,
+        secrets_payload,
+        description="secrets",
+    )
     _log_artifact_ready("Secrets", secrets_path, created=secrets_created)
     if persistence.secrets.error:
         raise RuntimeError(
@@ -366,6 +425,7 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
             "Secrets file could not be verified after save operation."
         )
 
+    _maybe_migrate_hotkey_config(hotkey_config_path, LEGACY_HOTKEY_CONFIG_PATHS)
     hotkey_created = _ensure_hotkey_config(hotkey_config_path)
     _log_artifact_ready("Hotkey configuration", hotkey_config_path, created=hotkey_created)
     if not hotkey_config_path.exists():
