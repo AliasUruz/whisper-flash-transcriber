@@ -75,6 +75,36 @@ _download_size_lock = RLock()
 _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _list_installed_lock = RLock()
 
+
+@lru_cache(maxsize=None)
+def _snapshot_download_supports(parameter: str) -> bool:
+    """Return ``True`` when ``snapshot_download`` accepts ``parameter``.
+
+    Some optional arguments (``local_dir_use_symlinks``,
+    ``local_dir_use_hardlinks`` and ``resume_download``) were introduced in
+    recent versions of ``huggingface_hub``. Older releases raised ``TypeError``
+    if those keyword arguments were provided, which previously resulted in the
+    entire download process crashing before it even started. This helper checks
+    the exported function signature (and any ``**kwargs`` catch-all) so that we
+    can conditionally pass the arguments only when they are actually supported.
+    """
+
+    if not parameter:
+        return False
+
+    try:
+        signature = inspect.signature(snapshot_download)
+    except Exception:  # pragma: no cover - defensive best effort
+        return False
+
+    parameters = signature.parameters
+    if parameter in parameters:
+        return True
+
+    return any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+    )
+
 _MODEL_WEIGHT_FILE_HINTS = {
     "model.bin",
     "model.onnx",
