@@ -11,7 +11,7 @@ from typing import Any, List
 import requests
 
 from .config_schema import coerce_with_defaults
-from .model_manager import list_catalog, list_installed
+from .model_manager import get_curated_entry, list_catalog, list_installed, normalize_backend_label
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -385,6 +385,41 @@ class ConfigManager:
         cfg[ASR_CACHE_DIR_CONFIG_KEY] = str(cache_path)
 
         cfg[ASR_CURATED_CATALOG_CONFIG_KEY] = list_catalog()
+        default_model_id = str(self.default_config[ASR_MODEL_ID_CONFIG_KEY])
+        configured_model_id = str(
+            cfg.get(ASR_MODEL_ID_CONFIG_KEY, default_model_id)
+        ).strip() or default_model_id
+        curated_entry = get_curated_entry(configured_model_id)
+        if curated_entry is None:
+            logging.warning(
+                "Configured ASR model '%s' is not part of the curated catalog; falling back to '%s'.",
+                configured_model_id,
+                default_model_id,
+            )
+            configured_model_id = default_model_id
+            curated_entry = get_curated_entry(configured_model_id)
+        cfg[ASR_MODEL_ID_CONFIG_KEY] = configured_model_id
+
+        expected_backend = normalize_backend_label(
+            curated_entry.get("backend") if curated_entry else None
+        )
+        configured_backend = _normalize_asr_backend(
+            cfg.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
+        )
+        if expected_backend and configured_backend != expected_backend:
+            logging.warning(
+                "Configured ASR backend '%s' is incompatible with curated model '%s'; forcing '%s'.",
+                configured_backend,
+                configured_model_id,
+                expected_backend,
+            )
+            configured_backend = expected_backend
+        if not configured_backend:
+            configured_backend = _normalize_asr_backend(
+                self.default_config[ASR_BACKEND_CONFIG_KEY]
+            )
+        cfg[ASR_BACKEND_CONFIG_KEY] = configured_backend
+
         try:
             cfg[ASR_INSTALLED_MODELS_CONFIG_KEY] = list_installed(str(cache_path))
         except OSError:

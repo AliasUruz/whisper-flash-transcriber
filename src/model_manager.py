@@ -77,6 +77,20 @@ def backend_storage_name(backend: str | None) -> str:
     return normalized
 
 
+def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
+    """Return the curated catalog entry for ``model_id`` if available."""
+
+    if not model_id:
+        return None
+
+    for entry in CURATED:
+        if entry.get("id") == model_id:
+            normalized = dict(entry)
+            normalized["backend"] = normalize_backend_label(entry.get("backend"))
+            return normalized
+    return None
+
+
 _CACHE_TTL_SECONDS = 60.0
 
 _download_size_cache: dict[str, tuple[float, tuple[int, int]]] = {}
