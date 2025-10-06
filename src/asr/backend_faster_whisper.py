@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import math
+from pathlib import Path
 
 
 class FasterWhisperBackend:
@@ -32,11 +33,37 @@ class FasterWhisperBackend:
         if model_name.startswith("whisper-"):
             model_name = model_name.replace("whisper-", "", 1)
 
+        model_source: str | None = None
+        download_root: str | None = cache_dir or None
+        if cache_dir:
+            try:
+                cache_path = Path(cache_dir).expanduser()
+                from .. import model_manager as model_manager_module
+
+                canonical_dir = model_manager_module.get_installation_dir(
+                    cache_path,
+                    "ctranslate2",
+                    self.model_id,
+                )
+                candidate_dirs = [canonical_dir]
+                for alias in ("ctranslate2", "faster-whisper"):
+                    candidate = cache_path / alias / self.model_id
+                    if candidate not in candidate_dirs:
+                        candidate_dirs.append(candidate)
+
+                for candidate in candidate_dirs:
+                    if _looks_like_ct2_installation(candidate):
+                        model_source = str(candidate)
+                        download_root = None
+                        break
+            except Exception:
+                model_source = None
+
         self.model = WhisperModel(
-            model_name,
+            model_source or model_name,
             device=device,
             compute_type=ct2_compute_type,
-            download_root=cache_dir or None,
+            download_root=download_root,
             **kwargs,
         )
 
@@ -123,3 +150,33 @@ def _segments_from_chunk_length(chunk_length: Any) -> int | None:
         return 1
     approx_segments = chunk / 30.0
     return _sanitize_language_detection_segments(approx_segments)
+
+
+def _looks_like_ct2_installation(path: Path) -> bool:
+    try:
+        if not path.exists() or not path.is_dir():
+            return False
+    except Exception:
+        return False
+
+    has_config = False
+    has_weights = False
+    try:
+        iterator = path.rglob("*")
+    except Exception:
+        return False
+
+    for candidate in iterator:
+        if not candidate.is_file():
+            continue
+        name = candidate.name.lower()
+        if name == "config.json":
+            has_config = True
+            continue
+        if name in {"model.bin", "model.onnx", "model.safetensors"} or (
+            name.endswith((".bin", ".onnx", ".safetensors")) and "model" in name
+        ):
+            has_weights = True
+        if has_config and has_weights:
+            return True
+    return has_config and has_weights
