@@ -40,6 +40,7 @@ from .config_manager import (
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
+    MODELS_STORAGE_DIR_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
@@ -575,6 +576,7 @@ class AppCore:
         ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         self.asr_ct2_compute_type = ct2_compute_type
         self.ct2_quantization = ct2_compute_type
+        self.models_storage_dir = self.config_manager.get(MODELS_STORAGE_DIR_CONFIG_KEY)
         # ... e outras configurações que AppCore precisa diretamente
 
     def _sync_installed_models(self):
@@ -1348,6 +1350,7 @@ class AppCore:
             "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
             "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
             "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            "new_models_storage_dir": MODELS_STORAGE_DIR_CONFIG_KEY,
             "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
             "new_ct2_cpu_threads": ASR_CT2_CPU_THREADS_CONFIG_KEY,
             "new_clear_gpu_cache": CLEAR_GPU_CACHE_CONFIG_KEY,
@@ -1439,6 +1442,7 @@ class AppCore:
             ASR_DTYPE_CONFIG_KEY,
             ASR_CT2_CPU_THREADS_CONFIG_KEY,
             ASR_CACHE_DIR_CONFIG_KEY,
+            MODELS_STORAGE_DIR_CONFIG_KEY,
         }
         reload_required = bool(changed_mapped_keys & reload_keys)
         launch_changed = LAUNCH_AT_STARTUP_CONFIG_KEY in changed_mapped_keys
@@ -1457,6 +1461,7 @@ class AppCore:
             RECORD_STORAGE_MODE_CONFIG_KEY,
             RECORD_STORAGE_LIMIT_CONFIG_KEY,
             MIN_RECORDING_DURATION_CONFIG_KEY,
+            MODELS_STORAGE_DIR_CONFIG_KEY,
         }
         if audio_related_keys & changed_mapped_keys:
             self.audio_handler.update_config()
