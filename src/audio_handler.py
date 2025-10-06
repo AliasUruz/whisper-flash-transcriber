@@ -218,14 +218,14 @@ class AudioHandler:
                                     thr_percent = 10
                                 percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
                                 if total_mb and percent_free < thr_percent:
-                                self._audio_log.info(
-                                    "Free RAM below configured threshold; moving buffers to disk.",
-                                    extra={
-                                        "event": "ram_to_disk_low_memory",
-                                        "stage": "storage_selection",
-                                        "details": f"percent_free={percent_free:.1f} threshold={thr_percent}",
-                                    },
-                                )
+                                    self._audio_log.info(
+                                        "Free RAM below configured threshold; moving buffers to disk.",
+                                        extra={
+                                            "event": "ram_to_disk_low_memory",
+                                            "stage": "storage_selection",
+                                            "details": f"percent_free={percent_free:.1f} threshold={thr_percent}",
+                                        },
+                                    )
                                     try:
                                         self._audio_log.info(
                                             "In-memory storage migration due to low available RAM.",
