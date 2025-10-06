@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import json
 import logging
 import shutil
 import time
@@ -98,44 +99,111 @@ _download_size_lock = RLock()
 _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _list_installed_lock = RLock()
 
-
-@lru_cache(maxsize=None)
-def _snapshot_download_supports(parameter: str) -> bool:
-    """Return ``True`` when ``snapshot_download`` accepts ``parameter``.
-
-    Some optional arguments (``local_dir_use_symlinks``,
-    ``local_dir_use_hardlinks`` and ``resume_download``) were introduced in
-    recent versions of ``huggingface_hub``. Older releases raised ``TypeError``
-    if those keyword arguments were provided, which previously resulted in the
-    entire download process crashing before it even started. This helper checks
-    the exported function signature (and any ``**kwargs`` catch-all) so that we
-    can conditionally pass the arguments only when they are actually supported.
-    """
-
-    if not parameter:
-        return False
-
-    try:
-        signature = inspect.signature(snapshot_download)
-    except Exception:  # pragma: no cover - defensive best effort
-        return False
-
-    parameters = signature.parameters
-    if parameter in parameters:
-        return True
-
-    return any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
-    )
-
 _MODEL_WEIGHT_FILE_HINTS = {
     "model.bin",
     "model.onnx",
     "model.safetensors",
 }
 
-_SNAPSHOT_SUPPORT_CACHE: dict[str, bool] = {}
-_SNAPSHOT_SUPPORT_LOCK = RLock()
+_METADATA_FILENAME = ".whisper_flash_model.json"
+
+
+def _metadata_path(model_dir: Path) -> Path:
+    return model_dir / _METADATA_FILENAME
+
+
+def _normalize_quant_label(quant: str | None) -> str:
+    if not quant:
+        return "default"
+    normalized = str(quant).strip()
+    if not normalized:
+        return "default"
+    if normalized.lower() == "default":
+        return "default"
+    return normalized
+
+
+def _load_install_metadata(model_dir: Path) -> dict[str, str] | None:
+    metadata_file = _metadata_path(model_dir)
+    if not metadata_file.is_file():
+        return None
+    try:
+        with metadata_file.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:  # pragma: no cover - metadata best effort
+        MODEL_LOGGER.debug(
+            "Failed to read metadata from %s", metadata_file, exc_info=True
+        )
+        return None
+    if not isinstance(payload, dict):
+        return None
+    metadata: dict[str, str] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str):
+            continue
+        metadata[key] = "" if value is None else str(value)
+    return metadata
+
+
+def _metadata_matches(
+    metadata: dict[str, str],
+    *,
+    model_id: str,
+    backend_label: str,
+    quant_label: str,
+) -> bool:
+    if not metadata:
+        return False
+    stored_backend = normalize_backend_label(metadata.get("backend"))
+    stored_quant = _normalize_quant_label(metadata.get("quant"))
+    return (
+        metadata.get("model_id") == model_id
+        and stored_backend == backend_label
+        and stored_quant == quant_label
+    )
+
+
+def _write_install_metadata(
+    model_dir: Path,
+    *,
+    model_id: str,
+    backend_label: str,
+    quant_label: str,
+) -> None:
+    metadata_file = _metadata_path(model_dir)
+    payload = {
+        "model_id": model_id,
+        "backend": backend_label,
+        "quant": quant_label,
+        "updated_at": int(time.time()),
+    }
+    try:
+        metadata_file.parent.mkdir(parents=True, exist_ok=True)
+        with metadata_file.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+    except Exception:  # pragma: no cover - best effort metadata write
+        MODEL_LOGGER.debug(
+            "Unable to persist metadata to %s", metadata_file, exc_info=True
+        )
+
+
+@lru_cache(maxsize=1)
+def _snapshot_download_signature() -> inspect.Signature | None:
+    """Return the resolved signature for :func:`snapshot_download`."""
+
+    func = snapshot_download
+    seen = set()
+    while hasattr(func, "__wrapped__"):
+        wrapped = getattr(func, "__wrapped__", None)
+        if wrapped is None or wrapped in seen:
+            break
+        seen.add(func)
+        func = wrapped
+
+    try:
+        return inspect.signature(func)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
 
 
 def _snapshot_download_supports(parameter: str) -> bool:
@@ -144,21 +212,17 @@ def _snapshot_download_supports(parameter: str) -> bool:
     if not parameter:
         return False
 
-    normalized = str(parameter)
-    with _SNAPSHOT_SUPPORT_LOCK:
-        cached = _SNAPSHOT_SUPPORT_CACHE.get(normalized)
-        if cached is not None:
-            return cached
+    signature = _snapshot_download_signature()
+    if signature is None:
+        return False
 
-        try:
-            signature = inspect.signature(snapshot_download)
-        except (TypeError, ValueError):  # pragma: no cover - interpreter specific behaviour
-            supported = False
-        else:
-            supported = normalized in signature.parameters
+    if parameter in signature.parameters:
+        return True
 
-        _SNAPSHOT_SUPPORT_CACHE[normalized] = supported
-        return supported
+    return any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in signature.parameters.values()
+    )
 
 
 def _set_snapshot_kwarg(target: dict, name: str, value) -> None:
@@ -353,7 +417,11 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
                     continue
                 if not _model_dir_is_complete(model_dir):
                     continue
-                installed.append({"id": rel_id, "backend": backend_label, "path": str(model_dir)})
+                record = {"id": rel_id, "backend": backend_label, "path": str(model_dir)}
+                metadata = _load_install_metadata(model_dir)
+                if metadata and metadata.get("quant") is not None:
+                    record["quant"] = _normalize_quant_label(metadata.get("quant"))
+                installed.append(record)
                 seen.add(rel_id)
 
     try:
@@ -539,27 +607,44 @@ def ensure_download(
     """
 
     cache_dir = Path(cache_dir)
-
-    curated_entry = get_curated_entry(model_id)
-    curated_backend = normalize_backend_label(curated_entry.get("backend")) if curated_entry else ""
-
-    requested_backend = normalize_backend_label(backend)
-    backend_label = requested_backend or curated_backend or "ctranslate2"
-
-    if curated_backend and backend_label != curated_backend:
-        MODEL_LOGGER.warning(
-            "Overriding backend '%s' with curated backend '%s' for model '%s'.",
-            backend_label,
-            curated_backend,
-            model_id,
-        )
-        backend_label = curated_backend
-
-    storage_backend = backend_storage_name(backend_label)
+    storage_backend = backend_storage_name(backend)
+    backend_label = normalize_backend_label(backend) or storage_backend
+    quant_label = _normalize_quant_label(quant)
 
     local_dir = cache_dir / storage_backend / model_id
-    if local_dir.is_dir() and any(local_dir.iterdir()):
-        if _is_installation_complete(local_dir):
+    metadata = _load_install_metadata(local_dir)
+
+    if _is_installation_complete(local_dir):
+        if metadata is None:
+            if storage_backend == "ct2" and quant_label != "default":
+                MODEL_LOGGER.info(
+                    "Existing CT2 installation at %s lacks metadata; forcing re-download for quant=%s.",
+                    local_dir,
+                    quant_label,
+                )
+            else:
+                MODEL_LOGGER.info(
+                    "Reusing legacy installation at %s (backend=%s, quant=%s).",
+                    local_dir,
+                    backend_label,
+                    quant_label,
+                )
+                try:
+                    _write_install_metadata(
+                        local_dir,
+                        model_id=model_id,
+                        backend_label=backend_label,
+                        quant_label=quant_label,
+                    )
+                except Exception:
+                    pass
+                return str(local_dir)
+        elif _metadata_matches(
+            metadata,
+            model_id=model_id,
+            backend_label=backend_label,
+            quant_label=quant_label,
+        ):
             MODEL_LOGGER.info(
                 "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
                 model_id,
@@ -567,9 +652,18 @@ def ensure_download(
                 local_dir,
             )
             return str(local_dir)
+        else:
+            MODEL_LOGGER.warning(
+                "Cached model metadata mismatch at %s (stored=%s, requested_backend=%s, requested_quant=%s).",
+                local_dir,
+                metadata,
+                backend_label,
+                quant_label,
+            )
 
+    if local_dir.is_dir() and any(local_dir.iterdir()):
         MODEL_LOGGER.warning(
-            "Detected incomplete installation for model=%s backend=%s at %s; cleaning up before retrying.",
+            "Detected incomplete or mismatched installation for model=%s backend=%s at %s; cleaning up before retrying.",
             model_id,
             backend_label,
             local_dir,
@@ -578,15 +672,17 @@ def ensure_download(
             shutil.rmtree(local_dir)
         except Exception:  # pragma: no cover - best effort cleanup
             MODEL_LOGGER.debug(
-                "Failed to remove incomplete model directory %s before re-download.",
+                "Failed to remove model directory %s before re-download.",
                 local_dir,
                 exc_info=True,
             )
+        else:
+            _invalidate_list_installed_cache(cache_dir)
 
     stale_local_dir = local_dir.exists()
     if stale_local_dir:
         MODEL_LOGGER.warning(
-            "Detected incomplete model directory at %s; removing before re-downloading.",
+            "Detected filesystem entry at %s prior to download; cleaning up stale remnants.",
             local_dir,
         )
 
@@ -678,10 +774,8 @@ def ensure_download(
 
     # Seleciona branch de quantização quando aplicável (modelos CT2).
     revision = None
-    if quant:
-        normalized_quant = str(quant).strip()
-        if normalized_quant and normalized_quant.lower() != "default":
-            revision = normalized_quant
+    if quant_label != "default":
+        revision = quant_label
 
     download_kwargs = {
         "repo_id": model_id,
@@ -703,7 +797,7 @@ def ensure_download(
         "Starting model download: model=%s backend=%s quant=%s target=%s",
         model_id,
         backend_label,
-        quant or "default",
+        quant_label,
         local_dir,
     )
 
@@ -754,6 +848,17 @@ def ensure_download(
         raise
 
     duration_ms = (time.perf_counter() - start_time) * 1000.0
+    try:
+        _write_install_metadata(
+            local_dir,
+            model_id=model_id,
+            backend_label=backend_label,
+            quant_label=quant_label,
+        )
+    except Exception:  # pragma: no cover - metadata persistence best effort
+        MODEL_LOGGER.debug(
+            "Unable to persist metadata for model %s at %s", model_id, local_dir, exc_info=True
+        )
     MODEL_LOGGER.info(
         "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
         model_id,
