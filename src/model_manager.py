@@ -52,6 +52,9 @@ _download_size_lock = RLock()
 _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _list_installed_lock = RLock()
 
+_inflight_downloads: dict[str, Event] = {}
+_inflight_downloads_lock = RLock()
+
 
 def _normalize_cache_dir(cache_dir: str | Path) -> Path:
     """Return a normalized ``Path`` instance for cache directory comparisons."""
@@ -284,6 +287,52 @@ def get_installed_size(model_path: str | Path) -> tuple[int, int]:
     return total, files
 
 
+def _local_dir_complete(local_dir: Path) -> bool:
+    """Return ``True`` when ``local_dir`` contains the essential model files."""
+
+    if not local_dir.is_dir():
+        return False
+
+    try:
+        entries = {p.name for p in local_dir.iterdir() if p.is_file()}
+    except FileNotFoundError:
+        return False
+
+    if "config.json" not in entries:
+        return False
+    if "model.bin" in entries or "model.onnx" in entries:
+        return True
+    return False
+
+
+def _register_inflight_download(local_dir: Path) -> tuple[Event, bool]:
+    """Return an event for the download slot and whether the caller owns it."""
+
+    key = str(local_dir)
+    with _inflight_downloads_lock:
+        existing = _inflight_downloads.get(key)
+        if existing is not None:
+            return existing, False
+        event = Event()
+        event.clear()
+        _inflight_downloads[key] = event
+        return event, True
+
+
+def _release_inflight_download(local_dir: Path, event: Event | None) -> None:
+    if event is None:
+        return
+
+    key = str(local_dir)
+    with _inflight_downloads_lock:
+        current = _inflight_downloads.get(key)
+        if current is event:
+            event.set()
+            _inflight_downloads.pop(key, None)
+        else:
+            event.set()
+
+
 def ensure_download(
     model_id: str,
     backend: str,
@@ -313,25 +362,6 @@ def ensure_download(
 
     cache_dir = Path(cache_dir)
     local_dir = cache_dir / backend / model_id
-    if local_dir.is_dir() and any(local_dir.iterdir()):
-        MODEL_LOGGER.info(
-            "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
-            model_id,
-            backend,
-            local_dir,
-        )
-        return str(local_dir)
-
-    local_dir.parent.mkdir(parents=True, exist_ok=True)
-
-    start_time = time.perf_counter()
-    MODEL_LOGGER.info(
-        "Starting model download: model=%s backend=%s quant=%s target=%s",
-        model_id,
-        backend,
-        quant or "default",
-        local_dir,
-    )
 
     timeout_value: float | None = None
     deadline: float | None = None
@@ -354,6 +384,37 @@ def ensure_download(
         if cancel_event is not None and cancel_event.is_set():
             raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
 
+    if _local_dir_complete(local_dir):
+        MODEL_LOGGER.info(
+            "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
+            model_id,
+            backend,
+            local_dir,
+        )
+        return str(local_dir)
+
+    wait_event: Event | None = None
+    owns_slot = False
+    while not owns_slot:
+        wait_event, owns_slot = _register_inflight_download(local_dir)
+        if owns_slot:
+            break
+        try:
+            while True:
+                _check_abort()
+                if wait_event.wait(timeout=0.5):
+                    break
+        except DownloadCancelledError:
+            raise
+        if _local_dir_complete(local_dir):
+            MODEL_LOGGER.info(
+                "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
+                model_id,
+                backend,
+                local_dir,
+            )
+            return str(local_dir)
+
     def _cleanup_partial() -> None:
         try:
             if local_dir.exists():
@@ -361,84 +422,101 @@ def ensure_download(
         except Exception:  # pragma: no cover - best effort cleanup
             logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
 
-    progress_class = None
-    if cancel_event is not None or deadline is not None:
-        progress_class = _make_cancellable_progress(_check_abort)
-
-    start_time = time.perf_counter()
-    MODEL_LOGGER.info(
-        "Starting model download: model=%s backend=%s quant=%s target=%s",
-        model_id,
-        backend,
-        quant or "default",
-        local_dir,
-    )
-
-    # Seleciona branch de quantização quando aplicável (modelos CT2).
-    revision = None
-    if quant:
-        normalized_quant = str(quant).strip()
-        if normalized_quant and normalized_quant.lower() != "default":
-            revision = normalized_quant
-
-    download_kwargs = {
-        "repo_id": model_id,
-        "local_dir": str(local_dir),
-        "allow_patterns": None,
-        "tqdm_class": progress_class,
-    }
-    if revision is not None:
-        download_kwargs["revision"] = revision
-
     try:
-        _check_abort()
-        if backend == "transformers":
-            snapshot_download(**download_kwargs)
-        elif backend == "ct2":
-            snapshot_download(**download_kwargs)
-        else:
-            raise ValueError(f"Unknown backend: {backend}")
-        _check_abort()
-    except DownloadCancelledError:
-        _cleanup_partial()
-        raise
-    except KeyboardInterrupt as exc:
-        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        progress_class = None
+        if cancel_event is not None or deadline is not None:
+            progress_class = _make_cancellable_progress(_check_abort)
+
+        local_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        if _local_dir_complete(local_dir):
+            MODEL_LOGGER.info(
+                "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
+                model_id,
+                backend,
+                local_dir,
+            )
+            return str(local_dir)
+
+        if local_dir.exists():
+            _cleanup_partial()
+
+        start_time = time.perf_counter()
         MODEL_LOGGER.info(
-            "[METRIC] stage=model_download status=cancelled model=%s backend=%s duration_ms=%.2f",
+            "Starting model download: model=%s backend=%s quant=%s target=%s",
             model_id,
             backend,
-            duration_ms,
-        )
-        raise DownloadCancelledError(
-            "Model download cancelled by user.",
-            by_user=True,
-        ) from exc
-    except Exception:
-        duration_ms = (time.perf_counter() - start_time) * 1000.0
-        MODEL_LOGGER.exception(
-            "Model download failed: model=%s backend=%s target=%s",
-            model_id,
-            backend,
+            quant or "default",
             local_dir,
         )
+
+        # Seleciona branch de quantização quando aplicável (modelos CT2).
+        revision = None
+        if quant:
+            normalized_quant = str(quant).strip()
+            if normalized_quant and normalized_quant.lower() != "default":
+                revision = normalized_quant
+
+        download_kwargs = {
+            "repo_id": model_id,
+            "local_dir": str(local_dir),
+            "allow_patterns": None,
+            "tqdm_class": progress_class,
+        }
+        if revision is not None:
+            download_kwargs["revision"] = revision
+
+        try:
+            _check_abort()
+            if backend == "transformers":
+                snapshot_download(**download_kwargs)
+            elif backend == "ct2":
+                snapshot_download(**download_kwargs)
+            else:
+                raise ValueError(f"Unknown backend: {backend}")
+            _check_abort()
+        except DownloadCancelledError:
+            _cleanup_partial()
+            raise
+        except KeyboardInterrupt as exc:
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            MODEL_LOGGER.info(
+                "[METRIC] stage=model_download status=cancelled model=%s backend=%s duration_ms=%.2f",
+                model_id,
+                backend,
+                duration_ms,
+            )
+            raise DownloadCancelledError(
+                "Model download cancelled by user.",
+                by_user=True,
+            ) from exc
+        except Exception:
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            MODEL_LOGGER.exception(
+                "Model download failed: model=%s backend=%s target=%s",
+                model_id,
+                backend,
+                local_dir,
+            )
+            MODEL_LOGGER.info(
+                "[METRIC] stage=model_download status=error model=%s backend=%s duration_ms=%.2f",
+                model_id,
+                backend,
+                duration_ms,
+            )
+            raise
+
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
         MODEL_LOGGER.info(
-            "[METRIC] stage=model_download status=error model=%s backend=%s duration_ms=%.2f",
+            "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
             model_id,
             backend,
             duration_ms,
+            local_dir,
         )
-        raise
-
-    duration_ms = (time.perf_counter() - start_time) * 1000.0
-    MODEL_LOGGER.info(
-        "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
-        model_id,
-        backend,
-        duration_ms,
-        local_dir,
-    )
-    return str(local_dir)
+        return str(local_dir)
+    finally:
+        _release_inflight_download(local_dir, wait_event)
 
 
 def _make_cancellable_progress(check_abort):
