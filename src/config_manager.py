@@ -209,6 +209,13 @@ ASR_CURATED_CATALOG_URL_CONFIG_KEY = "asr_curated_catalog_url"
 ASR_LAST_DOWNLOAD_STATUS_KEY = "asr_last_download_status"
 
 
+class ConfigPersistenceError(RuntimeError):
+    """Erro disparado quando não é possível persistir a configuração em disco."""
+
+
+CONFIG_LOGGER = get_logger("whisper_flash_transcriber.config", component="ConfigManager")
+
+
 def _normalize_asr_backend(name: str | None) -> str | None:
     """Return canonical backend name for persistence and UI consistency."""
     if not isinstance(name, str):
@@ -833,6 +840,56 @@ class ConfigManager:
 
         return copy.deepcopy(self.config), changed_keys
 
+    def _ensure_artifact_presence(self, *, path: Path, required: bool, artifact_name: str) -> None:
+        """Garante que o artefato ``path`` exista quando ``required`` é verdadeiro."""
+
+        if not required:
+            return
+        if not path.exists():
+            raise ConfigPersistenceError(
+                f"{artifact_name} expected at '{path}' after persistence but file was not created."
+            )
+
+    def _emit_persistence_summary(
+        self,
+        *,
+        config_changed: bool,
+        secrets_changed: bool,
+        secrets_expected: bool,
+    ) -> None:
+        """Emite um log estruturado consolidando o estado de persistência."""
+
+        summary = {
+            "config_path": str(Path(self.config_file).resolve()),
+            "config_exists": Path(self.config_file).is_file(),
+            "config_changed": config_changed,
+            "secrets_path": str(Path(SECRETS_FILE).resolve()),
+            "secrets_exists": Path(SECRETS_FILE).is_file(),
+            "secrets_changed": secrets_changed,
+            "secrets_expected": secrets_expected,
+        }
+        CONFIG_LOGGER.info(
+            StructuredMessage(
+                "Configuration persistence status recorded.",
+                event="config.persistence_summary",
+                details=summary,
+            )
+        )
+
+    def describe_persistence_state(self) -> dict[str, Any]:
+        """Retorna uma fotografia do estado atual dos arquivos de configuração."""
+
+        config_path = Path(self.config_file).resolve()
+        secrets_path = Path(SECRETS_FILE).resolve()
+        return {
+            "config_file": str(config_path),
+            "config_exists": config_path.is_file(),
+            "config_size": config_path.stat().st_size if config_path.is_file() else 0,
+            "secrets_file": str(secrets_path),
+            "secrets_exists": secrets_path.is_file(),
+            "secrets_size": secrets_path.stat().st_size if secrets_path.is_file() else 0,
+        }
+
     def save_config(self):
         """Salva as configurações não sensíveis no config.json e as sensíveis no secrets.json."""
         config_to_save = copy.deepcopy(self.config)
@@ -857,6 +914,7 @@ class ConfigManager:
 
         # Salvar config.json apenas se mudar
         new_config_hash = self._compute_hash(config_to_save)
+        config_changed = False
         if new_config_hash != self._config_hash:
             temp_file_config = self.config_file + ".tmp"
             try:
@@ -864,16 +922,29 @@ class ConfigManager:
                     json.dump(config_to_save, f, indent=4)
                 os.replace(temp_file_config, self.config_file)
                 self._config_hash = new_config_hash
-                self._bootstrap_state["config"]["written"] = True
-                self._bootstrap_state["config"]["existed"] = True
-                logging.info(f"Configuration saved to {self.config_file}")
+                config_changed = True
+                CONFIG_LOGGER.info(
+                    StructuredMessage(
+                        "Configuration file persisted successfully.",
+                        event="config.write_success",
+                        path=os.path.abspath(self.config_file),
+                    )
+                )
             except Exception as e:
                 logging.error(f"Error saving configuration to {self.config_file}: {e}")
                 if os.path.exists(temp_file_config):
                     os.remove(temp_file_config)
-                self._register_bootstrap_error("config", e)
+                raise ConfigPersistenceError(
+                    f"Unable to write configuration file '{self.config_file}': {e}"
+                ) from e
         else:
-            logging.info(f"No changes detected in {self.config_file}.")
+            CONFIG_LOGGER.debug(
+                StructuredMessage(
+                    "Configuration unchanged; skipping disk write.",
+                    event="config.write_skipped",
+                    path=os.path.abspath(self.config_file),
+                )
+            )
 
         # Salvar secrets.json somente se houver mudanças
         temp_file_secrets = SECRETS_FILE + ".tmp"
@@ -893,22 +964,58 @@ class ConfigManager:
         secrets_file_exists = os.path.exists(SECRETS_FILE)
         should_write_secrets = new_secrets_hash != self._secrets_hash or not secrets_file_exists
 
+        secrets_changed = False
         if should_write_secrets:
             try:
                 with open(temp_file_secrets, "w", encoding='utf-8') as f:
                     json.dump(existing_secrets, f, indent=4)
                 os.replace(temp_file_secrets, SECRETS_FILE)
                 self._secrets_hash = new_secrets_hash
-                self._bootstrap_state["secrets"]["written"] = True
-                self._bootstrap_state["secrets"]["existed"] = True
-                logging.info(f"Secrets saved to {SECRETS_FILE}")
+                secrets_changed = True
+                CONFIG_LOGGER.info(
+                    StructuredMessage(
+                        "Secrets file persisted successfully.",
+                        event="config.secrets_write_success",
+                        path=os.path.abspath(SECRETS_FILE),
+                        keys=list(existing_secrets.keys()),
+                    )
+                )
             except Exception as e:
                 logging.error(f"Error saving secrets to {SECRETS_FILE}: {e}")
                 if os.path.exists(temp_file_secrets):
                     os.remove(temp_file_secrets)
-                self._register_bootstrap_error("secrets", e)
+                raise ConfigPersistenceError(
+                    f"Unable to write secrets file '{SECRETS_FILE}': {e}"
+                ) from e
         else:
-            logging.info(f"No changes detected in {SECRETS_FILE}.")
+            CONFIG_LOGGER.debug(
+                StructuredMessage(
+                    "Secrets unchanged; skipping disk write.",
+                    event="config.secrets_write_skipped",
+                    path=os.path.abspath(SECRETS_FILE),
+                )
+            )
+
+        config_path = Path(self.config_file).resolve()
+        secrets_path = Path(SECRETS_FILE).resolve()
+        secrets_expected = bool(existing_secrets)
+
+        self._ensure_artifact_presence(
+            path=config_path,
+            required=True,
+            artifact_name="Configuration file",
+        )
+        self._ensure_artifact_presence(
+            path=secrets_path,
+            required=secrets_expected,
+            artifact_name="Secrets file",
+        )
+
+        self._emit_persistence_summary(
+            config_changed=config_changed,
+            secrets_changed=secrets_changed,
+            secrets_expected=secrets_expected,
+        )
 
         if not self._bootstrap_logged:
             self._log_bootstrap_summary()
