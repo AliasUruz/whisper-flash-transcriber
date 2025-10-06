@@ -46,6 +46,7 @@ from .config_manager import (
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
+    RECORDINGS_DIR_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     AUTO_PASTE_MODIFIER_CONFIG_KEY,
@@ -1378,6 +1379,7 @@ class AppCore:
             "new_display_transcripts_in_terminal": "display_transcripts_in_terminal",
             "new_record_storage_mode": RECORD_STORAGE_MODE_CONFIG_KEY,
             "new_record_storage_limit": RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            "new_recordings_dir": RECORDINGS_DIR_CONFIG_KEY,
             "new_launch_at_startup": LAUNCH_AT_STARTUP_CONFIG_KEY,
             "new_chunk_length_mode": "chunk_length_mode",
             "new_chunk_length_sec": "chunk_length_sec",
@@ -1475,6 +1477,7 @@ class AppCore:
             VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
             RECORD_STORAGE_MODE_CONFIG_KEY,
             RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            RECORDINGS_DIR_CONFIG_KEY,
             MIN_RECORDING_DURATION_CONFIG_KEY,
         }
         if audio_related_keys & changed_mapped_keys:

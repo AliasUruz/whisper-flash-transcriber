@@ -1,7 +1,7 @@
 
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
-from tkinter import simpledialog  # Adicionado para askstring
+from tkinter import filedialog, simpledialog  # Adicionado para askstring
 import logging
 import threading
 import time
@@ -36,6 +36,7 @@ from .config_manager import (
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
+    RECORDINGS_DIR_CONFIG_KEY,
     GPU_INDEX_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
@@ -801,6 +802,7 @@ class UIManager:
         asr_dtype_var = _var("asr_dtype_var")
         asr_ct2_compute_type_var = _var("asr_ct2_compute_type_var")
         asr_cache_dir_var = _var("asr_cache_dir_var")
+        recordings_dir_var = _var("recordings_dir_var")
 
         if detected_key_var is None or mode_var is None or auto_paste_var is None:
             return
@@ -911,6 +913,21 @@ class UIManager:
             messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{exc}", parent=settings_win)
             return
 
+        recordings_dir_to_apply = (
+            recordings_dir_var.get()
+            if recordings_dir_var
+            else self.config_manager.get_recordings_dir()
+        )
+        try:
+            Path(recordings_dir_to_apply).mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror(
+                "Invalid Path",
+                f"Recording directory is invalid:\n{exc}",
+                parent=settings_win,
+            )
+            return
+
         selected_device_str = asr_compute_device_var.get() if asr_compute_device_var else "Auto-select (Recommended)"
         gpu_index_to_apply = -1
         if "Force CPU" in selected_device_str:
@@ -973,6 +990,7 @@ class UIManager:
             new_asr_dtype=asr_dtype_to_apply,
             new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
             new_asr_cache_dir=asr_cache_dir_to_apply,
+            new_recordings_dir=recordings_dir_to_apply,
         )
         self._close_settings_window()
 
@@ -1076,11 +1094,14 @@ class UIManager:
                 pass
 
         _set_var("asr_cache_dir_var", DEFAULT_CONFIG["asr_cache_dir"])
+        _set_var("recordings_dir_var", DEFAULT_CONFIG.get("recordings_dir", ""))
 
         self.config_manager.set_asr_model_id(default_model_id)
         self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
         self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
         self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
+        if "recordings_dir" in DEFAULT_CONFIG:
+            self.config_manager.set_recordings_dir(DEFAULT_CONFIG["recordings_dir"])
         self.config_manager.save_config()
 
         backend_var = self._get_settings_var("asr_backend_var")
@@ -1434,6 +1455,24 @@ class UIManager:
         asr_cache_entry = ctk.CTkEntry(asr_cache_frame, textvariable=asr_cache_dir_var, width=240)
         asr_cache_entry.pack(side="left", padx=5)
         Tooltip(asr_cache_entry, "Directory used to cache ASR models.")
+
+        def _choose_asr_cache_dir():
+            initial_dir = asr_cache_dir_var.get() if asr_cache_dir_var else ""
+            directory = filedialog.askdirectory(
+                title="Select ASR cache directory",
+                initialdir=initial_dir or None,
+            )
+            if directory:
+                asr_cache_dir_var.set(directory)
+
+        browse_cache_button = ctk.CTkButton(
+            asr_cache_frame,
+            text="Browse...",
+            width=90,
+            command=_choose_asr_cache_dir,
+        )
+        browse_cache_button.pack(side="left", padx=5)
+        Tooltip(browse_cache_button, "Open a folder chooser for the ASR cache directory.")
 
         def _install_model():
             cache_dir = asr_cache_dir_var.get()
@@ -2166,6 +2205,14 @@ class UIManager:
                         coerce=bool,
                     )
                 )
+                recordings_dir_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        RECORDINGS_DIR_CONFIG_KEY,
+                        var_name="recordings_dir",
+                        getter=self.config_manager.get_recordings_dir,
+                        coerce=str,
+                    )
+                )
                 display_transcripts_var = ctk.BooleanVar(
                     value=self._resolve_initial_value(
                         DISPLAY_TRANSCRIPTS_KEY,
@@ -2276,6 +2323,7 @@ class UIManager:
                     ("asr_dtype_var", asr_dtype_var),
                     ("asr_ct2_compute_type_var", asr_ct2_compute_type_var),
                     ("asr_cache_dir_var", asr_cache_dir_var),
+                    ("recordings_dir_var", recordings_dir_var),
                 ]:
                     self._set_settings_var(name, var)
 
@@ -2388,6 +2436,17 @@ class UIManager:
                         messagebox.showerror("Invalid Path", f"ASR cache directory is invalid:\n{e}", parent=settings_win)
                         return
 
+                    recordings_dir_to_apply = recordings_dir_var.get()
+                    try:
+                        Path(recordings_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Invalid Path",
+                            f"Recording directory is invalid:\n{exc}",
+                            parent=settings_win,
+                        )
+                        return
+
                     # Logic for converting UI to GPU index
                     selected_device_str = asr_compute_device_var.get()
                     gpu_index_to_apply = -1 # Default to "Auto-select"
@@ -2456,6 +2515,7 @@ class UIManager:
                             "new_asr_dtype": asr_dtype_to_apply,
                             "new_asr_ct2_compute_type": asr_ct2_compute_type_to_apply,
                             "new_asr_cache_dir": asr_cache_dir_to_apply,
+                            "new_recordings_dir": recordings_dir_to_apply,
                         }
                     )
                     self._close_settings_window() # Call class method
@@ -2658,6 +2718,38 @@ class UIManager:
                 startup_switch = ctk.CTkSwitch(startup_frame, text="Iniciar com o Windows", variable=launch_at_startup_var)
                 startup_switch.pack(side="left", padx=5)
                 Tooltip(startup_switch, "Inicia automaticamente com o Windows.")
+
+                recordings_dir_frame = ctk.CTkFrame(general_frame)
+                recordings_dir_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(
+                    recordings_dir_frame,
+                    text="Recording Directory:",
+                ).pack(side="left", padx=(5, 10))
+                recordings_dir_entry = ctk.CTkEntry(
+                    recordings_dir_frame,
+                    textvariable=recordings_dir_var,
+                    width=240,
+                )
+                recordings_dir_entry.pack(side="left", padx=5)
+                Tooltip(recordings_dir_entry, "Directory used for disk recordings and preserved audio files.")
+
+                def _choose_recordings_dir() -> None:
+                    initial_dir = recordings_dir_var.get() if recordings_dir_var else ""
+                    directory = filedialog.askdirectory(
+                        title="Select recording directory",
+                        initialdir=initial_dir or None,
+                    )
+                    if directory:
+                        recordings_dir_var.set(directory)
+
+                recordings_dir_button = ctk.CTkButton(
+                    recordings_dir_frame,
+                    text="Browse...",
+                    width=90,
+                    command=_choose_recordings_dir,
+                )
+                recordings_dir_button.pack(side="left", padx=5)
+                Tooltip(recordings_dir_button, "Open a folder chooser for recording storage.")
 
                 # --- Sound Settings Section ---
                 sound_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
