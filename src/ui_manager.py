@@ -30,6 +30,8 @@ from .config_manager import (
     GEMINI_API_KEY_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    STORAGE_ROOT_DIR_CONFIG_KEY,
+    RECORDINGS_DIR_CONFIG_KEY,
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
     ASR_BACKEND_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
@@ -790,6 +792,8 @@ class UIManager:
         vad_post_speech_padding_ms_var = _var("vad_post_speech_padding_ms_var")
         save_temp_recordings_var = _var("save_temp_recordings_var")
         display_transcripts_var = _var("display_transcripts_var")
+        storage_root_dir_var = _var("storage_root_dir_var")
+        recordings_dir_var = _var("recordings_dir_var")
         record_storage_mode_var = _var("record_storage_mode_var")
         max_memory_seconds_mode_var = _var("max_memory_seconds_mode_var")
         max_memory_seconds_var = _var("max_memory_seconds_var")
@@ -906,11 +910,32 @@ class UIManager:
         asr_compute_device_to_apply = "auto"
         asr_dtype_to_apply = asr_dtype_var.get() if asr_dtype_var else self.config_manager.get_asr_dtype()
         asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get() if asr_ct2_compute_type_var else self.config_manager.get_asr_ct2_compute_type()
-        models_storage_dir_to_apply = (
-            models_storage_dir_var.get()
-            if models_storage_dir_var
-            else self.config_manager.get_models_storage_dir()
-        )
+        storage_root_dir_to_apply_raw = storage_root_dir_var.get().strip() if storage_root_dir_var else self.config_manager.get_storage_root_dir()
+        if not storage_root_dir_to_apply_raw:
+            storage_root_dir_to_apply_raw = self.config_manager.get_storage_root_dir()
+        try:
+            storage_root_path = Path(storage_root_dir_to_apply_raw).expanduser()
+            storage_root_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror("Invalid Path", f"Storage root directory is invalid:\n{exc}", parent=settings_win)
+            return
+        storage_root_dir_to_apply = str(storage_root_path)
+
+        recordings_dir_raw = recordings_dir_var.get().strip() if recordings_dir_var else ""
+        if not recordings_dir_raw:
+            recordings_path = storage_root_path / "recordings"
+        else:
+            try:
+                recordings_path = Path(recordings_dir_raw).expanduser()
+            except Exception as exc:
+                messagebox.showerror("Invalid Path", f"Recordings directory is invalid:\n{exc}", parent=settings_win)
+                return
+        try:
+            recordings_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror("Invalid Path", f"Recordings directory is invalid:\n{exc}", parent=settings_win)
+            return
+        recordings_dir_to_apply = str(recordings_path)
         asr_cache_dir_to_apply = asr_cache_dir_var.get() if asr_cache_dir_var else self.config_manager.get_asr_cache_dir()
 
         try:
@@ -1003,6 +1028,7 @@ class UIManager:
             new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
             new_models_storage_dir=models_storage_dir_to_apply,
             new_asr_cache_dir=asr_cache_dir_to_apply,
+            new_storage_root_dir=storage_root_dir_to_apply,
             new_recordings_dir=recordings_dir_to_apply,
         )
         self._close_settings_window()
@@ -1107,15 +1133,16 @@ class UIManager:
                 pass
 
         _set_var("asr_cache_dir_var", DEFAULT_CONFIG["asr_cache_dir"])
-        _set_var("models_storage_dir_var", DEFAULT_CONFIG["models_storage_dir"])
+        _set_var("storage_root_dir_var", DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
+        _set_var("recordings_dir_var", DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
 
         self.config_manager.set_asr_model_id(default_model_id)
         self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
         self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
         self.config_manager.set_models_storage_dir(DEFAULT_CONFIG["models_storage_dir"])
         self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
-        if "recordings_dir" in DEFAULT_CONFIG:
-            self.config_manager.set_recordings_dir(DEFAULT_CONFIG["recordings_dir"])
+        self.config_manager.set_storage_root_dir(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
+        self.config_manager.set_recordings_dir(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
         self.config_manager.save_config()
 
         backend_var = self._get_settings_var("asr_backend_var")
@@ -1468,12 +1495,16 @@ class UIManager:
             asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
             asr_ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
             asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
+            storage_root_dir_var.set(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
+            recordings_dir_var.set(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
             _on_backend_change(asr_backend_var.get())
             _update_model_info(default_model_id)
             self.config_manager.set_asr_model_id(default_model_id)
             self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
             self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
             self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
+            self.config_manager.set_storage_root_dir(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
+            self.config_manager.set_recordings_dir(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
             self.config_manager.save_config()
 
         reset_asr_button = ctk.CTkButton(
@@ -2304,6 +2335,21 @@ class UIManager:
                     )
                 )
 
+                storage_root_dir_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        STORAGE_ROOT_DIR_CONFIG_KEY,
+                        var_name="storage_root_dir",
+                        coerce=str,
+                    )
+                )
+                recordings_dir_var = ctk.StringVar(
+                    value=self._resolve_initial_value(
+                        RECORDINGS_DIR_CONFIG_KEY,
+                        var_name="recordings_dir",
+                        coerce=str,
+                    )
+                )
+
                 record_storage_mode_var = ctk.StringVar(
                     value=self._resolve_initial_value(
                         "record_storage_mode",
@@ -2396,6 +2442,8 @@ class UIManager:
                     ("vad_silence_duration_var", vad_silence_duration_var),
                     ("save_temp_recordings_var", save_temp_recordings_var),
                     ("display_transcripts_var", display_transcripts_var),
+                    ("storage_root_dir_var", storage_root_dir_var),
+                    ("recordings_dir_var", recordings_dir_var),
                     ("record_storage_mode_var", record_storage_mode_var),
                     ("max_memory_seconds_mode_var", max_memory_seconds_mode_var),
                     ("max_memory_seconds_var", max_memory_seconds_var),
@@ -2600,7 +2648,8 @@ class UIManager:
                             "new_asr_dtype": asr_dtype_to_apply,
                             "new_asr_ct2_compute_type": asr_ct2_compute_type_to_apply,
                             "new_asr_cache_dir": asr_cache_dir_to_apply,
-                            "new_recordings_dir": recordings_dir_to_apply,
+                            "new_storage_root_dir": storage_root_dir_var.get(),
+                            "new_recordings_dir": recordings_dir_var.get(),
                         }
                     )
                     self._close_settings_window() # Call class method
@@ -2718,6 +2767,8 @@ class UIManager:
                     vad_threshold_var.set(DEFAULT_CONFIG["vad_threshold"])
                     vad_silence_duration_var.set(DEFAULT_CONFIG["vad_silence_duration"])
                     save_temp_recordings_var.set(DEFAULT_CONFIG[SAVE_TEMP_RECORDINGS_CONFIG_KEY])
+                    storage_root_dir_var.set(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
+                    recordings_dir_var.set(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
                     display_transcripts_var.set(DEFAULT_CONFIG[DISPLAY_TRANSCRIPTS_KEY])
                     record_storage_mode_var.set(DEFAULT_CONFIG["record_storage_mode"])
                     max_memory_seconds_var.set(DEFAULT_CONFIG["max_memory_seconds"])
@@ -2804,37 +2855,42 @@ class UIManager:
                 startup_switch.pack(side="left", padx=5)
                 Tooltip(startup_switch, "Inicia automaticamente com o Windows.")
 
-                recordings_dir_frame = ctk.CTkFrame(general_frame)
-                recordings_dir_frame.pack(fill="x", pady=5)
+                # --- Storage Settings Section ---
+                storage_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
+                storage_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(
-                    recordings_dir_frame,
-                    text="Recording Directory:",
-                ).pack(side="left", padx=(5, 10))
+                    storage_frame,
+                    text="Armazenamento",
+                    font=ctk.CTkFont(weight="bold"),
+                ).pack(pady=(5, 10), anchor="w")
+
+                storage_root_frame = ctk.CTkFrame(storage_frame)
+                storage_root_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(storage_root_frame, text="Pasta raiz de dados:").pack(side="left", padx=(5, 10))
+                storage_root_entry = ctk.CTkEntry(
+                    storage_root_frame,
+                    textvariable=storage_root_dir_var,
+                    width=260,
+                )
+                storage_root_entry.pack(side="left", padx=5, fill="x", expand=True)
+                Tooltip(
+                    storage_root_entry,
+                    "Diretório base usado para modelos e outros artefatos pesados.",
+                )
+
+                recordings_dir_frame = ctk.CTkFrame(storage_frame)
+                recordings_dir_frame.pack(fill="x", pady=5)
+                ctk.CTkLabel(recordings_dir_frame, text="Diretório de gravações:").pack(side="left", padx=(5, 10))
                 recordings_dir_entry = ctk.CTkEntry(
                     recordings_dir_frame,
                     textvariable=recordings_dir_var,
-                    width=240,
+                    width=260,
                 )
-                recordings_dir_entry.pack(side="left", padx=5)
-                Tooltip(recordings_dir_entry, "Directory used for disk recordings and preserved audio files.")
-
-                def _choose_recordings_dir() -> None:
-                    initial_dir = recordings_dir_var.get() if recordings_dir_var else ""
-                    directory = filedialog.askdirectory(
-                        title="Select recording directory",
-                        initialdir=initial_dir or None,
-                    )
-                    if directory:
-                        recordings_dir_var.set(directory)
-
-                recordings_dir_button = ctk.CTkButton(
-                    recordings_dir_frame,
-                    text="Browse...",
-                    width=90,
-                    command=_choose_recordings_dir,
+                recordings_dir_entry.pack(side="left", padx=5, fill="x", expand=True)
+                Tooltip(
+                    recordings_dir_entry,
+                    "Local onde os arquivos WAV temporários e salvos serão armazenados.",
                 )
-                recordings_dir_button.pack(side="left", padx=5)
-                Tooltip(recordings_dir_button, "Open a folder chooser for recording storage.")
 
                 # --- Sound Settings Section ---
                 sound_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")

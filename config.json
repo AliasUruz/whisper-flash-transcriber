@@ -50,6 +50,8 @@
   "enable_torch_compile": false,
   "launch_at_startup": true,
   "clear_gpu_cache": true,
+  "storage_root_dir": "C:\\Users\\I\\.cache\\whisper_flash_transcriber",
+  "recordings_dir": "C:\\Users\\I\\.cache\\whisper_flash_transcriber\\recordings",
   "asr_model_id": "openai/whisper-large-v3-turbo",
   "asr_backend": "ctranslate2",
   "asr_compute_device": "cuda",
