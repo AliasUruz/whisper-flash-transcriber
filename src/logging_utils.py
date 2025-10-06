@@ -1,6 +1,7 @@
 """Logging helpers that keep terminal output structured and copy-friendly."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
@@ -11,6 +12,7 @@ import time
 import uuid
 from contextlib import contextmanager
 import contextvars
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
@@ -21,15 +23,24 @@ LOG_DIR_ENV = "WHISPER_LOG_DIR"
 LOG_MAX_BYTES_ENV = "WHISPER_LOG_MAX_BYTES"
 LOG_BACKUP_COUNT_ENV = "WHISPER_LOG_BACKUP_COUNT"
 LOG_RUN_ID_ENV = "WHISPER_LOG_RUN_ID"
+LOG_FORMAT_ENV = "WHISPER_LOG_FORMAT"
 DEFAULT_LOG_FILENAME = "whisper-flash-transcriber.log"
 DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
 DEFAULT_LOG_BACKUP_COUNT = 5
 
+_FORMAT_STRUCTURED = "structured"
+_FORMAT_JSON = "json"
+_SUPPORTED_FORMATS = {_FORMAT_STRUCTURED, _FORMAT_JSON}
+
 _SESSION_START = datetime.now(timezone.utc)
 _SESSION_MONOTONIC = time.monotonic()
-_RUN_ID = os.getenv(LOG_RUN_ID_ENV, "").strip() or f"{_SESSION_START:%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"
+_RUN_ID = (
+    os.getenv(LOG_RUN_ID_ENV, "").strip()
+    or f"{_SESSION_START:%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
+)
 _LAST_LOG_DIRECTORY: Path | None = None
 _LAST_LOG_FILE: Path | None = None
+_ACTIVE_FORMAT: str = _FORMAT_STRUCTURED
 
 
 _correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -249,6 +260,23 @@ def _determine_level() -> int:
     return getattr(logging, env_level, logging.INFO)
 
 
+def _determine_log_format() -> tuple[str, str | None]:
+    """Return the desired log format and any warning about invalid choices."""
+
+    raw_value = (os.getenv(LOG_FORMAT_ENV) or "").strip().lower()
+    if not raw_value:
+        return _FORMAT_STRUCTURED, None
+    if raw_value in _SUPPORTED_FORMATS:
+        return raw_value, None
+    return _FORMAT_STRUCTURED, raw_value
+
+
+def _build_formatter(log_format: str) -> logging.Formatter:
+    if log_format == _FORMAT_JSON:
+        return _JsonLogFormatter()
+    return _StructuredLogFormatter()
+
+
 class _StructuredLogFormatter(logging.Formatter):
     """Formatter that produces explicit, copy-friendly log lines."""
 
@@ -314,6 +342,90 @@ class _StructuredLogFormatter(logging.Formatter):
                 detail_segment += f" | {detail_pairs}"
 
         return f"{timestamp} | {level:<8} | {name}{context} | {message}{detail_segment}"
+
+
+def _normalize_json_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        return {str(k): _normalize_json_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_normalize_json_value(item) for item in value]
+    return str(value)
+
+
+class _JsonLogFormatter(logging.Formatter):
+    """Formatter that encodes log records as JSON payloads."""
+
+    default_time_format = "%Y-%m-%dT%H:%M:%S"
+    default_msec_format = "%s.%03d"
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname.upper(),
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+
+        component = getattr(record, "component", None)
+        if component:
+            payload["component"] = component
+
+        event = getattr(record, "event", None)
+        if event:
+            payload["event"] = event
+
+        details = getattr(record, "details", None)
+        if isinstance(details, Mapping) and details:
+            payload["details"] = {
+                str(key): _normalize_json_value(value) for key, value in details.items()
+            }
+
+        extras: dict[str, Any] = {}
+        process_id = getattr(record, "process_id", None)
+        if process_id is not None:
+            extras["pid"] = process_id
+        thread_name = getattr(record, "thread_name", None) or getattr(record, "threadName", None)
+        if thread_name and thread_name != "MainThread":
+            extras["thread"] = thread_name
+        run_id = getattr(record, "run_id", None)
+        if run_id:
+            extras["run"] = run_id
+        uptime_ms = getattr(record, "uptime_ms", None)
+        if isinstance(uptime_ms, int) and uptime_ms >= 0:
+            extras["uptime_ms"] = uptime_ms
+        if record.funcName:
+            extras["func"] = record.funcName
+        if record.module:
+            extras["module"] = record.module
+        if record.filename:
+            extras["filename"] = record.filename
+        if record.lineno:
+            extras["lineno"] = record.lineno
+
+        correlation_id = getattr(record, "correlation_id", None)
+        if correlation_id:
+            extras["correlation_id"] = correlation_id
+        operation_id = getattr(record, "operation_id", None)
+        if operation_id:
+            extras["operation_id"] = operation_id
+            depth = getattr(record, "operation_depth", None)
+            if isinstance(depth, int) and depth > 0:
+                extras["operation_depth"] = depth
+        operation_name = getattr(record, "operation_name", None)
+        if operation_name:
+            extras["operation_name"] = operation_name
+
+        if extras:
+            payload["extra"] = extras
+
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            payload["stack"] = self.formatStack(record.stack_info)
+
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 class ContextualLoggerAdapter(logging.LoggerAdapter):
@@ -399,7 +511,10 @@ def _resolve_int(value: str | None, default: int) -> int:
     return parsed if parsed >= 0 else default
 
 
-def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.Handler | None:
+def _build_rotating_file_handler(
+    filters: Iterable[logging.Filter],
+    formatter: logging.Formatter,
+) -> logging.Handler | None:
     log_directory = Path(os.getenv(LOG_DIR_ENV, "logs")).expanduser()
     try:
         log_directory.mkdir(parents=True, exist_ok=True)
@@ -432,7 +547,7 @@ def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.H
         )
         return None
 
-    handler.setFormatter(_StructuredLogFormatter())
+    handler.setFormatter(formatter)
     for filt in filters:
         handler.addFilter(filt)
     try:
@@ -445,6 +560,11 @@ def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.H
 def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> None:
     """Configure root logging with a structured, copy-friendly format."""
 
+    level = _determine_level()
+    log_format, invalid_choice = _determine_log_format()
+    global _ACTIVE_FORMAT
+    _ACTIVE_FORMAT = log_format
+
     filters: list[logging.Filter] = [
         _StripAnsiFilter(),
         _RuntimeContextFilter(),
@@ -454,18 +574,27 @@ def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> N
         filters.extend(extra_filters)
 
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(_StructuredLogFormatter())
+    console_handler.setFormatter(_build_formatter(log_format))
     for filt in filters:
         console_handler.addFilter(filt)
 
     handlers: list[logging.Handler] = [console_handler]
 
-    file_handler = _build_rotating_file_handler(filters)
+    file_formatter = _build_formatter(log_format)
+    file_handler = _build_rotating_file_handler(filters, file_formatter)
     if file_handler is not None:
         handlers.append(file_handler)
 
     logging.basicConfig(level=level, handlers=handlers, force=True)
     logging.captureWarnings(True)
+
+    if invalid_choice is not None:
+        logging.getLogger(__name__).warning(
+            "Unsupported log format '%s' requested via %s; using '%s' instead.",
+            invalid_choice,
+            LOG_FORMAT_ENV,
+            log_format,
+        )
 
     for noisy_logger in ("google", "httpx", "urllib3", "asyncio"):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
@@ -479,6 +608,7 @@ def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> N
             session_started=_SESSION_START.isoformat(),
             log_dir=str(_LAST_LOG_DIRECTORY) if _LAST_LOG_DIRECTORY else None,
             log_file=str(_LAST_LOG_FILE) if _LAST_LOG_FILE else None,
+            log_format=log_format,
         )
     )
 
@@ -489,6 +619,18 @@ def get_run_id() -> str:
     """Return the identifier assigned to the current logging session."""
 
     return _RUN_ID
+
+
+def get_log_format() -> str:
+    """Return the active log output format."""
+
+    return _ACTIVE_FORMAT
+
+
+def get_log_paths() -> tuple[Path | None, Path | None]:
+    """Return the directory and file currently used for file logging."""
+
+    return _LAST_LOG_DIRECTORY, _LAST_LOG_FILE
 
 
 def emit_startup_banner(
@@ -508,6 +650,7 @@ def emit_startup_banner(
         "session_started": _SESSION_START.isoformat(),
         "log_dir": str(_LAST_LOG_DIRECTORY) if _LAST_LOG_DIRECTORY else str(Path(os.getenv(LOG_DIR_ENV, "logs")).expanduser()),
         "log_file": str(_LAST_LOG_FILE) if _LAST_LOG_FILE else None,
+        "log_format": _ACTIVE_FORMAT,
     }
     if extra_details:
         details.update(extra_details)
@@ -641,6 +784,8 @@ __all__ = [
     "ContextualLoggerAdapter",
     "StructuredMessage",
     "current_correlation_id",
+    "get_log_format",
+    "get_log_paths",
     "get_logger",
     "log_duration",
     "log_context",
