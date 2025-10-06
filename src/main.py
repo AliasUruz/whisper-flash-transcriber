@@ -218,6 +218,7 @@ def _ensure_json_file(
 
     created = False
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
             created = True
@@ -334,19 +335,36 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
         )
     )
 
-    config_path = Path(config_manager.config_file).resolve()
-    config_pre_exists = config_path.exists()
-    config_manager.save_config()
-    config_created = not config_pre_exists and config_path.exists()
+    persistence = config_manager.save_config()
+    config_path = Path(persistence.config.path).resolve()
+    config_created = persistence.config.created
     _log_artifact_ready("Configuration", config_path, created=config_created)
+    if persistence.config.error:
+        raise RuntimeError(
+            f"Configuration persistence failed: {persistence.config.error}"
+        )
     if not config_path.exists():
         raise RuntimeError(f"Configuration file missing after preflight: {config_path}")
+    if not persistence.config.verified:
+        raise RuntimeError(
+            "Configuration file could not be verified after save operation."
+        )
 
-    secrets_path = Path(config_module.SECRETS_FILE).resolve()
+    secrets_path = Path(persistence.secrets.path).resolve()
+    secrets_created_via_save = persistence.secrets.created
     secrets_created = _ensure_json_file(secrets_path, {}, description="secrets")
+    secrets_created = secrets_created or secrets_created_via_save
     _log_artifact_ready("Secrets", secrets_path, created=secrets_created)
+    if persistence.secrets.error:
+        raise RuntimeError(
+            f"Secrets persistence failed: {persistence.secrets.error}"
+        )
     if not secrets_path.exists():
         raise RuntimeError(f"Secrets file missing after preflight: {secrets_path}")
+    if not persistence.secrets.verified and persistence.secrets.wrote:
+        raise RuntimeError(
+            "Secrets file could not be verified after save operation."
+        )
 
     hotkey_created = _ensure_hotkey_config(hotkey_config_path)
     _log_artifact_ready("Hotkey configuration", hotkey_config_path, created=hotkey_created)
@@ -354,6 +372,25 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
         raise RuntimeError(
             f"Hotkey configuration missing after preflight: {hotkey_config_path}"
         )
+
+    bootstrap_report = config_manager.get_bootstrap_report()
+    LOGGER.info(
+        StructuredMessage(
+            "Persistence bootstrap report ready.",
+            event="startup.preflight.bootstrap_report",
+            details={
+                key: {
+                    "path": value.get("path"),
+                    "existed": value.get("existed"),
+                    "created": value.get("created"),
+                    "written": value.get("written"),
+                    "verified": value.get("verified"),
+                    "error": value.get("error"),
+                }
+                for key, value in bootstrap_report.items()
+            },
+        )
+    )
 
     LOGGER.info(
         StructuredMessage(

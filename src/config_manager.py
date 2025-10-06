@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox
@@ -227,6 +228,36 @@ ASR_CURATED_CATALOG_URL_CONFIG_KEY = "asr_curated_catalog_url"
 ASR_LAST_DOWNLOAD_STATUS_KEY = "asr_last_download_status"
 
 
+@dataclass(frozen=True)
+class PersistenceRecord:
+    """Snapshot do resultado de persistência de um artefato."""
+
+    path: Path
+    existed_before: bool
+    wrote: bool
+    created: bool
+    verified: bool
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path),
+            "existed_before": self.existed_before,
+            "wrote": self.wrote,
+            "created": self.created,
+            "verified": self.verified,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class PersistenceOutcome:
+    """Resumo das operações de persistência do ciclo atual."""
+
+    config: PersistenceRecord
+    secrets: PersistenceRecord
+
+
 class ConfigPersistenceError(RuntimeError):
     """Erro disparado quando não é possível persistir a configuração em disco."""
 
@@ -266,13 +297,17 @@ class ConfigManager:
             "config": {
                 "path": self._config_path,
                 "existed": self._config_path.exists(),
+                "created": False,
                 "written": False,
+                "verified": False,
                 "error": None,
             },
             "secrets": {
                 "path": self._secrets_path,
                 "existed": self._secrets_path.exists(),
+                "created": False,
                 "written": False,
+                "verified": False,
                 "error": None,
             },
         }
@@ -1302,12 +1337,22 @@ class ConfigManager:
                 exc,
             )
 
-    def _verify_persistence(self, *, config_changed: bool, secrets_changed: bool) -> None:
+    def _verify_persistence(
+        self, *, config_changed: bool, secrets_changed: bool
+    ) -> dict[str, dict[str, Any]]:
+        report: dict[str, dict[str, Any]] = {}
         for changed, label, path in (
             (config_changed, "config", self.config_path),
             (secrets_changed, "secrets", self.secrets_path),
         ):
+            status = {"path": str(path), "verified": False, "error": None}
+            report[label] = status
+            bootstrap_entry = self._bootstrap_state.get(label)
+            if bootstrap_entry is not None:
+                bootstrap_entry["path"] = path
+
             if not path.exists():
+                status["error"] = "missing"
                 LOGGER.error(
                     log_context(
                         f"{label.title()} file missing after save attempt.",
@@ -1315,13 +1360,21 @@ class ConfigManager:
                         file=str(path),
                     )
                 )
+                if bootstrap_entry is not None:
+                    bootstrap_entry["error"] = "missing"
                 continue
+
             if not changed:
+                status["verified"] = True
+                if bootstrap_entry is not None:
+                    bootstrap_entry["verified"] = True
                 continue
+
             try:
                 with path.open("r", encoding="utf-8") as handle:
                     json.load(handle)
             except json.JSONDecodeError as exc:
+                status["error"] = f"invalid_json: {exc}"
                 LOGGER.error(
                     log_context(
                         f"{label.title()} file contains invalid JSON after save attempt.",
@@ -1331,8 +1384,11 @@ class ConfigManager:
                     ),
                     exc_info=True,
                 )
+                if bootstrap_entry is not None:
+                    bootstrap_entry["error"] = str(exc)
                 continue
             except Exception as exc:  # pragma: no cover - defensive path
+                status["error"] = str(exc)
                 LOGGER.error(
                     log_context(
                         f"Unable to verify {label} file after save attempt.",
@@ -1342,6 +1398,8 @@ class ConfigManager:
                     ),
                     exc_info=True,
                 )
+                if bootstrap_entry is not None:
+                    bootstrap_entry["error"] = str(exc)
                 continue
 
             try:
@@ -1357,8 +1415,29 @@ class ConfigManager:
                     size=size_bytes,
                 )
             )
+            status["verified"] = True
+            if bootstrap_entry is not None:
+                bootstrap_entry["verified"] = True
+                bootstrap_entry["error"] = None
 
-    def save_config(self):
+        return report
+
+    def get_bootstrap_report(self) -> dict[str, dict[str, Any]]:
+        """Retorna uma cópia do estado de bootstrap para inspeção externa."""
+
+        report: dict[str, dict[str, Any]] = {}
+        for label, payload in self._bootstrap_state.items():
+            report[label] = {
+                "path": str(payload.get("path", "")),
+                "existed": payload.get("existed", False),
+                "created": payload.get("created", False),
+                "written": payload.get("written", False),
+                "verified": payload.get("verified", False),
+                "error": payload.get("error"),
+            }
+        return report
+
+    def save_config(self) -> PersistenceOutcome:
         """Salva as configurações não sensíveis no config.json e as sensíveis no secrets.json."""
 
         config_to_save = copy.deepcopy(self.config)
@@ -1366,12 +1445,10 @@ class ConfigManager:
 
         secret_keys = [GEMINI_API_KEY_CONFIG_KEY, OPENROUTER_API_KEY_CONFIG_KEY]
 
-        # Separar segredos da configuração principal
         for key in secret_keys:
             if key in config_to_save:
                 secrets_to_save[key] = config_to_save.pop(key)
 
-        # Remover chaves não persistentes
         keys_to_ignore = [
             "tray_menu_items",
             "hotkey_manager",
@@ -1386,6 +1463,7 @@ class ConfigManager:
 
         new_config_hash = self._compute_hash(config_to_save)
         config_changed = False
+        config_error: str | None = None
         config_existed_before = self.config_path.exists()
 
         if new_config_hash != self._config_hash or not config_existed_before:
@@ -1406,6 +1484,7 @@ class ConfigManager:
                     )
                 )
             except Exception as exc:
+                config_error = str(exc)
                 LOGGER.error(
                     log_context(
                         "Error saving configuration file.",
@@ -1469,10 +1548,12 @@ class ConfigManager:
         existing_secrets.update(secrets_to_save)
         new_secrets_hash = self._compute_hash(existing_secrets)
         secrets_existed_before = self.secrets_path.exists()
-        should_write_secrets = new_secrets_hash != self._secrets_hash or not secrets_existed_before
+        should_write_secrets = (
+            new_secrets_hash != self._secrets_hash or not secrets_existed_before
+        )
         secrets_changed = False
+        secrets_error: str | None = None
 
-        secrets_changed = False
         if should_write_secrets:
             try:
                 with temp_file_secrets.open("w", encoding="utf-8") as handle:
@@ -1490,6 +1571,7 @@ class ConfigManager:
                     )
                 )
             except Exception as exc:
+                secrets_error = str(exc)
                 LOGGER.error(
                     log_context(
                         "Error saving secrets file.",
@@ -1521,7 +1603,75 @@ class ConfigManager:
                 )
             )
 
-        self._verify_persistence(config_changed=config_changed, secrets_changed=secrets_changed)
+        verification = self._verify_persistence(
+            config_changed=config_changed,
+            secrets_changed=secrets_changed,
+        )
+
+        config_entry = self._bootstrap_state["config"]
+        secrets_entry = self._bootstrap_state["secrets"]
+
+        config_entry["existed"] = config_entry.get("existed", False) or config_existed_before
+        secrets_entry["existed"] = secrets_entry.get("existed", False) or secrets_existed_before
+
+        config_created = (
+            not config_existed_before
+            and config_changed
+            and self.config_path.exists()
+        )
+        secrets_created = (
+            not secrets_existed_before
+            and secrets_changed
+            and self.secrets_path.exists()
+        )
+
+        config_entry["created"] = config_entry.get("created", False) or config_created
+        secrets_entry["created"] = secrets_entry.get("created", False) or secrets_created
+
+        config_entry["written"] = config_entry.get("written", False) or config_changed
+        secrets_entry["written"] = secrets_entry.get("written", False) or secrets_changed
+
+        config_verification = verification.get("config", {})
+        secrets_verification = verification.get("secrets", {})
+
+        config_entry["verified"] = config_entry.get("verified", False) or config_verification.get("verified", False)
+        secrets_entry["verified"] = secrets_entry.get("verified", False) or secrets_verification.get("verified", False)
+
+        verification_error_config = config_verification.get("error")
+        verification_error_secrets = secrets_verification.get("error")
+
+        if config_error:
+            config_entry["error"] = config_error
+        elif verification_error_config:
+            config_entry["error"] = verification_error_config
+        else:
+            config_entry["error"] = None
+
+        if secrets_error:
+            secrets_entry["error"] = secrets_error
+        elif verification_error_secrets:
+            secrets_entry["error"] = verification_error_secrets
+        else:
+            secrets_entry["error"] = None
+
+        return PersistenceOutcome(
+            config=PersistenceRecord(
+                path=self.config_path,
+                existed_before=config_existed_before,
+                wrote=config_changed,
+                created=config_created,
+                verified=config_verification.get("verified", False),
+                error=config_entry.get("error"),
+            ),
+            secrets=PersistenceRecord(
+                path=self.secrets_path,
+                existed_before=secrets_existed_before,
+                wrote=secrets_changed,
+                created=secrets_created,
+                verified=secrets_verification.get("verified", False),
+                error=secrets_entry.get("error"),
+            ),
+        )
 
     def get(self, key, default=None):
         """Recupera valores da configuração permitindo acesso aninhado.
