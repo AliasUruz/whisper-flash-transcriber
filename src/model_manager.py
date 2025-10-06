@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -381,6 +383,7 @@ def ensure_download(
             backend_label,
             local_dir,
         )
+        _invalidate_list_installed_cache(cache_dir)
         return str(local_dir)
 
     stale_local_dir = local_dir.exists()
@@ -447,6 +450,12 @@ def ensure_download(
         "resume_download": True,
         "local_dir_use_symlinks": False,
     }
+    if _snapshot_download_supports("local_dir_use_symlinks"):
+        download_kwargs["local_dir_use_symlinks"] = False
+    if _snapshot_download_supports("local_dir_use_hardlinks"):
+        download_kwargs["local_dir_use_hardlinks"] = False
+    if _snapshot_download_supports("resume_download") and "resume_download" not in download_kwargs:
+        download_kwargs["resume_download"] = True
     if revision is not None:
         download_kwargs["revision"] = revision
 
@@ -483,6 +492,8 @@ def ensure_download(
             backend_label,
             duration_ms,
         )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise DownloadCancelledError(
             "Model download cancelled by user.",
             by_user=True,
@@ -502,6 +513,8 @@ def ensure_download(
             backend_label,
             duration_ms,
         )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise
 
     duration_ms = (time.perf_counter() - start_time) * 1000.0
@@ -512,6 +525,7 @@ def ensure_download(
         duration_ms,
         local_dir,
     )
+    _invalidate_list_installed_cache(cache_dir)
     return str(local_dir)
 
 
