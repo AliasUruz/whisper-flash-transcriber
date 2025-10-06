@@ -24,6 +24,7 @@ from src.logging_utils import (
     StructuredMessage,
     emit_startup_banner,
     get_logger,
+    install_exception_hooks,
     setup_logging,
 )
 
@@ -364,6 +365,13 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
 
 def main() -> None:
     setup_logging()
+    install_exception_hooks(logger=LOGGER)
+    LOGGER.debug(
+        StructuredMessage(
+            "Global exception hooks registered for runtime diagnostics.",
+            event="bootstrap.exception_hooks",
+        )
+    )
     emit_startup_banner(
         extra_details={
             "icon_path": str(ICON_PATH),
