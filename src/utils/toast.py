@@ -28,11 +28,17 @@ class ToastNotification(BaseToplevel):
         self.duration = duration
 
         # Position the toast notification
-        self.master.update_idletasks()
-        master_width = self.master.winfo_width()
-        master_height = self.master.winfo_height()
-        master_x = self.master.winfo_x()
-        master_y = self.master.winfo_y()
+        parent = getattr(self, "master", None)
+        master_width = master_height = master_x = master_y = 0
+        if parent is not None:
+            try:
+                parent.update_idletasks()
+                master_width = parent.winfo_width()
+                master_height = parent.winfo_height()
+                master_x = parent.winfo_x()
+                master_y = parent.winfo_y()
+            except Exception:
+                parent = None
 
         self.update_idletasks()
         width = self.winfo_width()
