@@ -9,9 +9,16 @@ from pathlib import Path
 class FasterWhisperBackend:
     """ASR backend powered by faster-whisper."""
 
-    def __init__(self, model_id: str = "whisper-large-v3", device: str = "auto") -> None:
+    def __init__(
+        self,
+        model_id: str = "whisper-large-v3",
+        device: str | int | None = "auto",
+        *,
+        device_index: int | None = None,
+    ) -> None:
         self.model_id = model_id
         self.device = device
+        self.device_index = _coerce_device_index(device_index)
         self.model = None
 
     def load(self, ct2_compute_type: str = "default", cache_dir: str | None = None, **kwargs) -> None:
@@ -21,11 +28,39 @@ class FasterWhisperBackend:
         if "model_id" in kwargs:
             self.model_id = kwargs.pop("model_id")
 
-        device = self.device
-        if device == "auto":
-            device = "cuda" if _has_cuda() else "cpu"
+        device_override = kwargs.pop("device", None)
+        if device_override is not None:
+            self.device = device_override
+
+        device_index_override = kwargs.pop("device_index", None)
+        coerced_index = _coerce_device_index(device_index_override)
+        if coerced_index is not None:
+            self.device_index = coerced_index
+
+        cpu_threads_override = kwargs.pop("cpu_threads", None)
+        cpu_threads = _coerce_positive_int(cpu_threads_override)
+        if cpu_threads is not None:
+            kwargs["cpu_threads"] = cpu_threads
+
+        normalized_device, normalized_index = _normalize_device_spec(
+            self.device, self.device_index
+        )
+
+        if normalized_device == "auto":
+            normalized_device = "cuda" if _has_cuda() else "cpu"
+
+        if normalized_device != "cuda":
+            normalized_index = None
+        elif normalized_index is None and _has_cuda():
+            normalized_index = 0
+
+        runtime_device = "cuda" if normalized_device == "cuda" else normalized_device
+
+        self.device = _compose_device_label(normalized_device, normalized_index)
+        self.device_index = normalized_index
+
         if ct2_compute_type == "default":
-            ct2_compute_type = "int8_float16" if device == "cuda" else "int8"
+            ct2_compute_type = "int8_float16" if normalized_device == "cuda" else "int8"
 
         model_name = self.model_id
         if "/" in model_name:
@@ -59,12 +94,22 @@ class FasterWhisperBackend:
             except Exception:
                 model_source = None
 
+        if download_root is not None:
+            download_root = str(download_root)
+
+        model_kwargs: dict[str, Any] = {
+            "device": runtime_device,
+            "compute_type": ct2_compute_type,
+            "download_root": download_root,
+        }
+        model_kwargs.update(kwargs)
+
+        if normalized_device == "cuda" and normalized_index is not None:
+            model_kwargs["device_index"] = normalized_index
+
         self.model = WhisperModel(
             model_source or model_name,
-            device=device,
-            compute_type=ct2_compute_type,
-            download_root=download_root,
-            **kwargs,
+            **model_kwargs,
         )
 
     def warmup(self) -> None:
@@ -113,6 +158,61 @@ def _has_cuda() -> bool:
         return torch.cuda.is_available()
     except Exception:
         return False
+
+
+def _coerce_device_index(raw: Any) -> int | None:
+    try:
+        index = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return index if index >= 0 else None
+
+
+def _coerce_positive_int(raw: Any) -> int | None:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _normalize_device_spec(device: Any, index: int | None) -> tuple[str, int | None]:
+    if isinstance(device, str):
+        normalized = device.strip()
+        lowered = normalized.lower()
+        if lowered in {"", "auto"}:
+            return "auto", index
+        if lowered in {"cpu", "-1"}:
+            return "cpu", None
+        if lowered.startswith("cuda"):
+            _, _, suffix = lowered.partition(":")
+            parsed_index = _coerce_device_index(suffix) if suffix else None
+            if parsed_index is not None:
+                index = parsed_index
+            return "cuda", index
+        return normalized, index
+
+    if hasattr(device, "type"):
+        dev_type = getattr(device, "type", None)
+        dev_index = getattr(device, "index", None)
+        if dev_type == "cuda":
+            parsed_index = _coerce_device_index(dev_index)
+            return "cuda", parsed_index if parsed_index is not None else index
+        if dev_type == "cpu":
+            return "cpu", None
+        if dev_type is not None:
+            return str(dev_type), index
+
+    if isinstance(device, int):
+        return ("cuda", device) if device >= 0 else ("cpu", None)
+
+    return "auto", index
+
+
+def _compose_device_label(device: str, index: int | None) -> str:
+    if device == "cuda" and index is not None:
+        return f"cuda:{index}"
+    return device
 
 
 def _coerce_chunk_length(raw: Any) -> float | None:

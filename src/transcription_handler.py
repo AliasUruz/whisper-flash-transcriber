@@ -226,6 +226,9 @@ class TranscriptionHandler:
         asr_ct2_compute_type,
         asr_cache_dir,
         transformers_device,
+        backend_device,
+        backend_device_index,
+        asr_ct2_cpu_threads,
     ) -> dict:
         """Constroi os parâmetros de ``load`` para o backend escolhido."""
         if backend_name in {"transformers", "whisper"}:
@@ -244,10 +247,22 @@ class TranscriptionHandler:
                 "attn_implementation": attn_impl,
             }
         if backend_name in {"ct2", "faster-whisper", "ctranslate2"}:
-            return {
+            payload: dict[str, object] = {
                 "ct2_compute_type": asr_ct2_compute_type,
                 "cache_dir": asr_cache_dir,
             }
+            if backend_device:
+                payload["device"] = backend_device
+            if backend_device_index is not None:
+                payload["device_index"] = backend_device_index
+            try:
+                if asr_ct2_cpu_threads is not None:
+                    threads = int(asr_ct2_cpu_threads)
+                    if threads > 0:
+                        payload["cpu_threads"] = threads
+            except (TypeError, ValueError):
+                pass
+            return payload
         return {"cache_dir": asr_cache_dir}
 
     def _init_api_clients(self):
@@ -1135,34 +1150,70 @@ class TranscriptionHandler:
                 available_cuda = _torch_cuda_available()
                 gpu_count = _torch_cuda_device_count() if available_cuda else 0
 
+                requested_gpu_index: int | None = None
+                if isinstance(req_device, str):
+                    lowered_device = req_device.strip().lower()
+                    if lowered_device.startswith("cuda"):
+                        _, _, suffix = lowered_device.partition(":")
+                        if suffix:
+                            try:
+                                requested_gpu_index = int(suffix)
+                            except ValueError:
+                                requested_gpu_index = None
+
+                config_gpu_idx_raw = self.config_manager.get(GPU_INDEX_CONFIG_KEY, -1)
+                try:
+                    config_gpu_idx = int(config_gpu_idx_raw)
+                except (TypeError, ValueError):
+                    config_gpu_idx = -1
+
+                self.gpu_index_requested = (
+                    requested_gpu_index
+                    if requested_gpu_index is not None
+                    else (config_gpu_idx if config_gpu_idx >= 0 else None)
+                )
+
                 effective_device = "cpu"
                 transformers_device: int | str = -1
                 selected_gpu_index: int | None = None
 
                 if req_device == "cpu":
-                    effective_device = "cpu"
                     logging.info("ASR device explicitly set to CPU.")
                 elif isinstance(req_device, str) and req_device.startswith("cuda"):
-                    if not available_cuda:
-                        self._emit_device_warning(req_device, "cpu", "CUDA not available.")
-                        effective_device = "cpu"
-                    elif gpu_count == 0:
-                        self._emit_device_warning(req_device, "cpu", "No GPUs detected.")
-                        effective_device = "cpu"
+                    if not available_cuda or gpu_count == 0:
+                        reason = (
+                            "CUDA not available."
+                            if not available_cuda
+                            else "No GPUs detected."
+                        )
+                        self._emit_device_warning(req_device, "cpu", reason)
                     else:
-                        config_gpu_idx = self.config_manager.get(GPU_INDEX_CONFIG_KEY, -1)
-                        if 0 <= config_gpu_idx < gpu_count:
-                            target_idx = config_gpu_idx
+                        target_idx = requested_gpu_index
+                        if target_idx is None or target_idx < 0:
+                            if 0 <= config_gpu_idx < gpu_count:
+                                target_idx = config_gpu_idx
+                            else:
+                                if config_gpu_idx not in (-1, 0):
+                                    logging.warning(
+                                        "Invalid GPU index %s, falling back to GPU 0.",
+                                        config_gpu_idx,
+                                    )
+                                target_idx = 0
+                        if target_idx is not None and target_idx >= gpu_count:
+                            self._emit_device_warning(
+                                req_device,
+                                "cpu",
+                                (
+                                    f"Requested GPU index {target_idx} is out of range for "
+                                    f"{gpu_count} visible device(s)."
+                                ),
+                            )
                         else:
-                            target_idx = 0
-                            if config_gpu_idx != -1:
-                                logging.warning(
-                                    "Invalid GPU index %s, falling back to GPU 0.",
-                                    config_gpu_idx,
-                                )
-                        effective_device = f"cuda:{target_idx}"
-                        transformers_device = f"cuda:{target_idx}"
-                        selected_gpu_index = target_idx
+                            selected_gpu_index = target_idx
+                            effective_device = f"cuda:{selected_gpu_index}" if selected_gpu_index is not None else "cpu"
+                            transformers_device = (
+                                f"cuda:{selected_gpu_index}" if selected_gpu_index is not None else -1
+                            )
 
                 self.device_in_use = effective_device
                 self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
@@ -1175,16 +1226,40 @@ class TranscriptionHandler:
                 )
 
                 effective_dtype = self._resolve_effective_dtype(req_dtype)
+                backend_device = effective_device
+                backend_device_index = selected_gpu_index if selected_gpu_index is not None else None
+                if not backend_device.startswith("cuda"):
+                    backend_device_index = None
+
                 load_kwargs = self._build_backend_load_kwargs(
                     backend_name=backend_name,
                     asr_dtype=effective_dtype,
                     asr_ct2_compute_type=self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
                     asr_cache_dir=self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY),
                     transformers_device=transformers_device,
+                    backend_device=backend_device,
+                    backend_device_index=backend_device_index,
+                    asr_ct2_cpu_threads=self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY),
                 )
                 load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
                 if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
                     load_kwargs["cache_dir"] = str(load_kwargs["cache_dir"])
+
+                if hasattr(self._asr_backend, "model_id"):
+                    try:
+                        self._asr_backend.model_id = req_model_id
+                    except Exception:
+                        logging.debug("Unable to propagate model_id to backend instance.", exc_info=True)
+                if hasattr(self._asr_backend, "device"):
+                    try:
+                        self._asr_backend.device = backend_device
+                    except Exception:
+                        logging.debug("Unable to propagate device to backend instance.", exc_info=True)
+                if hasattr(self._asr_backend, "device_index"):
+                    try:
+                        self._asr_backend.device_index = backend_device_index
+                    except Exception:
+                        logging.debug("Unable to propagate device_index to backend instance.", exc_info=True)
 
                 self._update_model_log_context(
                     backend=backend_name,
