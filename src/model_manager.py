@@ -66,6 +66,34 @@ DISPLAY_NAMES: Dict[str, str] = {
 # CURATED e DISPLAY_NAMES abaixo.
 
 
+_CT2_KNOWN_QUANTIZATIONS: set[str] = {
+    "default",
+    "float16",
+    "float32",
+    "int8",
+    "int8_float16",
+    "int8_float32",
+}
+
+_CT2_QUANTIZATION_ALIASES: Dict[str, str] = {
+    "": "default",
+    "auto": "default",
+    "default": "default",
+    "fp16": "float16",
+    "half": "float16",
+    "float16": "float16",
+    "fp32": "float32",
+    "float32": "float32",
+    "int8": "int8",
+    "int8_float16": "int8_float16",
+    "int8-float16": "int8_float16",
+    "int8float16": "int8_float16",
+    "int8_float32": "int8_float32",
+    "int8-float32": "int8_float32",
+    "int8float32": "int8_float32",
+}
+
+
 def _resolve_catalog_entry(model_id: str) -> dict[str, str] | None:
     """Return the curated entry for ``model_id`` when available."""
 
@@ -164,6 +192,68 @@ def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
             normalized["backend"] = normalize_backend_label(entry.get("backend"))
             return normalized
     return None
+
+
+@lru_cache(maxsize=128)
+def _ct2_quant_revision_exists(model_id: str, revision: str) -> bool:
+    """Return ``True`` if the given CTranslate2 revision exists for ``model_id``."""
+
+    api = HfApi()
+    try:
+        api.model_info(model_id, revision=revision)
+    except Exception as exc:  # pragma: no cover - defensive network handling
+        MODEL_LOGGER.debug(
+            "Failed to resolve revision '%s' for model %s: %s",
+            revision,
+            model_id,
+            exc,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
+def _normalize_ct2_quant_label(raw_quant: str | None) -> tuple[str, str | None]:
+    """Normalize user-provided CT2 quantization label."""
+
+    if raw_quant is None:
+        return "default", None
+
+    raw_value = str(raw_quant).strip()
+    if not raw_value:
+        return "default", None
+
+    normalized_key = raw_value.lower().replace("-", "_")
+    normalized = _CT2_QUANTIZATION_ALIASES.get(normalized_key, normalized_key)
+    if normalized not in _CT2_KNOWN_QUANTIZATIONS:
+        return "default", raw_value
+    return normalized, None
+
+
+def _resolve_ct2_quantization(
+    model_id: str, raw_quant: str | None
+) -> tuple[str, str | None]:
+    """Return sanitized CT2 quantization label and revision to request."""
+
+    quant_label, rejected = _normalize_ct2_quant_label(raw_quant)
+    if rejected is not None:
+        MODEL_LOGGER.warning(
+            "Unsupported CTranslate2 quantization '%s'; falling back to default weights.",
+            rejected,
+        )
+
+    if quant_label != "default":
+        if _ct2_quant_revision_exists(model_id, quant_label):
+            return quant_label, quant_label
+
+        MODEL_LOGGER.warning(
+            "Requested CTranslate2 quantization '%s' is not available for model %s; using default branch instead.",
+            quant_label,
+            model_id,
+        )
+        quant_label = "default"
+
+    return quant_label, None
 
 
 _CACHE_TTL_SECONDS = 60.0
@@ -784,6 +874,15 @@ def ensure_download(
     storage_backend = backend_storage_name(backend_label or backend)
     backend_label = backend_label or normalize_backend_label(storage_backend) or storage_backend
 
+    quant_label: str
+    revision: str | None = None
+    if backend_label == "ctranslate2":
+        quant_label, revision = _resolve_ct2_quantization(model_id, quant)
+    else:
+        quant_label = str(quant).strip() if quant is not None else "default"
+        if not quant_label:
+            quant_label = "default"
+
     prepared = _prepare_local_installation(cache_dir, backend_label, model_id)
     local_dir = prepared.local_dir
     if prepared.ready_path is not None:
@@ -793,7 +892,7 @@ def ensure_download(
             backend_label,
             prepared.ready_path,
         )
-        return str(prepared.ready_path)
+        return ModelDownloadResult(str(prepared.ready_path), downloaded=False)
 
     stale_local_dir = prepared.stale_local_dir
 
@@ -884,9 +983,6 @@ def ensure_download(
         progress_class = _make_cancellable_progress(_check_abort)
 
     # Seleciona branch de quantização quando aplicável (modelos CT2).
-    revision = None
-    if quant_label != "default":
-        revision = quant_label
 
     download_kwargs = {
         "repo_id": model_id,
