@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -73,6 +75,44 @@ _download_size_lock = RLock()
 _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _list_installed_lock = RLock()
 
+_MODEL_WEIGHT_FILE_HINTS = {
+    "model.bin",
+    "model.onnx",
+    "model.safetensors",
+}
+
+
+def _model_dir_is_complete(path: Path) -> bool:
+    """Return ``True`` when ``path`` contains the expected model assets."""
+
+    if not path.exists() or not path.is_dir():
+        return False
+
+    has_config = False
+    has_weights = False
+
+    try:
+        iterator = path.rglob("*")
+    except Exception:  # pragma: no cover - defensive best effort
+        return False
+
+    for candidate in iterator:
+        if not candidate.is_file():
+            continue
+        name = candidate.name.lower()
+        if name == "config.json":
+            has_config = True
+            continue
+        if name in _MODEL_WEIGHT_FILE_HINTS or (
+            name.endswith((".bin", ".onnx", ".safetensors")) and "model" in name
+        ):
+            has_weights = True
+
+        if has_config and has_weights:
+            return True
+
+    return has_config and has_weights
+
 
 def _normalize_cache_dir(cache_dir: str | Path) -> Path:
     """Return a normalized ``Path`` instance for cache directory comparisons."""
@@ -135,9 +175,10 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     """Discover curated models available on disk and in the shared HF cache.
 
     Only models listed in :data:`CURATED` and containing essential files
-    (``config.json`` together with ``model.bin`` or ``model.onnx``) are
-    returned. Any other directories or isolated files found in ``cache_dir``
-    are ignored. The shared Hugging Face cache is queried as a fallback.
+    (``config.json`` together with at least one weight artifact such as
+    ``model.bin``, ``model.onnx`` or ``model.safetensors``) are returned.
+    Any other directories or isolated files found in ``cache_dir`` are
+    ignored. The shared Hugging Face cache is queried as a fallback.
     """
 
     normalized_dir = _normalize_cache_dir(cache_dir)
@@ -169,10 +210,7 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
                 rel_id = model_dir.relative_to(backend_dir).as_posix()
                 if rel_id in seen or rel_id not in curated_ids:
                     continue
-                files_present = {f.name for f in model_dir.iterdir() if f.is_file()}
-                if "config.json" not in files_present or not (
-                    "model.bin" in files_present or "model.onnx" in files_present
-                ):
+                if not _model_dir_is_complete(model_dir):
                     continue
                 installed.append({"id": rel_id, "backend": backend_label, "path": str(model_dir)})
                 seen.add(rel_id)
@@ -182,10 +220,7 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
         for repo in cache_info.repos:
             if repo.repo_id in seen or repo.repo_id not in curated_ids:
                 continue
-            repo_files = {p.name for p in Path(repo.repo_path).iterdir() if p.is_file()}
-            if "config.json" not in repo_files or not (
-                "model.bin" in repo_files or "model.onnx" in repo_files
-            ):
+            if not _model_dir_is_complete(Path(repo.repo_path)):
                 continue
             installed.append(
                 {
@@ -392,6 +427,13 @@ def ensure_download(
                 exc_info=True,
             )
 
+    stale_local_dir = local_dir.exists()
+    if stale_local_dir:
+        MODEL_LOGGER.warning(
+            "Detected incomplete model directory at %s; removing before re-downloading.",
+            local_dir,
+        )
+
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
     timeout_value: float | None = None
@@ -415,10 +457,18 @@ def ensure_download(
         if cancel_event is not None and cancel_event.is_set():
             raise DownloadCancelledError("Model download cancelled by caller.", by_user=True)
 
-    def _cleanup_partial() -> None:
+    def _cleanup_partial(context: str | None = None) -> None:
         try:
             if local_dir.exists():
                 shutil.rmtree(local_dir)
+                if context:
+                    MODEL_LOGGER.info(
+                        "Removed incomplete model directory at %s (%s).",
+                        local_dir,
+                        context,
+                    )
+                else:
+                    MODEL_LOGGER.info("Removed incomplete model directory at %s.", local_dir)
         except Exception:  # pragma: no cover - best effort cleanup
             logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
 
@@ -441,8 +491,17 @@ def ensure_download(
         "resume_download": True,
         "local_dir_use_symlinks": False,
     }
+    if _snapshot_download_supports("local_dir_use_symlinks"):
+        download_kwargs["local_dir_use_symlinks"] = False
+    if _snapshot_download_supports("local_dir_use_hardlinks"):
+        download_kwargs["local_dir_use_hardlinks"] = False
+    if _snapshot_download_supports("resume_download") and "resume_download" not in download_kwargs:
+        download_kwargs["resume_download"] = True
     if revision is not None:
         download_kwargs["revision"] = revision
+
+    if stale_local_dir:
+        _cleanup_partial("stale_before_download")
 
     start_time = time.perf_counter()
     MODEL_LOGGER.info(
@@ -462,10 +521,11 @@ def ensure_download(
         else:
             raise ValueError(f"Unknown backend: {backend_label}")
         _check_abort()
-    except DownloadCancelledError:
-        _cleanup_partial()
+    except DownloadCancelledError as cancel_exc:
+        _cleanup_partial("cancelled" if not getattr(cancel_exc, "timed_out", False) else "timeout")
         raise
     except KeyboardInterrupt as exc:
+        _cleanup_partial("keyboard_interrupt")
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=cancelled model=%s backend=%s duration_ms=%.2f",
@@ -473,11 +533,14 @@ def ensure_download(
             backend_label,
             duration_ms,
         )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise DownloadCancelledError(
             "Model download cancelled by user.",
             by_user=True,
         ) from exc
     except Exception:
+        _cleanup_partial("error")
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         MODEL_LOGGER.exception(
             "Model download failed: model=%s backend=%s target=%s",
@@ -491,6 +554,8 @@ def ensure_download(
             backend_label,
             duration_ms,
         )
+        _cleanup_partial()
+        _invalidate_list_installed_cache(cache_dir)
         raise
 
     duration_ms = (time.perf_counter() - start_time) * 1000.0

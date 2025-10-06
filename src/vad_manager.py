@@ -136,6 +136,7 @@ class VADManager:
             return detected
 
         self._state = self._coerce_state_tensor(self._state)
+        vad_input = np.ascontiguousarray(prepared, dtype=np.float32)
         ort_inputs = {
             "input": vad_input,
             "state": self._state,

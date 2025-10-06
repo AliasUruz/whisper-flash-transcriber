@@ -69,6 +69,7 @@ class TransformersBackend:
             feature_extractor=self.processor.feature_extractor,
             device=pipeline_device,
         )
+        self.device = resolved_device
         try:
             self.sample_rate = int(self.processor.feature_extractor.sampling_rate)  # type: ignore[attr-defined]
         except Exception:
