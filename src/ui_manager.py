@@ -10,6 +10,7 @@ import sys
 import subprocess
 import pystray
 from PIL import Image, ImageDraw
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 
@@ -50,8 +51,16 @@ from .utils.tooltip import Tooltip
 # import torch # Necessário para get_available_devices_for_ui - REMOVIDO
 
 try:
-    from .model_manager import DownloadCancelledError as _DefaultDownloadCancelledError
+    from .model_manager import (
+        DownloadCancelledError as _DefaultDownloadCancelledError,
+        ModelDownloadResult as _DefaultModelDownloadResult,
+    )
 except Exception:  # pragma: no cover - fallback se a exceção não existir
+    @dataclass(frozen=True)
+    class _DefaultModelDownloadResult:
+        path: str = ""
+        downloaded: bool = False
+
     class _DefaultDownloadCancelledError(Exception):
         """Fallback exception when model_manager is unavailable."""
 
@@ -79,7 +88,7 @@ except Exception:  # pragma: no cover - fallback caso o módulo não exista
         @staticmethod
         def ensure_download(*_args, **_kwargs):
             logging.warning("model_manager module not available.")
-            return ""
+            return _DefaultModelDownloadResult("", False)
 
         @staticmethod
         def get_model_download_size(*_args, **_kwargs):
@@ -710,7 +719,7 @@ class UIManager:
         try:
             compute_type_var = self._get_settings_var("asr_ct2_compute_type_var")
             quant = compute_type_var.get() if compute_type_var is not None else None
-            self.model_manager.ensure_download(
+            result = self.model_manager.ensure_download(
                 model_id,
                 backend,
                 cache_dir,
@@ -720,7 +729,9 @@ class UIManager:
             self.config_manager.set_asr_installed_models(installed_models)
             self.config_manager.save_config()
             self._update_model_info(model_id)
-            messagebox.showinfo("Model", "Download completed.")
+            downloaded = bool(getattr(result, "downloaded", True))
+            message = "Download completed." if downloaded else "Model already installed."
+            messagebox.showinfo("Model", message)
         except self._download_cancelled_error:
             messagebox.showinfo("Model", "Download canceled.")
         except OSError:
@@ -1456,7 +1467,7 @@ class UIManager:
                 return
 
             try:
-                model_manager.ensure_download(
+                result = model_manager.ensure_download(
                     model_id,
                     backend,
                     cache_dir,
@@ -1466,7 +1477,9 @@ class UIManager:
                 self.config_manager.set_asr_installed_models(installed_models)
                 self.config_manager.save_config()
                 _update_model_info(model_id)
-                messagebox.showinfo("Model", "Download completed.")
+                downloaded = bool(getattr(result, "downloaded", True))
+                message = "Download completed." if downloaded else "Model already installed."
+                messagebox.showinfo("Model", message)
             except download_cancelled_error:
                 messagebox.showinfo("Model", "Download canceled.")
             except OSError:
