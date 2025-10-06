@@ -13,7 +13,7 @@ import requests
 
 from .config_schema import coerce_with_defaults
 from .model_manager import get_curated_entry, list_catalog, list_installed, normalize_backend_label
-from .logging_utils import StructuredMessage, get_logger
+from .logging_utils import get_logger, log_context
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -138,6 +138,9 @@ DEFAULT_CONFIG = {
     },
 }
 
+
+LOGGER = get_logger("whisper_flash_transcriber.config", component="ConfigManager")
+
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
 LAST_MODEL_PROMPT_DECISION_CONFIG_KEY = "asr_last_prompt_decision"
 MIN_RECORDING_DURATION_CONFIG_KEY = "min_record_duration"
@@ -234,7 +237,9 @@ class ConfigManager:
     """Gerencia persistência de configuração e segredos do aplicativo."""
 
     def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
-        self.config_file = config_file
+        self.config_file = str(config_file)
+        self.config_path = Path(self.config_file).expanduser()
+        self.secrets_path = Path(SECRETS_FILE).expanduser()
         self.default_config = default_config
         self.config = {}
         self._config_hash = None
@@ -270,30 +275,47 @@ class ConfigManager:
         raw_cfg = copy.deepcopy(self.default_config)
         loaded_config_from_file: dict[str, Any] = {}
 
-        if os.path.exists(self.config_file):
+        if self.config_path.exists():
             try:
-                with open(self.config_file, "r", encoding="utf-8") as file_descriptor:
+                with self.config_path.open("r", encoding="utf-8") as file_descriptor:
                     loaded_config_from_file = json.load(file_descriptor)
                 self._config_hash = self._compute_hash(loaded_config_from_file)
                 raw_cfg.update(loaded_config_from_file)
-                logging.info("Configuration loaded from %s.", self.config_file)
+                LOGGER.info(
+                    log_context(
+                        "Configuration loaded from disk.",
+                        event="config.load.success",
+                        path=str(self.config_path),
+                        keys=len(loaded_config_from_file),
+                    )
+                )
             except json.JSONDecodeError as exc:
-                logging.error(
-                    "Error decoding %s: %s. Recreating with defaults.",
-                    self.config_file,
-                    exc,
+                LOGGER.error(
+                    log_context(
+                        "Error decoding configuration file; recreating from defaults.",
+                        event="config.load.invalid_json",
+                        path=str(self.config_path),
+                        error=str(exc),
+                    ),
+                    exc_info=True,
                 )
             except Exception as exc:  # pragma: no cover - defensive path
-                logging.error(
-                    "Unexpected error while loading %s: %s.",
-                    self.config_file,
-                    exc,
+                LOGGER.error(
+                    log_context(
+                        "Unexpected error while loading configuration file.",
+                        event="config.load.failure",
+                        path=str(self.config_path),
+                        error=str(exc),
+                    ),
                     exc_info=True,
                 )
         else:
-            logging.info(
-                "%s not found. Creating it with default settings for the first launch.",
-                self.config_file,
+            LOGGER.info(
+                log_context(
+                    "Configuration file not found; generating a fresh profile.",
+                    event="config.load.first_run",
+                    path=str(self.config_path),
+                )
             )
             BOOTSTRAP_LOGGER.info(
                 StructuredMessage(
@@ -329,30 +351,49 @@ class ConfigManager:
             logging.info("Old agent prompt detected and migrated to the new standard.")
 
         secrets_loaded: dict[str, Any] = {}
-        if os.path.exists(SECRETS_FILE):
+        if self.secrets_path.exists():
             try:
-                with open(SECRETS_FILE, "r", encoding="utf-8") as file_descriptor:
+                with self.secrets_path.open("r", encoding="utf-8") as file_descriptor:
                     secrets_loaded = json.load(file_descriptor)
                 raw_cfg.update(secrets_loaded)
                 self._secrets_hash = self._compute_hash(secrets_loaded)
-                logging.info("Secrets loaded from %s.", SECRETS_FILE)
+                LOGGER.info(
+                    log_context(
+                        "Secrets loaded from disk.",
+                        event="config.secrets.load.success",
+                        path=str(self.secrets_path),
+                        keys=len(secrets_loaded),
+                    )
+                )
             except (json.JSONDecodeError, FileNotFoundError) as exc:
-                logging.warning(
-                    "Error reading %s: %s. Secrets will be ignored until corrected.",
-                    SECRETS_FILE,
-                    exc,
+                LOGGER.warning(
+                    log_context(
+                        "Error reading secrets file; ignoring secrets until corrected.",
+                        event="config.secrets.load.invalid",
+                        path=str(self.secrets_path),
+                        error=str(exc),
+                    )
                 )
                 self._secrets_hash = None
             except Exception as exc:  # pragma: no cover - defensive path
-                logging.error(
-                    "Unexpected error loading %s: %s.",
-                    SECRETS_FILE,
-                    exc,
+                LOGGER.error(
+                    log_context(
+                        "Unexpected error while loading secrets file.",
+                        event="config.secrets.load.failure",
+                        path=str(self.secrets_path),
+                        error=str(exc),
+                    ),
                     exc_info=True,
                 )
                 self._secrets_hash = None
         else:
-            logging.info("%s not found. API keys might be missing.", SECRETS_FILE)
+            LOGGER.info(
+                log_context(
+                    "Secrets file not found; creating a fresh store.",
+                    event="config.secrets.load.first_run",
+                    path=str(self.secrets_path),
+                )
+            )
             self._secrets_hash = None
             BOOTSTRAP_LOGGER.info(
                 StructuredMessage(
@@ -840,58 +881,80 @@ class ConfigManager:
 
         return copy.deepcopy(self.config), changed_keys
 
-    def _ensure_artifact_presence(self, *, path: Path, required: bool, artifact_name: str) -> None:
-        """Garante que o artefato ``path`` exista quando ``required`` é verdadeiro."""
-
-        if not required:
-            return
-        if not path.exists():
-            raise ConfigPersistenceError(
-                f"{artifact_name} expected at '{path}' after persistence but file was not created."
+    def _ensure_directory(self, path: Path) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # pragma: no cover - defensive path
+            LOGGER.error(
+                log_context(
+                    "Failed to prepare directory for configuration persistence.",
+                    event="config.persistence.mkdir_failed",
+                    directory=str(path.parent),
+                    error=str(exc),
+                ),
+                exc_info=True,
             )
+            raise
 
-    def _emit_persistence_summary(
-        self,
-        *,
-        config_changed: bool,
-        secrets_changed: bool,
-        secrets_expected: bool,
-    ) -> None:
-        """Emite um log estruturado consolidando o estado de persistência."""
+    def _verify_persistence(self, *, config_changed: bool, secrets_changed: bool) -> None:
+        for changed, label, path in (
+            (config_changed, "config", self.config_path),
+            (secrets_changed, "secrets", self.secrets_path),
+        ):
+            if not path.exists():
+                LOGGER.error(
+                    log_context(
+                        f"{label.title()} file missing after save attempt.",
+                        event="config.persistence.missing",
+                        file=str(path),
+                    )
+                )
+                continue
+            if not changed:
+                continue
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    json.load(handle)
+            except json.JSONDecodeError as exc:
+                LOGGER.error(
+                    log_context(
+                        f"{label.title()} file contains invalid JSON after save attempt.",
+                        event="config.persistence.invalid_json",
+                        file=str(path),
+                        error=str(exc),
+                    ),
+                    exc_info=True,
+                )
+                continue
+            except Exception as exc:  # pragma: no cover - defensive path
+                LOGGER.error(
+                    log_context(
+                        f"Unable to verify {label} file after save attempt.",
+                        event="config.persistence.unreadable",
+                        file=str(path),
+                        error=str(exc),
+                    ),
+                    exc_info=True,
+                )
+                continue
 
-        summary = {
-            "config_path": str(Path(self.config_file).resolve()),
-            "config_exists": Path(self.config_file).is_file(),
-            "config_changed": config_changed,
-            "secrets_path": str(Path(SECRETS_FILE).resolve()),
-            "secrets_exists": Path(SECRETS_FILE).is_file(),
-            "secrets_changed": secrets_changed,
-            "secrets_expected": secrets_expected,
-        }
-        CONFIG_LOGGER.info(
-            StructuredMessage(
-                "Configuration persistence status recorded.",
-                event="config.persistence_summary",
-                details=summary,
+            try:
+                size_bytes = path.stat().st_size
+            except OSError:
+                size_bytes = None
+
+            LOGGER.info(
+                log_context(
+                    f"{label.title()} file persisted successfully.",
+                    event="config.persistence.verified",
+                    file=str(path),
+                    size=size_bytes,
+                )
             )
-        )
-
-    def describe_persistence_state(self) -> dict[str, Any]:
-        """Retorna uma fotografia do estado atual dos arquivos de configuração."""
-
-        config_path = Path(self.config_file).resolve()
-        secrets_path = Path(SECRETS_FILE).resolve()
-        return {
-            "config_file": str(config_path),
-            "config_exists": config_path.is_file(),
-            "config_size": config_path.stat().st_size if config_path.is_file() else 0,
-            "secrets_file": str(secrets_path),
-            "secrets_exists": secrets_path.is_file(),
-            "secrets_size": secrets_path.stat().st_size if secrets_path.is_file() else 0,
-        }
 
     def save_config(self):
         """Salva as configurações não sensíveis no config.json e as sensíveis no secrets.json."""
+
         config_to_save = copy.deepcopy(self.config)
         secrets_to_save = {}
 
@@ -912,218 +975,147 @@ class ConfigManager:
             if key in config_to_save:
                 del config_to_save[key]
 
-        # Salvar config.json apenas se mudar
+        self._ensure_directory(self.config_path)
+        self._ensure_directory(self.secrets_path)
+
         new_config_hash = self._compute_hash(config_to_save)
         config_changed = False
-        if new_config_hash != self._config_hash:
-            temp_file_config = self.config_file + ".tmp"
+        config_existed_before = self.config_path.exists()
+
+        if new_config_hash != self._config_hash or not config_existed_before:
+            temp_file_config = self.config_path.with_name(self.config_path.name + ".tmp")
             try:
-                with open(temp_file_config, "w", encoding='utf-8') as f:
-                    json.dump(config_to_save, f, indent=4)
-                os.replace(temp_file_config, self.config_file)
+                with temp_file_config.open("w", encoding="utf-8") as handle:
+                    json.dump(config_to_save, handle, indent=4)
+                os.replace(temp_file_config, self.config_path)
                 self._config_hash = new_config_hash
                 config_changed = True
-                CONFIG_LOGGER.info(
-                    StructuredMessage(
-                        "Configuration file persisted successfully.",
-                        event="config.write_success",
-                        path=os.path.abspath(self.config_file),
+                LOGGER.info(
+                    log_context(
+                        "Configuration saved to disk.",
+                        event="config.save.success",
+                        path=str(self.config_path),
+                        first_run=not config_existed_before,
+                        keys=len(config_to_save),
                     )
                 )
-            except Exception as e:
-                logging.error(f"Error saving configuration to {self.config_file}: {e}")
-                if os.path.exists(temp_file_config):
-                    os.remove(temp_file_config)
-                raise ConfigPersistenceError(
-                    f"Unable to write configuration file '{self.config_file}': {e}"
-                ) from e
+            except Exception as exc:
+                LOGGER.error(
+                    log_context(
+                        "Error saving configuration file.",
+                        event="config.save.failure",
+                        path=str(self.config_path),
+                        error=str(exc),
+                    ),
+                    exc_info=True,
+                )
+                if temp_file_config.exists():
+                    try:
+                        temp_file_config.unlink()
+                    except OSError as cleanup_exc:  # pragma: no cover - defensive path
+                        LOGGER.warning(
+                            log_context(
+                                "Failed to clean up temporary configuration file.",
+                                event="config.save.cleanup_failed",
+                                path=str(temp_file_config),
+                                error=str(cleanup_exc),
+                            ),
+                            exc_info=True,
+                        )
         else:
-            CONFIG_LOGGER.debug(
-                StructuredMessage(
+            LOGGER.debug(
+                log_context(
                     "Configuration unchanged; skipping disk write.",
-                    event="config.write_skipped",
-                    path=os.path.abspath(self.config_file),
+                    event="config.save.skipped",
+                    path=str(self.config_path),
                 )
             )
 
-        # Salvar secrets.json somente se houver mudanças
-        temp_file_secrets = SECRETS_FILE + ".tmp"
+        temp_file_secrets = self.secrets_path.with_name(self.secrets_path.name + ".tmp")
         existing_secrets = {}
-        if os.path.exists(SECRETS_FILE):
+        if self.secrets_path.exists():
             try:
-                with open(SECRETS_FILE, "r", encoding='utf-8') as f:
-                    existing_secrets = json.load(f)
+                with self.secrets_path.open("r", encoding="utf-8") as handle:
+                    existing_secrets = json.load(handle)
             except json.JSONDecodeError:
-                logging.warning(f"Could not decode {SECRETS_FILE}, will overwrite.")
+                LOGGER.warning(
+                    log_context(
+                        "Secrets file is corrupted; overwriting with sanitized values.",
+                        event="config.secrets.save.invalid_existing",
+                        path=str(self.secrets_path),
+                    )
+                )
+                existing_secrets = {}
             except FileNotFoundError:
-                pass
+                existing_secrets = {}
+            except Exception as exc:  # pragma: no cover - defensive path
+                LOGGER.error(
+                    log_context(
+                        "Unexpected error while reading secrets file before save.",
+                        event="config.secrets.save.read_failure",
+                        path=str(self.secrets_path),
+                        error=str(exc),
+                    ),
+                    exc_info=True,
+                )
+                existing_secrets = {}
 
         existing_secrets.update(secrets_to_save)
         new_secrets_hash = self._compute_hash(existing_secrets)
-
-        secrets_file_exists = os.path.exists(SECRETS_FILE)
-        should_write_secrets = new_secrets_hash != self._secrets_hash or not secrets_file_exists
+        secrets_existed_before = self.secrets_path.exists()
+        should_write_secrets = new_secrets_hash != self._secrets_hash or not secrets_existed_before
+        secrets_changed = False
 
         secrets_changed = False
         if should_write_secrets:
             try:
-                with open(temp_file_secrets, "w", encoding='utf-8') as f:
-                    json.dump(existing_secrets, f, indent=4)
-                os.replace(temp_file_secrets, SECRETS_FILE)
+                with temp_file_secrets.open("w", encoding="utf-8") as handle:
+                    json.dump(existing_secrets, handle, indent=4)
+                os.replace(temp_file_secrets, self.secrets_path)
                 self._secrets_hash = new_secrets_hash
                 secrets_changed = True
-                CONFIG_LOGGER.info(
-                    StructuredMessage(
-                        "Secrets file persisted successfully.",
-                        event="config.secrets_write_success",
-                        path=os.path.abspath(SECRETS_FILE),
-                        keys=list(existing_secrets.keys()),
+                LOGGER.info(
+                    log_context(
+                        "Secrets saved to disk.",
+                        event="config.secrets.save.success",
+                        path=str(self.secrets_path),
+                        first_run=not secrets_existed_before,
+                        keys=len(existing_secrets),
                     )
                 )
-            except Exception as e:
-                logging.error(f"Error saving secrets to {SECRETS_FILE}: {e}")
-                if os.path.exists(temp_file_secrets):
-                    os.remove(temp_file_secrets)
-                raise ConfigPersistenceError(
-                    f"Unable to write secrets file '{SECRETS_FILE}': {e}"
-                ) from e
+            except Exception as exc:
+                LOGGER.error(
+                    log_context(
+                        "Error saving secrets file.",
+                        event="config.secrets.save.failure",
+                        path=str(self.secrets_path),
+                        error=str(exc),
+                    ),
+                    exc_info=True,
+                )
+                if temp_file_secrets.exists():
+                    try:
+                        temp_file_secrets.unlink()
+                    except OSError as cleanup_exc:  # pragma: no cover - defensive path
+                        LOGGER.warning(
+                            log_context(
+                                "Failed to clean up temporary secrets file.",
+                                event="config.secrets.save.cleanup_failed",
+                                path=str(temp_file_secrets),
+                                error=str(cleanup_exc),
+                            ),
+                            exc_info=True,
+                        )
         else:
-            CONFIG_LOGGER.debug(
-                StructuredMessage(
+            LOGGER.debug(
+                log_context(
                     "Secrets unchanged; skipping disk write.",
-                    event="config.secrets_write_skipped",
-                    path=os.path.abspath(SECRETS_FILE),
+                    event="config.secrets.save.skipped",
+                    path=str(self.secrets_path),
                 )
             )
 
-        config_path = Path(self.config_file).resolve()
-        secrets_path = Path(SECRETS_FILE).resolve()
-        secrets_expected = bool(existing_secrets)
-
-        self._ensure_artifact_presence(
-            path=config_path,
-            required=True,
-            artifact_name="Configuration file",
-        )
-        self._ensure_artifact_presence(
-            path=secrets_path,
-            required=secrets_expected,
-            artifact_name="Secrets file",
-        )
-
-        self._emit_persistence_summary(
-            config_changed=config_changed,
-            secrets_changed=secrets_changed,
-            secrets_expected=secrets_expected,
-        )
-
-        if not self._bootstrap_logged:
-            self._log_bootstrap_summary()
-
-    def _register_bootstrap_error(self, target: str, error: Exception | str) -> None:
-        state = self._bootstrap_state.get(target)
-        if state is not None:
-            state["error"] = str(error)
-
-    def _detect_missing_bootstrap_artifacts(self) -> list[str]:
-        missing: list[str] = []
-        for name, state in self._bootstrap_state.items():
-            path = Path(state.get("path", ""))
-            try:
-                exists = path.exists()
-            except OSError as exc:
-                self._register_bootstrap_error(name, exc)
-                exists = False
-            if not exists:
-                missing.append(f"{name}:{path}")
-        return missing
-
-    def _log_bootstrap_summary(self) -> None:
-        if self._bootstrap_logged:
-            return
-
-        config_state = self._bootstrap_state.get("config", {})
-        secrets_state = self._bootstrap_state.get("secrets", {})
-
-        summary_details = {
-            "config_path": str(config_state.get("path", self.config_file)),
-            "config_existed": bool(config_state.get("existed")),
-            "config_written": bool(config_state.get("written")),
-            "secrets_path": str(secrets_state.get("path", SECRETS_FILE)),
-            "secrets_existed": bool(secrets_state.get("existed")),
-            "secrets_written": bool(secrets_state.get("written")),
-        }
-
-        BOOTSTRAP_LOGGER.info(
-            StructuredMessage(
-                "Configuration bootstrap verification completed.",
-                event="config.bootstrap.summary",
-                details=summary_details,
-            )
-        )
-
-        issues = {
-            name: state.get("error")
-            for name, state in self._bootstrap_state.items()
-            if state.get("error")
-        }
-        missing = self._detect_missing_bootstrap_artifacts()
-
-        if issues:
-            BOOTSTRAP_LOGGER.error(
-                StructuredMessage(
-                    "Errors occurred while writing bootstrap artifacts.",
-                    event="config.bootstrap.error",
-                    details={"errors": issues},
-                )
-            )
-
-        if missing:
-            BOOTSTRAP_LOGGER.critical(
-                StructuredMessage(
-                    "Configuration bootstrap integrity failure detected.",
-                    event="config.bootstrap.missing",
-                    details={"missing": missing},
-                )
-            )
-        elif not issues:
-            BOOTSTRAP_LOGGER.info(
-                StructuredMessage(
-                    "Configuration bootstrap integrity confirmed.",
-                    event="config.bootstrap.success",
-                    details={
-                        "config_path": summary_details["config_path"],
-                        "secrets_path": summary_details["secrets_path"],
-                    },
-                )
-            )
-
-        self._bootstrap_logged = True
-
-        if issues or missing:
-            joined_missing = ", ".join(missing)
-            joined_errors = "; ".join(f"{k}: {v}" for k, v in issues.items())
-            message_parts = []
-            if joined_errors:
-                message_parts.append(f"errors -> {joined_errors}")
-            if joined_missing:
-                message_parts.append(f"missing -> {joined_missing}")
-            message = "; ".join(message_parts) or "Unknown bootstrap failure"
-            raise RuntimeError(message)
-
-    def ensure_bootstrap_integrity(self) -> None:
-        missing = self._detect_missing_bootstrap_artifacts()
-        if missing:
-            BOOTSTRAP_LOGGER.critical(
-                StructuredMessage(
-                    "Configuration bootstrap integrity check failed.",
-                    event="config.bootstrap.verify_failure",
-                    details={"missing": missing},
-                )
-            )
-            raise RuntimeError(
-                "Configuration bootstrap artifacts missing: " + ", ".join(missing)
-            )
+        self._verify_persistence(config_changed=config_changed, secrets_changed=secrets_changed)
 
     def get(self, key, default=None):
         """Recupera valores da configuração permitindo acesso aninhado.
