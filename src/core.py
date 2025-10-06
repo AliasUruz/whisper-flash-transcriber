@@ -68,7 +68,13 @@ StateUpdateCallback = Callable[[sm.StateNotification], None]
 
 
 class AppCore:
-    def __init__(self, main_tk_root):
+    def __init__(
+        self,
+        main_tk_root,
+        *,
+        config_manager: ConfigManager | None = None,
+        hotkey_config_path: str = "hotkey_config.json",
+    ):
         self.main_tk_root = main_tk_root # Referência para a raiz Tkinter
 
         # --- Locks ---
@@ -88,26 +94,7 @@ class AppCore:
         self.on_segment_transcribed = None # Callback para UI ao vivo
 
         # --- Módulos ---
-        try:
-            self.config_manager = ConfigManager()
-        except ConfigPersistenceError as exc:
-            LOGGER.critical(
-                StructuredMessage(
-                    "Failed to initialize configuration storage.",
-                    event="bootstrap.config_failure",
-                    error=str(exc),
-                ),
-                exc_info=True,
-            )
-            raise
-        else:
-            LOGGER.info(
-                StructuredMessage(
-                    "Configuration subsystem initialized.",
-                    event="bootstrap.config_ready",
-                    details=self.config_manager.describe_persistence_state(),
-                )
-            )
+        self.config_manager = config_manager or ConfigManager()
         self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
         self._ui_manager = None  # Será setado externamente pelo main.py
         self._pending_tray_tooltips: list[str] = []
@@ -188,26 +175,7 @@ class AppCore:
             self.state_manager.subscribe(ui_manager_instance.update_tray_icon)
 
         # --- Hotkey Manager ---
-        try:
-            self.ahk_manager = KeyboardHotkeyManager(config_file="hotkey_config.json")
-        except Exception as exc:
-            LOGGER.critical(
-                StructuredMessage(
-                    "Failed to initialize hotkey subsystem.",
-                    event="bootstrap.hotkey_failure",
-                    error=str(exc),
-                ),
-                exc_info=True,
-            )
-            raise
-        else:
-            LOGGER.info(
-                StructuredMessage(
-                    "Hotkey subsystem initialized.",
-                    event="bootstrap.hotkey_ready",
-                    details=self.ahk_manager.describe_persistence_state(),
-                )
-            )
+        self.ahk_manager = KeyboardHotkeyManager(config_file=hotkey_config_path)
         self.ahk_running = False
         self.last_key_press_time = 0.0
         self.reregister_timer_thread = None
