@@ -5,6 +5,8 @@ import logging
 import os
 import re
 import threading
+import time
+from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -319,6 +321,76 @@ def log_event(
     logger.log(level, StructuredMessage(headline, event=event, details=details, **fields))
 
 
+@contextmanager
+def log_duration(
+    logger: logging.Logger,
+    headline: str,
+    /,
+    *,
+    event: str | None = None,
+    details: Mapping[str, Any] | None = None,
+    level: int = logging.INFO,
+    success_level: int | None = None,
+    failure_level: int | None = None,
+    log_start: bool = False,
+    start_level: int | None = None,
+) -> Iterable[dict[str, Any]]:
+    """Context manager that logs the duration of an operation.
+
+    The context yields a mutable ``dict`` that can be populated with additional
+    metadata. Its content is merged with ``details`` when the operation
+    completes or fails. On failure, ``exc_info`` is automatically attached to
+    the emitted log record.
+    """
+
+    base_details = dict(details or {})
+    if log_start:
+        start_details = dict(base_details)
+        start_details.setdefault("status", "started")
+        logger.log(
+            start_level or level,
+            StructuredMessage(
+                headline,
+                event=event,
+                details=start_details,
+            ),
+        )
+
+    collected: dict[str, Any] = {}
+    start_time = time.perf_counter()
+    try:
+        yield collected
+    except Exception as exc:
+        failure_details = dict(base_details)
+        failure_details.update(collected)
+        failure_details.setdefault("status", "failure")
+        failure_details["duration_ms"] = int((time.perf_counter() - start_time) * 1000)
+        failure_details.setdefault("error", repr(exc))
+        logger.log(
+            failure_level or logging.ERROR,
+            StructuredMessage(
+                headline,
+                event=event,
+                details=failure_details,
+            ),
+            exc_info=True,
+        )
+        raise
+    else:
+        success_details = dict(base_details)
+        success_details.update(collected)
+        success_details.setdefault("status", "success")
+        success_details["duration_ms"] = int((time.perf_counter() - start_time) * 1000)
+        logger.log(
+            success_level or level,
+            StructuredMessage(
+                headline,
+                event=event,
+                details=success_details,
+            ),
+        )
+
+
 def get_logger(
     name: str,
     *,
@@ -341,6 +413,7 @@ __all__ = [
     "ContextualLoggerAdapter",
     "StructuredMessage",
     "get_logger",
+    "log_duration",
     "log_context",
     "log_event",
     "setup_logging",
