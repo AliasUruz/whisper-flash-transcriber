@@ -116,6 +116,11 @@ class AudioHandler:
         self._processing_thread.start()
 
         self._audio_log = _AudioLoggerAdapter(LOGGER, {'handler': self})
+        self.models_storage_dir = (
+            self.config_manager.get_models_storage_dir()
+            if hasattr(self.config_manager, "get_models_storage_dir")
+            else None
+        )
 
         self.stream_blocksize = int(AUDIO_SAMPLE_RATE / 10)  # ~100ms buffers
         self._overflow_log_window = 5.0  # seconds
@@ -798,21 +803,18 @@ class AudioHandler:
         self.max_memory_seconds = self.config_manager.get("max_memory_seconds", 30)
         self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb", 1000)
 
-        raw_recordings_dir = self.config_manager.get(
-            RECORDINGS_DIR_CONFIG_KEY,
-            self.config_manager.default_config[RECORDINGS_DIR_CONFIG_KEY],
+        new_models_dir = (
+            self.config_manager.get_models_storage_dir()
+            if hasattr(self.config_manager, "get_models_storage_dir")
+            else self.models_storage_dir
         )
-        try:
-            recordings_path = Path(str(raw_recordings_dir)).expanduser()
-            recordings_path.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            self._audio_log.warning(
-                "Failed to prepare recordings directory '%s': %s. Falling back to temporary directory.",
-                raw_recordings_dir,
-                exc,
+        if new_models_dir and new_models_dir != self.models_storage_dir:
+            self._audio_log.info(
+                "Models storage directory updated to '%s'. Reinitializing VAD on next access.",
+                new_models_dir,
             )
-            recordings_path = Path(tempfile.gettempdir())
-        self.recordings_dir = str(recordings_path)
+            self.models_storage_dir = new_models_dir
+            self.vad_manager = None
 
         self.sound_enabled = self.config_manager.get("sound_enabled", True)
         self.sound_frequency = self.config_manager.get("sound_frequency", 400)

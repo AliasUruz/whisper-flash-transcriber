@@ -1,7 +1,7 @@
 
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
-from tkinter import filedialog, simpledialog  # Adicionado para askstring
+from tkinter import filedialog, simpledialog  # Adicionado para diálogos
 import logging
 import threading
 import time
@@ -801,6 +801,7 @@ class UIManager:
         asr_compute_device_var = _var("asr_compute_device_var")
         asr_dtype_var = _var("asr_dtype_var")
         asr_ct2_compute_type_var = _var("asr_ct2_compute_type_var")
+        models_storage_dir_var = _var("models_storage_dir_var")
         asr_cache_dir_var = _var("asr_cache_dir_var")
         recordings_dir_var = _var("recordings_dir_var")
 
@@ -905,7 +906,18 @@ class UIManager:
         asr_compute_device_to_apply = "auto"
         asr_dtype_to_apply = asr_dtype_var.get() if asr_dtype_var else self.config_manager.get_asr_dtype()
         asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get() if asr_ct2_compute_type_var else self.config_manager.get_asr_ct2_compute_type()
+        models_storage_dir_to_apply = (
+            models_storage_dir_var.get()
+            if models_storage_dir_var
+            else self.config_manager.get_models_storage_dir()
+        )
         asr_cache_dir_to_apply = asr_cache_dir_var.get() if asr_cache_dir_var else self.config_manager.get_asr_cache_dir()
+
+        try:
+            Path(models_storage_dir_to_apply).mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror("Invalid Path", f"Models storage directory is invalid:\n{exc}", parent=settings_win)
+            return
 
         try:
             Path(asr_cache_dir_to_apply).mkdir(parents=True, exist_ok=True)
@@ -989,6 +1001,7 @@ class UIManager:
             new_asr_compute_device=asr_compute_device_to_apply,
             new_asr_dtype=asr_dtype_to_apply,
             new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
+            new_models_storage_dir=models_storage_dir_to_apply,
             new_asr_cache_dir=asr_cache_dir_to_apply,
             new_recordings_dir=recordings_dir_to_apply,
         )
@@ -1094,11 +1107,12 @@ class UIManager:
                 pass
 
         _set_var("asr_cache_dir_var", DEFAULT_CONFIG["asr_cache_dir"])
-        _set_var("recordings_dir_var", DEFAULT_CONFIG.get("recordings_dir", ""))
+        _set_var("models_storage_dir_var", DEFAULT_CONFIG["models_storage_dir"])
 
         self.config_manager.set_asr_model_id(default_model_id)
         self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
         self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
+        self.config_manager.set_models_storage_dir(DEFAULT_CONFIG["models_storage_dir"])
         self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
         if "recordings_dir" in DEFAULT_CONFIG:
             self.config_manager.set_recordings_dir(DEFAULT_CONFIG["recordings_dir"])
@@ -1229,6 +1243,75 @@ class UIManager:
         )
         advanced_toggle.pack(fill='x', pady=(0, 5))
         toggle_button_ref['widget'] = advanced_toggle
+
+        previous_models_dir = {"value": models_storage_dir_var.get() if models_storage_dir_var else ""}
+
+        def _update_cache_dir_for_new_base(new_base: str) -> None:
+            old_base = previous_models_dir.get("value") or ""
+            previous_models_dir["value"] = new_base or ""
+            if not new_base:
+                return
+            try:
+                new_base_path = Path(new_base).expanduser()
+            except Exception:
+                return
+
+            try:
+                cache_current = Path(asr_cache_dir_var.get()).expanduser()
+            except Exception:
+                cache_current = None
+
+            try:
+                old_base_path = Path(old_base).expanduser() if old_base else None
+            except Exception:
+                old_base_path = None
+
+            if cache_current is None or old_base_path is None:
+                return
+
+            try:
+                relative = cache_current.relative_to(old_base_path)
+            except ValueError:
+                return
+
+            asr_cache_dir_var.set(str(new_base_path / relative))
+
+        def _browse_models_dir() -> None:
+            initial = models_storage_dir_var.get() if models_storage_dir_var else ""
+            try:
+                initial_dir = Path(initial).expanduser()
+            except Exception:
+                initial_dir = Path.home()
+            selected = filedialog.askdirectory(initialdir=str(initial_dir))
+            if selected:
+                models_storage_dir_var.set(selected)
+                _update_cache_dir_for_new_base(selected)
+
+        def _synchronize_cache_dir() -> None:
+            base = models_storage_dir_var.get()
+            if not base:
+                return
+            try:
+                candidate = Path(base).expanduser() / "asr"
+            except Exception:
+                return
+            asr_cache_dir_var.set(str(candidate))
+
+        models_dir_frame = ctk.CTkFrame(asr_frame)
+        models_dir_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(models_dir_frame, text="Diretório de Modelos:").pack(side="left", padx=(5, 10))
+        models_dir_entry = ctk.CTkEntry(models_dir_frame, textvariable=models_storage_dir_var, width=240)
+        models_dir_entry.pack(side="left", padx=5)
+        Tooltip(models_dir_entry, "Diretório raiz usado para armazenar todos os modelos e artefatos pesados.")
+        models_dir_entry.bind("<FocusOut>", lambda *_: _update_cache_dir_for_new_base(models_storage_dir_var.get()))
+
+        browse_button = ctk.CTkButton(models_dir_frame, text="Selecionar...", command=_browse_models_dir)
+        browse_button.pack(side="left", padx=5)
+        Tooltip(browse_button, "Escolha o diretório raiz onde os modelos serão armazenados.")
+
+        sync_button = ctk.CTkButton(models_dir_frame, text="Sincronizar Cache ASR", command=_synchronize_cache_dir)
+        sync_button.pack(side="left", padx=5)
+        Tooltip(sync_button, "Atualiza o diretório de cache ASR para ficar dentro do diretório de modelos.")
 
         asr_backend_frame = ctk.CTkFrame(asr_frame)
         _register_advanced(asr_backend_frame, fill="x", pady=5)
@@ -2283,6 +2366,7 @@ class UIManager:
                 enable_torch_compile_var = ctk.BooleanVar(value=self.config_manager.get_enable_torch_compile())
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
+                models_storage_dir_var = ctk.StringVar(value=self.config_manager.get_models_storage_dir())
                 asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
 
                 for name, var in [
@@ -2322,6 +2406,7 @@ class UIManager:
                     ("asr_model_id_var", asr_model_id_var),
                     ("asr_dtype_var", asr_dtype_var),
                     ("asr_ct2_compute_type_var", asr_ct2_compute_type_var),
+                    ("models_storage_dir_var", models_storage_dir_var),
                     ("asr_cache_dir_var", asr_cache_dir_var),
                     ("recordings_dir_var", recordings_dir_var),
                 ]:

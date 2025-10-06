@@ -1,5 +1,6 @@
 import json
 import logging
+import shutil
 import sys
 from collections import deque
 from datetime import datetime
@@ -8,20 +9,15 @@ from pathlib import Path
 import numpy as np
 import onnxruntime
 
-# Caminho para o modelo ONNX do Silero VAD
-MODEL_PATH = Path(__file__).resolve().parent / "models" / "silero_vad.onnx"
-
-# Ajuste para execucao via PyInstaller
+_PACKAGE_MODEL_PATH = Path(__file__).resolve().parent / "models" / "silero_vad.onnx"
 if hasattr(sys, "_MEIPASS"):
-    MODEL_PATH = Path(sys._MEIPASS) / "models" / "silero_vad.onnx"
+    _PACKAGE_MODEL_PATH = Path(sys._MEIPASS) / "models" / "silero_vad.onnx"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOGS_DIR = PROJECT_ROOT / "logs"
 FAILURE_LOG_PATH = LOGS_DIR / "vad_failure.jsonl"
 
 MIN_VAD_INPUT_SAMPLES = 512
-
-logging.info("VAD model path set to '%s'", MODEL_PATH)
 
 
 class VADManager:
@@ -30,7 +26,7 @@ class VADManager:
     @staticmethod
     def is_model_available() -> bool:
         """Verifica se o arquivo do modelo Silero VAD está presente."""
-        return MODEL_PATH.exists()
+        return _PACKAGE_MODEL_PATH.exists()
 
     def __init__(
         self,
@@ -66,16 +62,19 @@ class VADManager:
         self._sanitize_padding()
         self._update_padding_samples()
 
-        if not self.is_model_available():
+        self.model_path = self._resolve_model_path()
+        logging.info("VAD model path resolved to '%s'", self.model_path)
+
+        if not self.model_path.exists():
             logging.error(
                 "VAD model file missing at '%s'. VAD feature disabled.",
-                MODEL_PATH,
+                self.model_path,
             )
             self._activate_energy_fallback("model ausente")
             return
 
         try:
-            model_path_str = str(MODEL_PATH)
+            model_path_str = str(self.model_path)
             available_providers = onnxruntime.get_available_providers()
             if "CUDAExecutionProvider" in available_providers:
                 providers = ["CUDAExecutionProvider"]
@@ -98,7 +97,7 @@ class VADManager:
         except Exception as exc:
             logging.error(
                 "Error loading VAD model from '%s': %s",
-                MODEL_PATH,
+                self.model_path,
                 exc,
                 exc_info=True,
             )
@@ -112,6 +111,54 @@ class VADManager:
         self._pre_buffer_samples = 0
         self._speech_active = False
         self._post_silence_samples = 0
+
+    def _resolve_model_path(self) -> Path:
+        base_dir: Path | None = None
+        if self.config_manager is not None:
+            try:
+                raw_dir = self.config_manager.get("models_storage_dir")
+            except Exception:
+                logging.debug("Failed to read models storage directory from config manager.", exc_info=True)
+            else:
+                if raw_dir:
+                    try:
+                        base_dir = Path(str(raw_dir)).expanduser()
+                    except Exception:
+                        logging.debug("Failed to expand models storage directory '%s'.", raw_dir, exc_info=True)
+
+        if base_dir is None:
+            return _PACKAGE_MODEL_PATH
+
+        target_path = base_dir / "vad" / _PACKAGE_MODEL_PATH.name
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logging.warning(
+                "Failed to create VAD storage directory '%s': %s", target_path.parent, exc
+            )
+            return _PACKAGE_MODEL_PATH
+
+        if not target_path.exists():
+            if _PACKAGE_MODEL_PATH.exists():
+                try:
+                    shutil.copy2(_PACKAGE_MODEL_PATH, target_path)
+                    logging.info("Copied packaged VAD model to '%s'.", target_path)
+                except Exception as exc:
+                    logging.warning(
+                        "Failed to copy VAD model to '%s': %s", target_path, exc
+                    )
+                    return _PACKAGE_MODEL_PATH
+            else:
+                logging.warning(
+                    "Packaged VAD model not found at '%s'; expecting existing file at '%s'.",
+                    _PACKAGE_MODEL_PATH,
+                    target_path,
+                )
+
+        if target_path.exists():
+            return target_path
+
+        return _PACKAGE_MODEL_PATH
 
     def is_speech(self, audio_chunk: np.ndarray) -> bool:
         """Retorna ``True`` se o chunk contém fala."""

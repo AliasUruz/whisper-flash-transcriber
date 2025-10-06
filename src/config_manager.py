@@ -34,11 +34,11 @@ def _parse_bool(value):
 CONFIG_FILE = "config.json"
 SECRETS_FILE = "secrets.json"  # Nova constante para o arquivo de segredos
 
-
-BOOTSTRAP_LOGGER = get_logger(
-    "whisper_flash_transcriber.config.bootstrap",
-    component="ConfigBootstrap",
+DEFAULT_MODELS_STORAGE_DIR = str(
+    (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
 )
+DEFAULT_ASR_CACHE_DIR = str(Path(DEFAULT_MODELS_STORAGE_DIR) / "asr")
+
 
 DEFAULT_CONFIG = {
     "record_key": "F3",
@@ -119,7 +119,8 @@ DEFAULT_CONFIG = {
     "asr_compute_device": "auto",
     "asr_dtype": "float16",
     "asr_ct2_compute_type": "int8_float16",
-    "asr_cache_dir": str((Path.home() / ".cache" / "whisper_flash_transcriber" / "asr").expanduser()),
+    "models_storage_dir": DEFAULT_MODELS_STORAGE_DIR,
+    "asr_cache_dir": DEFAULT_ASR_CACHE_DIR,
     "asr_installed_models": [],
     "asr_curated_catalog": [],
     "asr_curated_catalog_url": "",
@@ -207,6 +208,7 @@ ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
 ASR_DTYPE_CONFIG_KEY = "asr_dtype"
 ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
 ASR_CT2_CPU_THREADS_CONFIG_KEY = "asr_ct2_cpu_threads"
+MODELS_STORAGE_DIR_CONFIG_KEY = "models_storage_dir"
 ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
@@ -477,6 +479,17 @@ class ConfigManager:
 
         cfg["batch_size_specified"] = batch_size_specified
         cfg["gpu_index_specified"] = gpu_index_specified
+
+        models_dir_value = cfg.get(
+            MODELS_STORAGE_DIR_CONFIG_KEY,
+            self.default_config[MODELS_STORAGE_DIR_CONFIG_KEY],
+        )
+        models_dir_path = Path(str(models_dir_value)).expanduser()
+        try:
+            models_dir_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # pragma: no cover - defensive path
+            logging.warning("Failed to create models storage directory '%s': %s", models_dir_path, exc)
+        cfg[MODELS_STORAGE_DIR_CONFIG_KEY] = str(models_dir_path)
 
         cache_dir_value = cfg.get(ASR_CACHE_DIR_CONFIG_KEY, self.default_config[ASR_CACHE_DIR_CONFIG_KEY])
         cache_path = Path(str(cache_dir_value)).expanduser()
@@ -1237,6 +1250,15 @@ class ConfigManager:
 
     def set_asr_ct2_compute_type(self, value: str):
         self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(value)
+
+    def get_models_storage_dir(self):
+        return self.config.get(
+            MODELS_STORAGE_DIR_CONFIG_KEY,
+            self.default_config[MODELS_STORAGE_DIR_CONFIG_KEY],
+        )
+
+    def set_models_storage_dir(self, value: str):
+        self.config[MODELS_STORAGE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
     def get_asr_cache_dir(self):
         return self.config.get(

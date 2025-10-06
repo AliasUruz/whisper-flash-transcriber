@@ -98,7 +98,7 @@ class AppConfig(BaseModel):
     asr_dtype: str = "float16"
     asr_ct2_compute_type: str = "int8_float16"
     asr_ct2_cpu_threads: int | None = None
-    recordings_dir: str = str((Path.home() / "WhisperFlashTranscriber" / "recordings").expanduser())
+    models_storage_dir: str = str((Path.home() / ".cache" / "whisper_flash_transcriber").expanduser())
     asr_cache_dir: str = str((Path.home() / ".cache" / "whisper_flash_transcriber" / "asr").expanduser())
     asr_installed_models: list[str] = Field(default_factory=list)
     asr_curated_catalog: list[str] = Field(default_factory=list)
@@ -222,7 +222,16 @@ class AppConfig(BaseModel):
             return coerced
         return [str(value)]
 
-    @field_validator("recordings_dir", "asr_cache_dir", mode="before")
+    @field_validator("models_storage_dir", mode="before")
+    @classmethod
+    def _expand_models_dir(cls, value: Any) -> str:
+        if isinstance(value, str):
+            return str(Path(value).expanduser())
+        if isinstance(value, Path):
+            return str(value.expanduser())
+        raise ValueError("models_storage_dir must be a string or Path")
+
+    @field_validator("asr_cache_dir", mode="before")
     @classmethod
     def _expand_cache_dir(cls, value: Any) -> str:
         if isinstance(value, str):
