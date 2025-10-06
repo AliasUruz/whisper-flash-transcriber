@@ -76,6 +76,20 @@ def backend_storage_name(backend: str | None) -> str:
     return normalized
 
 
+def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
+    """Return the curated catalog entry for ``model_id`` if available."""
+
+    if not model_id:
+        return None
+
+    for entry in CURATED:
+        if entry.get("id") == model_id:
+            normalized = dict(entry)
+            normalized["backend"] = normalize_backend_label(entry.get("backend"))
+            return normalized
+    return None
+
+
 _CACHE_TTL_SECONDS = 60.0
 
 _download_size_cache: dict[str, tuple[float, tuple[int, int]]] = {}
@@ -525,8 +539,23 @@ def ensure_download(
     """
 
     cache_dir = Path(cache_dir)
-    storage_backend = backend_storage_name(backend)
-    backend_label = normalize_backend_label(backend) or storage_backend
+
+    curated_entry = get_curated_entry(model_id)
+    curated_backend = normalize_backend_label(curated_entry.get("backend")) if curated_entry else ""
+
+    requested_backend = normalize_backend_label(backend)
+    backend_label = requested_backend or curated_backend or "ctranslate2"
+
+    if curated_backend and backend_label != curated_backend:
+        MODEL_LOGGER.warning(
+            "Overriding backend '%s' with curated backend '%s' for model '%s'.",
+            backend_label,
+            curated_backend,
+            model_id,
+        )
+        backend_label = curated_backend
+
+    storage_backend = backend_storage_name(backend_label)
 
     local_dir = cache_dir / storage_backend / model_id
     if local_dir.is_dir() and any(local_dir.iterdir()):
