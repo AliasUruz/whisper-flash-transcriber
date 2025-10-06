@@ -36,7 +36,11 @@ class TransformersBackend:
         if model_override:
             self.model_id = model_override
 
-        resolved_device = self._resolve_device(device, torch)
+        requested_device = device if device not in (None, "auto") else self.device
+        if requested_device in (None, "auto"):
+            requested_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+        resolved_device = self._resolve_device(requested_device, torch)
         torch_dtype = self._resolve_dtype(dtype, resolved_device, torch)
 
         LOGGER.info(
@@ -55,11 +59,9 @@ class TransformersBackend:
             use_safetensors=True,
             attn_implementation=attn_implementation,
         )
-        pipeline_device = (
-            resolved_device.index if resolved_device.type == "cuda" else -1
-        )
-        if pipeline_device is None:
-            pipeline_device = 0
+
+        pipeline_device = self._resolve_pipeline_device(resolved_device)
+        self.device = str(resolved_device)
         self.pipe = pipeline(
             "automatic-speech-recognition",
             model=self.model,
@@ -113,6 +115,8 @@ class TransformersBackend:
             normalized = device.strip().lower()
             if normalized in {"cpu", "-1"}:
                 return torch_module.device("cpu")
+            if normalized in {"mps", "xpu"}:
+                return torch_module.device(normalized)
             if normalized.isdigit():
                 return torch_module.device(f"cuda:{normalized}")
             if normalized.startswith("cuda"):
@@ -141,3 +145,11 @@ class TransformersBackend:
             return getattr(torch_module, target)
         except AttributeError as exc:  # pragma: no cover - defensive guard
             raise ValueError(f"Unsupported dtype specification: {dtype!r}") from exc
+
+    @staticmethod
+    def _resolve_pipeline_device(device: "torch.device") -> object:
+        """Map a resolved device into the value expected by ``pipeline``."""
+
+        if device.type in {"cuda", "mps", "xpu"}:
+            return device
+        return -1
