@@ -63,7 +63,7 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
 )
 from . import model_manager as model_manager_module
-from .logging_utils import get_logger
+from .logging_utils import current_correlation_id, get_logger, scoped_correlation_id
 
 LOGGER = get_logger('whisper_flash_transcriber.transcription', component='TranscriptionHandler')
 
@@ -1427,7 +1427,13 @@ class TranscriptionHandler:
                 logging.debug("Failed to notify load error.", exc_info=True)
             return None, None
 
-    def transcribe_audio_segment(self, audio_source: str | np.ndarray, agent_mode: bool = False):
+    def transcribe_audio_segment(
+        self,
+        audio_source: str | np.ndarray,
+        agent_mode: bool = False,
+        *,
+        correlation_id: str | None = None,
+    ):
         """Envia o áudio (arquivo ou array) para transcrição assíncrona."""
         if not self.is_model_ready():
             logging.error("Transcription pipeline is not available. Model not loaded or failed to load.")
@@ -1435,9 +1441,14 @@ class TranscriptionHandler:
                 "Transcription pipeline unavailable. The model is not loaded or failed to load."
             )
             return
-        self.transcription_future = self.transcription_executor.submit(
-            self._transcription_task, audio_source, agent_mode
-        )
+        if correlation_id is None:
+            correlation_id = current_correlation_id()
+
+        def _transcription_wrapper() -> None:
+            with scoped_correlation_id(correlation_id):
+                self._transcription_task(audio_source, agent_mode)
+
+        self.transcription_future = self.transcription_executor.submit(_transcription_wrapper)
 
     def _transcription_task(self, audio_source: str | np.ndarray, agent_mode: bool) -> None:
         self.transcription_cancel_event.clear()
