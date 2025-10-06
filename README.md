@@ -84,6 +84,7 @@ During the initial startup the application will create `config.json` and `hotkey
 - From the settings window you can:
   - Configure the recording hotkey.
   - Select the ASR model. If a model is missing, the application offers to download it.
+  - Choose where Whisper models are cached and where on-disk recordings are stored.
   - Configure AI services, audio feedback sounds, and additional quality-of-life options.
 
 ### Recording and Transcribing

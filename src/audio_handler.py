@@ -20,6 +20,7 @@ from .utils.memory import get_available_memory_mb, get_total_memory_mb
 
 from .vad_manager import VADManager
 from .config_manager import (
+    RECORDINGS_DIR_CONFIG_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
@@ -107,6 +108,7 @@ class AudioHandler:
         self._audio_frames: list[np.ndarray] = []
         self._sample_count = 0
         self._memory_samples = 0
+        self.recordings_dir = str(Path.cwd())
 
         # Dedicated queue and thread for audio processing
         self.audio_queue = queue.Queue()
@@ -447,7 +449,7 @@ class AudioHandler:
 
     def _migrate_to_file(self):
         """Move in-memory frames into a temporary audio file."""
-        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav", dir=self.recordings_dir)
         self.temp_file_path = raw_tmp.name
         raw_tmp.close()
         self._sf_writer = sf.SoundFile(
@@ -530,7 +532,7 @@ class AudioHandler:
                 self._sf_writer = None
                 self._audio_frames = []
             else:
-                raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav", dir=self.recordings_dir)
                 self.temp_file_path = raw_tmp.name
                 raw_tmp.close()
                 self._sf_writer = sf.SoundFile(
@@ -658,7 +660,7 @@ class AudioHandler:
                     ts = int(time.time())
                     filename = f"temp_recording_{ts}.wav"
                     source_path = Path(self.temp_file_path)
-                    target_path = (Path.cwd() / filename).resolve()
+                    target_path = (Path(self.recordings_dir) / filename).resolve()
                     shutil.move(str(source_path), target_path)
                     self.temp_file_path = str(target_path)
                     self._audio_log.info(
@@ -795,6 +797,22 @@ class AudioHandler:
         self.max_memory_seconds_mode = self.config_manager.get("max_memory_seconds_mode", "manual")
         self.max_memory_seconds = self.config_manager.get("max_memory_seconds", 30)
         self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb", 1000)
+
+        raw_recordings_dir = self.config_manager.get(
+            RECORDINGS_DIR_CONFIG_KEY,
+            self.config_manager.default_config[RECORDINGS_DIR_CONFIG_KEY],
+        )
+        try:
+            recordings_path = Path(str(raw_recordings_dir)).expanduser()
+            recordings_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._audio_log.warning(
+                "Failed to prepare recordings directory '%s': %s. Falling back to temporary directory.",
+                raw_recordings_dir,
+                exc,
+            )
+            recordings_path = Path(tempfile.gettempdir())
+        self.recordings_dir = str(recordings_path)
 
         self.sound_enabled = self.config_manager.get("sound_enabled", True)
         self.sound_frequency = self.config_manager.get("sound_frequency", 400)
@@ -1023,8 +1041,13 @@ class AudioHandler:
         total_bytes = 0
         candidates: list[tuple[float, Path, int]] = []
 
+        try:
+            recordings_root = Path(self.recordings_dir).expanduser()
+        except Exception:
+            recordings_root = Path.cwd()
+
         for pattern in patterns:
-            for file_path in Path.cwd().glob(pattern):
+            for file_path in recordings_root.glob(pattern):
                 try:
                     stat = file_path.stat()
                 except (FileNotFoundError, OSError):

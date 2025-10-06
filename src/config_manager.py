@@ -94,6 +94,7 @@ DEFAULT_CONFIG = {
         "gemini-2.5-pro"
     ],
     "save_temp_recordings": False,
+    "recordings_dir": str((Path.home() / "WhisperFlashTranscriber" / "recordings").expanduser()),
     "record_storage_mode": "auto",
     "record_storage_limit": 0,
     "max_memory_seconds_mode": "manual",
@@ -148,6 +149,7 @@ GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
 RECORD_STORAGE_MODE_CONFIG_KEY = "record_storage_mode"
 RECORD_STORAGE_LIMIT_CONFIG_KEY = "record_storage_limit"
+RECORDINGS_DIR_CONFIG_KEY = "recordings_dir"
 MAX_MEMORY_SECONDS_MODE_CONFIG_KEY = "max_memory_seconds_mode"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
@@ -356,6 +358,13 @@ class ConfigManager:
         cfg[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(
             cfg.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY, self.default_config[SAVE_TEMP_RECORDINGS_CONFIG_KEY])
         )
+        recordings_dir_value = cfg.get(RECORDINGS_DIR_CONFIG_KEY, self.default_config[RECORDINGS_DIR_CONFIG_KEY])
+        recordings_path = Path(str(recordings_dir_value)).expanduser()
+        try:
+            recordings_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # pragma: no cover - defensive path
+            logging.warning("Failed to create recordings directory '%s': %s", recordings_path, exc)
+        cfg[RECORDINGS_DIR_CONFIG_KEY] = str(recordings_path)
         cfg[LAUNCH_AT_STARTUP_CONFIG_KEY] = bool(
             cfg.get(LAUNCH_AT_STARTUP_CONFIG_KEY, self.default_config[LAUNCH_AT_STARTUP_CONFIG_KEY])
         )
@@ -1138,6 +1147,15 @@ class ConfigManager:
 
     def set_save_temp_recordings(self, value: bool):
         self.config[SAVE_TEMP_RECORDINGS_CONFIG_KEY] = bool(value)
+
+    def get_recordings_dir(self) -> str:
+        return self.config.get(
+            RECORDINGS_DIR_CONFIG_KEY,
+            self.default_config[RECORDINGS_DIR_CONFIG_KEY],
+        )
+
+    def set_recordings_dir(self, value: str) -> None:
+        self.config[RECORDINGS_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
 
     def get_record_storage_mode(self):
