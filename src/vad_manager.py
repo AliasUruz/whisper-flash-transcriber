@@ -7,7 +7,14 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import onnxruntime
+
+try:
+    import onnxruntime  # type: ignore[import-not-found]
+except Exception as exc:  # pragma: no cover - optional dependency
+    onnxruntime = None  # type: ignore[assignment]
+    _ONNXRUNTIME_IMPORT_ERROR = exc
+else:
+    _ONNXRUNTIME_IMPORT_ERROR: Exception | None = None
 
 _PACKAGE_MODEL_PATH = Path(__file__).resolve().parent / "models" / "silero_vad.onnx"
 if hasattr(sys, "_MEIPASS"):
@@ -64,6 +71,19 @@ class VADManager:
 
         self.model_path = self._resolve_model_path()
         logging.info("VAD model path resolved to '%s'", self.model_path)
+
+        if onnxruntime is None:
+            if _ONNXRUNTIME_IMPORT_ERROR is None:
+                logging.error(
+                    "onnxruntime is not available; enabling energy-based VAD fallback.",
+                )
+            else:
+                logging.error(
+                    "onnxruntime is not available; enabling energy-based VAD fallback: %s",
+                    _ONNXRUNTIME_IMPORT_ERROR,
+                )
+            self._activate_energy_fallback("onnxruntime missing", _ONNXRUNTIME_IMPORT_ERROR)
+            return
 
         if not self.model_path.exists():
             logging.error(
