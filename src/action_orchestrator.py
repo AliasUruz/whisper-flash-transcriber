@@ -12,7 +12,7 @@ import soundfile as sf
 from . import state_manager as sm
 from .audio_handler import AUDIO_SAMPLE_RATE
 from .config_manager import ConfigManager
-from .logging_utils import get_logger, log_context
+from .logging_utils import current_correlation_id, get_logger, log_context
 
 LOGGER = get_logger(__name__, component='ActionOrchestrator')
 
@@ -109,8 +109,12 @@ class ActionOrchestrator:
         handler = self._transcription_handler
         if handler is None:
             LOGGER.error(
-                "Transcription handler is not available to receive audio.",
-                extra={"event": "dispatch_failed", "stage": "transcription"},
+                log_context(
+                    "Transcription handler is not available to receive audio.",
+                    event="audio.dispatch_failed",
+                    stage="transcription",
+                    agent_mode=agent_mode,
+                )
             )
             if agent_mode:
                 self._log_status(
@@ -125,8 +129,13 @@ class ActionOrchestrator:
             return
 
         previous_future = getattr(handler, "transcription_future", None)
+        correlation_id = current_correlation_id()
         try:
-            handler.transcribe_audio_segment(audio_source, agent_mode)
+            handler.transcribe_audio_segment(
+                audio_source,
+                agent_mode,
+                correlation_id=correlation_id,
+            )
         except Exception as exc:  # pragma: no cover - defensive guard around handler
             LOGGER.error(
                 "Failed to dispatch audio segment for transcription: %s",
@@ -150,8 +159,11 @@ class ActionOrchestrator:
             if agent_mode:
                 self._agent_mode_active = True
                 LOGGER.warning(
-                    "Agent mode request preserved: transcription handler rejected audio segment (model likely unavailable).",
-                    extra={"event": "agent_mode_wait", "stage": "transcription"},
+                    log_context(
+                        "Agent mode request preserved: transcription handler rejected audio segment (model likely unavailable).",
+                        event="agent_mode.wait",
+                        stage="transcription",
+                    )
                 )
                 self._log_status(
                     "Agent mode unavailable: the model is not ready to receive commands yet.",
@@ -164,12 +176,13 @@ class ActionOrchestrator:
         self._agent_mode_active = False
 
         LOGGER.info(
-            "Dispatching audio segment for transcription.",
-            extra={
-                "event": "segment_dispatched",
-                "stage": "transcription",
-                "details": f"duration={duration_seconds:.2f}s agent_mode={agent_mode}",
-            },
+            log_context(
+                "Dispatching audio segment for transcription.",
+                event="audio.segment_dispatched",
+                stage="transcription",
+                duration_seconds=round(duration_seconds, 2),
+                agent_mode=agent_mode,
+            )
         )
 
     # ------------------------------------------------------------------
