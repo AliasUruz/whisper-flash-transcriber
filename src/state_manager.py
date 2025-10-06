@@ -1,13 +1,12 @@
 """
 This file will contain the StateManager class and related state management logic.
 """
-import logging
 from threading import RLock
 from dataclasses import dataclass
 from enum import Enum, auto, unique
 from collections.abc import Callable
 
-from .logging_utils import get_logger, log_context
+from .logging_utils import get_logger, log_context, log_duration
 
 LOGGER = get_logger('whisper_flash_transcriber.state', component='StateManager')
 
@@ -140,22 +139,63 @@ class StateManager:
         self._last_notification: StateNotification | None = None
         self._state_lock = RLock()
         self._subscribers: list[Callable[[StateNotification], None]] = []
+        self._logger = LOGGER.bind(manager_id=f"state-{id(self):x}")
+
+    @staticmethod
+    def _describe_callback(callback: Callable[[StateNotification], None]) -> str:
+        if hasattr(callback, "__qualname__"):
+            return callback.__qualname__  # type: ignore[return-value]
+        if hasattr(callback, "__name__"):
+            return callback.__name__  # type: ignore[return-value]
+        return repr(callback)
 
     def subscribe(self, callback: Callable[[StateNotification], None]):
         """Adds a subscriber to be notified of state changes."""
         if callback not in self._subscribers:
             self._subscribers.append(callback)
+            self._logger.debug(
+                log_context(
+                    "Subscriber registered for state updates.",
+                    event="state.subscriber_registered",
+                    total_subscribers=len(self._subscribers),
+                    subscriber=self._describe_callback(callback),
+                )
+            )
 
     def _notify_subscribers(self, notification: StateNotification):
         """Notifies all subscribers of a state change."""
-        for callback in self._subscribers:
-            try:
-                if self.main_tk_root:
-                    self.main_tk_root.after(0, lambda c=callback, n=notification: c(n))
-                else:
-                    callback(notification)
-            except Exception as e:
-                LOGGER.error(f"Error notifying subscriber: {e}", exc_info=True)
+        event_name = notification.event.name if notification.event else None
+        with log_duration(
+            self._logger,
+            "Dispatching state notification.",
+            event="state.notification_dispatch",
+            details={
+                "state": notification.state,
+                "event_name": event_name,
+            },
+        ) as log_details:
+            log_details["subscriber_count"] = len(self._subscribers)
+            had_errors = False
+            for callback in self._subscribers:
+                try:
+                    if self.main_tk_root:
+                        self.main_tk_root.after(0, lambda c=callback, n=notification: c(n))
+                    else:
+                        callback(notification)
+                except Exception:
+                    had_errors = True
+                    self._logger.error(
+                        log_context(
+                            "State subscriber raised an exception.",
+                            event="state.subscriber_error",
+                            subscriber=self._describe_callback(callback),
+                            state=notification.state,
+                            event_name=event_name,
+                        ),
+                        exc_info=True,
+                    )
+            if had_errors:
+                log_details["status"] = "partial"
 
     def set_state(self, event: StateEvent | str, *, details: str | None = None, source: str | None = None):
         """Applies a state transition and notifies subscribers."""
@@ -185,11 +225,14 @@ class StateManager:
             last_event = self._last_notification.event if self._last_notification else None
             last_state = self._last_notification.state if self._last_notification else None
             if last_event == event_obj and last_state == mapped_state:
-                LOGGER.debug(
-                    "Duplicate state event %s suppressed (state=%s, source=%s).",
-                    event_obj.name if event_obj else mapped_state,
-                    mapped_state,
-                    source,
+                self._logger.debug(
+                    log_context(
+                        "Duplicate state notification suppressed.",
+                        event="state.duplicate_suppressed",
+                        state=mapped_state,
+                        event_name=event_obj.name if event_obj else None,
+                        source=source,
+                    )
                 )
                 return
 
@@ -204,7 +247,7 @@ class StateManager:
             self._last_notification = notification
 
         origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
-        LOGGER.info(
+        self._logger.info(
             log_context(
                 "Application state transitioned.",
                 event="state.transition",
