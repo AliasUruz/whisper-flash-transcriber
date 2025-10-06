@@ -68,6 +68,34 @@ DISPLAY_NAMES: Dict[str, str] = {
 # CURATED e DISPLAY_NAMES abaixo.
 
 
+_INSTALL_METADATA_FILENAME = "install.json"
+
+
+def _write_install_metadata(
+    target_dir: Path,
+    *,
+    model_id: str,
+    backend_label: str,
+    quant_label: str,
+) -> None:
+    """Persist lightweight metadata alongside the installed model.
+
+    The metadata is used as a quick sanity check for the installation and to
+    enrich telemetry/log statements. Failures while writing metadata are
+    intentionally ignored by callers.
+    """
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = target_dir / _INSTALL_METADATA_FILENAME
+    payload = {
+        "model_id": model_id,
+        "backend": backend_label,
+        "quant": quant_label,
+        "timestamp": time.time(),
+    }
+    metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _resolve_catalog_entry(model_id: str) -> dict[str, str] | None:
     """Return the curated entry for ``model_id`` when available."""
 
@@ -154,6 +182,19 @@ def backend_storage_candidates(backend: str | None) -> list[str]:
     return candidates
 
 
+def _normalize_quant_label(label: str | None) -> str:
+    """Normalize the quantization branch label used for CT2 downloads."""
+
+    if label is None:
+        return "default"
+
+    normalized = str(label).strip()
+    if not normalized or normalized.lower() in {"default", "none"}:
+        return "default"
+
+    return normalized
+
+
 def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
     """Return the curated catalog entry for ``model_id`` if available."""
 
@@ -166,6 +207,68 @@ def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
             normalized["backend"] = normalize_backend_label(entry.get("backend"))
             return normalized
     return None
+
+
+@lru_cache(maxsize=128)
+def _ct2_quant_revision_exists(model_id: str, revision: str) -> bool:
+    """Return ``True`` if the given CTranslate2 revision exists for ``model_id``."""
+
+    api = HfApi()
+    try:
+        api.model_info(model_id, revision=revision)
+    except Exception as exc:  # pragma: no cover - defensive network handling
+        MODEL_LOGGER.debug(
+            "Failed to resolve revision '%s' for model %s: %s",
+            revision,
+            model_id,
+            exc,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
+def _normalize_ct2_quant_label(raw_quant: str | None) -> tuple[str, str | None]:
+    """Normalize user-provided CT2 quantization label."""
+
+    if raw_quant is None:
+        return "default", None
+
+    raw_value = str(raw_quant).strip()
+    if not raw_value:
+        return "default", None
+
+    normalized_key = raw_value.lower().replace("-", "_")
+    normalized = _CT2_QUANTIZATION_ALIASES.get(normalized_key, normalized_key)
+    if normalized not in _CT2_KNOWN_QUANTIZATIONS:
+        return "default", raw_value
+    return normalized, None
+
+
+def _resolve_ct2_quantization(
+    model_id: str, raw_quant: str | None
+) -> tuple[str, str | None]:
+    """Return sanitized CT2 quantization label and revision to request."""
+
+    quant_label, rejected = _normalize_ct2_quant_label(raw_quant)
+    if rejected is not None:
+        MODEL_LOGGER.warning(
+            "Unsupported CTranslate2 quantization '%s'; falling back to default weights.",
+            rejected,
+        )
+
+    if quant_label != "default":
+        if _ct2_quant_revision_exists(model_id, quant_label):
+            return quant_label, quant_label
+
+        MODEL_LOGGER.warning(
+            "Requested CTranslate2 quantization '%s' is not available for model %s; using default branch instead.",
+            quant_label,
+            model_id,
+        )
+        quant_label = "default"
+
+    return quant_label, None
 
 
 _CACHE_TTL_SECONDS = 60.0
@@ -786,9 +889,26 @@ def ensure_download(
     storage_backend = backend_storage_name(backend_label or backend)
     backend_label = backend_label or normalize_backend_label(storage_backend) or storage_backend
 
+    quant_label = _normalize_quant_label(quant if backend_label == "ctranslate2" else None)
+
     prepared = _prepare_local_installation(cache_dir, backend_label, model_id)
     local_dir = prepared.local_dir
     if prepared.ready_path is not None:
+        ready_path = prepared.ready_path
+        try:
+            _write_install_metadata(
+                ready_path,
+                model_id=model_id,
+                backend_label=backend_label,
+                quant_label=quant_label,
+            )
+        except Exception:  # pragma: no cover - metadata persistence best effort
+            MODEL_LOGGER.debug(
+                "Unable to persist metadata for model %s at %s",
+                model_id,
+                ready_path,
+                exc_info=True,
+            )
         MODEL_LOGGER.info(
             log_context(
                 "Model download skipped because artifacts already exist.",
@@ -798,7 +918,7 @@ def ensure_download(
                 path=str(prepared.ready_path),
             )
         )
-        return str(prepared.ready_path)
+        return ModelDownloadResult(str(ready_path), downloaded=False)
 
     stale_local_dir = prepared.stale_local_dir
 
@@ -893,7 +1013,7 @@ def ensure_download(
 
     # Seleciona branch de quantização quando aplicável (modelos CT2).
     revision = None
-    if quant_label != "default":
+    if storage_backend == "ct2" and quant_label != "default":
         revision = quant_label
 
     download_kwargs = {
@@ -965,6 +1085,13 @@ def ensure_download(
         _cleanup_partial()
         _invalidate_list_installed_cache(cache_dir)
         raise
+
+    if not _is_installation_complete(local_dir):
+        _cleanup_partial("incomplete")
+        _invalidate_list_installed_cache(cache_dir)
+        raise RuntimeError(
+            "Model download completed but installation is missing essential files."
+        )
 
     duration_ms = (time.perf_counter() - start_time) * 1000.0
     try:

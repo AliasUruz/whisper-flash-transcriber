@@ -1,5 +1,6 @@
 import atexit
-import importlib
+import importlib.util
+import logging
 import os
 import sys
 import threading
@@ -48,7 +49,6 @@ def ensure_display_available() -> None:
 
 
 def configure_environment() -> None:
-    applied_defaults = 0
     for key, value in ENV_DEFAULTS.items():
         os.environ.setdefault(key, value)
     os.environ.setdefault("TRANSFORMERS_VERBOSITY", os.environ.get("TRANSFORMERS_VERBOSITY", "error"))
@@ -198,7 +198,7 @@ def patch_tk_variable_cleanup() -> None:
 def main() -> None:
     setup_logging()
     LOGGER.info(
-        log_context(
+        StructuredMessage(
             "Whisper Flash Transcriber bootstrap sequence started.",
             event="bootstrap.start",
             python_version=sys.version.split()[0],

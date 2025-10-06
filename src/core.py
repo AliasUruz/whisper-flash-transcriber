@@ -1,13 +1,12 @@
+import atexit
 import logging
-import threading
-import time
 import os
 import sys
-from collections.abc import Callable
-from typing import Iterable
-from threading import RLock
+import threading
+import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
-import atexit
+from threading import RLock
 try:
     import pyautogui  # Still required for _do_paste
 except ImportError as exc:
