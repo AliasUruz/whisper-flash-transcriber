@@ -938,11 +938,20 @@ class UIManager:
         recordings_dir_to_apply = str(recordings_path)
         asr_cache_dir_to_apply = asr_cache_dir_var.get() if asr_cache_dir_var else self.config_manager.get_asr_cache_dir()
 
+        models_storage_dir_raw = models_storage_dir_var.get().strip() if models_storage_dir_var else ""
+        if not models_storage_dir_raw:
+            models_storage_dir_raw = self.config_manager.get_models_storage_dir()
         try:
-            Path(models_storage_dir_to_apply).mkdir(parents=True, exist_ok=True)
+            models_storage_dir_path = Path(models_storage_dir_raw).expanduser()
         except Exception as exc:
             messagebox.showerror("Invalid Path", f"Models storage directory is invalid:\n{exc}", parent=settings_win)
             return
+        try:
+            models_storage_dir_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror("Invalid Path", f"Models storage directory is invalid:\n{exc}", parent=settings_win)
+            return
+        models_storage_dir_to_apply = str(models_storage_dir_path)
 
         try:
             Path(asr_cache_dir_to_apply).mkdir(parents=True, exist_ok=True)
@@ -1230,6 +1239,9 @@ class UIManager:
         asr_compute_device_var,
         asr_dtype_var,
         asr_ct2_compute_type_var,
+        models_storage_dir_var,
+        storage_root_dir_var,
+        recordings_dir_var,
         asr_cache_dir_var,
         ui_elements,
     ):
@@ -3038,6 +3050,9 @@ class UIManager:
             asr_compute_device_var=asr_compute_device_var,
             asr_dtype_var=asr_dtype_var,
             asr_ct2_compute_type_var=asr_ct2_compute_type_var,
+            models_storage_dir_var=models_storage_dir_var,
+            storage_root_dir_var=storage_root_dir_var,
+            recordings_dir_var=recordings_dir_var,
             asr_cache_dir_var=asr_cache_dir_var,
             ui_elements={},
         )

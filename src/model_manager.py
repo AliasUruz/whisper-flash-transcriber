@@ -22,6 +22,32 @@ from .logging_utils import get_logger, log_context
 MODEL_LOGGER = get_logger("whisper_recorder.model", component="ModelManager")
 
 
+_CT2_KNOWN_QUANTIZATIONS: set[str] = {
+    "default",
+    "int8",
+    "int8_float16",
+    "int8_float32",
+    "int8_bfloat16",
+    "int16",
+    "float16",
+    "float32",
+}
+
+_CT2_QUANTIZATION_ALIASES: dict[str, str] = {
+    "auto": "default",
+    "fp16": "float16",
+    "half": "float16",
+    "fp32": "float32",
+    "full": "float32",
+    "int8float16": "int8_float16",
+    "int8_float_16": "int8_float16",
+    "int8float32": "int8_float32",
+    "int8_float_32": "int8_float32",
+    "int8bf16": "int8_bfloat16",
+    "int8_bf16": "int8_bfloat16",
+}
+
+
 @dataclass(frozen=True)
 class ModelDownloadResult:
     """Structured result for :func:`ensure_download`."""
