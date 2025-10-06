@@ -9,14 +9,14 @@ from threading import RLock
 from pathlib import Path
 import atexit
 try:
-    import pyautogui  # Ainda necessário para _do_paste
+    import pyautogui  # Still required for _do_paste
 except ImportError as exc:
     raise SystemExit(
-        "Erro: a biblioteca 'pyautogui' não está instalada. "
-        "Execute 'pip install -r requirements.txt' antes de executar o aplicativo."
+        "Error: the 'pyautogui' library is not installed. "
+        "Run 'pip install -r requirements.txt' before starting the application."
     ) from exc
-import pyperclip # Ainda necessário para _handle_transcription_result
-from tkinter import messagebox # Adicionado para messagebox no _on_model_load_failed
+import pyperclip  # Still required for _handle_transcription_result
+from tkinter import messagebox  # Added for message boxes in _on_model_load_failed
 
 # Importar os novos módulos
 from . import state_manager as sm
@@ -120,12 +120,12 @@ class AppCore:
             self._refresh_installed_models("__init__", raise_errors=True)
         except OSError:
             messagebox.showerror(
-                "Configuração",
-                "Diretório de cache inválido. Verifique as configurações.",
+                "Configuration",
+                "Invalid cache directory. Please review your settings.",
             )
         except Exception as e:
             LOGGER.warning(
-                "AppCore[__init__]: falha ao sincronizar modelos instalados: %r",
+                "AppCore[__init__]: failed to synchronize installed models: %r",
                 e,
                 exc_info=True,
             )
@@ -211,7 +211,7 @@ class AppCore:
             if start_loading:
                 self._start_model_loading_with_synced_config()
         except OSError:
-            messagebox.showerror("Erro", "Diretório de cache inválido.")
+            messagebox.showerror("Error", "Invalid cache directory.")
             self.state_manager.set_state(
                 sm.StateEvent.MODEL_CACHE_INVALID,
                 details=f"Invalid cache directory reported during init: {cache_dir}",
@@ -404,7 +404,7 @@ class AppCore:
             except OSError:
                 MODEL_LOGGER.error("Invalid cache directory during model download.", exc_info=True)
                 self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                self.main_tk_root.after(0, lambda: messagebox.showerror("Model", "Diretório de cache inválido. Verifique as configurações."))
+                self.main_tk_root.after(0, lambda: messagebox.showerror("Model", "Invalid cache directory. Check your settings."))
             except Exception as exc:
                 MODEL_LOGGER.error(f"Model download failed: {exc}", exc_info=True)
                 self.state_manager.set_state(sm.STATE_ERROR_MODEL)
@@ -682,23 +682,22 @@ class AppCore:
 
     def _on_model_load_failed(self, error_msg):
         """Callback do TranscriptionHandler quando o modelo falha ao carregar."""
-        LOGGER.error(f"AppCore: Falha ao carregar o modelo: {error_msg}")
+        LOGGER.error(f"AppCore: model load failed: {error_msg}")
         self.state_manager.set_state(
             sm.StateEvent.MODEL_LOADING_FAILED,
             details=error_msg,
             source="transcription_handler",
         )
-        self._log_status(f"Erro: Falha ao carregar o modelo. {error_msg}", error=True)
+        self._log_status(f"Error: failed to load the model. {error_msg}", error=True)
         # Exibir messagebox via UI Manager se disponível
         if self.ui_manager:
             if error_msg == "Diretório de cache inválido.":
-                self.main_tk_root.after(0, lambda: messagebox.showerror("Erro", "Diretório de cache inválido."))
+                self.main_tk_root.after(0, lambda: messagebox.showerror("Error", "Invalid cache directory."))
             else:
-                error_title = "Erro de Carregamento do Modelo"
+                error_title = "Model Load Error"
                 error_message = (
-                    f"Falha ao carregar o modelo Whisper:\n{error_msg}\n\n"
-                    "Por favor, verifique sua conexão com a internet, "
-                    "o nome do modelo nas configurações ou a memória da sua GPU."
+                    f"Failed to load the Whisper model:\n{error_msg}\n\n"
+                    "Please verify your internet connection, the configured model name, and your GPU memory."
                 )
                 self.main_tk_root.after(
                     0,
@@ -730,8 +729,8 @@ class AppCore:
             LOGGER.info("Text pasted.")
             self._log_status("Text pasted.")
         except Exception as e:
-            LOGGER.error(f"Erro ao colar: {e}")
-            self._log_status("Erro ao colar.", error=True)
+            LOGGER.error(f"Failed to execute paste automation: {e}")
+            self._log_status("Error: failed to simulate the paste hotkey.", error=True)
 
     def _resolve_paste_hotkey_sequence(self) -> tuple[str, ...]:
         """Resolve the hotkey combination used for auto-paste."""
@@ -807,14 +806,14 @@ class AppCore:
         manager = getattr(self, "ahk_manager", None)
         if manager is None:
             LOGGER.error(
-                "AppCore: KeyboardHotkeyManager indisponível; não é possível detectar teclas."
+                "AppCore: KeyboardHotkeyManager is unavailable; key detection cannot start."
             )
             return
 
         callback = getattr(self, "key_detection_callback", None)
         if callback is None:
             LOGGER.debug(
-                "AppCore: detecção de tecla solicitada sem callback registrado; ignorando pedido."
+                "AppCore: key detection requested without a registered callback; ignoring request."
             )
             return
 
@@ -823,7 +822,7 @@ class AppCore:
         except (TypeError, ValueError):
             timeout_value = 5.0
             LOGGER.debug(
-                "AppCore: timeout de detecção inválido (%s); utilizando padrão de %.1fs.",
+                "AppCore: invalid detection timeout (%s); falling back to %.1fs.",
                 timeout,
                 timeout_value,
             )
@@ -836,8 +835,8 @@ class AppCore:
 
             try:
                 callback(result)
-            except Exception:  # pragma: no cover - UI callback defensivo
-                LOGGER.error("Callback de detecção de tecla gerou exceção.", exc_info=True)
+            except Exception:  # pragma: no cover - defensive UI callback guard
+                LOGGER.error("Key detection callback raised an exception.", exc_info=True)
 
         def _schedule_delivery(result: str | None) -> None:
             def _invoke() -> None:
@@ -846,9 +845,9 @@ class AppCore:
             if self.main_tk_root:
                 try:
                     self.main_tk_root.after(0, _invoke)
-                except Exception:  # pragma: no cover - entrega síncrona como fallback
+                except Exception:  # pragma: no cover - synchronous fallback
                     LOGGER.debug(
-                        "Falha ao agendar callback de detecção no loop Tk; executando diretamente.",
+                        "Failed to schedule key detection callback on the Tk loop; executing inline instead.",
                         exc_info=True,
                     )
                     _invoke()
@@ -860,7 +859,7 @@ class AppCore:
                 detected_key = manager.detect_key(timeout=timeout_value)
             except Exception as exc:
                 LOGGER.error(
-                    "AppCore: erro durante detecção de tecla: %s",
+                    "AppCore: unexpected error while detecting a key: %s",
                     exc,
                     exc_info=True,
                 )
@@ -868,7 +867,7 @@ class AppCore:
 
             if not detected_key:
                 LOGGER.info(
-                    "Nenhuma tecla detectada dentro do timeout configurado; restaurando valor anterior."
+                    "No key was detected within the configured timeout; restoring the previous value."
                 )
 
             _schedule_delivery(detected_key)
@@ -881,7 +880,7 @@ class AppCore:
         with self.keyboard_lock:
             if self._key_detection_thread and self._key_detection_thread.is_alive():
                 LOGGER.debug(
-                    "Thread de detecção de tecla já está em execução; ignorando novo pedido."
+                    "Key detection thread is already running; ignoring a new request."
                 )
                 return
 
@@ -924,7 +923,7 @@ class AppCore:
                     details="KeyboardHotkeyManager.start returned False",
                     source="hotkeys",
                 )
-                self._log_status("Erro: Falha ao iniciar KeyboardHotkeyManager.", error=True)
+                self._log_status("Error: failed to initialize the KeyboardHotkeyManager.", error=True)
             return success
 
     def register_hotkeys(self):
@@ -985,10 +984,10 @@ class AppCore:
                     break
                 except Exception as e:
                     last_error = e
-                    LOGGER.error(f"Erro na tentativa {attempt} de recarregamento: {e}")
+                    LOGGER.error(f"Reload attempt {attempt} failed: {e}")
                     time.sleep(1)
             if attempt >= max_attempts and last_error is not None:
-                LOGGER.error(f"Falha após {max_attempts} tentativas de recarregamento. Último erro: {last_error}")
+                LOGGER.error(f"KeyboardHotkeyManager reload exhausted {max_attempts} attempts. Last error: {last_error}")
                 return False
             return self.register_hotkeys()
 
@@ -1050,7 +1049,7 @@ class AppCore:
                         self._log_status("KeyboardHotkeyManager reload completed.", error=False)
                         return True
                     else:
-                        self._log_status("Falha ao recarregar KeyboardHotkeyManager.", error=True)
+                        self._log_status("KeyboardHotkeyManager reload failed.", error=True)
                         self.state_manager.set_state(
                             sm.StateEvent.SETTINGS_REREGISTER_FAILED,
                             details="Manual hotkey re-registration failed",
@@ -1060,7 +1059,7 @@ class AppCore:
                 except Exception as e:
                     self.ahk_running = False
                     LOGGER.error(f"Exception during manual KeyboardHotkeyManager re-registration: {e}", exc_info=True)
-                    self._log_status(f"Erro ao recarregar KeyboardHotkeyManager: {e}", error=True)
+                    self._log_status(f"KeyboardHotkeyManager reload failed with exception: {e}", error=True)
                     self.state_manager.set_state(
                         sm.StateEvent.SETTINGS_REREGISTER_FAILED,
                         details=f"Exception during manual hotkey re-registration: {e}",
@@ -1271,7 +1270,7 @@ class AppCore:
                 LOGGER.info(
                     "AppCore: nenhum parâmetro recebido para reaplicar as configurações forçadas.")
             else:
-                LOGGER.info("Nenhuma configuração alterada.")
+                LOGGER.info("No configuration changes were required.")
             return
 
         changed_mapped_keys, warnings = self.config_manager.apply_updates(normalized_updates)
@@ -1288,7 +1287,7 @@ class AppCore:
             )
 
             def _show_warning():
-                messagebox.showwarning("Configurações ajustadas", message)
+                messagebox.showwarning("Adjusted settings", message)
 
             self.main_tk_root.after(0, _show_warning)
         if not changed_mapped_keys:
@@ -1296,7 +1295,7 @@ class AppCore:
                 LOGGER.info(
                     "AppCore: nenhuma configuração alterada, mas forçando reaplicação dos parâmetros.")
             else:
-                LOGGER.info("Nenhuma configuração alterada.")
+                LOGGER.info("No configuration changes were required.")
                 return
 
         if force_reload and changed_mapped_keys:
@@ -1338,9 +1337,9 @@ class AppCore:
         try:
             reload_needed = self.transcription_handler.update_config(trigger_reload=False)
         except Exception as exc:
-            LOGGER.error("Erro ao atualizar configurações do TranscriptionHandler: %s", exc, exc_info=True)
+            LOGGER.error("Failed to update TranscriptionHandler configuration: %s", exc, exc_info=True)
             self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-            self._log_status("Erro: Falha ao aplicar configurações do modelo.", error=True)
+            self._log_status("Error: unable to apply the updated model configuration.", error=True)
             return
 
         reload_required = reload_required or reload_needed
@@ -1350,14 +1349,14 @@ class AppCore:
             try:
                 self.transcription_handler.start_model_loading()
             except Exception as exc:
-                LOGGER.error("Falha ao iniciar recarregamento do modelo ASR: %s", exc, exc_info=True)
+                LOGGER.error("Failed to start ASR model reload: %s", exc, exc_info=True)
                 self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
+                self._log_status("Error: unable to start the ASR model reload.", error=True)
                 return
         else:
             self.state_manager.set_state(
                 sm.StateEvent.SETTINGS_RECOVERED,
-                details="Configurações aplicadas; mantendo estado IDLE.",
+                details="Settings applied; keeping the application in the IDLE state.",
                 source="settings",
             )
 
@@ -1422,7 +1421,7 @@ class AppCore:
         if text_correction_keys & changed_mapped_keys:
             self._refresh_text_correction_clients()
 
-        self._log_status("Configurações atualizadas.")
+        self._log_status("Settings updated.")
 
     def update_setting(self, key: str, value):
         """
@@ -1431,14 +1430,14 @@ class AppCore:
         """
         old_value = self.config_manager.get(key)
         if old_value == value:
-            LOGGER.info(f"Configuração '{key}' já possui o valor '{value}'. Nenhuma alteração necessária.")
+            LOGGER.info(f"Configuration '{key}' already equals '{value}'. No update required.")
             return
 
         self.config_manager.set(key, value)
         if key in {ASR_BACKEND_CONFIG_KEY, ASR_MODEL_ID_CONFIG_KEY, "asr_model"}:
             self.config_manager.reset_last_model_prompt_decision()
         self.config_manager.save_config()
-        LOGGER.info(f"Configuração '{key}' alterada para: {value}")
+        LOGGER.info(f"Configuration '{key}' updated to: {value}")
 
         # Re-aplicar configurações aos atributos do AppCore
         self._apply_initial_config_to_core_attributes()
@@ -1474,28 +1473,38 @@ class AppCore:
 
         # Propagar para TranscriptionHandler se for uma configuração relevante
         if key in transcription_config_keys or key in text_correction_keys:
-            self.transcription_handler.config_manager = self.config_manager  # Garantir que a referência esteja atualizada
+            self.transcription_handler.config_manager = self.config_manager  # keep reference in sync
             reload_needed = self.transcription_handler.update_config(trigger_reload=False)
-            LOGGER.info(f"TranscriptionHandler: Configurações de transcrição atualizadas via update_setting para '{key}'.")
+            LOGGER.info(
+                "TranscriptionHandler: transcription settings refreshed via update_setting for '%s'.",
+                key,
+            )
             if reload_needed:
                 self.state_manager.set_state(sm.STATE_LOADING_MODEL)
                 try:
                     self.transcription_handler.start_model_loading()
                 except Exception as exc:
                     LOGGER.error(
-                        "Falha ao iniciar recarregamento do modelo após update_setting (%s): %s",
+                        "Failed to start ASR model reload after update_setting(%s): %s",
                         key,
                         exc,
                         exc_info=True,
                     )
                     self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                    self._log_status("Erro: Falha ao iniciar recarregamento do modelo.", error=True)
+                    self._log_status("Error: unable to start the ASR model reload.", error=True)
                     return
 
-        if key in ["min_record_duration", "use_vad", "vad_threshold", "vad_silence_duration", "record_storage_mode", "record_storage_limit"]:
+        if key in [
+            "min_record_duration",
+            "use_vad",
+            "vad_threshold",
+            "vad_silence_duration",
+            "record_storage_mode",
+            "record_storage_limit",
+        ]:
             self.audio_handler.config_manager = self.config_manager
             self.audio_handler.update_config()
-            LOGGER.info(f"AudioHandler: Configurações atualizadas via update_setting para '{key}'.")
+        LOGGER.info(f"AudioHandler: configuration refreshed via update_setting for '{key}'.")
 
         # Re-inicializar clientes de correção de texto quando necessário
         if key in text_correction_keys:
@@ -1504,7 +1513,7 @@ class AppCore:
         # Re-registrar hotkeys se as chaves ou modo mudaram
         if key in ["record_key", "agent_key", "record_mode"]:
             self.register_hotkeys()
-            LOGGER.info(f"Hotkeys re-registradas via update_setting para '{key}'.")
+            LOGGER.info(f"Hotkeys re-registered via update_setting for '{key}'.")
         
         # Iniciar/parar serviços de estabilidade de hotkey se a configuração mudou
         if key == "hotkey_stability_service_enabled":
@@ -1525,16 +1534,16 @@ class AppCore:
                 self.stop_health_check_event.set()
                 LOGGER.info("Hotkey stability services stopped via update_setting.")
 
-        LOGGER.info(f"Configuração '{key}' atualizada e propagada com sucesso.")
+        LOGGER.info(f"Configuration '{key}' updated and propagated successfully.")
 
     def _refresh_text_correction_clients(self) -> None:
         """Reinicializa clientes de correção de texto respeitando a configuração atual."""
         try:
             if getattr(self, "gemini_api", None):
                 self.gemini_api.reinitialize_client()
-        except Exception as exc:  # pragma: no cover - falhas são registradas apenas
+        except Exception as exc:  # pragma: no cover - failures are logged only
             LOGGER.error(
-                "Falha ao reinicializar o cliente Gemini após alteração de configuração: %s",
+                "Failed to reinitialize the Gemini client after configuration change: %s",
                 exc,
                 exc_info=True,
             )
@@ -1553,9 +1562,9 @@ class AppCore:
                 model_id=self.config_manager.get("openrouter_model"),
                 request_timeout=openrouter_timeout,
             )
-        except Exception as exc:  # pragma: no cover - falhas são registradas apenas
+        except Exception as exc:  # pragma: no cover - failures are logged only
             LOGGER.error(
-                "Falha ao reinicializar o cliente OpenRouter após alteração de configuração: %s",
+                "Failed to reinitialize the OpenRouter client after configuration change: %s",
                 exc,
                 exc_info=True,
             )
@@ -1621,7 +1630,7 @@ class AppCore:
             try:
                 self.ui_manager.tray_icon.stop()
             except Exception as e:
-                LOGGER.error(f"Erro ao encerrar tray icon: {e}")
+                LOGGER.error(f"Error stopping tray icon: {e}")
 
         # Sinaliza para o AudioHandler parar a gravação e processamento
         if self.audio_handler.is_recording:
@@ -1644,7 +1653,7 @@ class AppCore:
             try:
                 self.audio_handler.cleanup()
             except Exception as e:
-                LOGGER.error(f"Erro no cleanup do AudioHandler: {e}")
+                LOGGER.error(f"Error during AudioHandler cleanup: {e}")
 
         if self.reregister_timer_thread and self.reregister_timer_thread.is_alive():
             self.reregister_timer_thread.join(timeout=1.5)

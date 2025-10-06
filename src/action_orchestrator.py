@@ -101,7 +101,7 @@ class ActionOrchestrator:
             LOGGER.error("Transcription handler is not available to receive audio.")
             if agent_mode:
                 self._log_status(
-                    "Modo agente indisponível: aguarde o carregamento do modelo e tente novamente.",
+                    "Agent mode is unavailable while the model is loading. Please wait and try again.",
                     error=True,
                 )
             self._state_manager.set_state(
@@ -119,7 +119,7 @@ class ActionOrchestrator:
             if agent_mode:
                 self._agent_mode_active = True
                 self._log_status(
-                    "Falha ao engajar o modo agente. Verifique o carregamento do modelo e tente novamente.",
+                    "Agent mode activation failed. Ensure the model is loaded and try again.",
                     error=True,
                 )
             else:
@@ -135,7 +135,7 @@ class ActionOrchestrator:
                     "Agent mode request preserved: transcription handler rejected audio segment (model likely unavailable)."
                 )
                 self._log_status(
-                    "Modo agente indisponível: o modelo ainda não está pronto para receber comandos.",
+                    "Agent mode is unavailable: the model is not ready to receive commands.",
                     error=True,
                 )
             else:
@@ -190,16 +190,16 @@ class ActionOrchestrator:
 
         response = (agent_response_text or "").strip()
         if not response:
-            self._log_status("Comando do agente sem resposta.", error=True)
+            self._log_status("Agent command returned an empty response.", error=True)
             LOGGER.warning("Agent command returned an empty response.")
             return
 
         self._copy_to_clipboard(response)
 
         if self._config_manager.get("agent_auto_paste", True):
-            self._paste_and_log(success_message="Comando do agente executado e colado.")
+            self._paste_and_log(success_message="Agent command executed and pasted.")
         else:
-            self._log_status("Comando do agente executado (colagem automática desativada).")
+            self._log_status("Agent command executed (auto-paste disabled).")
 
         self._state_manager.set_state(
             sm.StateEvent.AGENT_COMMAND_COMPLETED,
