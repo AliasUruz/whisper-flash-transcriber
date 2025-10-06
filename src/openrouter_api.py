@@ -5,9 +5,9 @@ import logging
 import time
 from typing import Optional
 
-import requests
+from .logging_utils import get_logger, log_context
 
-LOGGER = logging.getLogger('whisper_flash_transcriber.openrouter')
+LOGGER = get_logger('whisper_flash_transcriber.openrouter', component='OpenRouterAPI')
 
 
 class OpenRouterAPI:
@@ -262,6 +262,7 @@ class OpenRouterAPI:
 
         payload_json = json.dumps(payload, ensure_ascii=False)
         delay = retry_delay
+        start_time = time.time()
 
         for attempt in range(max_retries):
             attempt_number = attempt + 1
@@ -273,7 +274,13 @@ class OpenRouterAPI:
 
             if result is not None and 'choices' in result and result['choices']:
                 corrected_text = result['choices'][0]['message']['content']
-                LOGGER.info("Successfully received corrected text from OpenRouter API")
+                LOGGER.info(
+                    log_context(
+                        "Successfully received corrected text from OpenRouter API.",
+                        event="openrouter.correction_success",
+                        latency_ms=int((time.time() - start_time) * 1000),
+                    )
+                )
                 if corrected_text != text:
                     LOGGER.info("OpenRouter API made corrections to the text")
                 else:

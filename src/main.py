@@ -6,7 +6,6 @@ import sys
 import threading
 import tkinter as tk
 
-
 # Add project root to path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -17,10 +16,15 @@ if PROJECT_ROOT not in sys.path:
 ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
 
 
-from src.logging_utils import StructuredMessage, setup_logging
+from src.logging_utils import (
+    StructuredMessage,
+    get_logger,
+    log_context,
+    setup_logging,
+)
 
 
-LOGGER = logging.getLogger("whisper_flash_transcriber.bootstrap")
+LOGGER = get_logger("whisper_flash_transcriber.bootstrap", component="Bootstrap")
 
 
 ENV_DEFAULTS = {

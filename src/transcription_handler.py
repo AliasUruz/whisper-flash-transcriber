@@ -63,8 +63,9 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
 )
 from . import model_manager as model_manager_module
+from .logging_utils import get_logger
 
-LOGGER = logging.getLogger('whisper_flash_transcriber.transcription')
+LOGGER = get_logger('whisper_flash_transcriber.transcription', component='TranscriptionHandler')
 
 
 class TranscriptionHandler:

@@ -12,7 +12,7 @@ import sounddevice as sd
 import soundfile as sf
 import tempfile
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 # Observação: em ambientes WSL, a biblioteca sounddevice depende de servidores PulseAudio;
 # mantenha esta limitação em mente ao depurar gravações.
@@ -24,20 +24,34 @@ from .config_manager import (
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
 )
-from .logging_utils import StructuredMessage
+from .logging_utils import StructuredMessage, get_logger, log_context
 
-LOGGER = logging.getLogger('whisper_flash_transcriber.audio')
+LOGGER = get_logger('whisper_flash_transcriber.audio', component='Audio')
 
 
 class _AudioLoggerAdapter(logging.LoggerAdapter):
     """Logger adapter que inclui contexto de thread e armazenamento."""
 
     def process(self, msg, kwargs):
+        if not isinstance(kwargs, dict):
+            kwargs = dict(kwargs)
+
         handler = self.extra.get('handler')
         storage_mode = 'memory' if getattr(handler, 'in_memory_mode', False) else 'disk'
         thread_name = threading.current_thread().name
-        prefix = f"[thread={thread_name}][storage={storage_mode}] "
-        return prefix + str(msg), kwargs
+
+        detail_overrides = kwargs.pop('details', None)
+        merged_details: dict[str, Any]
+        if isinstance(detail_overrides, Mapping):
+            merged_details = dict(detail_overrides)
+        else:
+            merged_details = {}
+
+        merged_details.setdefault('storage', storage_mode)
+        merged_details.setdefault('thread', thread_name)
+        kwargs['details'] = merged_details
+
+        return msg, kwargs
 
 
 AUDIO_SAMPLE_RATE = 16000
@@ -185,24 +199,25 @@ class AudioHandler:
                             max_samples = self._memory_limit_samples
                             if self.record_storage_mode == 'auto' and self._memory_samples > max_samples:
                                 self._audio_log.info(
-                                    "Recording duration exceeded in-memory threshold; moving buffers to disk.",
-                                    extra={
-                                        "event": "ram_to_disk_threshold",
-                                        "details": f"threshold_seconds={self.current_max_memory_seconds}",
-                                        "stage": "storage_selection",
-                                    },
+                                    log_context(
+                                        "Recording duration exceeded in-memory threshold; moving buffers to disk.",
+                                        event="audio.storage_threshold",
+                                        threshold_seconds=self.current_max_memory_seconds,
+                                        stage="storage_selection",
+                                    )
                                 )
                                 try:
                                     total_mb = get_total_memory_mb()
                                     avail_mb = get_available_memory_mb()
                                     percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
                                     self._audio_log.info(
-                                        "In-memory storage migration due to recording length.",
-                                        extra={
-                                            "stage": "ram_to_disk_migration",
-                                            "status": "duration_exceeded",
-                                            "details": f"percent_free_ram={percent_free:.1f}",
-                                        },
+                                        log_context(
+                                            "In-memory storage migration due to recording length.",
+                                            event="audio.storage_migration",
+                                            stage="ram_to_disk_migration",
+                                            status="duration_exceeded",
+                                            percent_free_ram=round(percent_free, 1),
+                                        )
                                     )
                                 except Exception:
                                     pass
@@ -219,21 +234,23 @@ class AudioHandler:
                                 percent_free = (avail_mb / total_mb * 100.0) if total_mb else 0.0
                                 if total_mb and percent_free < thr_percent:
                                     self._audio_log.info(
-                                        "Free RAM below configured threshold; moving buffers to disk.",
-                                        extra={
-                                            "event": "ram_to_disk_low_memory",
-                                            "stage": "storage_selection",
-                                            "details": f"percent_free={percent_free:.1f} threshold={thr_percent}",
-                                        },
+                                        log_context(
+                                            "Free RAM below configured threshold; moving buffers to disk.",
+                                            event="audio.storage_threshold_low_ram",
+                                            percent_free=round(percent_free, 1),
+                                            threshold_percent=thr_percent,
+                                            stage="storage_selection",
+                                        )
                                     )
                                     try:
                                         self._audio_log.info(
-                                            "In-memory storage migration due to low available RAM.",
-                                            extra={
-                                                "stage": "ram_to_disk_migration",
-                                                "status": "low_free_ram",
-                                                "details": f"percent_free={percent_free:.1f} threshold={thr_percent}",
-                                            },
+                                            log_context(
+                                                "In-memory storage migration due to low available RAM.",
+                                                event="audio.storage_migration_low_ram",
+                                                percent_free=round(percent_free, 1),
+                                                threshold_percent=thr_percent,
+                                                stage="ram_to_disk_migration",
+                                            )
                                         )
                                     except Exception:
                                         pass

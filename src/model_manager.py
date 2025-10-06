@@ -16,8 +16,10 @@ from typing import Dict, List, NamedTuple
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
+from .logging_utils import get_logger, log_context
 
-MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
+
+MODEL_LOGGER = get_logger("whisper_recorder.model", component="ModelManager")
 
 
 @dataclass(frozen=True)
@@ -908,10 +910,13 @@ def ensure_download(
                 exc_info=True,
             )
         MODEL_LOGGER.info(
-            "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
-            model_id,
-            backend_label,
-            ready_path,
+            log_context(
+                "Model download skipped because artifacts already exist.",
+                event="model.download_skipped",
+                model=model_id,
+                backend=backend_label,
+                path=str(prepared.ready_path),
+            )
         )
         return ModelDownloadResult(str(ready_path), downloaded=False)
 
@@ -940,11 +945,14 @@ def ensure_download(
             safety_margin = max(int(estimated_bytes * 0.1), 256 * 1024 * 1024)
             required_bytes = estimated_bytes + safety_margin
             MODEL_LOGGER.info(
-                "Model %s download estimated at %s across %d files (free space: %s).",
-                model_id,
-                _format_bytes(estimated_bytes),
-                estimated_files,
-                _format_bytes(free_bytes),
+                log_context(
+                    "Model download size estimated.",
+                    event="model.download_size_estimate",
+                    model=model_id,
+                    estimated_bytes=estimated_bytes,
+                    estimated_files=estimated_files,
+                    free_bytes=free_bytes,
+                )
             )
             if free_bytes < required_bytes:
                 MODEL_LOGGER.error(

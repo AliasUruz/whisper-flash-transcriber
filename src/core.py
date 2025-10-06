@@ -54,10 +54,11 @@ from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from . import model_manager as model_manager_module
+from .logging_utils import get_logger, log_context
 
 
-LOGGER = logging.getLogger('whisper_flash_transcriber.core')
-MODEL_LOGGER = logging.getLogger('whisper_recorder.model')
+LOGGER = get_logger('whisper_flash_transcriber.core', component='Core')
+MODEL_LOGGER = get_logger('whisper_recorder.model', component='ModelManager')
 
 
 
@@ -748,7 +749,16 @@ class AppCore:
 
     def _on_model_loaded(self):
         """Callback do TranscriptionHandler quando o modelo é carregado com sucesso."""
-        LOGGER.info("AppCore: Model loaded successfully.")
+        backend = getattr(self.transcription_handler, 'backend_resolved', None) or self.asr_backend
+        model_id = getattr(self.transcription_handler, '_asr_model_id', None) or self.asr_model_id
+        LOGGER.info(
+            log_context(
+                "ASR model loaded successfully.",
+                event="asr.model_ready",
+                backend=backend,
+                model=model_id,
+            )
+        )
         self.state_manager.set_state(
             sm.StateEvent.MODEL_READY,
             details="Transcription model loaded",
@@ -769,7 +779,12 @@ class AppCore:
                     target=self._periodic_reregister_task, daemon=True, name="PeriodicHotkeyReregister"
                 )
                 self.reregister_timer_thread.start()
-                LOGGER.info("Periodic hotkey re-registration thread started.")
+                LOGGER.info(
+                    log_context(
+                        "Periodic hotkey re-registration thread started.",
+                        event="hotkeys.reregister_thread_started",
+                    )
+                )
             
             # Iniciar thread de verificação de saúde
             if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
@@ -778,9 +793,19 @@ class AppCore:
                     target=self._hotkey_health_check_task, daemon=True, name="HotkeyHealthThread"
                 )
                 self.health_check_thread.start()
-                LOGGER.info("Hotkey health monitoring thread launched.")
+                LOGGER.info(
+                    log_context(
+                        "Hotkey health monitoring thread launched.",
+                        event="hotkeys.health_thread_started",
+                    )
+                )
         else:
-            LOGGER.info("Hotkey stability services are disabled by configuration.")
+            LOGGER.info(
+                log_context(
+                    "Hotkey stability services are disabled by configuration.",
+                    event="hotkeys.stability_services_disabled",
+                )
+            )
 
     def _on_model_load_failed(self, error_msg):
         """Callback do TranscriptionHandler quando o modelo falha ao carregar."""
@@ -1709,7 +1734,12 @@ class AppCore:
         if self.shutting_down:
             return
         self.shutting_down = True
-        LOGGER.info("Shutdown sequence initiated.")
+        LOGGER.info(
+            log_context(
+                "Shutdown sequence initiated.",
+                event="app.shutdown.start",
+            )
+        )
 
         self.cancel_model_download()
 
@@ -1717,7 +1747,13 @@ class AppCore:
         self.stop_health_check_event.set()
 
         try:
-            LOGGER.info("Stopping KeyboardHotkeyManager...")
+            LOGGER.info(
+                log_context(
+                    "Stopping KeyboardHotkeyManager...",
+                    event="hotkeys.shutdown",
+                    subsystem="KeyboardHotkeyManager",
+                )
+            )
             self._cleanup_hotkeys()
         except Exception as e:
             LOGGER.error(f"Error during hotkey cleanup in shutdown: {e}")
@@ -1736,7 +1772,12 @@ class AppCore:
 
         # Sinaliza para o AudioHandler parar a gravação e processamento
         if self.audio_handler.is_recording:
-            LOGGER.warning("Recording active during shutdown. Forcing stop...")
+            LOGGER.warning(
+                log_context(
+                    "Recording active during shutdown. Forcing stop...",
+                    event="audio.shutdown_force_stop",
+                )
+            )
             self.audio_handler.is_recording = False # Sinaliza para a thread de gravação parar
             # try:
             #     self.audio_handler.audio_queue.put_nowait(None) # Sinaliza para a thread de processamento parar
@@ -1747,7 +1788,12 @@ class AppCore:
                     if self.audio_handler.audio_stream.active:
                         self.audio_handler.audio_stream.stop()
                         self.audio_handler.audio_stream.close()
-                        LOGGER.info("Audio stream stopped and closed during shutdown.")
+                        LOGGER.info(
+                            log_context(
+                                "Audio stream stopped and closed during shutdown.",
+                                event="audio.shutdown_stream_closed",
+                            )
+                        )
                 except Exception as e:
                     LOGGER.error(f"Error stopping audio stream on close: {e}")
 
@@ -1762,4 +1808,9 @@ class AppCore:
         if self.health_check_thread and self.health_check_thread.is_alive():
             self.health_check_thread.join(timeout=1.5)
 
-        LOGGER.info("Core shutdown sequence complete.")
+        LOGGER.info(
+            log_context(
+                "Core shutdown sequence complete.",
+                event="app.shutdown.complete",
+            )
+        )
