@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
