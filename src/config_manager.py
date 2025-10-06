@@ -13,6 +13,7 @@ import requests
 
 from .config_schema import coerce_with_defaults
 from .model_manager import get_curated_entry, list_catalog, list_installed, normalize_backend_label
+from .logging_utils import StructuredMessage, get_logger
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -32,6 +33,12 @@ def _parse_bool(value):
 # --- Constantes de Configuração (movidas de whisper_tkinter.py) ---
 CONFIG_FILE = "config.json"
 SECRETS_FILE = "secrets.json"  # Nova constante para o arquivo de segredos
+
+
+BOOTSTRAP_LOGGER = get_logger(
+    "whisper_flash_transcriber.config.bootstrap",
+    component="ConfigBootstrap",
+)
 
 DEFAULT_CONFIG = {
     "record_key": "F3",
@@ -226,6 +233,23 @@ class ConfigManager:
         self._config_hash = None
         self._secrets_hash = None
         self._invalid_timeout_cache: dict[str, Any] = {}
+        self._config_path = Path(self.config_file).expanduser()
+        self._secrets_path = Path(SECRETS_FILE).expanduser()
+        self._bootstrap_state: dict[str, dict[str, Any]] = {
+            "config": {
+                "path": self._config_path,
+                "existed": self._config_path.exists(),
+                "written": False,
+                "error": None,
+            },
+            "secrets": {
+                "path": self._secrets_path,
+                "existed": self._secrets_path.exists(),
+                "written": False,
+                "error": None,
+            },
+        }
+        self._bootstrap_logged = False
         self.load_config()
         url = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
         if url:
@@ -263,6 +287,16 @@ class ConfigManager:
             logging.info(
                 "%s not found. Creating it with default settings for the first launch.",
                 self.config_file,
+            )
+            BOOTSTRAP_LOGGER.info(
+                StructuredMessage(
+                    "Configuration file missing; defaults will be materialized.",
+                    event="config.bootstrap.config_missing",
+                    details={
+                        "path": str(self._config_path),
+                        "first_run": True,
+                    },
+                )
             )
 
         # Migrate legacy keys before validation
@@ -313,6 +347,16 @@ class ConfigManager:
         else:
             logging.info("%s not found. API keys might be missing.", SECRETS_FILE)
             self._secrets_hash = None
+            BOOTSTRAP_LOGGER.info(
+                StructuredMessage(
+                    "Secrets file missing; an empty template will be created.",
+                    event="config.bootstrap.secrets_missing",
+                    details={
+                        "path": str(self._secrets_path),
+                        "first_run": True,
+                    },
+                )
+            )
 
         sanitized_cfg, validation_warnings = coerce_with_defaults(raw_cfg, self.default_config)
         for warning in validation_warnings:
@@ -820,11 +864,14 @@ class ConfigManager:
                     json.dump(config_to_save, f, indent=4)
                 os.replace(temp_file_config, self.config_file)
                 self._config_hash = new_config_hash
+                self._bootstrap_state["config"]["written"] = True
+                self._bootstrap_state["config"]["existed"] = True
                 logging.info(f"Configuration saved to {self.config_file}")
             except Exception as e:
                 logging.error(f"Error saving configuration to {self.config_file}: {e}")
                 if os.path.exists(temp_file_config):
                     os.remove(temp_file_config)
+                self._register_bootstrap_error("config", e)
         else:
             logging.info(f"No changes detected in {self.config_file}.")
 
@@ -852,13 +899,124 @@ class ConfigManager:
                     json.dump(existing_secrets, f, indent=4)
                 os.replace(temp_file_secrets, SECRETS_FILE)
                 self._secrets_hash = new_secrets_hash
+                self._bootstrap_state["secrets"]["written"] = True
+                self._bootstrap_state["secrets"]["existed"] = True
                 logging.info(f"Secrets saved to {SECRETS_FILE}")
             except Exception as e:
                 logging.error(f"Error saving secrets to {SECRETS_FILE}: {e}")
                 if os.path.exists(temp_file_secrets):
                     os.remove(temp_file_secrets)
+                self._register_bootstrap_error("secrets", e)
         else:
             logging.info(f"No changes detected in {SECRETS_FILE}.")
+
+        if not self._bootstrap_logged:
+            self._log_bootstrap_summary()
+
+    def _register_bootstrap_error(self, target: str, error: Exception | str) -> None:
+        state = self._bootstrap_state.get(target)
+        if state is not None:
+            state["error"] = str(error)
+
+    def _detect_missing_bootstrap_artifacts(self) -> list[str]:
+        missing: list[str] = []
+        for name, state in self._bootstrap_state.items():
+            path = Path(state.get("path", ""))
+            try:
+                exists = path.exists()
+            except OSError as exc:
+                self._register_bootstrap_error(name, exc)
+                exists = False
+            if not exists:
+                missing.append(f"{name}:{path}")
+        return missing
+
+    def _log_bootstrap_summary(self) -> None:
+        if self._bootstrap_logged:
+            return
+
+        config_state = self._bootstrap_state.get("config", {})
+        secrets_state = self._bootstrap_state.get("secrets", {})
+
+        summary_details = {
+            "config_path": str(config_state.get("path", self.config_file)),
+            "config_existed": bool(config_state.get("existed")),
+            "config_written": bool(config_state.get("written")),
+            "secrets_path": str(secrets_state.get("path", SECRETS_FILE)),
+            "secrets_existed": bool(secrets_state.get("existed")),
+            "secrets_written": bool(secrets_state.get("written")),
+        }
+
+        BOOTSTRAP_LOGGER.info(
+            StructuredMessage(
+                "Configuration bootstrap verification completed.",
+                event="config.bootstrap.summary",
+                details=summary_details,
+            )
+        )
+
+        issues = {
+            name: state.get("error")
+            for name, state in self._bootstrap_state.items()
+            if state.get("error")
+        }
+        missing = self._detect_missing_bootstrap_artifacts()
+
+        if issues:
+            BOOTSTRAP_LOGGER.error(
+                StructuredMessage(
+                    "Errors occurred while writing bootstrap artifacts.",
+                    event="config.bootstrap.error",
+                    details={"errors": issues},
+                )
+            )
+
+        if missing:
+            BOOTSTRAP_LOGGER.critical(
+                StructuredMessage(
+                    "Configuration bootstrap integrity failure detected.",
+                    event="config.bootstrap.missing",
+                    details={"missing": missing},
+                )
+            )
+        elif not issues:
+            BOOTSTRAP_LOGGER.info(
+                StructuredMessage(
+                    "Configuration bootstrap integrity confirmed.",
+                    event="config.bootstrap.success",
+                    details={
+                        "config_path": summary_details["config_path"],
+                        "secrets_path": summary_details["secrets_path"],
+                    },
+                )
+            )
+
+        self._bootstrap_logged = True
+
+        if issues or missing:
+            joined_missing = ", ".join(missing)
+            joined_errors = "; ".join(f"{k}: {v}" for k, v in issues.items())
+            message_parts = []
+            if joined_errors:
+                message_parts.append(f"errors -> {joined_errors}")
+            if joined_missing:
+                message_parts.append(f"missing -> {joined_missing}")
+            message = "; ".join(message_parts) or "Unknown bootstrap failure"
+            raise RuntimeError(message)
+
+    def ensure_bootstrap_integrity(self) -> None:
+        missing = self._detect_missing_bootstrap_artifacts()
+        if missing:
+            BOOTSTRAP_LOGGER.critical(
+                StructuredMessage(
+                    "Configuration bootstrap integrity check failed.",
+                    event="config.bootstrap.verify_failure",
+                    details={"missing": missing},
+                )
+            )
+            raise RuntimeError(
+                "Configuration bootstrap artifacts missing: " + ", ".join(missing)
+            )
 
     def get(self, key, default=None):
         """Recupera valores da configuração permitindo acesso aninhado.
