@@ -62,6 +62,7 @@ from .config_manager import (
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
 )
+from . import model_manager as model_manager_module
 
 LOGGER = logging.getLogger('whisper_flash_transcriber.transcription')
 
@@ -1169,11 +1170,26 @@ class TranscriptionHandler:
             model_id = self.asr_model_id
             backend = self.asr_backend
             compute_device = self.asr_compute_device
-            model_path = Path(self.asr_cache_dir) / backend / model_id
-            if not (model_path.is_dir() and any(model_path.iterdir())):
+            model_dir = model_manager_module.find_existing_installation(
+                self.asr_cache_dir,
+                backend,
+                model_id,
+            )
+            if model_dir is None:
                 raise FileNotFoundError(
                     f"Modelo '{model_id}' não encontrado. Instale-o nas configurações."
                 )
+            canonical_dir = model_manager_module.get_installation_dir(
+                self.asr_cache_dir,
+                backend,
+                model_id,
+            )
+            if model_dir != canonical_dir:
+                logging.info(
+                    "Utilizando instalação legada do modelo em %s enquanto a migração é finalizada.",
+                    model_dir,
+                )
+            model_path = Path(model_dir)
             self._update_model_log_context(
                 backend=backend,
                 model=model_id,
