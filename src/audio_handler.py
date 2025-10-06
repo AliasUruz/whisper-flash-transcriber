@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import logging
-import threading
-import queue
 import os
-import time
+import queue
 import shutil
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Callable, Iterable
 
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
-import tempfile
-from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
 
 # Observação: em ambientes WSL, a biblioteca sounddevice depende de servidores PulseAudio;
 # mantenha esta limitação em mente ao depurar gravações.
@@ -26,7 +26,7 @@ from .config_manager import (
 )
 from .logging_utils import StructuredMessage, get_logger, log_context
 
-LOGGER = get_logger('whisper_flash_transcriber.audio', component='Audio')
+LOGGER = logging.getLogger("whisper_flash_transcriber.audio")
 
 
 class _AudioLoggerAdapter(logging.LoggerAdapter):
@@ -222,7 +222,7 @@ class AudioHandler:
                                 except Exception:
                                     pass
                                 self._migrate_to_file()
-                            elif self.record_storage_mode == 'auto':
+                            elif self.record_storage_mode == "auto":
                                 total_mb = get_total_memory_mb()
                                 avail_mb = get_available_memory_mb()
                                 try:
