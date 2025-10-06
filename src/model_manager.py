@@ -4,18 +4,28 @@ from __future__ import annotations
 
 import copy
 import inspect
+import json
 import logging
 import shutil
 import time
+from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from threading import Event, RLock
-from typing import Dict, List
+from typing import Dict, List, NamedTuple
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
 
 MODEL_LOGGER = logging.getLogger("whisper_recorder.model")
+
+
+@dataclass(frozen=True)
+class ModelDownloadResult:
+    """Structured result for :func:`ensure_download`."""
+
+    path: str
+    downloaded: bool
 
 
 class DownloadCancelledError(Exception):
@@ -56,6 +66,41 @@ DISPLAY_NAMES: Dict[str, str] = {
 # CURATED e DISPLAY_NAMES abaixo.
 
 
+def _resolve_catalog_entry(model_id: str) -> dict[str, str] | None:
+    """Return the curated entry for ``model_id`` when available."""
+
+    for entry in CURATED:
+        if entry.get("id") == model_id:
+            return dict(entry)
+    return None
+
+
+def _model_relative_path(model_id: str) -> Path:
+    """Return the canonical relative path used to store ``model_id`` locally."""
+
+    candidate = PurePosixPath(str(model_id or "").strip())
+    if candidate.is_absolute():
+        raise ValueError(f"Model identifier '{model_id}' cannot be absolute.")
+
+    parts: list[str] = []
+    for part in candidate.parts:
+        normalized = part.strip()
+        if not normalized or normalized in {".", ".."}:
+            raise ValueError(
+                f"Model identifier '{model_id}' contains unsafe path segment '{part}'."
+            )
+        if any(sep in normalized for sep in ("\\", ":")):
+            raise ValueError(
+                f"Model identifier '{model_id}' contains invalid character in segment '{part}'."
+            )
+        parts.append(normalized)
+
+    if not parts:
+        raise ValueError("Model identifier cannot be empty.")
+
+    return Path(*parts)
+
+
 def normalize_backend_label(backend: str | None) -> str:
     """Return a normalized backend label for UI/configuration."""
     if not backend:
@@ -69,11 +114,42 @@ def normalize_backend_label(backend: str | None) -> str:
 
 
 def backend_storage_name(backend: str | None) -> str:
-    """Map backend label to the directory name used on disk."""
+    """Map backend label to the canonical directory name used on disk."""
+
     normalized = normalize_backend_label(backend)
-    if normalized in {"ctranslate2", "faster-whisper"}:
+    if not normalized:
         return "ct2"
+    if normalized == "ctranslate2":
+        return "ct2"
+    if normalized == "faster-whisper":
+        return "faster-whisper"
     return normalized
+
+
+def backend_storage_candidates(backend: str | None) -> list[str]:
+    """Return ordered storage directory candidates for ``backend``."""
+
+    normalized = normalize_backend_label(backend)
+    primary = backend_storage_name(normalized)
+
+    candidates: list[str] = []
+    if primary:
+        candidates.append(primary)
+
+    legacy_map = {
+        "ctranslate2": ["ctranslate2"],
+        "faster-whisper": ["ct2", "ctranslate2"],
+        "transformers": ["transformers"],
+    }
+
+    for legacy_name in legacy_map.get(normalized, []):
+        if legacy_name and legacy_name not in candidates:
+            candidates.append(legacy_name)
+
+    if normalized and normalized not in candidates:
+        candidates.append(normalized)
+
+    return candidates
 
 
 def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
@@ -99,34 +175,12 @@ _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _list_installed_lock = RLock()
 
 
-@lru_cache(maxsize=None)
-def _snapshot_download_supports(parameter: str) -> bool:
-    """Return ``True`` when ``snapshot_download`` accepts ``parameter``.
 
-    Some optional arguments (``local_dir_use_symlinks``,
-    ``local_dir_use_hardlinks`` and ``resume_download``) were introduced in
-    recent versions of ``huggingface_hub``. Older releases raised ``TypeError``
-    if those keyword arguments were provided, which previously resulted in the
-    entire download process crashing before it even started. This helper checks
-    the exported function signature (and any ``**kwargs`` catch-all) so that we
-    can conditionally pass the arguments only when they are actually supported.
-    """
+class _PreparedInstallation(NamedTuple):
+    local_dir: Path
+    ready_path: Path | None
+    stale_local_dir: bool
 
-    if not parameter:
-        return False
-
-    try:
-        signature = inspect.signature(snapshot_download)
-    except Exception:  # pragma: no cover - defensive best effort
-        return False
-
-    parameters = signature.parameters
-    if parameter in parameters:
-        return True
-
-    return any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
-    )
 
 _MODEL_WEIGHT_FILE_HINTS = {
     "model.bin",
@@ -136,29 +190,6 @@ _MODEL_WEIGHT_FILE_HINTS = {
 
 _SNAPSHOT_SUPPORT_CACHE: dict[str, bool] = {}
 _SNAPSHOT_SUPPORT_LOCK = RLock()
-
-
-def _snapshot_download_supports(parameter: str) -> bool:
-    """Return ``True`` when ``snapshot_download`` accepts ``parameter``."""
-
-    if not parameter:
-        return False
-
-    normalized = str(parameter)
-    with _SNAPSHOT_SUPPORT_LOCK:
-        cached = _SNAPSHOT_SUPPORT_CACHE.get(normalized)
-        if cached is not None:
-            return cached
-
-        try:
-            signature = inspect.signature(snapshot_download)
-        except (TypeError, ValueError):  # pragma: no cover - interpreter specific behaviour
-            supported = False
-        else:
-            supported = normalized in signature.parameters
-
-        _SNAPSHOT_SUPPORT_CACHE[normalized] = supported
-        return supported
 
 
 def _set_snapshot_kwarg(target: dict, name: str, value) -> None:
@@ -203,24 +234,35 @@ def _snapshot_download_signature() -> inspect.Signature | None:
     except (TypeError, ValueError):  # pragma: no cover - defensive
         return None
 
-
+@lru_cache(maxsize=None)
 def _snapshot_download_supports(parameter: str) -> bool:
     """Return ``True`` when ``snapshot_download`` accepts ``parameter``."""
 
     if not parameter:
         return False
 
+    normalized = str(parameter)
+
+    with _SNAPSHOT_SUPPORT_LOCK:
+        cached = _SNAPSHOT_SUPPORT_CACHE.get(normalized)
+    if cached is not None:
+        return cached
+
     signature = _snapshot_download_signature()
     if signature is None:
-        return False
+        supported = False
+    elif normalized in signature.parameters:
+        supported = True
+    else:
+        supported = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        )
 
-    if parameter in signature.parameters:
-        return True
+    with _SNAPSHOT_SUPPORT_LOCK:
+        _SNAPSHOT_SUPPORT_CACHE[normalized] = supported
 
-    return any(
-        param.kind == inspect.Parameter.VAR_KEYWORD
-        for param in signature.parameters.values()
-    )
+    return supported
 
 
 def _model_dir_is_complete(path: Path) -> bool:
@@ -301,6 +343,144 @@ def _is_installation_complete(model_dir: Path) -> bool:
     return False
 
 
+def _prepare_local_installation(
+    cache_dir: Path,
+    backend_label: str,
+    model_id: str,
+) -> _PreparedInstallation:
+    storage_backend = backend_storage_name(backend_label)
+    candidate_names = backend_storage_candidates(backend_label)
+    if storage_backend not in candidate_names:
+        candidate_names.insert(0, storage_backend)
+
+    local_dir = cache_dir / storage_backend / model_id
+    complete_dir: Path | None = None
+    complete_source: str | None = None
+    stale_dirs: list[Path] = []
+
+    for candidate_name in candidate_names:
+        candidate_dir = cache_dir / candidate_name / model_id
+        if not candidate_dir.exists() or not candidate_dir.is_dir():
+            continue
+        try:
+            has_entries = any(candidate_dir.iterdir())
+        except Exception:  # pragma: no cover - best effort probing
+            has_entries = False
+        if not has_entries:
+            stale_dirs.append(candidate_dir)
+            continue
+        if _is_installation_complete(candidate_dir):
+            complete_dir = candidate_dir
+            complete_source = candidate_name
+            break
+        stale_dirs.append(candidate_dir)
+
+    ready_path: Path | None = None
+    if complete_dir is not None:
+        destination = local_dir
+        if complete_source != storage_backend and destination != complete_dir:
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:  # pragma: no cover - directory creation best effort
+                pass
+            if destination.exists() and destination != complete_dir:
+                try:
+                    shutil.rmtree(destination)
+                except Exception:  # pragma: no cover - defensive cleanup
+                    MODEL_LOGGER.debug(
+                        "Failed to remove conflicting destination directory %s before relocation.",
+                        destination,
+                        exc_info=True,
+                    )
+            try:
+                shutil.move(str(complete_dir), str(destination))
+            except Exception:
+                MODEL_LOGGER.exception(
+                    "Failed to relocate legacy model directory from %s to %s.",
+                    complete_dir,
+                    destination,
+                )
+                ready_path = complete_dir
+            else:
+                MODEL_LOGGER.info(
+                    "Relocated ASR model directory for backend %s: %s -> %s.",
+                    backend_label,
+                    complete_dir,
+                    destination,
+                )
+                ready_path = destination
+                _invalidate_list_installed_cache(cache_dir)
+        else:
+            ready_path = complete_dir
+
+    stale_local_dir = False
+    removed_any = False
+    for stale_dir in stale_dirs:
+        if ready_path is not None and stale_dir == ready_path:
+            continue
+        if stale_dir == local_dir:
+            stale_local_dir = True
+        if not stale_dir.exists():
+            continue
+        try:
+            shutil.rmtree(stale_dir)
+        except Exception:  # pragma: no cover - best effort cleanup
+            MODEL_LOGGER.debug(
+                "Failed to remove incomplete model directory %s before re-download.",
+                stale_dir,
+                exc_info=True,
+            )
+        else:
+            removed_any = True
+            MODEL_LOGGER.info(
+                "Removed incomplete model directory at %s before retrying download.",
+                stale_dir,
+            )
+
+    if removed_any:
+        _invalidate_list_installed_cache(cache_dir)
+
+    if stale_local_dir:
+        MODEL_LOGGER.warning(
+            "Detected incomplete model directory at %s; removing before re-downloading.",
+            local_dir,
+        )
+
+    return _PreparedInstallation(
+        local_dir=local_dir,
+        ready_path=ready_path,
+        stale_local_dir=stale_local_dir,
+    )
+
+
+def ensure_local_installation(
+    cache_dir: str | Path,
+    backend: str | None,
+    model_id: str,
+) -> Path | None:
+    cache_path = Path(cache_dir)
+
+    curated_entry = get_curated_entry(model_id)
+    curated_backend = (
+        normalize_backend_label(curated_entry.get("backend")) if curated_entry else ""
+    )
+
+    requested_backend = normalize_backend_label(backend)
+    backend_label = requested_backend or curated_backend or "ctranslate2"
+
+    if curated_backend and backend_label != curated_backend:
+        MODEL_LOGGER.warning(
+            "Overriding backend '%s' with curated backend '%s' for model '%s'.",
+            backend_label,
+            curated_backend,
+            model_id,
+        )
+        backend_label = curated_backend
+
+    prepared = _prepare_local_installation(cache_path, backend_label, model_id)
+    return prepared.ready_path
+
+
 def list_catalog() -> List[Dict[str, str]]:
     """Return curated catalog entries with display names."""
     catalog = []
@@ -334,40 +514,84 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
                 return copy.deepcopy(cached_value)
             _list_installed_cache.pop(cache_key, None)
 
-    curated_ids = {c["id"] for c in CURATED}
+    curated_entries = {
+        entry["id"]: normalize_backend_label(entry.get("backend"))
+        for entry in CURATED
+    }
     installed: List[Dict[str, str]] = []
-    seen = set()
+    seen: set[str] = set()
 
-    cache_dir = Path(cache_dir)
-    MODEL_LOGGER.debug("Listing curated models installed under %s", cache_dir)
-    if cache_dir.is_dir():
-        for backend_dir in cache_dir.iterdir():
+    MODEL_LOGGER.debug("Listing curated models installed under %s", normalized_dir)
+    for model_id, backend_label in curated_entries.items():
+        try:
+            relative_path = _model_relative_path(model_id)
+        except ValueError as exc:
+            MODEL_LOGGER.warning(
+                "Skipping curated model %s due to invalid identifier: %s",
+                model_id,
+                exc,
+            )
+            continue
+
+        storage_backend = backend_storage_name(backend_label)
+        candidate_dir = normalized_dir / storage_backend / relative_path
+        if candidate_dir.is_dir():
+            if _model_dir_is_complete(candidate_dir):
+                installed.append(
+                    {
+                        "id": model_id,
+                        "backend": backend_label,
+                        "path": str(candidate_dir),
+                    }
+                )
+                seen.add(model_id)
+            else:
+                MODEL_LOGGER.warning(
+                    "Model %s found at %s but installation is incomplete; ignoring.",
+                    model_id,
+                    candidate_dir,
+                )
+
+    # Detect curated models placed in an unexpected backend directory to surface
+    # configuration issues while avoiding duplicate/invalid entries.
+    try:
+        for backend_dir in normalized_dir.iterdir():
             if not backend_dir.is_dir():
                 continue
             backend_label = normalize_backend_label(backend_dir.name)
-            for model_dir in backend_dir.rglob("*"):
-                if not model_dir.is_dir():
+            for model_id, curated_backend in curated_entries.items():
+                if model_id in seen:
                     continue
-                rel_id = model_dir.relative_to(backend_dir).as_posix()
-                if rel_id in seen or rel_id not in curated_ids:
+                try:
+                    relative_path = _model_relative_path(model_id)
+                except ValueError:
                     continue
-                if not _model_dir_is_complete(model_dir):
-                    continue
-                installed.append({"id": rel_id, "backend": backend_label, "path": str(model_dir)})
-                seen.add(rel_id)
+                stray_dir = backend_dir / relative_path
+                if stray_dir.is_dir() and _model_dir_is_complete(stray_dir):
+                    MODEL_LOGGER.warning(
+                        "Model %s is installed under backend directory '%s', "
+                        "but curated backend is '%s'. The installation will be "
+                        "ignored to avoid inconsistent state.",
+                        model_id,
+                        backend_label or backend_dir.name,
+                        curated_backend,
+                    )
+    except FileNotFoundError:
+        pass
 
     try:
         cache_info = scan_cache_dir()
         for repo in cache_info.repos:
-            if repo.repo_id in seen or repo.repo_id not in curated_ids:
+            if repo.repo_id in seen or repo.repo_id not in curated_entries:
                 continue
-            if not _model_dir_is_complete(Path(repo.repo_path)):
+            repo_path = Path(repo.repo_path)
+            if not _model_dir_is_complete(repo_path):
                 continue
             installed.append(
                 {
                     "id": repo.repo_id,
                     "backend": "transformers",
-                    "path": str(repo.repo_path),
+                    "path": str(repo_path),
                 }
             )
             seen.add(repo.repo_id)
@@ -519,7 +743,7 @@ def ensure_download(
     *,
     timeout: float | int | None = None,
     cancel_event: Event | None = None,
-) -> str:
+) -> ModelDownloadResult:
     """Ensure that the given model is present locally.
 
     Parameters
@@ -536,59 +760,42 @@ def ensure_download(
         Maximum number of seconds to wait before aborting the download. ``None`` disables the timeout.
     cancel_event: Event | None, optional
         When provided, the download is aborted if the event is set.
+
+    Returns
+    -------
+    ModelDownloadResult
+        Structured metadata about the local installation, including whether
+        a fresh download was performed.
     """
 
     cache_dir = Path(cache_dir)
-
-    curated_entry = get_curated_entry(model_id)
+    backend_label = normalize_backend_label(backend)
+    curated_entry = _resolve_catalog_entry(model_id)
     curated_backend = normalize_backend_label(curated_entry.get("backend")) if curated_entry else ""
-
-    requested_backend = normalize_backend_label(backend)
-    backend_label = requested_backend or curated_backend or "ctranslate2"
-
-    if curated_backend and backend_label != curated_backend:
+    if curated_backend and backend_label and backend_label != curated_backend:
         MODEL_LOGGER.warning(
-            "Overriding backend '%s' with curated backend '%s' for model '%s'.",
+            "Requested backend '%s' for model %s does not match curated backend '%s'; enforcing curated backend.",
             backend_label,
+            model_id,
             curated_backend,
-            model_id,
         )
+    if curated_backend:
         backend_label = curated_backend
+    storage_backend = backend_storage_name(backend_label or backend)
+    backend_label = backend_label or normalize_backend_label(storage_backend) or storage_backend
 
-    storage_backend = backend_storage_name(backend_label)
-
-    local_dir = cache_dir / storage_backend / model_id
-    if local_dir.is_dir() and any(local_dir.iterdir()):
-        if _is_installation_complete(local_dir):
-            MODEL_LOGGER.info(
-                "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
-                model_id,
-                backend_label,
-                local_dir,
-            )
-            return str(local_dir)
-
-        MODEL_LOGGER.warning(
-            "Detected incomplete installation for model=%s backend=%s at %s; cleaning up before retrying.",
+    prepared = _prepare_local_installation(cache_dir, backend_label, model_id)
+    local_dir = prepared.local_dir
+    if prepared.ready_path is not None:
+        MODEL_LOGGER.info(
+            "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
             model_id,
             backend_label,
-            local_dir,
+            prepared.ready_path,
         )
-        try:
-            shutil.rmtree(local_dir)
-        except Exception:  # pragma: no cover - best effort cleanup
-            MODEL_LOGGER.debug(
-                "Failed to remove incomplete model directory %s before re-download.",
-                local_dir,
-                exc_info=True,
-            )
+        return str(prepared.ready_path)
 
-    stale_local_dir = local_dir.exists()
-    if stale_local_dir:
-        MODEL_LOGGER.warning(
-            "Detected incomplete model directory at %s; removing before re-downloading.",
-            local_dir,
-        )
+    stale_local_dir = prepared.stale_local_dir
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
@@ -678,10 +885,8 @@ def ensure_download(
 
     # Seleciona branch de quantização quando aplicável (modelos CT2).
     revision = None
-    if quant:
-        normalized_quant = str(quant).strip()
-        if normalized_quant and normalized_quant.lower() != "default":
-            revision = normalized_quant
+    if quant_label != "default":
+        revision = quant_label
 
     download_kwargs = {
         "repo_id": model_id,
@@ -703,7 +908,7 @@ def ensure_download(
         "Starting model download: model=%s backend=%s quant=%s target=%s",
         model_id,
         backend_label,
-        quant or "default",
+        quant_label,
         local_dir,
     )
 
@@ -711,7 +916,7 @@ def ensure_download(
         _check_abort()
         if storage_backend == "transformers":
             snapshot_download(**download_kwargs)
-        elif storage_backend == "ct2":
+        elif storage_backend in {"ct2", "faster-whisper"}:
             snapshot_download(**download_kwargs)
         else:
             raise ValueError(f"Unknown backend: {backend_label}")
@@ -754,6 +959,17 @@ def ensure_download(
         raise
 
     duration_ms = (time.perf_counter() - start_time) * 1000.0
+    try:
+        _write_install_metadata(
+            local_dir,
+            model_id=model_id,
+            backend_label=backend_label,
+            quant_label=quant_label,
+        )
+    except Exception:  # pragma: no cover - metadata persistence best effort
+        MODEL_LOGGER.debug(
+            "Unable to persist metadata for model %s at %s", model_id, local_dir, exc_info=True
+        )
     MODEL_LOGGER.info(
         "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
         model_id,
@@ -762,7 +978,7 @@ def ensure_download(
         local_dir,
     )
     _invalidate_list_installed_cache(cache_dir)
-    return str(local_dir)
+    return ModelDownloadResult(str(local_dir), downloaded=True)
 
 
 def _make_cancellable_progress(check_abort):

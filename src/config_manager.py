@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox
 from typing import Any, List
@@ -474,13 +475,20 @@ class ConfigManager:
             self.config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False))
         )
 
-        self.config[ASR_BACKEND_CONFIG_KEY] = str(
+        backend_value = _normalize_asr_backend(
             self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
         )
+        if not backend_value:
+            backend_value = _normalize_asr_backend(self.default_config[ASR_BACKEND_CONFIG_KEY])
+        self.config[ASR_BACKEND_CONFIG_KEY] = backend_value
 
-        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(
+        model_id_value = str(
             self.config.get(ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY])
-        )
+            or ""
+        ).strip()
+        if not model_id_value:
+            model_id_value = str(self.default_config[ASR_MODEL_ID_CONFIG_KEY])
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = model_id_value
     
         # Lógica de validação para gpu_index
         try:
@@ -1012,6 +1020,35 @@ class ConfigManager:
         if not sanitized.get("status"):
             sanitized["status"] = default_status.get("status", "unknown")
         self.config[ASR_LAST_DOWNLOAD_STATUS_KEY] = sanitized
+
+    def record_model_download_status(
+        self,
+        *,
+        status: str,
+        model_id: str,
+        backend: str,
+        message: str = "",
+        details: str = "",
+        timestamp: datetime | None = None,
+        save: bool = True,
+    ) -> None:
+        """Capture and persist metadata about the last model download attempt."""
+
+        normalized_status = str(status or "").strip().lower()
+        if not normalized_status:
+            normalized_status = "unknown"
+        timestamp_value = timestamp or datetime.now(timezone.utc)
+        payload = {
+            "status": normalized_status,
+            "timestamp": timestamp_value.isoformat(),
+            "model_id": str(model_id or ""),
+            "backend": str(backend or ""),
+            "message": str(message or ""),
+            "details": str(details or ""),
+        }
+        self.set_last_asr_download_status(payload)
+        if save:
+            self.save_config()
 
     def get_asr_curated_catalog(self):
         return self.config.get(

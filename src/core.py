@@ -190,23 +190,21 @@ class AppCore:
             ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
 
             cache_root = Path(cache_dir)
-            storage_backend = model_manager_module.backend_storage_name(backend)
-            model_path = cache_root / storage_backend / model_id
 
             start_loading = True
-            if not (model_path.is_dir() and any(model_path.iterdir())):
-                legacy_path = cache_root / str(backend) / model_id if backend else None
-                if legacy_path and legacy_path.is_dir() and any(legacy_path.iterdir()):
-                    MODEL_LOGGER.info(
-                        "Found legacy model directory at %s; using it for backend %s.",
-                        legacy_path,
-                        backend or storage_backend,
-                    )
-                else:
-                    MODEL_LOGGER.warning("ASR model not found locally; waiting for user confirmation before downloading.")
-                    self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                    self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
-                    start_loading = False
+            ready_path = model_manager_module.ensure_local_installation(
+                cache_root,
+                backend,
+                model_id,
+            )
+
+            if ready_path is None:
+                MODEL_LOGGER.warning(
+                    "ASR model not found locally; waiting for user confirmation before downloading.",
+                )
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+                self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
+                start_loading = False
 
             if start_loading:
                 self._start_model_loading_with_synced_config()
@@ -299,6 +297,36 @@ class AppCore:
 
         self.main_tk_root.after(0, _ask_user)
 
+    def _record_download_status(
+        self,
+        status: str,
+        model_id: str,
+        backend: str,
+        *,
+        message: str = "",
+        details: str = "",
+    ) -> None:
+        """Persist structured information about download attempts."""
+
+        config_manager = getattr(self, "config_manager", None)
+        if not config_manager:
+            return
+        try:
+            config_manager.record_model_download_status(
+                status=status,
+                model_id=model_id,
+                backend=backend,
+                message=message,
+                details=details,
+            )
+        except Exception:  # pragma: no cover - persistence best effort
+            LOGGER.debug(
+                "Failed to persist download status for model %s (status=%s).",
+                model_id,
+                status,
+                exc_info=True,
+            )
+
     def download_model_and_reload(self, model_id, backend, cache_dir, quant):
         """
         Handles the full model download and subsequent reload process.
@@ -310,30 +338,65 @@ class AppCore:
         
         try:
             self.state_manager.set_state(sm.STATE_LOADING_MODEL)
-            
+            self._record_download_status(
+                "in_progress",
+                model_id,
+                backend,
+                message="Model download started.",
+            )
+
             ensure_kwargs = {
                 "quant": quant,
                 "timeout": self.model_download_timeout,
                 "cancel_event": cancel_event,
             }
-            
-            self.model_manager.ensure_download(
+
+            result = self.model_manager.ensure_download(
                 model_id,
                 backend,
                 cache_dir,
                 **ensure_kwargs,
             )
-            
+
+            downloaded = bool(getattr(result, "downloaded", True))
+            result_path = getattr(result, "path", "")
+            status = "success" if downloaded else "skipped"
+            message = (
+                "Model download completed."
+                if downloaded
+                else "Model already present; download skipped."
+            )
+            self._record_download_status(
+                status,
+                model_id,
+                backend,
+                message=message,
+                details=result_path,
+            )
+
             # If download was not cancelled and did not raise an error, reload
             self._refresh_installed_models("post_download", raise_errors=False)
             self.transcription_handler.reload_asr()
 
         except self._download_cancelled_error as e:
             LOGGER.info(f"Download was cancelled for model {model_id}: {e}")
+            self._record_download_status(
+                "cancelled",
+                model_id,
+                backend,
+                message=str(e) or "Model download cancelled.",
+            )
             raise # Re-raise for the UI thread to handle
         except Exception as e:
             LOGGER.error(f"An error occurred during model download/reload for {model_id}: {e}", exc_info=True)
             self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+            self._record_download_status(
+                "error",
+                model_id,
+                backend,
+                message="Model download failed.",
+                details=str(e),
+            )
             raise # Re-raise for the UI thread to handle
         finally:
             self._active_model_download_event = None
@@ -356,16 +419,37 @@ class AppCore:
         def _download():
             try:
                 self.state_manager.set_state(sm.STATE_LOADING_MODEL)
+                self._record_download_status(
+                    "in_progress",
+                    model_id,
+                    backend,
+                    message="Model download started.",
+                )
                 ensure_kwargs = {
                     "quant": ct2_type,
                     "timeout": timeout,
                     "cancel_event": cancel_event,
                 }
-                self.model_manager.ensure_download(
+                result = self.model_manager.ensure_download(
                     model_id,
                     backend,
                     cache_dir,
                     **ensure_kwargs,
+                )
+                downloaded = bool(getattr(result, "downloaded", True))
+                result_path = getattr(result, "path", "")
+                status = "success" if downloaded else "skipped"
+                message = (
+                    "Model download completed."
+                    if downloaded
+                    else "Model already present; download skipped."
+                )
+                self._record_download_status(
+                    status,
+                    model_id,
+                    backend,
+                    message=message,
+                    details=result_path,
                 )
             except self._download_cancelled_error as cancel_exc:
                 by_user = bool(getattr(cancel_exc, "by_user", False))
@@ -378,6 +462,12 @@ class AppCore:
                         reason = "Model download cancelled by user."
                     else:
                         reason = "Model download cancelled."
+                self._record_download_status(
+                    "cancelled",
+                    model_id,
+                    backend,
+                    message=reason,
+                )
                 context_flags = []
                 if by_user:
                     context_flags.append("by_user=True")
@@ -403,10 +493,23 @@ class AppCore:
                 return
             except OSError:
                 MODEL_LOGGER.error("Invalid cache directory during model download.", exc_info=True)
+                self._record_download_status(
+                    "error",
+                    model_id,
+                    backend,
+                    message="Invalid cache directory during model download.",
+                )
                 self.state_manager.set_state(sm.STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda: messagebox.showerror("Model", "Invalid cache directory. Check your settings."))
             except Exception as exc:
                 MODEL_LOGGER.error(f"Model download failed: {exc}", exc_info=True)
+                self._record_download_status(
+                    "error",
+                    model_id,
+                    backend,
+                    message="Model download failed.",
+                    details=str(exc),
+                )
                 self.state_manager.set_state(sm.STATE_ERROR_MODEL)
                 self.main_tk_root.after(0, lambda exc=exc: messagebox.showerror("Model", f"Download failed: {exc}"))  # noqa: F821
             else:

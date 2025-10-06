@@ -24,6 +24,7 @@ from .config_manager import (
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
 )
+from .logging_utils import StructuredMessage
 
 LOGGER = logging.getLogger('whisper_flash_transcriber.audio')
 
@@ -110,8 +111,15 @@ class AudioHandler:
     # ------------------------------------------------------------------
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
-            LOGGER.warning(f"Audio callback status: {status}")
-            self._handle_audio_overflow(status)
+            status_text = str(status).strip()
+            LOGGER.warning(
+                StructuredMessage(
+                    "Audio callback reported backend status.",
+                    event="audio.callback_status",
+                    status=status_text,
+                )
+            )
+            self._handle_audio_overflow(status_text)
         if self.is_recording:
             # Copy avoids references to buffers reused by SoundDevice
             self.audio_queue.put(indata.copy())
@@ -135,9 +143,12 @@ class AudioHandler:
             self._last_overflow_sample = (now, count)
 
             LOGGER.warning(
-                "Audio input overflow detected (%s occurrences in last %.0fs).",
-                count,
-                self._overflow_log_window,
+                StructuredMessage(
+                    "Audio input overflow detected.",
+                    event="audio.callback_overflow",
+                    occurrences=count,
+                    window_seconds=self._overflow_log_window,
+                )
             )
 
     def _process_audio_queue(self):
@@ -266,7 +277,14 @@ class AudioHandler:
     def _record_audio_task(self):
         self.audio_stream = None
         try:
-            self._audio_log.info("Audio recording thread started.")
+            self._audio_log.info(
+                StructuredMessage(
+                    "Audio recording thread started.",
+                    event="audio.thread.start",
+                    samplerate=AUDIO_SAMPLE_RATE,
+                    channels=AUDIO_CHANNELS,
+                )
+            )
             if not self.is_recording:
                 LOGGER.warning("Recording flag turned off before stream start.")
                 return
@@ -280,11 +298,22 @@ class AudioHandler:
             )
             self.audio_stream.start()
             self.stream_started = True
-            self._audio_log.info("Audio stream started.")
+            self._audio_log.info(
+                StructuredMessage(
+                    "Audio stream opened.",
+                    event="audio.stream.opened",
+                    blocksize=self.stream_blocksize,
+                )
+            )
 
             while not self._stop_event.is_set() and self.is_recording:
                 sd.sleep(100)
-            self._audio_log.info("Recording flag is off. Stopping audio stream.")
+            self._audio_log.info(
+                StructuredMessage(
+                    "Recording flag lowered; stopping audio stream.",
+                    event="audio.stream.stop_requested",
+                )
+            )
         except sd.PortAudioError as e:
             self._audio_log.error(f"PortAudio error during recording: {e}", exc_info=True)
             self.is_recording = False
@@ -300,7 +329,12 @@ class AudioHandler:
             self.stream_started = False
             self._stop_event.clear()
             self._record_thread = None
-            self._audio_log.info("Audio recording thread finished.")
+            self._audio_log.info(
+                StructuredMessage(
+                    "Audio recording thread finished.",
+                    event="audio.thread.stop",
+                )
+            )
             # Stop overhead metric for the recording thread (event-based approximation)
             try:
                 self._audio_log.info("[METRIC] stage=record_thread_finalize value_ms=0")
@@ -315,7 +349,12 @@ class AudioHandler:
                 if self.audio_stream.active:
                     self.audio_stream.stop()
                 self.audio_stream.close()
-                self._audio_log.info("Audio stream stopped and closed.")
+                self._audio_log.info(
+                    StructuredMessage(
+                        "Audio stream stopped and closed.",
+                        event="audio.stream.closed",
+                    )
+                )
             except Exception as e:
                 self._audio_log.error(f"Error stopping/closing audio stream: {e}")
             finally:
@@ -348,7 +387,12 @@ class AudioHandler:
 
     def start_recording(self):
         if self.is_recording:
-            LOGGER.warning("Recording is already active.")
+            LOGGER.warning(
+                StructuredMessage(
+                    "Recording request ignored because capture is already active.",
+                    event="audio.recording_already_active",
+                )
+            )
             return False
         if not self._processing_thread or not self._processing_thread.is_alive():
             self.audio_queue = queue.Queue()
@@ -378,17 +422,21 @@ class AudioHandler:
             else:
                 self.in_memory_mode = False
                 reason = f"auto: free RAM {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
-        self._audio_log.info(
-            "Storage decision: in_memory=%s (%s)",
-            self.in_memory_mode,
-            reason,
-        )
-
         if self.max_memory_seconds_mode == "auto":
             self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
         else:
             self.current_max_memory_seconds = self.max_memory_seconds
         self._memory_limit_samples = int(self.current_max_memory_seconds * AUDIO_SAMPLE_RATE)
+
+        self._audio_log.info(
+            StructuredMessage(
+                "Recording storage mode decided.",
+                event="audio.storage_selected",
+                in_memory=self.in_memory_mode,
+                rationale=reason,
+                max_buffer_seconds=self.current_max_memory_seconds,
+            )
+        )
 
         with self.storage_lock:
             self.is_recording = True
@@ -425,7 +473,12 @@ class AudioHandler:
 
     def stop_recording(self):
         if not self.is_recording:
-            LOGGER.warning("Recording is not active and cannot be stopped.")
+            LOGGER.warning(
+                StructuredMessage(
+                    "Stop request ignored because no recording is active.",
+                    event="audio.stop_ignored",
+                )
+            )
             return False
 
         self.is_recording = False
@@ -469,7 +522,12 @@ class AudioHandler:
                 self._sf_writer = None
 
         if not stream_was_started:
-            LOGGER.warning("Stop recording called but audio stream never started. Ignoring data.")
+            LOGGER.warning(
+                StructuredMessage(
+                    "Stop request ignored because audio stream never started.",
+                    event="audio.stop_without_stream",
+                )
+            )
             self._cleanup_temp_file()
             self.state_manager.set_state("IDLE")
             return False
@@ -477,10 +535,22 @@ class AudioHandler:
         recording_duration = time.time() - self.start_time
         if self._sample_count == 0 or recording_duration < self.min_record_duration:
             self._audio_log.info(
-                f"Recorded duration {recording_duration:.2f}s below configured minimum {self.min_record_duration}s; discarding segment."
+                StructuredMessage(
+                    "Recording discarded because it is shorter than the configured minimum.",
+                    event="audio.segment_too_short",
+                    captured_seconds=round(recording_duration, 2),
+                    minimum_seconds=self.min_record_duration,
+                    samples_recorded=self._sample_count,
+                )
             )
             LOGGER.warning(
-                f"Recording shorter than {self.min_record_duration}s or empty; discarding segment."
+                StructuredMessage(
+                    "Recording discarded due to insufficient duration or missing samples.",
+                    event="audio.segment_discarded",
+                    captured_seconds=round(recording_duration, 2),
+                    minimum_seconds=self.min_record_duration,
+                    samples_recorded=self._sample_count,
+                )
             )
             self._cleanup_temp_file()
             self.state_manager.set_state("IDLE")
@@ -503,7 +573,14 @@ class AudioHandler:
                     target_path = (Path.cwd() / filename).resolve()
                     shutil.move(str(source_path), target_path)
                     self.temp_file_path = str(target_path)
-                    self._audio_log.info(f"Temporary recording saved at {target_path}")
+                    self._audio_log.info(
+                        StructuredMessage(
+                            "Temporary recording persisted to disk.",
+                            event="audio.segment_saved",
+                            path=str(target_path),
+                            size_bytes=target_path.stat().st_size if target_path.exists() else None,
+                        )
+                    )
                     self._enforce_record_storage_limit(exclude_paths=[target_path])
                 except Exception as e:
                     self._audio_log.error(f"Failed to save temporary recording: {e}")
@@ -708,9 +785,14 @@ class AudioHandler:
         )
 
         self._audio_log.info(
-            "AudioHandler: Settings updated (mode=%s, limit=%s)",
-            self.record_storage_mode,
-            self.record_storage_limit,
+            StructuredMessage(
+                "Audio handler configuration refreshed.",
+                event="audio.settings_applied",
+                storage_mode=self.record_storage_mode,
+                storage_limit_mb=self.record_storage_limit,
+                vad_enabled=self.use_vad,
+                min_duration_seconds=self.min_record_duration,
+            )
         )
 
     def _calculate_auto_memory_seconds(self) -> float:
@@ -777,12 +859,22 @@ class AudioHandler:
                 path.unlink()
                 if reclaimed_bytes:
                     self._audio_log.info(
-                        "Deleted temp audio file: %s (freed %.2f MB)",
-                        path,
-                        reclaimed_bytes / (1024 * 1024),
+                        StructuredMessage(
+                            "Deleted temporary audio file.",
+                            event="audio.temp_file_deleted",
+                            path=str(path),
+                            freed_mb=reclaimed_bytes / (1024 * 1024),
+                        )
                     )
                 else:
-                    self._audio_log.info("Deleted temp audio file: %s", path)
+                    self._audio_log.info(
+                        StructuredMessage(
+                            "Deleted temporary audio file.",
+                            event="audio.temp_file_deleted",
+                            path=str(path),
+                            freed_mb=0.0,
+                        )
+                    )
             except Exception as e:
                 self._audio_log.error("Failed to remove temporary file %s: %s", path, e)
                 return 0
@@ -894,7 +986,12 @@ class AudioHandler:
                 if self.audio_stream.active:
                     self.audio_stream.stop()
                 self.audio_stream.close()
-                self._audio_log.info("Audio stream stopped during cleanup.")
+                self._audio_log.info(
+                    StructuredMessage(
+                        "Audio stream stopped during cleanup.",
+                        event="audio.stream.cleanup",
+                    )
+                )
             except Exception as e:
                 self._audio_log.error(f"Failed to close audio stream: {e}")
             finally:
