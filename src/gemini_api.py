@@ -8,6 +8,7 @@ from .config_manager import (
     GEMINI_PROMPT_CONFIG_KEY,
     GEMINI_TIMEOUT_CONFIG_KEY,
 )
+from .logging_utils import get_logger, log_context
 
 try:
     import google.generativeai as genai
@@ -38,7 +39,7 @@ except ImportError:
             def __init__(self, timeout=None):
                 pass
 
-LOGGER = logging.getLogger('whisper_flash_transcriber.gemini')
+LOGGER = get_logger('whisper_flash_transcriber.gemini', component='GeminiAPI')
 
 if google_api_exceptions is not None:
     GoogleAPIError = google_api_exceptions.GoogleAPIError
@@ -98,7 +99,12 @@ class GeminiAPI:
             self.is_valid = False
             return
 
-        LOGGER.info('Gemini API client re/initializing due to external request.')
+        LOGGER.info(
+            log_context(
+                'Gemini API client re/initializing due to external request.',
+                event='gemini.client_reinitialized',
+            )
+        )
         self._load_models_from_config()
 
     def _reset_models(self) -> None:

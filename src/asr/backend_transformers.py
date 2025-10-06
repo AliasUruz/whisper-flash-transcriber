@@ -4,8 +4,9 @@ from typing import Any
 
 import logging
 
+from ..logging_utils import get_logger, log_context
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__, component='TransformersBackend')
 
 
 class TransformersBackend:
@@ -44,10 +45,13 @@ class TransformersBackend:
         torch_dtype = self._resolve_dtype(dtype, resolved_device, torch)
 
         LOGGER.info(
-            "Loading Transformers ASR model '%s' with device=%s and dtype=%s",
-            self.model_id,
-            resolved_device,
-            torch_dtype,
+            log_context(
+                "Loading Transformers ASR model.",
+                event="asr.transformers_load",
+                model=self.model_id,
+                device=resolved_device,
+                dtype=str(torch_dtype),
+            )
         )
 
         self.processor = AutoProcessor.from_pretrained(self.model_id, cache_dir=cache_dir)

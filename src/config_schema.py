@@ -8,7 +8,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-LOGGER = logging.getLogger(__name__)
+from .logging_utils import get_logger, log_context
+
+LOGGER = get_logger(__name__, component='ConfigSchema')
 
 
 class ASRDownloadStatus(BaseModel):
@@ -158,7 +160,12 @@ class AppConfig(BaseModel):
         if isinstance(value, str):
             lowered = value.strip().lower()
             if lowered == "hybrid":
-                LOGGER.info("Mapping legacy record_storage_mode 'hybrid' to 'auto'.")
+                LOGGER.info(
+                    log_context(
+                        "Mapping legacy record_storage_mode 'hybrid' to 'auto'.",
+                        event="config.legacy_storage_mode_mapped",
+                    )
+                )
                 lowered = "auto"
             return cls._normalize_lower(
                 lowered,

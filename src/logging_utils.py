@@ -5,9 +5,18 @@ import logging
 import os
 import re
 import threading
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+LOG_DIR_ENV = "WHISPER_LOG_DIR"
+LOG_MAX_BYTES_ENV = "WHISPER_LOG_MAX_BYTES"
+LOG_BACKUP_COUNT_ENV = "WHISPER_LOG_BACKUP_COUNT"
+DEFAULT_LOG_FILENAME = "whisper-flash-transcriber.log"
+DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
+DEFAULT_LOG_BACKUP_COUNT = 5
 
 
 class _StripAnsiFilter(logging.Filter):
@@ -99,52 +108,200 @@ class _StructuredLogFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         timestamp = self.formatTime(record, self.datefmt)
         level = record.levelname.upper()
+        component = getattr(record, "component", None)
         name = record.name
+        if component:
+            name = f"{name}:{component}"
+
         message = super().format(record)
-
-        extras: list[str] = []
-        if record.processName:
-            extras.append(f"process={record.processName}")
-        if record.threadName and record.threadName != "MainThread":
-            extras.append(f"thread={record.threadName}")
-        if record.funcName:
-            extras.append(f"func={record.funcName}")
-
-        context = f" [{', '.join(extras)}]" if extras else ""
-
         if "\n" in message:
             head, *rest = message.splitlines()
             body = "\n".join(f"    {line}" for line in rest)
             message = head + ("\n" + body if body else "")
 
-        return f"{timestamp} | {level:<8} | {name}{context} | {message}"
+        extras: list[str] = []
+        process_id = getattr(record, "process_id", None)
+        if process_id is not None:
+            extras.append(f"pid={process_id}")
+        thread_name = getattr(record, "thread_name", None) or getattr(record, "threadName", None)
+        if thread_name and thread_name != "MainThread":
+            extras.append(f"thread={thread_name}")
+        if record.funcName:
+            extras.append(f"func={record.funcName}")
+
+        context = f" [{', '.join(extras)}]" if extras else ""
+
+        event = getattr(record, "event", None)
+        details = getattr(record, "details", None)
+        detail_segment = ""
+        if event:
+            detail_segment = f" | event={event}"
+
+        if isinstance(details, Mapping) and details:
+            detail_pairs = " ".join(
+                f"{key}={_stringify_detail(value)}" for key, value in sorted(details.items())
+            )
+            if detail_pairs:
+                detail_segment += f" | {detail_pairs}"
+
+        return f"{timestamp} | {level:<8} | {name}{context} | {message}{detail_segment}"
+
+
+class ContextualLoggerAdapter(logging.LoggerAdapter):
+    """Logger adapter that normalizes structured metadata across log records."""
+
+    __slots__ = ("_component", "_defaults", "_default_event")
+
+    def __init__(
+        self,
+        logger: logging.Logger,
+        *,
+        component: str | None = None,
+        defaults: Mapping[str, Any] | None = None,
+        default_event: str | None = None,
+    ) -> None:
+        super().__init__(logger, extra={})
+        self._component = component
+        self._defaults = dict(defaults or {})
+        self._default_event = default_event
+
+    def bind(self, *, event: str | None = None, **fields: Any) -> "ContextualLoggerAdapter":
+        merged_defaults = dict(self._defaults)
+        merged_defaults.update(fields)
+        default_event = event or self._default_event
+        return ContextualLoggerAdapter(
+            self.logger,
+            component=self._component,
+            defaults=merged_defaults,
+            default_event=default_event,
+        )
+
+    def process(self, msg: Any, kwargs: Mapping[str, Any]) -> tuple[Any, Mapping[str, Any]]:
+        if not isinstance(kwargs, dict):
+            kwargs = dict(kwargs)
+        event_override = kwargs.pop("event", None)
+        detail_overrides = kwargs.pop("details", None)
+
+        if isinstance(msg, StructuredMessage):
+            headline = msg.headline
+            event = msg.event
+            details = dict(msg.details)
+        else:
+            headline = str(msg)
+            event = None
+            details: dict[str, Any] = {}
+
+        details.update(self._defaults)
+        if isinstance(detail_overrides, Mapping):
+            details.update(detail_overrides)
+
+        event = event_override or event or self._default_event
+
+        extra = dict(kwargs.get("extra", {}))
+        if self._component and "component" not in extra:
+            extra["component"] = self._component
+        if event is not None:
+            extra.setdefault("event", event)
+        if details:
+            existing_details = extra.get("details")
+            if isinstance(existing_details, Mapping):
+                merged_details = dict(existing_details)
+                merged_details.update(details)
+            else:
+                merged_details = details
+            extra["details"] = merged_details
+        kwargs = dict(kwargs)
+        if extra:
+            kwargs["extra"] = extra
+
+        if isinstance(msg, StructuredMessage):
+            msg = headline
+
+        return msg, kwargs
+
+
+def _resolve_int(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def _build_rotating_file_handler(filters: Iterable[logging.Filter]) -> logging.Handler | None:
+    log_directory = Path(os.getenv(LOG_DIR_ENV, "logs")).expanduser()
+    try:
+        log_directory.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Unable to create log directory at %s; file logging disabled.",
+            log_directory,
+            exc_info=True,
+        )
+        return None
+
+    max_bytes = _resolve_int(os.getenv(LOG_MAX_BYTES_ENV), DEFAULT_LOG_MAX_BYTES)
+    backup_count = _resolve_int(os.getenv(LOG_BACKUP_COUNT_ENV), DEFAULT_LOG_BACKUP_COUNT)
+
+    try:
+        handler = RotatingFileHandler(
+            log_directory / DEFAULT_LOG_FILENAME,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Unable to configure rotating file handler in %s; file logging disabled.",
+            log_directory,
+            exc_info=True,
+        )
+        return None
+
+    handler.setFormatter(_StructuredLogFormatter())
+    for filt in filters:
+        handler.addFilter(filt)
+    return handler
 
 
 def setup_logging(*, extra_filters: Iterable[logging.Filter] | None = None) -> None:
     """Configure root logging with a structured, copy-friendly format."""
 
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-        logging.Formatter(
-            fmt=(
-                "%(asctime)s | %(levelname)-8s | %(name)s | "
-                "pid=%(process_id)s thread=%(thread_name)s | %(message)s"
-            ),
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    )
-
     filters: list[logging.Filter] = [_StripAnsiFilter(), _RuntimeContextFilter()]
     if extra_filters:
         filters.extend(extra_filters)
-    for filt in filters:
-        handler.addFilter(filt)
 
-    logging.basicConfig(level=_determine_level(), handlers=[handler], force=True)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(_StructuredLogFormatter())
+    for filt in filters:
+        console_handler.addFilter(filt)
+
+    handlers: list[logging.Handler] = [console_handler]
+
+    file_handler = _build_rotating_file_handler(filters)
+    if file_handler is not None:
+        handlers.append(file_handler)
+
+    logging.basicConfig(level=_determine_level(), handlers=handlers, force=True)
     logging.captureWarnings(True)
 
     for noisy_logger in ("google", "httpx", "urllib3", "asyncio"):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+
+def log_context(
+    headline: str,
+    /,
+    *,
+    event: str | None = None,
+    details: Mapping[str, Any] | None = None,
+    **fields: Any,
+) -> StructuredMessage:
+    """Build a :class:`StructuredMessage` with a friendly helper syntax."""
+
+    return StructuredMessage(headline, event=event, details=details, **fields)
 
 
 def log_event(
@@ -162,4 +319,29 @@ def log_event(
     logger.log(level, StructuredMessage(headline, event=event, details=details, **fields))
 
 
-__all__ = ["StructuredMessage", "log_event", "setup_logging"]
+def get_logger(
+    name: str,
+    *,
+    component: str | None = None,
+    default_event: str | None = None,
+    **default_fields: Any,
+) -> ContextualLoggerAdapter:
+    """Return a logger adapter enriched with component metadata."""
+
+    base_logger = logging.getLogger(name)
+    return ContextualLoggerAdapter(
+        base_logger,
+        component=component,
+        defaults=default_fields,
+        default_event=default_event,
+    )
+
+
+__all__ = [
+    "ContextualLoggerAdapter",
+    "StructuredMessage",
+    "get_logger",
+    "log_context",
+    "log_event",
+    "setup_logging",
+]
