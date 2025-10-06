@@ -260,8 +260,8 @@ class ConfigManager:
                     exc_info=True,
                 )
         else:
-            logging.warning(
-                "%s not found. A new one will be created with default settings.",
+            logging.info(
+                "%s not found. Creating it with default settings for the first launch.",
                 self.config_file,
             )
 
@@ -843,22 +843,20 @@ class ConfigManager:
         existing_secrets.update(secrets_to_save)
         new_secrets_hash = self._compute_hash(existing_secrets)
 
-        if new_secrets_hash != self._secrets_hash:
-            if existing_secrets or os.path.exists(SECRETS_FILE):
-                try:
-                    with open(temp_file_secrets, "w", encoding='utf-8') as f:
-                        json.dump(existing_secrets, f, indent=4)
-                    os.replace(temp_file_secrets, SECRETS_FILE)
-                    logging.info(f"Secrets saved to {SECRETS_FILE}")
-                except Exception as e:
-                    logging.error(f"Error saving secrets to {SECRETS_FILE}: {e}")
-                    if os.path.exists(temp_file_secrets):
-                        os.remove(temp_file_secrets)
-                else:
-                    self._secrets_hash = new_secrets_hash
-            else:
-                # Não há arquivo nem segredos a salvar
+        secrets_file_exists = os.path.exists(SECRETS_FILE)
+        should_write_secrets = new_secrets_hash != self._secrets_hash or not secrets_file_exists
+
+        if should_write_secrets:
+            try:
+                with open(temp_file_secrets, "w", encoding='utf-8') as f:
+                    json.dump(existing_secrets, f, indent=4)
+                os.replace(temp_file_secrets, SECRETS_FILE)
                 self._secrets_hash = new_secrets_hash
+                logging.info(f"Secrets saved to {SECRETS_FILE}")
+            except Exception as e:
+                logging.error(f"Error saving secrets to {SECRETS_FILE}: {e}")
+                if os.path.exists(temp_file_secrets):
+                    os.remove(temp_file_secrets)
         else:
             logging.info(f"No changes detected in {SECRETS_FILE}.")
 
