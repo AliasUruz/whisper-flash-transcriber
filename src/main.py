@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import tkinter as tk
+import threading
 
 # Add project root to path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -13,6 +14,12 @@ if PROJECT_ROOT not in sys.path:
 
 
 ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
+
+
+from src.logging_utils import StructuredMessage, setup_logging
+
+
+LOGGER = logging.getLogger("whisper_flash_transcriber.bootstrap")
 
 
 ENV_DEFAULTS = {
@@ -25,7 +32,14 @@ ENV_DEFAULTS = {
 
 def ensure_display_available() -> None:
     if os.name != "nt" and not os.environ.get("DISPLAY"):
-        logging.warning("DISPLAY environment variable missing; aborting GUI startup for test mode.")
+        LOGGER.warning(
+            StructuredMessage(
+                "Display server unavailable; aborting GUI bootstrap.",
+                event="startup.display_check",
+                platform=os.name,
+                reason="missing_display_variable",
+            )
+        )
         sys.exit(0)
 
 
@@ -33,13 +47,26 @@ def configure_environment() -> None:
     for key, value in ENV_DEFAULTS.items():
         os.environ.setdefault(key, value)
     os.environ.setdefault("TRANSFORMERS_VERBOSITY", os.environ.get("TRANSFORMERS_VERBOSITY", "error"))
+    LOGGER.debug(
+        StructuredMessage(
+            "Base environment variables applied.",
+            event="startup.environment_applied",
+            details={"defaults": tuple(sorted(ENV_DEFAULTS))},
+        )
+    )
 
 
 def configure_cuda_logging() -> None:
     try:
         torch_spec = importlib.util.find_spec("torch")
         if torch_spec is None:
-            logging.debug("torch not available; skipping CUDA diagnostics.")
+            LOGGER.debug(
+                StructuredMessage(
+                    "Torch module not available; skipping CUDA diagnostics.",
+                    event="startup.cuda_skipped",
+                    reason="torch_missing",
+                )
+            )
             return
 
         import torch  # type: ignore
@@ -47,40 +74,92 @@ def configure_cuda_logging() -> None:
         if torch.cuda.is_available():
             try:
                 torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
-                logging.info("cudnn.benchmark enabled (CUDA available).")
+                LOGGER.info(
+                    StructuredMessage(
+                        "cuDNN benchmark enabled for CUDA runtime.",
+                        event="cuda.cudnn_benchmark_enabled",
+                    )
+                )
             except Exception as exc:
-                logging.warning("Unable to enable cudnn.benchmark: %s", exc)
+                LOGGER.warning(
+                    StructuredMessage(
+                        "Unable to enable cuDNN benchmark mode.",
+                        event="cuda.cudnn_benchmark_failure",
+                        error=str(exc),
+                    )
+                )
 
             try:
                 num_gpus = torch.cuda.device_count()
-                logging.info("CUDA %s detected; GPUs available: %s", torch.version.cuda, num_gpus)
+                LOGGER.info(
+                    StructuredMessage(
+                        "CUDA runtime detected.",
+                        event="cuda.runtime_detected",
+                        cuda_version=torch.version.cuda,
+                        gpu_count=num_gpus,
+                    )
+                )
                 for idx in range(num_gpus):
                     try:
                         name = torch.cuda.get_device_name(idx)
                         props = torch.cuda.get_device_properties(idx)
                         total_mem_gb = props.total_memory / (1024 ** 3)
                         capability = f"{props.major}.{props.minor}"
-                        logging.info(
-                            "GPU %s: %s | total VRAM: %.2f GB | compute capability: %s",
-                            idx,
-                            name,
-                            total_mem_gb,
-                            capability,
+                        LOGGER.info(
+                            StructuredMessage(
+                                "GPU device enumerated.",
+                                event="cuda.gpu_discovered",
+                                index=idx,
+                                name=name,
+                                vram_gb=f"{total_mem_gb:.2f}",
+                                compute_capability=capability,
+                            )
                         )
                     except Exception as gpu_exc:
-                        logging.warning("Unable to query GPU %s properties: %s", idx, gpu_exc)
+                        LOGGER.warning(
+                            StructuredMessage(
+                                "Unable to query GPU device properties.",
+                                event="cuda.gpu_introspection_failed",
+                                index=idx,
+                                error=str(gpu_exc),
+                            )
+                        )
 
                 try:
                     has_flash_attn = importlib.util.find_spec("flash_attn") is not None
                 except Exception:
                     has_flash_attn = False
-                logging.info("FlashAttention 2 detected: %s", has_flash_attn)
+                LOGGER.info(
+                    StructuredMessage(
+                        "FlashAttention 2 availability checked.",
+                        event="cuda.flash_attention_probe",
+                        available=has_flash_attn,
+                    )
+                )
             except Exception as diag_exc:
-                logging.warning("Unable to gather CUDA capabilities: %s", diag_exc)
+                LOGGER.warning(
+                    StructuredMessage(
+                        "Unable to gather CUDA diagnostics.",
+                        event="cuda.diagnostics_failed",
+                        error=str(diag_exc),
+                    )
+                )
         else:
-            logging.info("[METRIC] stage=device_select device=cpu reason=no_cuda_available")
+            LOGGER.info(
+                StructuredMessage(
+                    "CUDA runtime not detected; defaulting to CPU execution.",
+                    event="cuda.cpu_fallback",
+                )
+            )
     except Exception as exc:  # pragma: no cover - defensive guard
-        logging.warning("Skipping CUDA diagnostics due to error: %s", exc, exc_info=True)
+        LOGGER.warning(
+            StructuredMessage(
+                "Skipping CUDA diagnostics due to unexpected error.",
+                event="cuda.diagnostics_exception",
+                error=str(exc),
+            ),
+            exc_info=True,
+        )
 
 
 def patch_tk_variable_cleanup() -> None:
@@ -112,8 +191,6 @@ def patch_tk_variable_cleanup() -> None:
 
 
 def main() -> None:
-    from src.logging_utils import setup_logging
-
     setup_logging()
     configure_environment()
     ensure_display_available()
@@ -127,28 +204,48 @@ def main() -> None:
     ui_manager_instance = None
 
     def on_exit_app_enhanced(*_):
-        logging.info("Exit requested from tray icon.")
+        LOGGER.info(
+            StructuredMessage(
+                "Exit requested from tray icon.",
+                event="ui.exit_requested",
+            )
+        )
         if app_core_instance:
             app_core_instance.shutdown()
         if ui_manager_instance and ui_manager_instance.tray_icon:
             ui_manager_instance.tray_icon.stop()
         main_tk_root.after(0, main_tk_root.quit)
 
-    atexit.register(lambda: logging.info("Application terminated."))
+    atexit.register(
+        lambda: LOGGER.info(
+            StructuredMessage(
+                "Application terminated.",
+                event="shutdown.complete",
+            )
+        )
+    )
 
     main_tk_root = tk.Tk()
     main_tk_root.withdraw()
     icon_path = ICON_PATH
     if not os.path.exists(icon_path):
-        logging.warning("Failed to set main window icon. File not found: %s", icon_path)
+        LOGGER.warning(
+            StructuredMessage(
+                "Main window icon not found on disk.",
+                event="ui.icon_missing",
+                path=icon_path,
+            )
+        )
     else:
         try:
-            # Define o ícone da aplicação, que aparecerá na barra de tarefas
             main_tk_root.iconbitmap(icon_path)
         except Exception:
-            logging.warning(
-                "Failed to set main window icon. icon.ico may be missing or invalid at %s.",
-                icon_path,
+            LOGGER.warning(
+                StructuredMessage(
+                    "Failed to set main window icon.",
+                    event="ui.icon_application_failed",
+                    path=icon_path,
+                )
             )
 
     app_core_instance = AppCore(main_tk_root)
@@ -163,9 +260,20 @@ def main() -> None:
     app_core_instance.flush_pending_ui_notifications()
     ui_manager_instance.on_exit_app = on_exit_app_enhanced
 
-    logging.info("Starting Tkinter mainloop on the main thread.")
+    LOGGER.info(
+        StructuredMessage(
+            "Starting Tkinter mainloop.",
+            event="ui.mainloop.start",
+            thread=threading.current_thread().name,
+        )
+    )
     main_tk_root.mainloop()
-    logging.info("Tkinter mainloop finished. The application will exit.")
+    LOGGER.info(
+        StructuredMessage(
+            "Tkinter mainloop finished; application will exit.",
+            event="ui.mainloop.stop",
+        )
+    )
 
 
 if __name__ == "__main__":
