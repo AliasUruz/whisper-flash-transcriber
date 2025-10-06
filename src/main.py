@@ -38,9 +38,13 @@ LOGGER = get_logger("whisper_flash_transcriber.bootstrap", component="Bootstrap"
 
 def ensure_display_available() -> None:
     if os.name != "nt" and not os.environ.get("DISPLAY"):
-        logging.warning(
-            "DISPLAY environment variable missing; aborting GUI startup for test mode.",
-            extra={"event": "display_validation", "status": "missing"},
+        LOGGER.warning(
+            StructuredMessage(
+                "Display server unavailable; aborting GUI bootstrap.",
+                event="startup.display_check",
+                platform=os.name,
+                reason="missing_display_variable",
+            )
         )
         sys.exit(0)
 
@@ -50,9 +54,12 @@ def configure_environment() -> None:
     for key, value in ENV_DEFAULTS.items():
         os.environ.setdefault(key, value)
     os.environ.setdefault("TRANSFORMERS_VERBOSITY", os.environ.get("TRANSFORMERS_VERBOSITY", "error"))
-    logging.info(
-        "Environment defaults applied.",
-        extra={"event": "environment_config", "details": ",".join(sorted(ENV_DEFAULTS.keys()))},
+    LOGGER.debug(
+        StructuredMessage(
+            "Base environment variables applied.",
+            event="startup.environment_applied",
+            details={"defaults": tuple(sorted(ENV_DEFAULTS))},
+        )
     )
 
 
@@ -60,9 +67,12 @@ def configure_cuda_logging() -> None:
     try:
         torch_spec = importlib.util.find_spec("torch")
         if torch_spec is None:
-            logging.debug(
-                "torch not available; skipping CUDA diagnostics.",
-                extra={"event": "cuda_diagnostics", "status": "torch_missing"},
+            LOGGER.debug(
+                StructuredMessage(
+                    "Torch module not available; skipping CUDA diagnostics.",
+                    event="startup.cuda_skipped",
+                    reason="torch_missing",
+                )
             )
             return
 
@@ -71,25 +81,30 @@ def configure_cuda_logging() -> None:
         if torch.cuda.is_available():
             try:
                 torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
-                logging.info(
-                    "cudnn.benchmark enabled (CUDA available).",
-                    extra={"event": "cuda_optimization", "status": "enabled"},
+                LOGGER.info(
+                    StructuredMessage(
+                        "cuDNN benchmark enabled for CUDA runtime.",
+                        event="cuda.cudnn_benchmark_enabled",
+                    )
                 )
             except Exception as exc:
-                logging.warning(
-                    "Unable to enable cudnn.benchmark: %s",
-                    exc,
-                    extra={"event": "cuda_optimization", "status": "failed"},
+                LOGGER.warning(
+                    StructuredMessage(
+                        "Unable to enable cuDNN benchmark mode.",
+                        event="cuda.cudnn_benchmark_failure",
+                        error=str(exc),
+                    )
                 )
 
             try:
                 num_gpus = torch.cuda.device_count()
-                logging.info(
-                    "CUDA runtime detected.",
-                    extra={
-                        "event": "cuda_detected",
-                        "details": f"version={torch.version.cuda} gpu_count={num_gpus}",
-                    },
+                LOGGER.info(
+                    StructuredMessage(
+                        "CUDA runtime detected.",
+                        event="cuda.runtime_detected",
+                        cuda_version=torch.version.cuda,
+                        gpu_count=num_gpus,
+                    )
                 )
                 for idx in range(num_gpus):
                     try:
@@ -97,47 +112,60 @@ def configure_cuda_logging() -> None:
                         props = torch.cuda.get_device_properties(idx)
                         total_mem_gb = props.total_memory / (1024 ** 3)
                         capability = f"{props.major}.{props.minor}"
-                        logging.info(
-                            "GPU inventory report.",
-                            extra={
-                                "event": "cuda_gpu_profile",
-                                "details": (
-                                    f"index={idx} name={name} vram_gb={total_mem_gb:.2f} capability={capability}"
-                                ),
-                            },
+                        LOGGER.info(
+                            StructuredMessage(
+                                "GPU device enumerated.",
+                                event="cuda.gpu_discovered",
+                                index=idx,
+                                name=name,
+                                vram_gb=f"{total_mem_gb:.2f}",
+                                compute_capability=capability,
+                            )
                         )
                     except Exception as gpu_exc:
-                        logging.warning(
-                            "Unable to query GPU properties: %s",
-                            gpu_exc,
-                            extra={"event": "cuda_gpu_profile", "status": "failed", "details": f"index={idx}"},
+                        LOGGER.warning(
+                            StructuredMessage(
+                                "Unable to query GPU device properties.",
+                                event="cuda.gpu_introspection_failed",
+                                index=idx,
+                                error=str(gpu_exc),
+                            )
                         )
 
                 try:
                     has_flash_attn = importlib.util.find_spec("flash_attn") is not None
                 except Exception:
                     has_flash_attn = False
-                logging.info(
-                    "FlashAttention 2 availability assessed.",
-                    extra={"event": "flash_attention_check", "status": str(has_flash_attn).lower()},
+                LOGGER.info(
+                    StructuredMessage(
+                        "FlashAttention 2 availability checked.",
+                        event="cuda.flash_attention_probe",
+                        available=has_flash_attn,
+                    )
                 )
             except Exception as diag_exc:
-                logging.warning(
-                    "Unable to gather CUDA capabilities: %s",
-                    diag_exc,
-                    extra={"event": "cuda_diagnostics", "status": "failed"},
+                LOGGER.warning(
+                    StructuredMessage(
+                        "Unable to gather CUDA diagnostics.",
+                        event="cuda.diagnostics_failed",
+                        error=str(diag_exc),
+                    )
                 )
         else:
-            logging.info(
-                "CUDA runtime not available; defaulting to CPU execution.",
-                extra={"event": "device_select", "status": "cpu"},
+            LOGGER.info(
+                StructuredMessage(
+                    "CUDA runtime not detected; defaulting to CPU execution.",
+                    event="cuda.cpu_fallback",
+                )
             )
     except Exception as exc:  # pragma: no cover - defensive guard
-        logging.warning(
-            "Skipping CUDA diagnostics due to error: %s",
-            exc,
+        LOGGER.warning(
+            StructuredMessage(
+                "Skipping CUDA diagnostics due to unexpected error.",
+                event="cuda.diagnostics_exception",
+                error=str(exc),
+            ),
             exc_info=True,
-            extra={"event": "cuda_diagnostics", "status": "error"},
         )
 
 
@@ -191,9 +219,11 @@ def main() -> None:
     ui_manager_instance = None
 
     def on_exit_app_enhanced(*_):
-        logging.info(
-            "Exit requested from tray icon.",
-            extra={"event": "shutdown", "status": "requested"},
+        LOGGER.info(
+            StructuredMessage(
+                "Exit requested from tray icon.",
+                event="ui.exit_requested",
+            )
         )
         if app_core_instance:
             app_core_instance.shutdown()
@@ -201,31 +231,36 @@ def main() -> None:
             ui_manager_instance.tray_icon.stop()
         main_tk_root.after(0, main_tk_root.quit)
 
-    def _log_process_shutdown() -> None:
-        logging.info(
-            "Application terminated.",
-            extra={"event": "shutdown", "status": "complete"},
+    atexit.register(
+        lambda: LOGGER.info(
+            StructuredMessage(
+                "Application terminated.",
+                event="shutdown.complete",
+            )
         )
-
-    atexit.register(_log_process_shutdown)
+    )
 
     main_tk_root = tk.Tk()
     main_tk_root.withdraw()
     icon_path = ICON_PATH
     if not os.path.exists(icon_path):
-        logging.warning(
-            "Failed to set main window icon. File not found: %s",
-            icon_path,
-            extra={"event": "icon_setup", "status": "missing"},
+        LOGGER.warning(
+            StructuredMessage(
+                "Main window icon not found on disk.",
+                event="ui.icon_missing",
+                path=icon_path,
+            )
         )
     else:
         try:
             main_tk_root.iconbitmap(icon_path)
         except Exception:
-            logging.warning(
-                "Failed to set main window icon. icon.ico may be missing or invalid at %s.",
-                icon_path,
-                extra={"event": "icon_setup", "status": "error"},
+            LOGGER.warning(
+                StructuredMessage(
+                    "Failed to set main window icon.",
+                    event="ui.icon_application_failed",
+                    path=icon_path,
+                )
             )
 
     app_core_instance = AppCore(main_tk_root)
@@ -240,14 +275,19 @@ def main() -> None:
     app_core_instance.flush_pending_ui_notifications()
     ui_manager_instance.on_exit_app = on_exit_app_enhanced
 
-    logging.info(
-        "Starting Tkinter mainloop on the main thread.",
-        extra={"event": "tk_mainloop", "status": "starting"},
+    LOGGER.info(
+        StructuredMessage(
+            "Starting Tkinter mainloop.",
+            event="ui.mainloop.start",
+            thread=threading.current_thread().name,
+        )
     )
     main_tk_root.mainloop()
-    logging.info(
-        "Tkinter mainloop finished. The application will exit.",
-        extra={"event": "tk_mainloop", "status": "finished"},
+    LOGGER.info(
+        StructuredMessage(
+            "Tkinter mainloop finished; application will exit.",
+            event="ui.mainloop.stop",
+        )
     )
 
 

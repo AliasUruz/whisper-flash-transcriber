@@ -143,13 +143,12 @@ class AudioHandler:
             self._last_overflow_sample = (now, count)
 
             LOGGER.warning(
-                "Audio input overflow detected.",
-                extra={
-                    "event": "audio_input_overflow",
-                    "details": f"occurrences={count}",
-                    "duration_ms": int(self._overflow_log_window * 1000),
-                    "status": status_str,
-                },
+                StructuredMessage(
+                    "Audio input overflow detected.",
+                    event="audio.callback_overflow",
+                    occurrences=count,
+                    window_seconds=self._overflow_log_window,
+                )
             )
 
     def _process_audio_queue(self):
@@ -314,8 +313,12 @@ class AudioHandler:
         self.audio_stream = None
         try:
             self._audio_log.info(
-                "Audio recording thread started.",
-                extra={"event": "record_thread_start", "stage": "recording"},
+                StructuredMessage(
+                    "Audio recording thread started.",
+                    event="audio.thread.start",
+                    samplerate=AUDIO_SAMPLE_RATE,
+                    channels=AUDIO_CHANNELS,
+                )
             )
             if not self.is_recording:
                 LOGGER.warning("Recording flag turned off before stream start.")
@@ -331,15 +334,20 @@ class AudioHandler:
             self.audio_stream.start()
             self.stream_started = True
             self._audio_log.info(
-                "Audio stream started.",
-                extra={"event": "input_stream_started", "stage": "recording"},
+                StructuredMessage(
+                    "Audio stream opened.",
+                    event="audio.stream.opened",
+                    blocksize=self.stream_blocksize,
+                )
             )
 
             while not self._stop_event.is_set() and self.is_recording:
                 sd.sleep(100)
             self._audio_log.info(
-                "Recording flag is off. Stopping audio stream.",
-                extra={"event": "record_stop_signal", "stage": "recording"},
+                StructuredMessage(
+                    "Recording flag lowered; stopping audio stream.",
+                    event="audio.stream.stop_requested",
+                )
             )
         except sd.PortAudioError as e:
             self._audio_log.error(f"PortAudio error during recording: {e}", exc_info=True)
@@ -357,8 +365,10 @@ class AudioHandler:
             self._stop_event.clear()
             self._record_thread = None
             self._audio_log.info(
-                "Audio recording thread finished.",
-                extra={"event": "record_thread_stop", "stage": "recording"},
+                StructuredMessage(
+                    "Audio recording thread finished.",
+                    event="audio.thread.stop",
+                )
             )
             # Stop overhead metric for the recording thread (event-based approximation)
             try:
@@ -378,8 +388,10 @@ class AudioHandler:
                     self.audio_stream.stop()
                 self.audio_stream.close()
                 self._audio_log.info(
-                    "Audio stream stopped and closed.",
-                    extra={"event": "input_stream_closed", "stage": "recording"},
+                    StructuredMessage(
+                        "Audio stream stopped and closed.",
+                        event="audio.stream.closed",
+                    )
                 )
             except Exception as e:
                 self._audio_log.error(f"Error stopping/closing audio stream: {e}")
@@ -417,8 +429,10 @@ class AudioHandler:
     def start_recording(self):
         if self.is_recording:
             LOGGER.warning(
-                "Recording is already active.",
-                extra={"event": "record_start_skipped", "stage": "recording"},
+                StructuredMessage(
+                    "Recording request ignored because capture is already active.",
+                    event="audio.recording_already_active",
+                )
             )
             return False
         if not self._processing_thread or not self._processing_thread.is_alive():
@@ -452,16 +466,6 @@ class AudioHandler:
             else:
                 self.in_memory_mode = False
                 reason = f"auto: free RAM {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
-        self._audio_log.info(
-            "Storage decision resolved.",
-            extra={
-                "event": "storage_decision",
-                "stage": "recording",
-                "status": "memory" if self.in_memory_mode else "disk",
-                "details": reason,
-            },
-        )
-
         if self.max_memory_seconds_mode == "auto":
             self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
         else:
@@ -521,8 +525,10 @@ class AudioHandler:
     def stop_recording(self):
         if not self.is_recording:
             LOGGER.warning(
-                "Recording is not active and cannot be stopped.",
-                extra={"event": "record_stop_skipped", "stage": "recording"},
+                StructuredMessage(
+                    "Stop request ignored because no recording is active.",
+                    event="audio.stop_ignored",
+                )
             )
             return False
 
