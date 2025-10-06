@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ import requests
 
 from .config_schema import coerce_with_defaults
 from .model_manager import get_curated_entry, list_catalog, list_installed, normalize_backend_label
-from .logging_utils import get_logger, log_context
+from .logging_utils import StructuredMessage, get_logger, log_context
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -143,6 +144,9 @@ DEFAULT_CONFIG = {
 
 
 LOGGER = get_logger("whisper_flash_transcriber.config", component="ConfigManager")
+BOOTSTRAP_LOGGER = get_logger(
+    "whisper_flash_transcriber.config.bootstrap", component="Bootstrap"
+)
 
 # Outras constantes de configuração (movidas de whisper_tkinter.py)
 LAST_MODEL_PROMPT_DECISION_CONFIG_KEY = "asr_last_prompt_decision"
@@ -418,7 +422,10 @@ class ConfigManager:
             logging.warning(warning)
 
         self.config = sanitized_cfg
-        self._apply_runtime_overrides(loaded_config=loaded_config_from_file)
+        self._apply_runtime_overrides(
+            loaded_config=loaded_config_from_file,
+            previous_config=None,
+        )
         self.save_config()
 
     def _apply_runtime_overrides(
@@ -426,6 +433,7 @@ class ConfigManager:
         *,
         loaded_config: dict[str, Any] | None = None,
         applied_updates: dict[str, Any] | None = None,
+        previous_config: dict[str, Any] | None = None,
     ) -> None:
         """Apply derived configuration values after schema validation."""
 
@@ -562,6 +570,11 @@ class ConfigManager:
                 loaded_config[STORAGE_ROOT_DIR_CONFIG_KEY],
                 default=default_storage_root_path,
             )
+        elif previous_config and STORAGE_ROOT_DIR_CONFIG_KEY in previous_config:
+            previous_storage_root_path = _coerce_path(
+                previous_config[STORAGE_ROOT_DIR_CONFIG_KEY],
+                default=default_storage_root_path,
+            )
 
         storage_root_path = _ensure_directory(
             requested_storage_root_path,
@@ -578,6 +591,23 @@ class ConfigManager:
         }
         if previous_storage_root_path is not None:
             asr_defaults.add(_normalized_str(previous_storage_root_path / "asr"))
+
+        previous_default_asr = (
+            previous_storage_root_path / "asr"
+            if previous_storage_root_path is not None
+            else default_asr_path
+        )
+        previous_asr_path: Path | None = None
+        if previous_config and ASR_CACHE_DIR_CONFIG_KEY in previous_config:
+            previous_asr_path = _coerce_path(
+                previous_config[ASR_CACHE_DIR_CONFIG_KEY],
+                default=previous_default_asr,
+            )
+        elif loaded_config and ASR_CACHE_DIR_CONFIG_KEY in loaded_config:
+            previous_asr_path = _coerce_path(
+                loaded_config[ASR_CACHE_DIR_CONFIG_KEY],
+                default=previous_default_asr,
+            )
 
         asr_override = False
         if applied_updates and ASR_CACHE_DIR_CONFIG_KEY in applied_updates:
@@ -627,6 +657,23 @@ class ConfigManager:
                 _normalized_str(previous_storage_root_path / "recordings")
             )
 
+        previous_default_recordings = (
+            previous_storage_root_path / "recordings"
+            if previous_storage_root_path is not None
+            else default_recordings_path
+        )
+        previous_recordings_path: Path | None = None
+        if previous_config and RECORDINGS_DIR_CONFIG_KEY in previous_config:
+            previous_recordings_path = _coerce_path(
+                previous_config[RECORDINGS_DIR_CONFIG_KEY],
+                default=previous_default_recordings,
+            )
+        elif loaded_config and RECORDINGS_DIR_CONFIG_KEY in loaded_config:
+            previous_recordings_path = _coerce_path(
+                loaded_config[RECORDINGS_DIR_CONFIG_KEY],
+                default=previous_default_recordings,
+            )
+
         recordings_override = False
         if applied_updates and RECORDINGS_DIR_CONFIG_KEY in applied_updates:
             recordings_override = True
@@ -664,6 +711,17 @@ class ConfigManager:
                 description="recordings",
             )
         cfg[RECORDINGS_DIR_CONFIG_KEY] = str(recordings_path)
+
+        self._maybe_migrate_storage_paths(
+            previous_storage_root=previous_storage_root_path,
+            new_storage_root=storage_root_path,
+            previous_asr_path=previous_asr_path,
+            new_asr_path=cache_path,
+            previous_recordings_path=previous_recordings_path,
+            new_recordings_path=recordings_path,
+            asr_override=asr_override,
+            recordings_override=recordings_override,
+        )
 
         cfg[ASR_CURATED_CATALOG_CONFIG_KEY] = list_catalog()
         default_model_id = str(self.default_config[ASR_MODEL_ID_CONFIG_KEY])
@@ -1035,7 +1093,10 @@ class ConfigManager:
             logging.warning(warning)
 
         self.config = sanitized_cfg
-        self._apply_runtime_overrides(applied_updates=filtered_updates)
+        self._apply_runtime_overrides(
+            applied_updates=filtered_updates,
+            previous_config=previous_config,
+        )
         self.save_config()
 
         changed_keys = {
@@ -1058,7 +1119,10 @@ class ConfigManager:
             logging.warning(warning)
 
         self.config = sanitized_cfg
-        self._apply_runtime_overrides(applied_updates=self.default_config)
+        self._apply_runtime_overrides(
+            applied_updates=self.default_config,
+            previous_config=previous_config,
+        )
         self.save_config()
 
         changed_keys = {
@@ -1083,6 +1147,111 @@ class ConfigManager:
                 exc_info=True,
             )
             raise
+
+    def _maybe_migrate_storage_paths(
+        self,
+        *,
+        previous_storage_root: Path | None,
+        new_storage_root: Path,
+        previous_asr_path: Path | None,
+        new_asr_path: Path,
+        previous_recordings_path: Path | None,
+        new_recordings_path: Path,
+        asr_override: bool,
+        recordings_override: bool,
+    ) -> None:
+        if previous_storage_root is None:
+            return
+
+        try:
+            storage_changed = previous_storage_root.resolve() != new_storage_root.resolve()
+        except Exception:
+            storage_changed = str(previous_storage_root) != str(new_storage_root)
+
+        if not storage_changed:
+            return
+
+        if not asr_override:
+            source_asr = previous_asr_path or previous_storage_root / "asr"
+            self._relocate_directory(source_asr, new_asr_path, "ASR cache")
+
+        if not recordings_override:
+            source_recordings = (
+                previous_recordings_path or previous_storage_root / "recordings"
+            )
+            self._relocate_directory(
+                source_recordings,
+                new_recordings_path,
+                "Recordings",
+            )
+
+    def _relocate_directory(self, source: Path, destination: Path, label: str) -> None:
+        if source is None:
+            return
+
+        try:
+            if source.resolve() == destination.resolve():
+                return
+        except Exception:
+            if str(source) == str(destination):
+                return
+
+        if not source.exists():
+            return
+
+        if destination.exists():
+            try:
+                has_entries = any(destination.iterdir())
+            except Exception:
+                has_entries = True
+
+            if has_entries:
+                logging.info(
+                    "%s directory already present at '%s'; skipping migration from '%s'.",
+                    label,
+                    destination,
+                    source,
+                )
+                return
+
+            try:
+                destination.rmdir()
+            except OSError:
+                logging.info(
+                    "%s directory already present at '%s'; skipping migration from '%s'.",
+                    label,
+                    destination,
+                    source,
+                )
+                return
+
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logging.warning(
+                "Unable to prepare destination for %s directory at '%s': %s",
+                label.lower(),
+                destination,
+                exc,
+            )
+            return
+
+        try:
+            shutil.move(str(source), str(destination))
+            logging.info(
+                "%s directory migrated from '%s' to '%s'.",
+                label,
+                source,
+                destination,
+            )
+        except Exception as exc:
+            logging.warning(
+                "Failed to migrate %s directory from '%s' to '%s': %s",
+                label.lower(),
+                source,
+                destination,
+                exc,
+            )
 
     def _verify_persistence(self, *, config_changed: bool, secrets_changed: bool) -> None:
         for changed, label, path in (
