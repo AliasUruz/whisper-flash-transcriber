@@ -584,6 +584,73 @@ def _prepare_local_installation(
     )
 
 
+def get_installation_dir(
+    cache_dir: str | Path,
+    backend: str | None,
+    model_id: str,
+) -> Path:
+    """Return the canonical on-disk directory for ``model_id``.
+
+    This helper mirrors the logic used when preparing local installations and
+    is relied upon by the faster-whisper/ctranslate2 backend loader to locate
+    previously downloaded models.  Prior to this implementation the
+    application attempted to call ``model_manager.get_installation_dir`` but
+    the function was never defined, resulting in an ``AttributeError`` during
+    backend initialization and preventing the faster-whisper and CTranslate2
+    integrations from bootstrapping correctly.
+
+    Parameters
+    ----------
+    cache_dir:
+        Base directory where models are stored. It is typically configured via
+        the application settings.
+    backend:
+        Backend identifier (``"ctranslate2"``, ``"faster-whisper"``, etc.).
+        When ``None`` the curated/default backend is used.
+    model_id:
+        Hugging Face model identifier.
+
+    Returns
+    -------
+    Path
+        Path pointing to the canonical installation directory for the given
+        model/backend pair.
+    """
+
+    normalized_dir = _normalize_cache_dir(cache_dir)
+    storage_backend = backend_storage_name(backend)
+    relative_path = _model_relative_path(model_id)
+    return normalized_dir / storage_backend / relative_path
+
+
+def find_existing_installation(
+    cache_dir: str | Path | None,
+    backend: str | None,
+    model_id: str,
+) -> str | None:
+    """Return the path to an existing local installation when available."""
+
+    if not cache_dir:
+        return None
+
+    try:
+        relative_path = _model_relative_path(model_id)
+    except ValueError:
+        return None
+
+    cache_path = _normalize_cache_dir(cache_dir)
+    storage_backend = backend_storage_name(backend)
+    candidate_names = backend_storage_candidates(backend)
+    if storage_backend not in candidate_names:
+        candidate_names.insert(0, storage_backend)
+
+    for candidate_name in candidate_names:
+        candidate_dir = cache_path / candidate_name / relative_path
+        if _is_installation_complete(candidate_dir):
+            return str(candidate_dir)
+    return None
+
+
 def ensure_local_installation(
     cache_dir: str | Path,
     backend: str | None,
