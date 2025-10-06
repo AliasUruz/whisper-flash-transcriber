@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from threading import Event, RLock
-from typing import Dict, List
+from typing import Dict, List, NamedTuple
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
@@ -117,6 +117,8 @@ def backend_storage_name(backend: str | None) -> str:
     """Map backend label to the canonical directory name used on disk."""
 
     normalized = normalize_backend_label(backend)
+    if not normalized:
+        return "ct2"
     if normalized == "ctranslate2":
         return "ct2"
     if normalized == "faster-whisper":
@@ -124,49 +126,30 @@ def backend_storage_name(backend: str | None) -> str:
     return normalized
 
 
-def _installation_dir_candidates(
-    cache_dir: str | Path, backend: str | None, model_id: str
-) -> list[Path]:
-    """Return possible locations for ``model_id`` under ``cache_dir``."""
+def backend_storage_candidates(backend: str | None) -> list[str]:
+    """Return ordered storage directory candidates for ``backend``."""
 
-    normalized_cache = _normalize_cache_dir(cache_dir)
-    normalized_backend = normalize_backend_label(backend)
+    normalized = normalize_backend_label(backend)
+    primary = backend_storage_name(normalized)
 
-    candidates: list[Path] = []
+    candidates: list[str] = []
+    if primary:
+        candidates.append(primary)
 
-    canonical = normalized_cache / backend_storage_name(normalized_backend) / model_id
-    candidates.append(canonical)
+    legacy_map = {
+        "ctranslate2": ["ctranslate2"],
+        "faster-whisper": ["ct2", "ctranslate2"],
+        "transformers": ["transformers"],
+    }
 
-    legacy_labels: list[str] = []
-    if normalized_backend:
-        legacy_labels.append(normalized_backend)
-        if normalized_backend in {"ctranslate2", "faster-whisper"}:
-            legacy_labels.extend(["ctranslate2", "faster-whisper"])
+    for legacy_name in legacy_map.get(normalized, []):
+        if legacy_name and legacy_name not in candidates:
+            candidates.append(legacy_name)
 
-    for label in legacy_labels:
-        candidate = normalized_cache / label / model_id
-        if candidate not in candidates:
-            candidates.append(candidate)
+    if normalized and normalized not in candidates:
+        candidates.append(normalized)
 
     return candidates
-
-
-def get_installation_dir(cache_dir: str | Path, backend: str | None, model_id: str) -> Path:
-    """Return the canonical installation directory for ``model_id``."""
-
-    candidates = _installation_dir_candidates(cache_dir, backend, model_id)
-    return candidates[0]
-
-
-def find_existing_installation(
-    cache_dir: str | Path, backend: str | None, model_id: str
-) -> Path | None:
-    """Return the path of a detected installation when present."""
-
-    for candidate in _installation_dir_candidates(cache_dir, backend, model_id):
-        if candidate.is_dir() and _model_dir_is_complete(candidate):
-            return candidate
-    return None
 
 
 def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
@@ -192,11 +175,21 @@ _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
 _list_installed_lock = RLock()
 
 
+
+class _PreparedInstallation(NamedTuple):
+    local_dir: Path
+    ready_path: Path | None
+    stale_local_dir: bool
+
+
 _MODEL_WEIGHT_FILE_HINTS = {
     "model.bin",
     "model.onnx",
     "model.safetensors",
 }
+
+_SNAPSHOT_SUPPORT_CACHE: dict[str, bool] = {}
+_SNAPSHOT_SUPPORT_LOCK = RLock()
 
 
 def _set_snapshot_kwarg(target: dict, name: str, value) -> None:
@@ -248,17 +241,28 @@ def _snapshot_download_supports(parameter: str) -> bool:
     if not parameter:
         return False
 
+    normalized = str(parameter)
+
+    with _SNAPSHOT_SUPPORT_LOCK:
+        cached = _SNAPSHOT_SUPPORT_CACHE.get(normalized)
+    if cached is not None:
+        return cached
+
     signature = _snapshot_download_signature()
     if signature is None:
-        return False
+        supported = False
+    elif normalized in signature.parameters:
+        supported = True
+    else:
+        supported = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        )
 
-    if parameter in signature.parameters:
-        return True
+    with _SNAPSHOT_SUPPORT_LOCK:
+        _SNAPSHOT_SUPPORT_CACHE[normalized] = supported
 
-    return any(
-        param.kind == inspect.Parameter.VAR_KEYWORD
-        for param in signature.parameters.values()
-    )
+    return supported
 
 
 def _model_dir_is_complete(path: Path) -> bool:
@@ -337,6 +341,144 @@ def _is_installation_complete(model_dir: Path) -> bool:
         if has_config and has_weights:
             return True
     return False
+
+
+def _prepare_local_installation(
+    cache_dir: Path,
+    backend_label: str,
+    model_id: str,
+) -> _PreparedInstallation:
+    storage_backend = backend_storage_name(backend_label)
+    candidate_names = backend_storage_candidates(backend_label)
+    if storage_backend not in candidate_names:
+        candidate_names.insert(0, storage_backend)
+
+    local_dir = cache_dir / storage_backend / model_id
+    complete_dir: Path | None = None
+    complete_source: str | None = None
+    stale_dirs: list[Path] = []
+
+    for candidate_name in candidate_names:
+        candidate_dir = cache_dir / candidate_name / model_id
+        if not candidate_dir.exists() or not candidate_dir.is_dir():
+            continue
+        try:
+            has_entries = any(candidate_dir.iterdir())
+        except Exception:  # pragma: no cover - best effort probing
+            has_entries = False
+        if not has_entries:
+            stale_dirs.append(candidate_dir)
+            continue
+        if _is_installation_complete(candidate_dir):
+            complete_dir = candidate_dir
+            complete_source = candidate_name
+            break
+        stale_dirs.append(candidate_dir)
+
+    ready_path: Path | None = None
+    if complete_dir is not None:
+        destination = local_dir
+        if complete_source != storage_backend and destination != complete_dir:
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:  # pragma: no cover - directory creation best effort
+                pass
+            if destination.exists() and destination != complete_dir:
+                try:
+                    shutil.rmtree(destination)
+                except Exception:  # pragma: no cover - defensive cleanup
+                    MODEL_LOGGER.debug(
+                        "Failed to remove conflicting destination directory %s before relocation.",
+                        destination,
+                        exc_info=True,
+                    )
+            try:
+                shutil.move(str(complete_dir), str(destination))
+            except Exception:
+                MODEL_LOGGER.exception(
+                    "Failed to relocate legacy model directory from %s to %s.",
+                    complete_dir,
+                    destination,
+                )
+                ready_path = complete_dir
+            else:
+                MODEL_LOGGER.info(
+                    "Relocated ASR model directory for backend %s: %s -> %s.",
+                    backend_label,
+                    complete_dir,
+                    destination,
+                )
+                ready_path = destination
+                _invalidate_list_installed_cache(cache_dir)
+        else:
+            ready_path = complete_dir
+
+    stale_local_dir = False
+    removed_any = False
+    for stale_dir in stale_dirs:
+        if ready_path is not None and stale_dir == ready_path:
+            continue
+        if stale_dir == local_dir:
+            stale_local_dir = True
+        if not stale_dir.exists():
+            continue
+        try:
+            shutil.rmtree(stale_dir)
+        except Exception:  # pragma: no cover - best effort cleanup
+            MODEL_LOGGER.debug(
+                "Failed to remove incomplete model directory %s before re-download.",
+                stale_dir,
+                exc_info=True,
+            )
+        else:
+            removed_any = True
+            MODEL_LOGGER.info(
+                "Removed incomplete model directory at %s before retrying download.",
+                stale_dir,
+            )
+
+    if removed_any:
+        _invalidate_list_installed_cache(cache_dir)
+
+    if stale_local_dir:
+        MODEL_LOGGER.warning(
+            "Detected incomplete model directory at %s; removing before re-downloading.",
+            local_dir,
+        )
+
+    return _PreparedInstallation(
+        local_dir=local_dir,
+        ready_path=ready_path,
+        stale_local_dir=stale_local_dir,
+    )
+
+
+def ensure_local_installation(
+    cache_dir: str | Path,
+    backend: str | None,
+    model_id: str,
+) -> Path | None:
+    cache_path = Path(cache_dir)
+
+    curated_entry = get_curated_entry(model_id)
+    curated_backend = (
+        normalize_backend_label(curated_entry.get("backend")) if curated_entry else ""
+    )
+
+    requested_backend = normalize_backend_label(backend)
+    backend_label = requested_backend or curated_backend or "ctranslate2"
+
+    if curated_backend and backend_label != curated_backend:
+        MODEL_LOGGER.warning(
+            "Overriding backend '%s' with curated backend '%s' for model '%s'.",
+            backend_label,
+            curated_backend,
+            model_id,
+        )
+        backend_label = curated_backend
+
+    prepared = _prepare_local_installation(cache_path, backend_label, model_id)
+    return prepared.ready_path
 
 
 def list_catalog() -> List[Dict[str, str]]:
@@ -642,84 +784,18 @@ def ensure_download(
     storage_backend = backend_storage_name(backend_label or backend)
     backend_label = backend_label or normalize_backend_label(storage_backend) or storage_backend
 
-    storage_backend = backend_storage_name(backend_label)
-    candidates = _installation_dir_candidates(cache_dir, backend_label, model_id)
-    local_dir = candidates[0]
-
-    existing_dir: Path | None = None
-    for candidate in candidates:
-        if candidate.is_dir() and _model_dir_is_complete(candidate):
-            existing_dir = candidate
-            break
-
-    if existing_dir is not None:
-        if existing_dir != local_dir:
-            try:
-                local_dir.parent.mkdir(parents=True, exist_ok=True)
-                if local_dir.exists():
-                    shutil.rmtree(local_dir)
-                shutil.move(str(existing_dir), str(local_dir))
-                MODEL_LOGGER.info(
-                    "Migrated ASR model %s from %s to canonical path %s.",
-                    model_id,
-                    existing_dir,
-                    local_dir,
-                )
-                existing_dir = local_dir
-                _invalidate_list_installed_cache(cache_dir)
-            except Exception:
-                MODEL_LOGGER.warning(
-                    "Failed to migrate existing model %s from %s to %s; using original location.",
-                    model_id,
-                    existing_dir,
-                    local_dir,
-                    exc_info=True,
-                )
-                local_dir = existing_dir
-
+    prepared = _prepare_local_installation(cache_dir, backend_label, model_id)
+    local_dir = prepared.local_dir
+    if prepared.ready_path is not None:
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=skip model=%s backend=%s path=%s",
             model_id,
             backend_label,
-            local_dir,
+            prepared.ready_path,
         )
-        return str(local_dir)
+        return str(prepared.ready_path)
 
-    stale_local_dir = False
-    if local_dir.exists():
-        stale_local_dir = True
-        MODEL_LOGGER.warning(
-            "Detected incomplete model directory at %s; removing before re-downloading.",
-            local_dir,
-        )
-        try:
-            shutil.rmtree(local_dir)
-        except Exception:
-            MODEL_LOGGER.debug(
-                "Failed to remove model directory %s before re-download.",
-                local_dir,
-                exc_info=True,
-            )
-        else:
-            _invalidate_list_installed_cache(cache_dir)
-
-    for candidate in candidates[1:]:
-        if not candidate.exists():
-            continue
-        MODEL_LOGGER.warning(
-            "Removing legacy ASR model directory at %s before fresh installation.",
-            candidate,
-        )
-        try:
-            shutil.rmtree(candidate)
-        except Exception:
-            MODEL_LOGGER.debug(
-                "Failed to remove legacy directory %s during installation prep.",
-                candidate,
-                exc_info=True,
-            )
-        else:
-            _invalidate_list_installed_cache(cache_dir)
+    stale_local_dir = prepared.stale_local_dir
 
     local_dir.parent.mkdir(parents=True, exist_ok=True)
 
