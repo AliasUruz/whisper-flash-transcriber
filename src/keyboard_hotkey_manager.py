@@ -37,7 +37,7 @@ class KeyboardHotkeyManager:
         """Load configuration from disk, creating the file with defaults when it is missing."""
         try:
             if not os.path.exists(self.config_file):
-                logging.warning(f"'{self.config_file}' not found. Creating it with default values.")
+                logging.info(f"'{self.config_file}' not found. Creating it with default values for the first launch.")
                 self._save_config()
 
             with open(self.config_file, 'r', encoding='utf-8') as f:
