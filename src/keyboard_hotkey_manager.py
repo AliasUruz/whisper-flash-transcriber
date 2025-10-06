@@ -4,6 +4,8 @@ import json
 import time
 import threading
 import logging
+from pathlib import Path
+
 import keyboard
 
 class KeyboardHotkeyManager:
@@ -37,7 +39,7 @@ class KeyboardHotkeyManager:
         """Load configuration from disk, creating the file with defaults when it is missing."""
         try:
             if not os.path.exists(self.config_file):
-                logging.warning(f"'{self.config_file}' not found. Creating it with default values.")
+                logging.info(f"'{self.config_file}' not found. Creating it with default values for the first launch.")
                 self._save_config()
 
             with open(self.config_file, 'r', encoding='utf-8') as f:
@@ -52,9 +54,27 @@ class KeyboardHotkeyManager:
                     self.record_mode,
                 )
         except (json.JSONDecodeError, FileNotFoundError) as e:
-            logging.error(f"Error loading or creating hotkey config: {e}. Using default hotkeys.")
+            logging.error(
+                f"Error loading or creating hotkey config: {e}. Resetting file to defaults.",
+                exc_info=True,
+            )
+            try:
+                self.record_key = "f3"
+                self.agent_key = "f4"
+                self.record_mode = "toggle"
+                self._save_config()
+            except Exception as write_error:
+                logging.error(
+                    f"Failed to rebuild hotkey configuration after corruption: {write_error}",
+                    exc_info=True,
+                )
+                raise
+            raise RuntimeError(
+                f"Hotkey configuration '{self.config_file}' was corrupted and has been reset. Please restart the application."
+            ) from e
         except Exception as e:
             logging.error(f"An unexpected error occurred while loading hotkey config: {e}", exc_info=True)
+            raise
 
     def _save_config(self):
         """Persist the current hotkey configuration to disk."""
@@ -70,6 +90,9 @@ class KeyboardHotkeyManager:
                          self.record_key, self.agent_key, self.record_mode)
         except Exception as e:
             logging.error(f"Failed to save hotkey configuration: {e}")
+            raise RuntimeError(
+                f"Unable to persist hotkey configuration '{self.config_file}': {e}"
+            ) from e
 
     def start(self):
         """Inicia o gerenciador de hotkeys."""
@@ -166,6 +189,25 @@ class KeyboardHotkeyManager:
 
         if agent is not None:
             self.callback_agent = agent
+
+    def describe_persistence_state(self) -> dict[str, object]:
+        """Retorna informações de diagnóstico do arquivo de hotkeys."""
+
+        path = Path(self.config_file).resolve()
+        exists = path.is_file()
+        try:
+            size = path.stat().st_size if exists else 0
+        except OSError:
+            size = 0
+
+        return {
+            "path": str(path),
+            "exists": exists,
+            "size": size,
+            "record_key": self.record_key,
+            "agent_key": self.agent_key,
+            "record_mode": self.record_mode,
+        }
 
     def _store_hotkey_handle(self, handle_id, handle):
         """Guarda o handle retornado pela biblioteca ``keyboard``."""

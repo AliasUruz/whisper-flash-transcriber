@@ -238,7 +238,7 @@ class AppConfig(BaseModel):
             return str(Path(value).expanduser())
         if isinstance(value, Path):
             return str(value.expanduser())
-        raise ValueError("asr_cache_dir must be a string or Path")
+        raise ValueError("Directory paths must be provided as string or Path objects")
 
     @field_validator("asr_installed_models", "asr_curated_catalog", mode="before")
     @classmethod
