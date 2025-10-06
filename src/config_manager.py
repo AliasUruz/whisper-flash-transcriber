@@ -439,13 +439,20 @@ class ConfigManager:
             self.config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False))
         )
 
-        self.config[ASR_BACKEND_CONFIG_KEY] = str(
+        backend_value = _normalize_asr_backend(
             self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
         )
+        if not backend_value:
+            backend_value = _normalize_asr_backend(self.default_config[ASR_BACKEND_CONFIG_KEY])
+        self.config[ASR_BACKEND_CONFIG_KEY] = backend_value
 
-        self.config[ASR_MODEL_ID_CONFIG_KEY] = str(
+        model_id_value = str(
             self.config.get(ASR_MODEL_ID_CONFIG_KEY, self.default_config[ASR_MODEL_ID_CONFIG_KEY])
-        )
+            or ""
+        ).strip()
+        if not model_id_value:
+            model_id_value = str(self.default_config[ASR_MODEL_ID_CONFIG_KEY])
+        self.config[ASR_MODEL_ID_CONFIG_KEY] = model_id_value
     
         # Lógica de validação para gpu_index
         try:
