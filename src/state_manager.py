@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from enum import Enum, auto, unique
 from collections.abc import Callable
 
-LOGGER = logging.getLogger('whisper_flash_transcriber.state')
+from .logging_utils import get_logger, log_context
+
+LOGGER = get_logger('whisper_flash_transcriber.state', component='StateManager')
 
 # Estados da aplicação
 STATE_IDLE = "IDLE"
@@ -202,12 +204,17 @@ class StateManager:
             self._last_notification = notification
 
         origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
-        transition_log = f"State transition via {origin_label}: {previous_state} -> {mapped_state}"
-        if message:
-            transition_log += f" ({message})"
-        if source:
-            transition_log += f" [source={source}]"
-        LOGGER.info(transition_log)
+        LOGGER.info(
+            log_context(
+                "Application state transitioned.",
+                event="state.transition",
+                previous_state=previous_state,
+                current_state=mapped_state,
+                origin=origin_label,
+                message=message,
+                source=source,
+            )
+        )
 
         self._notify_subscribers(notification)
 

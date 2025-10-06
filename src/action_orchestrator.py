@@ -12,8 +12,9 @@ import soundfile as sf
 from . import state_manager as sm
 from .audio_handler import AUDIO_SAMPLE_RATE
 from .config_manager import ConfigManager
+from .logging_utils import get_logger, log_context
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__, component='ActionOrchestrator')
 
 
 class ActionOrchestrator:
@@ -86,9 +87,12 @@ class ActionOrchestrator:
         )
         if duration_seconds < min_duration:
             LOGGER.info(
-                "Segment discarded: duration %.2fs below threshold %.2fs.",
-                duration_seconds,
-                min_duration,
+                log_context(
+                    "Audio segment discarded due to minimum duration threshold.",
+                    event="audio.segment_discarded",
+                    duration_seconds=round(duration_seconds, 2),
+                    min_duration_seconds=round(min_duration, 2),
+                )
             )
             self._state_manager.set_state(
                 sm.StateEvent.AUDIO_RECORDING_DISCARDED,
