@@ -1,10 +1,11 @@
 import atexit
-import importlib
+import importlib.util
+import logging
 import os
 import sys
 import threading
 import tkinter as tk
-import threading
+
 
 # Add project root to path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,12 +31,6 @@ ENV_DEFAULTS = {
 }
 
 
-from src.logging_utils import get_logger, log_context, setup_logging
-
-
-LOGGER = get_logger("whisper_flash_transcriber.bootstrap", component="Bootstrap")
-
-
 def ensure_display_available() -> None:
     if os.name != "nt" and not os.environ.get("DISPLAY"):
         LOGGER.warning(
@@ -50,7 +45,6 @@ def ensure_display_available() -> None:
 
 
 def configure_environment() -> None:
-    applied_defaults = 0
     for key, value in ENV_DEFAULTS.items():
         os.environ.setdefault(key, value)
     os.environ.setdefault("TRANSFORMERS_VERBOSITY", os.environ.get("TRANSFORMERS_VERBOSITY", "error"))
@@ -200,7 +194,7 @@ def patch_tk_variable_cleanup() -> None:
 def main() -> None:
     setup_logging()
     LOGGER.info(
-        log_context(
+        StructuredMessage(
             "Whisper Flash Transcriber bootstrap sequence started.",
             event="bootstrap.start",
             python_version=sys.version.split()[0],
