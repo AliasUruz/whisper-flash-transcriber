@@ -1,9 +1,13 @@
+import concurrent.futures
+import importlib
+import importlib.util
 import logging
 import threading
-import concurrent.futures
 import time
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
-import torch
 
 try:  # pragma: no cover - biblioteca opcional
     from whisper_flash import make_backend  # type: ignore
@@ -64,6 +68,61 @@ from .config_manager import (
 )
 from . import model_manager as model_manager_module
 from .logging_utils import current_correlation_id, get_logger, scoped_correlation_id
+
+if TYPE_CHECKING:  # pragma: no cover - hints only
+    import torch as torch_type
+
+torch: Any | None
+_torch_spec = importlib.util.find_spec("torch")
+if _torch_spec is not None:  # pragma: no cover - import side effect
+    torch = importlib.import_module("torch")
+else:  # pragma: no cover - optional dependency missing
+    torch = None
+
+
+def _torch_available() -> bool:
+    return torch is not None
+
+
+def _torch_cuda_available() -> bool:
+    if torch is None:
+        return False
+    cuda = getattr(torch, "cuda", None)
+    if cuda is None:
+        return False
+    try:
+        return bool(cuda.is_available())
+    except Exception:
+        return False
+
+
+def _torch_cuda_device_count() -> int:
+    if not _torch_cuda_available():
+        return 0
+    device_count = getattr(torch.cuda, "device_count", None)
+    if device_count is None:
+        return 0
+    try:
+        return int(device_count())
+    except Exception:
+        return 0
+
+
+@contextmanager
+def _torch_no_grad():
+    if torch is not None and hasattr(torch, "no_grad"):
+        with torch.no_grad():
+            yield
+    else:
+        yield
+
+
+def _require_torch() -> "torch_type":
+    if torch is None:
+        raise RuntimeError(
+            "PyTorch is required for the selected ASR backend but is not installed."
+        )
+    return torch
 
 LOGGER = get_logger('whisper_flash_transcriber.transcription', component='TranscriptionHandler')
 
@@ -295,8 +354,9 @@ class TranscriptionHandler:
 
         self.pipe = None
 
-        if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and torch.cuda.is_available():
+        if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and _torch_cuda_available():
             try:
+                assert torch is not None  # narrow type for static checkers
                 torch.cuda.empty_cache()
             except Exception as cache_error:
                 logging.debug(
@@ -483,7 +543,7 @@ class TranscriptionHandler:
             backend = "transformers"
 
         if compute_device == "auto":
-            compute_device = "cuda" if torch.cuda.is_available() else "cpu"
+            compute_device = "cuda" if _torch_cuda_available() else "cpu"
 
         if dtype == "auto":
             dtype = "float16" if compute_device.startswith("cuda") else "float32"
@@ -583,8 +643,9 @@ class TranscriptionHandler:
 
     def _initialize_model_and_processor(self):
         try:
-            if torch.cuda.is_available():
+            if _torch_cuda_available():
                 try:
+                    assert torch is not None
                     torch.cuda.empty_cache()
                 except Exception:
                     logging.debug(
@@ -632,7 +693,7 @@ class TranscriptionHandler:
                 f"cuda:{self.gpu_index}"
                 if self.gpu_index is not None
                 and self.gpu_index >= 0
-                and torch.cuda.is_available()
+                and _torch_cuda_available()
                 else "cpu"
             )
 
@@ -651,10 +712,12 @@ class TranscriptionHandler:
 
             if (
                 self.enable_torch_compile
+                and _torch_available()
                 and hasattr(torch, "compile")
                 and device.startswith("cuda")
             ):
                 try:
+                    assert torch is not None
                     model = torch.compile(model)  # type: ignore[attr-defined]
                     logging.info(
                         "torch.compile applied to the model (experimental).",
@@ -690,6 +753,7 @@ class TranscriptionHandler:
                     )
 
             generate_kwargs_init = {"task": "transcribe", "language": None}
+            torch_mod = _require_torch()
             self.pipe = pipeline(
                 "automatic-speech-recognition",
                 model=model,
@@ -697,7 +761,7 @@ class TranscriptionHandler:
                 feature_extractor=processor.feature_extractor,
                 chunk_length_s=self.chunk_length_sec,
                 batch_size=self.batch_size,
-                torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
+                torch_dtype=torch_mod.float16 if device.startswith("cuda") else torch_mod.float32,
                 generate_kwargs=generate_kwargs_init,
             )
             logging.info(
@@ -714,7 +778,7 @@ class TranscriptionHandler:
                 t = _np.linspace(0, warmup_dur, n, False, dtype=_np.float32)
                 tone = (_np.sin(2 * _np.pi * 440.0 * t)).astype(_np.float32)
                 t0 = time.perf_counter()
-                with torch.no_grad():
+                with _torch_no_grad():
                     _ = self.pipe(
                         tone,
                         chunk_length_s=self.chunk_length_sec,
@@ -889,7 +953,7 @@ class TranscriptionHandler:
 
     def _get_dynamic_batch_size(self) -> int:
         device_in_use = (str(self.device_in_use or "").lower())
-        if not (torch.cuda.is_available() and device_in_use.startswith("cuda")):
+        if not (_torch_cuda_available() and device_in_use.startswith("cuda")):
             logging.info(
                 "GPU unavailable or not selected; using CPU batch size (4).",
                 extra={"event": "batch_size", "status": "cpu_fallback"},
@@ -1068,8 +1132,8 @@ class TranscriptionHandler:
                     req_dtype,
                 )
 
-                available_cuda = torch.cuda.is_available()
-                gpu_count = torch.cuda.device_count() if available_cuda else 0
+                available_cuda = _torch_cuda_available()
+                gpu_count = _torch_cuda_device_count() if available_cuda else 0
 
                 effective_device = "cpu"
                 transformers_device: int | str = -1
@@ -1149,6 +1213,10 @@ class TranscriptionHandler:
                     chunk_length_s=float(self.chunk_length_sec),
                     batch_size=self.batch_size,
                 )
+                if backend_name in {"transformers", "whisper"} and not _torch_available():
+                    raise RuntimeError(
+                        "PyTorch is required for the Transformers backend but is not installed."
+                    )
                 load_kwargs["model_id"] = req_model_id
                 try:
                     self._asr_backend.load(**load_kwargs)
@@ -1266,14 +1334,16 @@ class TranscriptionHandler:
             logging.info("Loading processor for %s...", model_id)
             processor = AutoProcessor.from_pretrained(str(model_path))
 
-            if torch.cuda.is_available():
+            torch_mod = _require_torch()
+
+            if _torch_cuda_available():
                 if self.gpu_index == -1:
-                    num_gpus = torch.cuda.device_count()
+                    num_gpus = _torch_cuda_device_count()
                     if num_gpus > 0:
                         best_gpu_index = 0
                         max_vram = 0
                         for i in range(num_gpus):
-                            props = torch.cuda.get_device_properties(i)
+                            props = torch_mod.cuda.get_device_properties(i)
                             if props.total_memory > max_vram:
                                 max_vram = props.total_memory
                                 best_gpu_index = i
@@ -1281,7 +1351,7 @@ class TranscriptionHandler:
                         logging.info(
                             "Auto-selected GPU with highest total VRAM: %s (%s)",
                             self.gpu_index,
-                            torch.cuda.get_device_name(self.gpu_index),
+                            torch_mod.cuda.get_device_name(self.gpu_index),
                         )
                     else:
                         logging.info("No GPU available; using CPU.")
@@ -1300,11 +1370,11 @@ class TranscriptionHandler:
 
             device = (
                 f"cuda:{self.gpu_index}"
-                if self.gpu_index >= 0 and torch.cuda.is_available()
+                if self.gpu_index >= 0 and _torch_cuda_available()
                 else "cpu"
             )
             self.device_in_use = device
-            torch_dtype_local = torch.float16 if device.startswith("cuda") else torch.float32
+            torch_dtype_local = torch_mod.float16 if device.startswith("cuda") else torch_mod.float32
             resolved_device = device
             resolved_dtype_label = str(torch_dtype_local).replace("torch.", "")
             self._update_model_log_context(device=resolved_device, dtype=resolved_dtype_label)
@@ -1314,14 +1384,14 @@ class TranscriptionHandler:
             try:
                 if (
                     compute_device == "cuda"
-                    and torch.cuda.is_available()
+                    and _torch_cuda_available()
                     and self.gpu_index == -1
                 ):
                     best_idx = None
                     best_free = -1
-                    for i in range(torch.cuda.device_count()):
+                    for i in range(_torch_cuda_device_count()):
                         try:
-                            free_b, _ = torch.cuda.mem_get_info(torch.device(f"cuda:{i}"))
+                            free_b, _ = torch_mod.cuda.mem_get_info(torch_mod.device(f"cuda:{i}"))
                             if free_b > best_free:
                                 best_free = free_b
                                 best_idx = i
@@ -1334,7 +1404,10 @@ class TranscriptionHandler:
                     if best_idx is not None:
                         self.gpu_index = best_idx
                         free_gb = best_free / (1024 ** 3) if best_free > 0 else 0.0
-                        total_gb = torch.cuda.get_device_properties(self.gpu_index).total_memory / (1024 ** 3)
+                        total_gb = (
+                            torch_mod.cuda.get_device_properties(self.gpu_index).total_memory
+                            / (1024 ** 3)
+                        )
                         logging.info(
                             "Automatic GPU selection completed.",
                             extra={
@@ -1346,7 +1419,7 @@ class TranscriptionHandler:
                 logging.warning("Failed to select GPU by free memory: %s", _gpu_sel_e)
 
             quant_config = None
-            if compute_device == "cuda" and torch.cuda.is_available() and self.gpu_index >= 0:
+            if compute_device == "cuda" and _torch_cuda_available() and self.gpu_index >= 0:
                 quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
             attn_impl = "sdpa"
@@ -1623,10 +1696,14 @@ class TranscriptionHandler:
                             pass
 
                     try:
-                        device = f"cuda:{self.gpu_index}" if torch.cuda.is_available() and self.gpu_index >= 0 else "cpu"
+                        device = (
+                            f"cuda:{self.gpu_index}"
+                            if _torch_cuda_available() and self.gpu_index >= 0
+                            else "cpu"
+                        )
                     except Exception:
                         device = "cpu"
-                    dtype = "fp16" if (torch.cuda.is_available() and self.gpu_index >= 0) else "fp32"
+                    dtype = "fp16" if (_torch_cuda_available() and self.gpu_index >= 0) else "fp32"
                     try:
                         import importlib.util as _spec_util
                         attn_impl = "flash_attn2" if _spec_util.find_spec("flash_attn") is not None else "sdpa"
@@ -1638,7 +1715,7 @@ class TranscriptionHandler:
                     t_pre_end = time.perf_counter()
                     t_pre_ms = (t_pre_end - t_pre_start) * 1000.0
 
-                    with torch.no_grad():
+                    with _torch_no_grad():
                         t_infer_start = time.perf_counter()
                         result = self.pipe(
                             audio_source,
@@ -1833,10 +1910,11 @@ class TranscriptionHandler:
 
         try:
             enable_clear = bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY))
-            is_gpu = torch.cuda.is_available() and getattr(self, "gpu_index", -1) >= 0
+            is_gpu = _torch_cuda_available() and getattr(self, "gpu_index", -1) >= 0
             long_audio = float(getattr(self, "chunk_length_sec", 30.0)) >= 45.0
             if enable_clear and is_gpu and long_audio:
                 t_ec_start = time.perf_counter()
+                assert torch is not None
                 before_b = (
                     torch.cuda.memory_allocated()
                     if hasattr(torch.cuda, "memory_allocated")
@@ -1883,7 +1961,7 @@ class TranscriptionHandler:
                     "Application state changed before transcription result. UI will not be updated."
                 )
 
-        if torch.cuda.is_available():
+        if _torch_cuda_available():
             logging.debug(
                 "GPU cache preserved for consecutive transcriptions."
             )
@@ -1990,9 +2068,12 @@ class TranscriptionHandler:
         Baseada na VRAM livre estimada da GPU alvo.
         """
         try:
-            if not torch.cuda.is_available() or self.gpu_index < 0:
+            if not _torch_cuda_available() or self.gpu_index < 0:
                 return float(self.chunk_length_sec)  # manter o manual atual em CPU
-            free_bytes, total_bytes = torch.cuda.mem_get_info(torch.device(f"cuda:{self.gpu_index}"))
+            torch_mod = _require_torch()
+            free_bytes, total_bytes = torch_mod.cuda.mem_get_info(
+                torch_mod.device(f"cuda:{self.gpu_index}")
+            )
             free_gb = free_bytes / (1024 ** 3)
             # Heurística: mais VRAM livre -> chunks maiores
             if free_gb >= 12:
@@ -2022,7 +2103,8 @@ class TranscriptionHandler:
         except Exception as e:
             logging.error(f"Erro ao encerrar o executor de transcrição: {e}")
         finally:
-            if torch.cuda.is_available():
+            if _torch_cuda_available():
+                assert torch is not None
                 torch.cuda.empty_cache()
                 logging.debug(
                     "Cache da GPU liberado no encerramento do aplicativo."
