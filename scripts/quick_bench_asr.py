@@ -1,4 +1,8 @@
-"""Quick benchmarking utility for ASR backends."""
+"""Quick benchmarking utility for ASR backends.
+
+Este script agora emite mensagens estruturadas via logging; confira os logs
+em vez do STDOUT cru para acompanhar o progresso e os resultados do benchmark.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,19 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from src.logging_utils import (  # noqa: E402  # isort:skip
+    get_logger,
+    log_context,
+    log_operation,
+    setup_logging,
+)
+
+LOGGER = get_logger(
+    "whisper_flash_transcriber.scripts.quick_bench_asr",
+    component="QuickBenchASR",
+    default_event="scripts.quick_bench_asr",
+)
 
 try:  # pragma: no cover - apenas para ambientes de teste sem PortAudio
     import sounddevice  # type: ignore  # noqa: F401
@@ -347,32 +364,102 @@ def _ensure_app_dependencies() -> None:
 
 
 def main() -> None:
+    """Execute o benchmark e reporte os resultados via logger estruturado."""
+
+    setup_logging()
     _ensure_app_dependencies()
     assert _CONFIG_MANAGER_CLS is not None
     assert _TRANSCRIPTION_HANDLER_CLS is not None
 
     cfg = _CONFIG_MANAGER_CLS()
 
-    handler = _TRANSCRIPTION_HANDLER_CLS(
-        cfg,
-        gemini_api_client=None,
-        on_model_ready_callback=lambda: None,
-        on_model_error_callback=lambda e: print(f"error: {e}"),
-        on_transcription_result_callback=lambda text, _orig: print(text),
-        on_agent_result_callback=None,
-        on_segment_transcribed_callback=None,
-        is_state_transcribing_fn=lambda: False,
-    )
+    with log_operation(
+        LOGGER,
+        "Executando benchmark rápido de ASR.",
+        event="scripts.quick_bench_asr.run",
+        details={"iterations": 3, "audio_duration_sec": 15.0},
+    ) as operation_id:
+        def _log_model_error(exc: Exception) -> None:
+            LOGGER.error(
+                log_context(
+                    "Erro reportado pelo backend durante o benchmark.",
+                    event="scripts.quick_bench_asr.model_error",
+                    operation_id=operation_id,
+                    error=repr(exc),
+                ),
+                exc_info=exc,
+            )
 
-    handler.reload_asr()
-    audio = np.zeros(int(16000 * 15), dtype="float32")
-    times = []
-    for _ in range(3):
-        start = time.perf_counter()
-        handler._asr_backend.transcribe(audio, chunk_length_s=30, batch_size=1)
-        times.append(time.perf_counter() - start)
-    median = sorted(times)[len(times) // 2]
-    print(f"median_time={median:.2f}s")
+        def _log_transcription(text: str, _orig: Any) -> None:
+            LOGGER.info(
+                log_context(
+                    "Transcrição concluída para áudio sintético.",
+                    event="scripts.quick_bench_asr.transcription_result",
+                    operation_id=operation_id,
+                    transcript=text,
+                )
+            )
+
+        handler = _TRANSCRIPTION_HANDLER_CLS(
+            cfg,
+            gemini_api_client=None,
+            on_model_ready_callback=lambda: None,
+            on_model_error_callback=_log_model_error,
+            on_transcription_result_callback=_log_transcription,
+            on_agent_result_callback=None,
+            on_segment_transcribed_callback=None,
+            is_state_transcribing_fn=lambda: False,
+        )
+
+        with log_operation(
+            LOGGER,
+            "Carregando backend de transcrição para o benchmark.",
+            event="scripts.quick_bench_asr.load_backend",
+            details={"operation_id": operation_id},
+        ):
+            handler.reload_asr()
+
+        audio = np.zeros(int(16000 * 15), dtype="float32")
+        times = []
+        for iteration in range(1, 4):
+            with log_operation(
+                LOGGER,
+                "Executando iteração do benchmark de transcrição.",
+                event="scripts.quick_bench_asr.iteration",
+                details={
+                    "iteration": iteration,
+                    "chunk_length_s": 30,
+                    "batch_size": 1,
+                    "parent_operation_id": operation_id,
+                },
+            ) as iteration_operation_id:
+                start = time.perf_counter()
+                handler._asr_backend.transcribe(
+                    audio,
+                    chunk_length_s=30,
+                    batch_size=1,
+                )
+                elapsed = time.perf_counter() - start
+                times.append(elapsed)
+                LOGGER.info(
+                    log_context(
+                        "Iteração concluída.",
+                        event="scripts.quick_bench_asr.iteration_complete",
+                        operation_id=iteration_operation_id,
+                        duration_s=round(elapsed, 6),
+                    )
+                )
+
+        median = sorted(times)[len(times) // 2]
+        LOGGER.info(
+            log_context(
+                "Benchmark finalizado.",
+                event="scripts.quick_bench_asr.summary",
+                operation_id=operation_id,
+                median_time_s=round(median, 4),
+                iterations=len(times),
+            )
+        )
 
 
 # --- Tests ---------------------------------------------------------------
