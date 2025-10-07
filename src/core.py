@@ -65,6 +65,7 @@ from .action_orchestrator import ActionOrchestrator
 from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
+from .model_download_controller import ModelDownloadController
 from . import model_manager as model_manager_module
 from .onboarding.first_run_wizard import (
     DownloadProgressPanel,
