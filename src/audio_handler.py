@@ -30,6 +30,7 @@ from .config_manager import (
 from .logging_utils import (
     StructuredMessage,
     get_logger,
+    join_thread_with_timeout,
     log_context,
     log_operation,
     scoped_correlation_id,
@@ -745,10 +746,20 @@ class AudioHandler:
                     processing_thread = self._processing_thread
                     if processing_thread is threading.current_thread():
                         self._log.debug(
-                            "Stop recording invoked from processing thread; skipping self-join.",
+                            log_context(
+                                "Stop recording invoked from processing thread; skipping self-join.",
+                                event="audio.processing_thread.join_skipped",
+                                details={"thread_name": processing_thread.name},
+                            )
                         )
-                    elif processing_thread.is_alive():
-                        processing_thread.join()
+                    else:
+                        join_thread_with_timeout(
+                            processing_thread,
+                            timeout=2.0,
+                            logger=self._log,
+                            thread_name=processing_thread.name,
+                            event_prefix="audio.processing_thread",
+                        )
                     self._processing_thread = None
 
                 if self.use_vad and self.vad_manager:

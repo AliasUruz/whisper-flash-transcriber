@@ -859,6 +859,97 @@ def log_duration(
         )
 
 
+def join_thread_with_timeout(
+    thread: threading.Thread | None,
+    *,
+    timeout: float,
+    logger: logging.Logger | logging.LoggerAdapter,
+    thread_name: str | None = None,
+    event_prefix: str | None = None,
+    details: Mapping[str, Any] | None = None,
+    log_success: bool = False,
+) -> bool:
+    """Wait for ``thread`` to finish, logging when the join exceeds ``timeout``."""
+
+    if thread is None:
+        return True
+
+    if not isinstance(thread, threading.Thread):
+        raise TypeError("join_thread_with_timeout expects a threading.Thread instance or None")
+
+    if thread is threading.current_thread():
+        logger.debug(
+            log_context(
+                "Skipping join on current thread.",
+                event=(f"{event_prefix}.join_skipped_self" if event_prefix else "thread.join_skipped_self"),
+                details={
+                    "thread_name": thread_name or thread.name,
+                },
+            )
+        )
+        return True
+
+    label = thread_name or thread.name or "<unnamed-thread>"
+
+    if not thread.is_alive():
+        if log_success:
+            logger.debug(
+                log_context(
+                    "Thread already stopped before join.",
+                    event=(f"{event_prefix}.join_no_wait" if event_prefix else "thread.join_no_wait"),
+                    details={"thread_name": label},
+                )
+            )
+        return True
+
+    try:
+        thread.join(timeout)
+    except Exception:
+        logger.warning(
+            log_context(
+                "Exception raised while waiting for thread shutdown.",
+                event=(f"{event_prefix}.join_exception" if event_prefix else "thread.join_exception"),
+                details={
+                    "thread_name": label,
+                    "timeout_seconds": timeout,
+                    "thread_ident": thread.ident,
+                },
+            ),
+            exc_info=True,
+        )
+        return False
+
+    if thread.is_alive():
+        extra = {
+            "thread_name": label,
+            "timeout_seconds": timeout,
+            "thread_ident": thread.ident,
+        }
+        if details:
+            extra.update(details)
+        logger.warning(
+            log_context(
+                "Thread did not finish within the allotted timeout.",
+                event=(f"{event_prefix}.join_timeout" if event_prefix else "thread.join_timeout"),
+                details=extra,
+            )
+        )
+        return False
+
+    if log_success:
+        extra = {"thread_name": label, "thread_ident": thread.ident}
+        if details:
+            extra.update(details)
+        logger.debug(
+            log_context(
+                "Thread joined successfully.",
+                event=(f"{event_prefix}.join_success" if event_prefix else "thread.join_success"),
+                details=extra,
+            )
+        )
+    return True
+
+
 def get_logger(
     name: str,
     *,
@@ -956,6 +1047,7 @@ __all__ = [
     "log_duration",
     "log_context",
     "log_event",
+    "join_thread_with_timeout",
     "log_operation",
     "install_exception_hooks",
     "scoped_correlation_id",
