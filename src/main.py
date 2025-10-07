@@ -723,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
             config_manager=config_manager,
             hotkey_config_path=str(HOTKEY_CONFIG_PATH),
             startup_diagnostics=diagnostics_report,
+            enable_onboarding=not headless,
         )
         ui_manager_instance = UIManager(
             main_tk_root,
