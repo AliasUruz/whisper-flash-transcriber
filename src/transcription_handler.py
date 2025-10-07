@@ -1839,11 +1839,58 @@ class TranscriptionHandler:
 
             t_infer_start = time.perf_counter()
             try:
-                result = self._asr_backend.transcribe(
-                    audio_source,
-                    chunk_length_s=float(self.chunk_length_sec),
-                    batch_size=dynamic_batch_size,
-                )
+                if (
+                    (self.backend_resolved or "").lower() == "ctranslate2"
+                    and hasattr(self._asr_backend, "stream_transcribe")
+                ):
+                    streamed_segments: list[dict[str, Any]] = []
+
+                    def _handle_stream_segment(
+                        text: str,
+                        *,
+                        metadata: dict[str, Any] | None = None,
+                        is_final: bool = False,
+                    ) -> None:
+                        record = dict(metadata or {})
+                        if "text" not in record:
+                            record["text"] = text
+                        record["is_final"] = bool(is_final)
+                        streamed_segments.append(record)
+                        self._log_model_event(
+                            "transcription_segment",
+                            segment_index=len(streamed_segments) - 1,
+                            start=record.get("start"),
+                            end=record.get("end"),
+                            text_chars=len((record.get("text") or "")),
+                            is_final=record.get("is_final", False),
+                            agent_mode=agent_mode,
+                        )
+                        if self.on_segment_transcribed_callback:
+                            try:
+                                self.on_segment_transcribed_callback(
+                                    text,
+                                    metadata=metadata,
+                                    is_final=is_final,
+                                )
+                            except TypeError:
+                                self.on_segment_transcribed_callback(text)
+
+                    aggregated_text, metadata_list = self._asr_backend.stream_transcribe(
+                        audio_source,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        batch_size=dynamic_batch_size,
+                        on_segment=_handle_stream_segment,
+                        cancel_event=self.transcription_cancel_event,
+                    )
+                    if metadata_list:
+                        streamed_segments = metadata_list
+                    result = {"text": aggregated_text, "segments": streamed_segments}
+                else:
+                    result = self._asr_backend.transcribe(
+                        audio_source,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        batch_size=dynamic_batch_size,
+                    )
             except Exception as transcribe_error:
                 t_infer_end = time.perf_counter()
                 t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
@@ -2237,7 +2284,13 @@ class TranscriptionHandler:
         ):
             logging.warning(f"Segment processed without meaningful text or with error: {text_result}")
             if text_result and self.on_segment_transcribed_callback:
-                self.on_segment_transcribed_callback(text_result or "")
+                try:
+                    self.on_segment_transcribed_callback(
+                        text_result or "",
+                        is_final=True,
+                    )
+                except TypeError:
+                    self.on_segment_transcribed_callback(text_result or "")
             if (
                 not agent_mode
                 and text_result
@@ -2341,6 +2394,8 @@ class TranscriptionHandler:
 
         if self.on_segment_transcribed_callback:
             try:
+                self.on_segment_transcribed_callback(error_message, is_final=True)
+            except TypeError:
                 self.on_segment_transcribed_callback(error_message)
             except Exception:  # pragma: no cover - callback externo
                 logging.debug(
