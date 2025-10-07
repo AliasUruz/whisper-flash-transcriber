@@ -671,6 +671,65 @@ class TranscriptionHandler:
 
         logging.log(level, "[ASR] " + " ".join(parts))
 
+    def _emit_transcription_metrics(self, payload: dict[str, object] | None) -> None:
+        """Forward transcription metrics to optional collectors in the core instance."""
+
+        if not payload:
+            return
+
+        core = getattr(self, "core_instance_ref", None)
+        if core is None:
+            return
+
+        potential_attributes = (
+            "transcription_metrics_callback",
+            "transcription_metrics_collector",
+            "transcription_metrics_collectors",
+            "diagnostic_callbacks",
+            "diagnostics_callbacks",
+            "telemetry_collectors",
+            "transcription_diagnostic_callbacks",
+        )
+        potential_methods = (
+            "dispatch_transcription_metrics",
+            "handle_transcription_metrics",
+            "emit_transcription_metrics",
+            "publish_transcription_metrics",
+            "collect_transcription_metrics",
+        )
+
+        callbacks: list[object] = []
+
+        for attr in potential_attributes:
+            target = getattr(core, attr, None)
+            if callable(target):
+                callbacks.append(target)
+            elif isinstance(target, (list, tuple, set)):
+                callbacks.extend(cb for cb in target if callable(cb))
+
+        for method_name in potential_methods:
+            method = getattr(core, method_name, None)
+            if callable(method):
+                callbacks.append(method)
+
+        if not callbacks:
+            return
+
+        seen: set[object] = set()
+        for callback in callbacks:
+            identifier = getattr(callback, "__qualname__", None) or getattr(callback, "__name__", None) or id(callback)
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+            try:
+                callback(payload)
+            except Exception:
+                logging.debug(
+                    "Failed to propagate transcription metrics via %s.",
+                    getattr(callback, "__qualname__", getattr(callback, "__name__", repr(callback))),
+                    exc_info=True,
+                )
+
     def _format_audio_source(self, audio_source: str | np.ndarray | bytes | bytearray | list[float] | None) -> str:
         if audio_source is None:
             return "none"
@@ -1664,6 +1723,8 @@ class TranscriptionHandler:
         dynamic_batch_size = None
         size_descriptor = self._format_audio_source(audio_source)
         if self._asr_backend is not None:
+            stage_timings: dict[str, float] = {}
+            t_pre_start = time.perf_counter()
             try:
                 dynamic_batch_size = self._get_dynamic_batch_size()
             except Exception as batch_error:
@@ -1678,11 +1739,24 @@ class TranscriptionHandler:
                 )
                 raise
 
+            t_pre_end = time.perf_counter()
+            t_pre_ms = (t_pre_end - t_pre_start) * 1000.0
+            stage_timings["preprocess"] = t_pre_ms
             self._update_model_log_context(
                 chunk_length_s=float(self.chunk_length_sec),
                 batch_size=dynamic_batch_size,
+                preprocess_ms=t_pre_ms,
             )
-            start_ts = time.perf_counter()
+            self._log_model_event(
+                "transcription_stage",
+                stage="preprocess",
+                duration_ms=t_pre_ms,
+                batch_size=dynamic_batch_size,
+                chunk_length_s=float(self.chunk_length_sec),
+                size=size_descriptor,
+                agent_mode=agent_mode,
+            )
+            t_total_start = t_pre_start
             self._log_model_event(
                 "transcription_start",
                 batch_size=dynamic_batch_size,
@@ -1690,6 +1764,8 @@ class TranscriptionHandler:
                 size=size_descriptor,
                 agent_mode=agent_mode,
             )
+
+            t_infer_start = time.perf_counter()
             try:
                 result = self._asr_backend.transcribe(
                     audio_source,
@@ -1697,7 +1773,24 @@ class TranscriptionHandler:
                     batch_size=dynamic_batch_size,
                 )
             except Exception as transcribe_error:
-                duration_ms = (time.perf_counter() - start_ts) * 1000.0
+                t_infer_end = time.perf_counter()
+                t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
+                stage_timings["infer"] = t_infer_ms
+                total_failure_ms = (t_infer_end - t_total_start) * 1000.0
+                self._update_model_log_context(
+                    infer_ms=t_infer_ms,
+                    total_ms=total_failure_ms,
+                )
+                self._log_model_event(
+                    "transcription_stage",
+                    stage="infer",
+                    duration_ms=t_infer_ms,
+                    batch_size=dynamic_batch_size,
+                    chunk_length_s=float(self.chunk_length_sec),
+                    size=size_descriptor,
+                    agent_mode=agent_mode,
+                    status="failure",
+                )
                 self._log_model_event(
                     "transcription_failure",
                     level=logging.ERROR,
@@ -1705,25 +1798,84 @@ class TranscriptionHandler:
                     chunk_length_s=float(self.chunk_length_sec),
                     size=size_descriptor,
                     agent_mode=agent_mode,
-                    duration_ms=duration_ms,
+                    duration_ms=total_failure_ms,
                     error=str(transcribe_error),
                 )
                 logging.error(
                     f"Error during transcription via unified backend: {transcribe_error}",
                     exc_info=True,
                 )
-                return
-            else:
-                duration_ms = (time.perf_counter() - start_ts) * 1000.0
-                text_result = result.get("text", "").strip() or "[No speech detected]"
-                self._log_model_event(
-                    "transcription_success",
-                    batch_size=dynamic_batch_size,
-                    chunk_length_s=float(self.chunk_length_sec),
-                    size=size_descriptor,
-                    agent_mode=agent_mode,
-                    duration_ms=duration_ms,
+                self._emit_transcription_metrics(
+                    {
+                        "status": "failure",
+                        "timings_ms": dict(stage_timings),
+                        "batch_size": dynamic_batch_size,
+                        "chunk_length_s": float(self.chunk_length_sec),
+                        "agent_mode": agent_mode,
+                        "size": size_descriptor,
+                        "error": str(transcribe_error),
+                    }
                 )
+                return
+
+            t_infer_end = time.perf_counter()
+            t_infer_ms = (t_infer_end - t_infer_start) * 1000.0
+            stage_timings["infer"] = t_infer_ms
+            self._update_model_log_context(infer_ms=t_infer_ms)
+            self._log_model_event(
+                "transcription_stage",
+                stage="infer",
+                duration_ms=t_infer_ms,
+                batch_size=dynamic_batch_size,
+                chunk_length_s=float(self.chunk_length_sec),
+                size=size_descriptor,
+                agent_mode=agent_mode,
+            )
+
+            t_post_start = time.perf_counter()
+            raw_text = ""
+            if isinstance(result, dict):
+                raw_text = result.get("text", "")
+            try:
+                text_candidate = raw_text.strip() if isinstance(raw_text, str) else str(raw_text or "").strip()
+            except Exception:
+                text_candidate = ""
+            text_result = text_candidate or "[No speech detected]"
+            t_post_end = time.perf_counter()
+            t_post_ms = (t_post_end - t_post_start) * 1000.0
+            stage_timings["postprocess"] = t_post_ms
+            self._update_model_log_context(postprocess_ms=t_post_ms)
+            self._log_model_event(
+                "transcription_stage",
+                stage="postprocess",
+                duration_ms=t_post_ms,
+                batch_size=dynamic_batch_size,
+                chunk_length_s=float(self.chunk_length_sec),
+                size=size_descriptor,
+                agent_mode=agent_mode,
+            )
+
+            t_total_ms = (t_post_end - t_total_start) * 1000.0
+            self._update_model_log_context(total_ms=t_total_ms)
+            self._log_model_event(
+                "transcription_success",
+                batch_size=dynamic_batch_size,
+                chunk_length_s=float(self.chunk_length_sec),
+                size=size_descriptor,
+                agent_mode=agent_mode,
+                duration_ms=t_total_ms,
+            )
+            self._emit_transcription_metrics(
+                {
+                    "status": "success",
+                    "timings_ms": dict(stage_timings),
+                    "batch_size": dynamic_batch_size,
+                    "chunk_length_s": float(self.chunk_length_sec),
+                    "agent_mode": agent_mode,
+                    "size": size_descriptor,
+                    "total_ms": t_total_ms,
+                }
+            )
         else:
             # Legacy pipeline
             # Garantir que dynamic_batch_size esteja definido mesmo quando o backend
