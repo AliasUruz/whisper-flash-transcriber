@@ -1,7 +1,13 @@
 import builtins
+import importlib
+import json
+import os
+import sys
 import tempfile
 import unittest
+from collections import deque
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -9,6 +15,8 @@ import numpy as np
 
 if not hasattr(builtins, "Mapping"):
     builtins.Mapping = Mapping
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 try:
     from src.vad_manager import VADManager
@@ -18,6 +26,44 @@ except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
         sys.path.insert(0, PROJECT_ROOT)
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
+
+
+@contextmanager
+def isolated_config_environment(
+    profile_dir: str | Path,
+    *,
+    working_dir: str | Path | None = None,
+):
+    """Provide an isolated config environment for tests."""
+
+    profile_path = Path(profile_dir).expanduser().resolve()
+    env_key = "WHISPER_FLASH_PROFILE_DIR"
+    previous_env = os.environ.get(env_key)
+    os.environ[env_key] = str(profile_path)
+
+    original_cwd = Path.cwd()
+    if working_dir is not None:
+        os.chdir(Path(working_dir).expanduser())
+
+    modules_to_reset = ["src.config_manager", "src.config_schema"]
+    preserved_modules = {name: sys.modules.get(name) for name in modules_to_reset}
+    for name in modules_to_reset:
+        sys.modules.pop(name, None)
+
+    try:
+        config_module = importlib.import_module("src.config_manager")
+        yield config_module
+    finally:
+        for name in modules_to_reset:
+            sys.modules.pop(name, None)
+            module = preserved_modules.get(name)
+            if module is not None:
+                sys.modules[name] = module
+        if previous_env is not None:
+            os.environ[env_key] = previous_env
+        else:
+            os.environ.pop(env_key, None)
+        os.chdir(original_cwd)
 
 
 class DummyConfigManager:

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
+from .hotkey_normalization import _normalize_key_name
+from .hotkeys.drivers import BaseHotkeyDriver, build_available_drivers
 from .logging_utils import get_logger, join_thread_with_timeout, log_context
 
 LOGGER = get_logger(
