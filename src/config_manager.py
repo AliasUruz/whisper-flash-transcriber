@@ -38,8 +38,11 @@ SECRETS_FILE = "secrets.json"  # Nova constante para o arquivo de segredos
 
 _BASE_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
 _DEFAULT_STORAGE_ROOT_DIR = str(_BASE_STORAGE_ROOT)
-_DEFAULT_MODELS_STORAGE_DIR = _DEFAULT_STORAGE_ROOT_DIR
-_DEFAULT_ASR_CACHE_DIR = str((_BASE_STORAGE_ROOT / "asr").expanduser())
+_DEFAULT_MODELS_STORAGE_DIR = str((_BASE_STORAGE_ROOT / "models").expanduser())
+_DEFAULT_ASR_CACHE_DIR = str((Path(_DEFAULT_MODELS_STORAGE_DIR) / "asr").expanduser())
+_DEFAULT_DEPS_INSTALL_DIR = str((_BASE_STORAGE_ROOT / "deps").expanduser())
+_DEFAULT_HF_HOME_DIR = str((Path(_DEFAULT_DEPS_INSTALL_DIR) / "huggingface").expanduser())
+_DEFAULT_TRANSFORMERS_CACHE_DIR = str((Path(_DEFAULT_DEPS_INSTALL_DIR) / "transformers").expanduser())
 _DEFAULT_RECORDINGS_DIR = str((_BASE_STORAGE_ROOT / "recordings").expanduser())
 
 
@@ -141,7 +144,6 @@ DEFAULT_CONFIG = {
         "gemini-2.5-pro"
     ],
     "save_temp_recordings": False,
-    "recordings_dir": str((Path.home() / "WhisperFlashTranscriber" / "recordings").expanduser()),
     "record_storage_mode": "auto",
     "record_storage_limit": 0,
     "max_memory_seconds_mode": "manual",
@@ -156,6 +158,9 @@ DEFAULT_CONFIG = {
     "clear_gpu_cache": True,
     "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
     "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
+    "deps_install_dir": _DEFAULT_DEPS_INSTALL_DIR,
+    "hf_home_dir": _DEFAULT_HF_HOME_DIR,
+    "transformers_cache_dir": _DEFAULT_TRANSFORMERS_CACHE_DIR,
     "recordings_dir": _DEFAULT_RECORDINGS_DIR,
     "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "ctranslate2",
@@ -256,6 +261,9 @@ ASR_DTYPE_CONFIG_KEY = "asr_dtype"
 ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
 ASR_CT2_CPU_THREADS_CONFIG_KEY = "asr_ct2_cpu_threads"
 MODELS_STORAGE_DIR_CONFIG_KEY = "models_storage_dir"
+DEPS_INSTALL_DIR_CONFIG_KEY = "deps_install_dir"
+HF_HOME_DIR_CONFIG_KEY = "hf_home_dir"
+TRANSFORMERS_CACHE_DIR_CONFIG_KEY = "transformers_cache_dir"
 ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
@@ -697,23 +705,31 @@ class ConfigManager:
         )
         cfg[STORAGE_ROOT_DIR_CONFIG_KEY] = str(storage_root_path)
 
-        default_models_storage_path = _coerce_path(
-            self.default_config.get(
-                MODELS_STORAGE_DIR_CONFIG_KEY,
-                storage_root_path,
-            ),
-            default=storage_root_path,
+        default_models_storage_path = storage_root_path / "models"
+        configured_models_default = self.default_config.get(
+            MODELS_STORAGE_DIR_CONFIG_KEY
         )
+        if configured_models_default:
+            default_models_storage_path = _coerce_path(
+                configured_models_default,
+                default=default_models_storage_path,
+            )
+
         previous_models_storage_path: Path | None = None
-        if loaded_config and MODELS_STORAGE_DIR_CONFIG_KEY in loaded_config:
+        if previous_config and MODELS_STORAGE_DIR_CONFIG_KEY in previous_config:
+            previous_models_storage_path = _coerce_path(
+                previous_config[MODELS_STORAGE_DIR_CONFIG_KEY],
+                default=default_models_storage_path,
+            )
+        elif loaded_config and MODELS_STORAGE_DIR_CONFIG_KEY in loaded_config:
             previous_models_storage_path = _coerce_path(
                 loaded_config[MODELS_STORAGE_DIR_CONFIG_KEY],
-                default=storage_root_path,
+                default=default_models_storage_path,
             )
 
         models_defaults = {
-            _normalized_str(storage_root_path),
             _normalized_str(default_models_storage_path),
+            _normalized_str(storage_root_path),
         }
         if previous_storage_root_path is not None:
             models_defaults.add(_normalized_str(previous_storage_root_path))
@@ -727,7 +743,7 @@ class ConfigManager:
             loaded_models_path = _normalized_str(
                 _coerce_path(
                     loaded_config[MODELS_STORAGE_DIR_CONFIG_KEY],
-                    default=storage_root_path,
+                    default=default_models_storage_path,
                 )
             )
             if loaded_models_path not in models_defaults:
@@ -743,20 +759,36 @@ class ConfigManager:
         if models_override:
             requested_models_storage_path = _coerce_path(
                 models_raw,
-                default=storage_root_path,
+                default=default_models_storage_path,
             )
         else:
-            requested_models_storage_path = storage_root_path
+            requested_models_storage_path = default_models_storage_path
 
         models_storage_path = _ensure_directory(
             requested_models_storage_path,
-            fallback=storage_root_path,
+            fallback=default_models_storage_path,
             description="models storage",
         )
         cfg[MODELS_STORAGE_DIR_CONFIG_KEY] = str(models_storage_path)
 
         derived_asr_path = models_storage_path / "asr"
-        default_asr_path = Path(self.default_config[ASR_CACHE_DIR_CONFIG_KEY]).expanduser()
+        default_asr_path = _coerce_path(
+            self.default_config.get(ASR_CACHE_DIR_CONFIG_KEY, derived_asr_path),
+            default=derived_asr_path,
+        )
+
+        previous_asr_path: Path | None = None
+        if previous_config and ASR_CACHE_DIR_CONFIG_KEY in previous_config:
+            previous_asr_path = _coerce_path(
+                previous_config[ASR_CACHE_DIR_CONFIG_KEY],
+                default=default_asr_path,
+            )
+        elif loaded_config and ASR_CACHE_DIR_CONFIG_KEY in loaded_config:
+            previous_asr_path = _coerce_path(
+                loaded_config[ASR_CACHE_DIR_CONFIG_KEY],
+                default=default_asr_path,
+            )
+
         asr_defaults = {
             _normalized_str(derived_asr_path),
             _normalized_str(default_asr_path),
@@ -764,9 +796,9 @@ class ConfigManager:
         if previous_storage_root_path is not None:
             asr_defaults.add(_normalized_str(previous_storage_root_path / "asr"))
         if previous_models_storage_path is not None:
-            asr_defaults.add(
-                _normalized_str(previous_models_storage_path / "asr")
-            )
+            asr_defaults.add(_normalized_str(previous_models_storage_path / "asr"))
+        if previous_asr_path is not None:
+            asr_defaults.add(_normalized_str(previous_asr_path))
 
         asr_override = False
         if applied_updates and ASR_CACHE_DIR_CONFIG_KEY in applied_updates:
@@ -775,7 +807,7 @@ class ConfigManager:
             loaded_asr_path = _normalized_str(
                 _coerce_path(
                     loaded_config[ASR_CACHE_DIR_CONFIG_KEY],
-                    default=derived_asr_path,
+                    default=default_asr_path,
                 )
             )
             if loaded_asr_path not in asr_defaults:
@@ -802,6 +834,81 @@ class ConfigManager:
                 description="ASR cache",
             )
         cfg[ASR_CACHE_DIR_CONFIG_KEY] = str(cache_path)
+
+        default_deps_path = storage_root_path / "deps"
+        configured_deps_default = self.default_config.get(DEPS_INSTALL_DIR_CONFIG_KEY)
+        if configured_deps_default:
+            default_deps_path = _coerce_path(
+                configured_deps_default,
+                default=default_deps_path,
+            )
+
+        previous_deps_path: Path | None = None
+        if previous_config and DEPS_INSTALL_DIR_CONFIG_KEY in previous_config:
+            previous_deps_path = _coerce_path(
+                previous_config[DEPS_INSTALL_DIR_CONFIG_KEY],
+                default=default_deps_path,
+            )
+        elif loaded_config and DEPS_INSTALL_DIR_CONFIG_KEY in loaded_config:
+            previous_deps_path = _coerce_path(
+                loaded_config[DEPS_INSTALL_DIR_CONFIG_KEY],
+                default=default_deps_path,
+            )
+
+        deps_defaults = {
+            _normalized_str(default_deps_path),
+            _normalized_str(storage_root_path / "deps"),
+        }
+        if previous_storage_root_path is not None:
+            deps_defaults.add(_normalized_str(previous_storage_root_path / "deps"))
+        if previous_deps_path is not None:
+            deps_defaults.add(_normalized_str(previous_deps_path))
+
+        deps_override = False
+        if applied_updates and DEPS_INSTALL_DIR_CONFIG_KEY in applied_updates:
+            deps_override = True
+        elif loaded_config and DEPS_INSTALL_DIR_CONFIG_KEY in loaded_config:
+            loaded_deps_path = _normalized_str(
+                _coerce_path(
+                    loaded_config[DEPS_INSTALL_DIR_CONFIG_KEY],
+                    default=default_deps_path,
+                )
+            )
+            if loaded_deps_path not in deps_defaults:
+                deps_override = True
+
+        deps_raw = _source_value(
+            DEPS_INSTALL_DIR_CONFIG_KEY,
+            default=cfg.get(
+                DEPS_INSTALL_DIR_CONFIG_KEY,
+                self.default_config[DEPS_INSTALL_DIR_CONFIG_KEY],
+            ),
+        )
+        if deps_override:
+            requested_deps_path = _coerce_path(deps_raw, default=default_deps_path)
+        else:
+            requested_deps_path = default_deps_path
+
+        deps_install_path = _ensure_directory(
+            requested_deps_path,
+            fallback=default_deps_path,
+            description="dependencies",
+        )
+        cfg[DEPS_INSTALL_DIR_CONFIG_KEY] = str(deps_install_path)
+
+        hf_home_path = _ensure_directory(
+            deps_install_path / "huggingface",
+            fallback=deps_install_path,
+            description="Hugging Face home",
+        )
+        cfg[HF_HOME_DIR_CONFIG_KEY] = str(hf_home_path)
+
+        transformers_cache_path = _ensure_directory(
+            hf_home_path / "transformers",
+            fallback=hf_home_path,
+            description="Transformers cache",
+        )
+        cfg[TRANSFORMERS_CACHE_DIR_CONFIG_KEY] = str(transformers_cache_path)
 
         derived_recordings_path = storage_root_path / "recordings"
         default_recordings_path = Path(
@@ -880,6 +987,9 @@ class ConfigManager:
             new_recordings_path=recordings_path,
             asr_override=asr_override,
             recordings_override=recordings_override,
+            previous_deps_path=previous_deps_path,
+            new_deps_path=deps_install_path,
+            deps_override=deps_override,
         )
 
         cfg[ASR_CURATED_CATALOG_CONFIG_KEY] = list_catalog()
@@ -1227,6 +1337,15 @@ class ConfigManager:
         safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
         logging.info("Settings applied: %s", str(safe_config))
 
+        try:
+            self.apply_environment_overrides()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "Failed to apply environment overrides: %s",
+                exc,
+                exc_info=True,
+            )
+
     def apply_updates(self, updates: dict[str, Any]) -> tuple[set[str], list[str]]:
         """Apply partial configuration updates validated by the schema."""
 
@@ -1368,6 +1487,9 @@ class ConfigManager:
         new_recordings_path: Path,
         asr_override: bool,
         recordings_override: bool,
+        previous_deps_path: Path | None,
+        new_deps_path: Path,
+        deps_override: bool,
     ) -> None:
         if previous_storage_root is None:
             return
@@ -1392,6 +1514,14 @@ class ConfigManager:
                 source_recordings,
                 new_recordings_path,
                 "Recordings",
+            )
+
+        if not deps_override:
+            source_deps = previous_deps_path or previous_storage_root / "deps"
+            self._relocate_directory(
+                source_deps,
+                new_deps_path,
+                "Dependencies",
             )
 
     def _relocate_directory(self, source: Path, destination: Path, label: str) -> None:
@@ -1910,18 +2040,6 @@ class ConfigManager:
     def set_asr_ct2_compute_type(self, value: str):
         self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(value)
 
-    def get_models_storage_dir(self) -> str:
-        return self.config.get(
-            MODELS_STORAGE_DIR_CONFIG_KEY,
-            self.default_config.get(
-                MODELS_STORAGE_DIR_CONFIG_KEY,
-                self.default_config[STORAGE_ROOT_DIR_CONFIG_KEY],
-            ),
-        )
-
-    def set_models_storage_dir(self, value: str):
-        self.config[MODELS_STORAGE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
-
     def get_storage_root_dir(self) -> str:
         return self.config.get(
             STORAGE_ROOT_DIR_CONFIG_KEY,
@@ -1936,12 +2054,48 @@ class ConfigManager:
             MODELS_STORAGE_DIR_CONFIG_KEY,
             self.default_config.get(
                 MODELS_STORAGE_DIR_CONFIG_KEY,
-                self.config.get(STORAGE_ROOT_DIR_CONFIG_KEY),
+                self.default_config.get(STORAGE_ROOT_DIR_CONFIG_KEY),
             ),
         )
 
     def set_models_storage_dir(self, value: str):
         self.config[MODELS_STORAGE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_deps_install_dir(self) -> str:
+        return self.config.get(
+            DEPS_INSTALL_DIR_CONFIG_KEY,
+            self.default_config.get(
+                DEPS_INSTALL_DIR_CONFIG_KEY,
+                _DEFAULT_DEPS_INSTALL_DIR,
+            ),
+        )
+
+    def set_deps_install_dir(self, value: str):
+        self.config[DEPS_INSTALL_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_hf_home_dir(self) -> str:
+        return self.config.get(
+            HF_HOME_DIR_CONFIG_KEY,
+            self.default_config.get(
+                HF_HOME_DIR_CONFIG_KEY,
+                _DEFAULT_HF_HOME_DIR,
+            ),
+        )
+
+    def set_hf_home_dir(self, value: str):
+        self.config[HF_HOME_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_transformers_cache_dir(self) -> str:
+        return self.config.get(
+            TRANSFORMERS_CACHE_DIR_CONFIG_KEY,
+            self.default_config.get(
+                TRANSFORMERS_CACHE_DIR_CONFIG_KEY,
+                _DEFAULT_TRANSFORMERS_CACHE_DIR,
+            ),
+        )
+
+    def set_transformers_cache_dir(self, value: str):
+        self.config[TRANSFORMERS_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
     def get_recordings_dir(self) -> str:
         return self.config.get(
@@ -1951,6 +2105,213 @@ class ConfigManager:
 
     def set_recordings_dir(self, value: str):
         self.config[RECORDINGS_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_environment_overrides(self) -> dict[str, str]:
+        overrides: dict[str, str] = {}
+        hf_home = self.get_hf_home_dir()
+        if hf_home:
+            overrides["HF_HOME"] = os.path.expanduser(str(hf_home))
+        transformers_cache = self.get_transformers_cache_dir()
+        if transformers_cache:
+            overrides["TRANSFORMERS_CACHE"] = os.path.expanduser(
+                str(transformers_cache)
+            )
+        models_dir = self.get_models_storage_dir()
+        if models_dir:
+            overrides["WHISPER_FLASH_MODELS_DIR"] = os.path.expanduser(
+                str(models_dir)
+            )
+        deps_dir = self.get_deps_install_dir()
+        if deps_dir:
+            overrides["WHISPER_FLASH_DEPS_DIR"] = os.path.expanduser(str(deps_dir))
+        return overrides
+
+    def apply_environment_overrides(self) -> dict[str, str]:
+        overrides = self.get_environment_overrides()
+        applied: dict[str, str] = {}
+        for key, value in overrides.items():
+            if not value:
+                continue
+            try:
+                Path(value).expanduser().mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Unable to prepare directory for environment override %s=%s: %s",
+                    key,
+                    value,
+                    exc,
+                )
+                continue
+            os.environ[key] = value
+            applied[key] = value
+        if applied:
+            summary = ", ".join(f"{k}={v}" for k, v in applied.items())
+            LOGGER.info("Environment overrides applied: %s", summary)
+        return applied
+
+    def validate_directory_candidate(
+        self,
+        candidate: str | Path,
+        *,
+        label: str,
+        create: bool = True,
+    ) -> tuple[bool, str, Path | None]:
+        try:
+            path = Path(candidate).expanduser()
+        except Exception as exc:
+            return False, f"Invalid {label.lower()} directory: {exc}", None
+
+        if create:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                return (
+                    False,
+                    f"Unable to create {label.lower()} directory at '{path}': {exc}",
+                    None,
+                )
+
+        if not os.access(path, os.W_OK):
+            return (
+                False,
+                f"No write permission for {label.lower()} directory '{path}'.",
+                path,
+            )
+
+        try:
+            usage = shutil.disk_usage(path)
+        except FileNotFoundError:
+            usage = shutil.disk_usage(path.parent)
+
+        free_gb = usage.free / (1024 ** 3)
+        message = (
+            f"{label} directory ready at '{path}'. Free space available: {free_gb:.2f} GB"
+        )
+        return True, message, path
+
+    def migrate_directory(
+        self,
+        source: str | Path,
+        destination: str | Path,
+        *,
+        label: str,
+    ) -> bool:
+        try:
+            source_path = Path(source).expanduser()
+            destination_path = Path(destination).expanduser()
+        except Exception as exc:
+            LOGGER.warning("Invalid %s migration paths: %s", label.lower(), exc)
+            return False
+
+        try:
+            if source_path.resolve() == destination_path.resolve():
+                LOGGER.info(
+                    "%s migration skipped because source and destination match: %s.",
+                    label,
+                    source_path,
+                )
+                return True
+        except Exception:
+            if str(source_path) == str(destination_path):
+                LOGGER.info(
+                    "%s migration skipped because source and destination match: %s.",
+                    label,
+                    source_path,
+                )
+                return True
+
+        if not source_path.exists():
+            LOGGER.info(
+                "%s directory '%s' does not exist; nothing to migrate.",
+                label,
+                source_path,
+            )
+            return True
+
+        try:
+            total_bytes = 0
+            for entry in source_path.rglob("*"):
+                if entry.is_file():
+                    total_bytes += entry.stat().st_size
+        except Exception as exc:
+            LOGGER.warning(
+                "Unable to compute size for %s directory '%s': %s",
+                label.lower(),
+                source_path,
+                exc,
+            )
+            total_bytes = 0
+
+        try:
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            LOGGER.warning(
+                "Unable to prepare destination for %s directory at '%s': %s",
+                label.lower(),
+                destination_path,
+                exc,
+            )
+            return False
+
+        safety_margin = max(int(total_bytes * 0.1), 256 * 1024 * 1024)
+        required_bytes = total_bytes + safety_margin
+        try:
+            usage = shutil.disk_usage(destination_path.parent)
+        except FileNotFoundError:
+            usage = shutil.disk_usage(destination_path)
+        free_bytes = usage.free
+
+        def _fmt_bytes(value: int) -> str:
+            units = ["B", "KB", "MB", "GB", "TB"]
+            size = float(value)
+            for unit in units:
+                if size < 1024.0 or unit == units[-1]:
+                    return f"{size:.2f} {unit}"
+                size /= 1024.0
+            return f"{value} B"
+
+        if total_bytes and free_bytes < required_bytes:
+            LOGGER.error(
+                "Insufficient free space to migrate %s directory: required %s but only %s available.",
+                label.lower(),
+                _fmt_bytes(required_bytes),
+                _fmt_bytes(free_bytes),
+            )
+            return False
+
+        if destination_path.exists():
+            try:
+                has_entries = any(destination_path.iterdir())
+            except Exception:
+                has_entries = True
+            if has_entries:
+                LOGGER.warning(
+                    "%s directory already exists at '%s'; aborting migration from '%s'.",
+                    label,
+                    destination_path,
+                    source_path,
+                )
+                return False
+
+        try:
+            shutil.move(str(source_path), str(destination_path))
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to migrate %s directory from '%s' to '%s': %s",
+                label.lower(),
+                source_path,
+                destination_path,
+                exc,
+            )
+            return False
+
+        LOGGER.info(
+            "%s directory migrated from '%s' to '%s'.",
+            label,
+            source_path,
+            destination_path,
+        )
+        return True
 
     def get_asr_cache_dir(self):
         return self.config.get(

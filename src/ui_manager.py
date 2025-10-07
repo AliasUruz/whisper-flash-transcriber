@@ -39,6 +39,7 @@ from .config_manager import (
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
+    DEPS_INSTALL_DIR_CONFIG_KEY,
     GPU_INDEX_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
@@ -726,11 +727,13 @@ class UIManager:
         try:
             compute_type_var = self._get_settings_var("asr_ct2_compute_type_var")
             quant = compute_type_var.get() if compute_type_var is not None else None
+            environment = self.config_manager.get_environment_overrides()
             result = self.model_manager.ensure_download(
                 model_id,
                 backend,
                 cache_dir,
                 quant if backend == "ctranslate2" else None,
+                environment=environment,
             )
             installed_models = self.model_manager.list_installed(cache_dir)
             self.config_manager.set_asr_installed_models(installed_models)
@@ -810,6 +813,7 @@ class UIManager:
         asr_dtype_var = _var("asr_dtype_var")
         asr_ct2_compute_type_var = _var("asr_ct2_compute_type_var")
         models_storage_dir_var = _var("models_storage_dir_var")
+        deps_install_dir_var = _var("deps_install_dir_var")
         asr_cache_dir_var = _var("asr_cache_dir_var")
         recordings_dir_var = _var("recordings_dir_var")
 
@@ -946,6 +950,29 @@ class UIManager:
             return
         models_storage_dir_to_apply = str(models_storage_path)
 
+        deps_install_dir_raw = deps_install_dir_var.get().strip() if deps_install_dir_var else ""
+        if not deps_install_dir_raw:
+            deps_install_dir_raw = self.config_manager.get_deps_install_dir()
+        try:
+            deps_install_path = Path(deps_install_dir_raw).expanduser()
+        except Exception as exc:
+            messagebox.showerror(
+                "Invalid Path",
+                f"Dependencies directory is invalid:\n{exc}",
+                parent=settings_win,
+            )
+            return
+        try:
+            deps_install_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror(
+                "Invalid Path",
+                f"Dependencies directory is invalid:\n{exc}",
+                parent=settings_win,
+            )
+            return
+        deps_install_dir_to_apply = str(deps_install_path)
+
         recordings_dir_raw = recordings_dir_var.get().strip() if recordings_dir_var else ""
         if not recordings_dir_raw:
             recordings_path = storage_root_path / "recordings"
@@ -1063,6 +1090,7 @@ class UIManager:
             new_asr_dtype=asr_dtype_to_apply,
             new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
             new_models_storage_dir=models_storage_dir_to_apply,
+            new_deps_install_dir=deps_install_dir_to_apply,
             new_asr_cache_dir=asr_cache_dir_to_apply,
             new_storage_root_dir=storage_root_dir_to_apply,
             new_recordings_dir=recordings_dir_to_apply,
@@ -1267,6 +1295,7 @@ class UIManager:
         asr_dtype_var,
         asr_ct2_compute_type_var,
         models_storage_dir_var,
+        deps_install_dir_var,
         storage_root_dir_var,
         recordings_dir_var,
         asr_cache_dir_var,
@@ -1297,20 +1326,132 @@ class UIManager:
                     widget.pack(**pack_kwargs)
             button = toggle_button_ref['widget']
             if button is not None:
-                button.configure(text='Ocultar avancado' if show else 'Mostrar avancado')
+                button.configure(text='Ocultar avançado' if show else 'Mostrar avançado')
 
         def _toggle_advanced() -> None:
             _set_advanced_visibility(not advanced_state['visible'])
 
         advanced_toggle = ctk.CTkButton(
             asr_frame,
-            text='Mostrar avancado',
+            text='Mostrar avançado',
             command=_toggle_advanced,
         )
         advanced_toggle.pack(fill='x', pady=(0, 5))
         toggle_button_ref['widget'] = advanced_toggle
 
         previous_models_dir = {"value": models_storage_dir_var.get() if models_storage_dir_var else ""}
+        previous_deps_dir = {"value": deps_install_dir_var.get() if deps_install_dir_var else ""}
+
+        def _validate_directory(label: str, raw_value: str, *, show_dialog: bool = True) -> Path | None:
+            sanitized = (raw_value or "").strip()
+            if not sanitized:
+                return None
+            ok, message, resolved = self.config_manager.validate_directory_candidate(
+                sanitized,
+                label=label,
+            )
+            if show_dialog and message:
+                dialog = messagebox.showinfo if ok else messagebox.showerror
+                if settings_win is not None:
+                    dialog(label, message, parent=settings_win)
+                else:
+                    dialog(label, message)
+            if ok:
+                logging.info(message)
+                return resolved
+            logging.warning(message)
+            return None
+
+        def _on_deps_focus_out() -> None:
+            value = deps_install_dir_var.get().strip() if deps_install_dir_var else ""
+            if not value:
+                return
+            resolved = _validate_directory("Dependencies", value, show_dialog=False)
+            if resolved is None:
+                deps_install_dir_var.set(previous_deps_dir.get("value", ""))
+            else:
+                deps_install_dir_var.set(str(resolved))
+
+        def _browse_deps_dir() -> None:
+            initial = deps_install_dir_var.get() if deps_install_dir_var else ""
+            try:
+                initial_dir = Path(initial).expanduser()
+            except Exception:
+                initial_dir = Path.home()
+            selected = filedialog.askdirectory(initialdir=str(initial_dir))
+            if selected:
+                resolved = _validate_directory("Dependencies", selected)
+                if resolved is not None:
+                    deps_install_dir_var.set(str(resolved))
+                else:
+                    deps_install_dir_var.set(previous_deps_dir.get("value", ""))
+
+        def _check_deps_dir() -> None:
+            value = deps_install_dir_var.get().strip() if deps_install_dir_var else ""
+            if not value:
+                messagebox.showwarning(
+                    "Dependencies",
+                    "Selecione um diretório de dependências antes de validar.",
+                    parent=settings_win,
+                )
+                return
+            ok, message, _ = self.config_manager.validate_directory_candidate(
+                value,
+                label="Dependencies",
+            )
+            dialog = messagebox.showinfo if ok else messagebox.showerror
+            if ok:
+                logging.info(message)
+            else:
+                logging.warning(message)
+            dialog("Dependencies", message, parent=settings_win)
+
+        def _migrate_deps_dir() -> None:
+            source = previous_deps_dir.get("value") or ""
+            destination = deps_install_dir_var.get().strip() if deps_install_dir_var else ""
+            if not source or not destination:
+                messagebox.showwarning(
+                    "Dependencies",
+                    "Defina diretórios de origem e destino antes de migrar.",
+                    parent=settings_win,
+                )
+                return
+            if source == destination:
+                messagebox.showinfo(
+                    "Dependencies",
+                    "Os diretórios de origem e destino são idênticos.",
+                    parent=settings_win,
+                )
+                return
+            confirm = messagebox.askyesno(
+                "Dependencies",
+                (
+                    "Migrar os artefatos existentes de\n"
+                    f"{source}\npara\n{destination}?"
+                ),
+                parent=settings_win,
+            )
+            if not confirm:
+                return
+            success = self.config_manager.migrate_directory(
+                source,
+                destination,
+                label="Dependencies",
+            )
+            if success:
+                previous_deps_dir["value"] = destination
+                self.config_manager.apply_environment_overrides()
+                messagebox.showinfo(
+                    "Dependencies",
+                    "Migração concluída com sucesso.",
+                    parent=settings_win,
+                )
+            else:
+                messagebox.showerror(
+                    "Dependencies",
+                    "A migração falhou. Verifique os logs para mais detalhes.",
+                    parent=settings_win,
+                )
 
         def _update_cache_dir_for_new_base(new_base: str) -> None:
             old_base = previous_models_dir.get("value") or ""
@@ -1378,6 +1519,41 @@ class UIManager:
         sync_button = ctk.CTkButton(models_dir_frame, text="Sincronizar Cache ASR", command=_synchronize_cache_dir)
         sync_button.pack(side="left", padx=5)
         Tooltip(sync_button, "Atualiza o diretório de cache ASR para ficar dentro do diretório de modelos.")
+
+        deps_dir_frame = ctk.CTkFrame(asr_frame)
+        _register_advanced(deps_dir_frame, fill="x", pady=5)
+        ctk.CTkLabel(deps_dir_frame, text="Diretório de Dependências:").pack(side="left", padx=(5, 10))
+        deps_dir_entry = ctk.CTkEntry(deps_dir_frame, textvariable=deps_install_dir_var, width=240)
+        deps_dir_entry.pack(side="left", padx=5)
+        Tooltip(
+            deps_dir_entry,
+            "Local onde caches do Hugging Face e dependências auxiliares serão mantidos.",
+        )
+        deps_dir_entry.bind("<FocusOut>", lambda *_: _on_deps_focus_out())
+
+        deps_browse_button = ctk.CTkButton(
+            deps_dir_frame,
+            text="Selecionar...",
+            command=_browse_deps_dir,
+        )
+        deps_browse_button.pack(side="left", padx=5)
+        Tooltip(deps_browse_button, "Escolha o diretório para armazenar dependências compartilhadas.")
+
+        deps_validate_button = ctk.CTkButton(
+            deps_dir_frame,
+            text="Validar espaço",
+            command=_check_deps_dir,
+        )
+        deps_validate_button.pack(side="left", padx=5)
+        Tooltip(deps_validate_button, "Verifica permissões e espaço disponível no diretório selecionado.")
+
+        deps_migrate_button = ctk.CTkButton(
+            deps_dir_frame,
+            text="Migrar ativos",
+            command=_migrate_deps_dir,
+        )
+        deps_migrate_button.pack(side="left", padx=5)
+        Tooltip(deps_migrate_button, "Move dependências existentes para o novo diretório.")
 
         asr_backend_frame = ctk.CTkFrame(asr_frame)
         _register_advanced(asr_backend_frame, fill="x", pady=5)
@@ -1659,11 +1835,13 @@ class UIManager:
                 return
 
             try:
+                environment = self.config_manager.get_environment_overrides()
                 result = model_manager.ensure_download(
                     model_id,
                     backend,
                     cache_dir,
                     asr_ct2_compute_type_var.get() if backend == "ctranslate2" else None,
+                    environment=environment,
                 )
                 installed_models = model_manager.list_installed(cache_dir)
                 self.config_manager.set_asr_installed_models(installed_models)
@@ -2450,6 +2628,7 @@ class UIManager:
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
                 models_storage_dir_var = ctk.StringVar(value=self.config_manager.get_models_storage_dir())
+                deps_install_dir_var = ctk.StringVar(value=self.config_manager.get_deps_install_dir())
                 asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
 
                 for name, var in [
@@ -2492,6 +2671,7 @@ class UIManager:
                     ("asr_dtype_var", asr_dtype_var),
                     ("asr_ct2_compute_type_var", asr_ct2_compute_type_var),
                     ("models_storage_dir_var", models_storage_dir_var),
+                    ("deps_install_dir_var", deps_install_dir_var),
                     ("asr_cache_dir_var", asr_cache_dir_var),
                     ("recordings_dir_var", recordings_dir_var),
                 ]:
@@ -3076,6 +3256,7 @@ class UIManager:
             asr_dtype_var=asr_dtype_var,
             asr_ct2_compute_type_var=asr_ct2_compute_type_var,
             models_storage_dir_var=models_storage_dir_var,
+            deps_install_dir_var=deps_install_dir_var,
             storage_root_dir_var=storage_root_dir_var,
             recordings_dir_var=recordings_dir_var,
             asr_cache_dir_var=asr_cache_dir_var,

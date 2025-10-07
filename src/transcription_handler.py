@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 from contextlib import contextmanager
+import os
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -200,6 +201,11 @@ class TranscriptionHandler:
         self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         self.asr_ct2_cpu_threads = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
         self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+        self.deps_install_dir = self.config_manager.get_deps_install_dir()
+        self.hf_home_dir = self.config_manager.get_hf_home_dir()
+        self.transformers_cache_dir = self.config_manager.get_transformers_cache_dir()
+
+        self._apply_environment_overrides()
 
         self.openrouter_client = None
         # self.gemini_client é injetado
@@ -217,6 +223,19 @@ class TranscriptionHandler:
             core.report_runtime_notice(message, level=level)
         else:
             logging.log(level, message)
+
+    def _apply_environment_overrides(self) -> None:
+        overrides = self.config_manager.get_environment_overrides()
+        if not overrides:
+            return
+        for key, value in overrides.items():
+            if not value:
+                continue
+            os.environ[key] = str(value)
+        logging.debug(
+            "TranscriptionHandler applied environment overrides: %s",
+            ", ".join(f"{k}={v}" for k, v in overrides.items()),
+        )
 
     def _build_backend_load_kwargs(
         self,
@@ -505,6 +524,16 @@ class TranscriptionHandler:
         ct2_threads_changed = ct2_threads_value != previous_ct2_threads
         cache_dir_changed = cache_dir_value != previous_cache_dir
 
+        new_deps_dir = self.config_manager.get_deps_install_dir()
+        new_hf_home = self.config_manager.get_hf_home_dir()
+        new_transformers_cache = self.config_manager.get_transformers_cache_dir()
+
+        deps_changed = new_deps_dir != getattr(self, "deps_install_dir", None)
+        hf_home_changed = new_hf_home != getattr(self, "hf_home_dir", None)
+        transformers_cache_changed = new_transformers_cache != getattr(
+            self, "transformers_cache_dir", None
+        )
+
         reload_needed = (
             backend_changed
             or model_changed
@@ -513,6 +542,9 @@ class TranscriptionHandler:
             or ct2_type_changed
             or ct2_threads_changed
             or cache_dir_changed
+            or deps_changed
+            or hf_home_changed
+            or transformers_cache_changed
         )
 
         correction_changed = (
@@ -531,6 +563,12 @@ class TranscriptionHandler:
         self.asr_ct2_compute_type = ct2_type_value
         self.asr_ct2_cpu_threads = ct2_threads_value
         self.asr_cache_dir = cache_dir_value
+        self.deps_install_dir = new_deps_dir
+        self.hf_home_dir = new_hf_home
+        self.transformers_cache_dir = new_transformers_cache
+
+        if deps_changed or hf_home_changed or transformers_cache_changed:
+            self._apply_environment_overrides()
 
         if reload_needed and trigger_reload:
             logging.info(
@@ -1106,6 +1144,7 @@ class TranscriptionHandler:
 
     def _load_model_task(self):
         try:
+            self._apply_environment_overrides()
             self.device_in_use = "cpu"
             if make_backend is not None:
                 backend_preference = self.config_manager.get("asr_backend") or "transformers"

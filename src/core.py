@@ -43,6 +43,7 @@ from .config_manager import (
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     MODELS_STORAGE_DIR_CONFIG_KEY,
+    DEPS_INSTALL_DIR_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     STORAGE_ROOT_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
@@ -384,6 +385,9 @@ class AppCore:
                 "timeout": self.model_download_timeout,
                 "cancel_event": cancel_event,
             }
+            environment_overrides = self.config_manager.get_environment_overrides()
+            if environment_overrides:
+                ensure_kwargs["environment"] = environment_overrides
 
             result = self.model_manager.ensure_download(
                 model_id,
@@ -464,6 +468,9 @@ class AppCore:
                     "timeout": timeout,
                     "cancel_event": cancel_event,
                 }
+                environment_overrides = self.config_manager.get_environment_overrides()
+                if environment_overrides:
+                    ensure_kwargs["environment"] = environment_overrides
                 result = self.model_manager.ensure_download(
                     model_id,
                     backend,
@@ -1515,6 +1522,7 @@ class AppCore:
             "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
             "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             "new_models_storage_dir": MODELS_STORAGE_DIR_CONFIG_KEY,
+            "new_deps_install_dir": DEPS_INSTALL_DIR_CONFIG_KEY,
             "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
             "new_storage_root_dir": STORAGE_ROOT_DIR_CONFIG_KEY,
             "new_recordings_dir": RECORDINGS_DIR_CONFIG_KEY,
