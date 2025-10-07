@@ -16,9 +16,7 @@ LOGGER = get_logger(__name__, component='ConfigSchema')
 
 _DEFAULT_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
 _DEFAULT_MODELS_STORAGE_DIR = str((_DEFAULT_STORAGE_ROOT / "models").expanduser())
-_DEFAULT_PYTHON_PACKAGES_DIR = str((_DEFAULT_STORAGE_ROOT / "python_packages").expanduser())
-_DEFAULT_VAD_MODELS_DIR = str((_DEFAULT_STORAGE_ROOT / "vad").expanduser())
-_DEFAULT_HF_CACHE_DIR = str((_DEFAULT_STORAGE_ROOT / "hf_cache").expanduser())
+_DEFAULT_DEPS_STORAGE_DIR = str((_DEFAULT_STORAGE_ROOT / "deps").expanduser())
 
 
 class ASRDownloadStatus(BaseModel):
@@ -114,6 +112,9 @@ class AppConfig(BaseModel):
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
     models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
+    deps_install_dir: str = _DEFAULT_DEPS_STORAGE_DIR
+    hf_home_dir: str = str((Path(_DEFAULT_DEPS_STORAGE_DIR) / "huggingface").expanduser())
+    transformers_cache_dir: str = str((Path(_DEFAULT_DEPS_STORAGE_DIR) / "transformers").expanduser())
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
     python_packages_dir: str = _DEFAULT_PYTHON_PACKAGES_DIR
@@ -252,6 +253,9 @@ class AppConfig(BaseModel):
     @field_validator(
         "storage_root_dir",
         "models_storage_dir",
+        "deps_install_dir",
+        "hf_home_dir",
+        "transformers_cache_dir",
         "recordings_dir",
         "python_packages_dir",
         "vad_models_dir",
