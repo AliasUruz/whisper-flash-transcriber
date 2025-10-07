@@ -241,6 +241,49 @@ class AppCore:
         self._recording_started_at: float | None = None
         self._onboarding_active = False
 
+        # Inicializar atributos dependentes da configuração antes de acionar o fluxo de modelo
+        self._apply_initial_config_to_core_attributes()
+
+        self.model_download_timeout = self._resolve_model_download_timeout()
+        try:
+            cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+            model_id = self.asr_model_id
+            backend = self.asr_backend
+            ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+
+            if not cache_dir:
+                raise OSError("Invalid cache directory.")
+
+            cache_root = Path(cache_dir)
+
+            start_loading = True
+            ready_path = model_manager_module.ensure_local_installation(
+                cache_root,
+                backend,
+                model_id,
+            )
+
+            if ready_path is None:
+                MODEL_LOGGER.warning(
+                    "ASR model not found locally; waiting for user confirmation before downloading.",
+                )
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+                self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
+                start_loading = False
+
+            if start_loading:
+                self._start_model_loading_with_synced_config()
+        except OSError:
+            messagebox.showerror("Error", "Invalid cache directory.")
+            self.state_manager.set_state(
+                sm.StateEvent.MODEL_CACHE_INVALID,
+                details=f"Invalid cache directory reported during init: {cache_dir}",
+                source="init",
+            )
+
+        self._cleanup_old_audio_files_on_startup()
+        atexit.register(self.shutdown)
+
     @property
     def dependency_audit_failure_message(self) -> str | None:
         return self._dependency_audit_failure_message
@@ -534,43 +577,6 @@ class AppCore:
         """Expose the startup diagnostics report to interested UI components."""
 
         return self.startup_diagnostics
-
-        try:
-            cache_dir = self.config_manager.get("asr_cache_dir")
-            model_id = self.asr_model_id
-            backend = self.asr_backend
-            ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
-
-            cache_root = Path(cache_dir)
-
-            start_loading = True
-            ready_path = model_manager_module.ensure_local_installation(
-                cache_root,
-                backend,
-                model_id,
-            )
-
-            if ready_path is None:
-                MODEL_LOGGER.warning(
-                    "ASR model not found locally; waiting for user confirmation before downloading.",
-                )
-                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
-                start_loading = False
-
-            if start_loading:
-                self._start_model_loading_with_synced_config()
-        except OSError:
-            messagebox.showerror("Error", "Invalid cache directory.")
-            self.state_manager.set_state(
-                sm.StateEvent.MODEL_CACHE_INVALID,
-                details=f"Invalid cache directory reported during init: {cache_dir}",
-                source="init",
-            )
-
-
-        self._cleanup_old_audio_files_on_startup()
-        atexit.register(self.shutdown)
 
     def get_last_onboarding_outcome(self) -> dict[str, Any] | None:
         """Return a shallow copy of the most recent onboarding outcome."""
