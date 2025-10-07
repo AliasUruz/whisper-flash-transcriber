@@ -8,6 +8,8 @@ import time
 import os
 import sys
 import subprocess
+import webbrowser
+from datetime import datetime
 import pystray
 from PIL import Image, ImageDraw
 from dataclasses import dataclass
@@ -48,6 +50,8 @@ from .config_manager import (
 from .utils.form_validation import safe_get_float, safe_get_int
 from .utils.tooltip import Tooltip
 from .logging_utils import get_log_directory
+from .state_manager import StateEvent
+from .utils.dependency_audit import DependencyAuditResult, DependencyIssue
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -164,6 +168,17 @@ class UIManager:
         self.live_textbox = None
 
         self._divergent_keys_logged: set[str] = set()
+
+        self._dependency_audit_window = None
+        self._dependency_audit_summary_label = None
+        self._dependency_audit_timestamp_label = None
+        self._dependency_audit_content = None
+        self._dependency_audit_copy_all_btn = None
+        self._dependency_audit_commands: list[str] = []
+        self._dependency_audit_presented = False
+        self._dependency_audit_docs_path = (
+            Path(__file__).resolve().parent.parent / "docs" / "dependency-audit.md"
+        )
 
 
         # Assign methods to the instance
@@ -1232,6 +1247,299 @@ class UIManager:
             dc.rectangle((width // 4, height // 4, width * 3 // 4, height * 3 // 4), fill=color2)
         return image
 
+    # ------------------------------------------------------------------
+    # Painel de auditoria de dependências
+    # ------------------------------------------------------------------
+    def present_dependency_audit(
+        self,
+        result: DependencyAuditResult | None,
+        *,
+        error_message: str | None = None,
+    ) -> None:
+        """Exibe um painel não modal com o resultado da auditoria de dependências."""
+
+        self._dependency_audit_presented = True
+        window_exists = bool(
+            self._dependency_audit_window and self._dependency_audit_window.winfo_exists()
+        )
+
+        if not window_exists:
+            audit_window = ctk.CTkToplevel(self.main_tk_root)
+            audit_window.title("Dependency Audit")
+            audit_window.geometry("720x540")
+            audit_window.resizable(True, True)
+            try:
+                audit_window.iconbitmap("icon.ico")
+            except Exception:
+                logging.debug("Dependency audit window icon not applied.", exc_info=True)
+            audit_window.protocol("WM_DELETE_WINDOW", self._close_dependency_audit_window)
+
+            header = ctk.CTkFrame(audit_window)
+            header.pack(fill="x", padx=16, pady=(16, 12))
+            self._dependency_audit_summary_label = ctk.CTkLabel(
+                header,
+                text="",
+                font=("Segoe UI", 16, "bold"),
+                justify="left",
+                anchor="w",
+                wraplength=660,
+            )
+            self._dependency_audit_summary_label.pack(fill="x")
+            self._dependency_audit_timestamp_label = ctk.CTkLabel(
+                header,
+                text="",
+                font=("Segoe UI", 12),
+                justify="left",
+                anchor="w",
+            )
+            self._dependency_audit_timestamp_label.pack(fill="x", pady=(6, 0))
+
+            self._dependency_audit_content = ctk.CTkScrollableFrame(
+                audit_window,
+                height=360,
+            )
+            self._dependency_audit_content.pack(
+                fill="both",
+                expand=True,
+                padx=16,
+                pady=(0, 12),
+            )
+
+            button_frame = ctk.CTkFrame(audit_window)
+            button_frame.pack(fill="x", padx=16, pady=(0, 16))
+            self._dependency_audit_copy_all_btn = ctk.CTkButton(
+                button_frame,
+                text="Copiar todos os comandos",
+                command=self._copy_all_dependency_audit_commands,
+            )
+            self._dependency_audit_copy_all_btn.pack(side="left")
+            docs_button = ctk.CTkButton(
+                button_frame,
+                text="Abrir documentação",
+                command=self._open_dependency_audit_docs,
+            )
+            docs_button.pack(side="right")
+
+            self._dependency_audit_window = audit_window
+        else:
+            audit_window = self._dependency_audit_window
+            try:
+                audit_window.lift()
+            except Exception:
+                logging.debug("Failed to raise dependency audit window.", exc_info=True)
+
+        summary_label = self._dependency_audit_summary_label
+        timestamp_label = self._dependency_audit_timestamp_label
+        container = self._dependency_audit_content
+        if not container:
+            return
+
+        summary_text = ""
+        timestamp_text = ""
+        if result is not None:
+            summary_text = result.summary_message()
+            try:
+                localized = result.generated_at.astimezone()
+            except Exception:
+                localized = result.generated_at
+            timestamp_text = f"Gerado em {localized.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+        elif error_message:
+            summary_text = error_message
+            timestamp_text = "Resultado indisponível no momento."
+        else:
+            summary_text = "Dependency audit result unavailable."
+            timestamp_text = "Resultado indisponível no momento."
+
+        if summary_label is not None:
+            summary_label.configure(text=summary_text)
+        if timestamp_label is not None:
+            timestamp_label.configure(text=timestamp_text)
+
+        for child in container.winfo_children():
+            child.destroy()
+
+        self._dependency_audit_commands = []
+        has_issues = False
+
+        if result is None:
+            info = error_message or "Dependency audit result unavailable."
+            ctk.CTkLabel(
+                container,
+                text=info,
+                justify="left",
+                anchor="w",
+                wraplength=640,
+            ).pack(anchor="w", padx=12, pady=(0, 8))
+        else:
+            sections = [
+                (
+                    "Dependências ausentes",
+                    result.missing,
+                    "Instale os pacotes listados para alinhar o ambiente ao manifesto.",
+                ),
+                (
+                    "Versões fora da especificação",
+                    result.version_mismatches,
+                    "Atualize as bibliotecas abaixo para satisfazer os intervalos declarados.",
+                ),
+                (
+                    "Divergências de hash",
+                    result.hash_mismatches,
+                    "Reinstale os pacotes com hashes divergentes para garantir integridade.",
+                ),
+            ]
+
+            for title, issues, guidance in sections:
+                if issues:
+                    has_issues = True
+                self._render_dependency_issue_section(
+                    container,
+                    title,
+                    issues,
+                    guidance,
+                )
+
+        if self._dependency_audit_copy_all_btn is not None:
+            state = "normal" if (self._dependency_audit_commands and has_issues) else "disabled"
+            self._dependency_audit_copy_all_btn.configure(state=state)
+
+    def _render_dependency_issue_section(
+        self,
+        parent,
+        title: str,
+        issues: Iterable[DependencyIssue],
+        guidance: str,
+    ) -> None:
+        section = ctk.CTkFrame(parent)
+        section.pack(fill="x", padx=8, pady=(0, 12))
+
+        ctk.CTkLabel(
+            section,
+            text=title,
+            font=("Segoe UI", 15, "bold"),
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", pady=(8, 4), padx=8)
+
+        if guidance:
+            ctk.CTkLabel(
+                section,
+                text=guidance,
+                wraplength=640,
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=12, pady=(0, 8))
+
+        issues = list(issues)
+        if not issues:
+            ctk.CTkLabel(
+                section,
+                text="Nenhum item identificado.",
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=12, pady=(0, 8))
+            return
+
+        for issue in issues:
+            card = ctk.CTkFrame(section, corner_radius=8)
+            card.pack(fill="x", padx=12, pady=(0, 8))
+
+            metadata_lines = [
+                f"Requisito: {issue.requirement_string}",
+                f"Origem: {Path(issue.requirement_file).name}:{issue.line_number}",
+            ]
+            if issue.specifier:
+                metadata_lines.append(f"Política declarada: {issue.specifier}")
+            if issue.marker:
+                metadata_lines.append(f"Marker: {issue.marker}")
+            if issue.installed_version:
+                metadata_lines.append(f"Versão instalada: {issue.installed_version}")
+            elif issue.category == "missing":
+                metadata_lines.append("Versão instalada: <não localizada>")
+            if issue.hashes:
+                metadata_lines.append(f"Hashes esperados: {', '.join(issue.hashes)}")
+
+            details = issue.details or {}
+            expected = details.get("expected") if isinstance(details, dict) else None
+            detected = details.get("detected") if isinstance(details, dict) else None
+            if expected:
+                metadata_lines.append(f"Hashes declarados: {expected}")
+            if detected:
+                metadata_lines.append(f"Hashes detectados: {detected}")
+
+            ctk.CTkLabel(
+                card,
+                text="\n".join(metadata_lines),
+                justify="left",
+                anchor="w",
+                wraplength=620,
+            ).pack(fill="x", padx=12, pady=(8, 4))
+
+            suggestion_text = issue.suggestion
+            ctk.CTkLabel(
+                card,
+                text=suggestion_text,
+                justify="left",
+                anchor="w",
+                wraplength=620,
+                text_color=("#A0A0A0", "#A0A0A0"),
+            ).pack(fill="x", padx=12, pady=(0, 8))
+
+            action_row = ctk.CTkFrame(card, fg_color="transparent")
+            action_row.pack(fill="x", padx=12, pady=(0, 12))
+            ctk.CTkButton(
+                action_row,
+                text="Copiar comando",
+                command=lambda cmd=suggestion_text: self._copy_to_clipboard(cmd),
+            ).pack(side="left")
+
+            self._dependency_audit_commands.append(suggestion_text)
+
+    def _copy_all_dependency_audit_commands(self) -> None:
+        commands = [cmd for cmd in self._dependency_audit_commands if cmd]
+        if not commands:
+            return
+        unique_commands = list(dict.fromkeys(commands))
+        payload = "\n".join(unique_commands)
+        self._copy_to_clipboard(payload)
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        if not text:
+            return
+        try:
+            self.main_tk_root.clipboard_clear()
+            self.main_tk_root.clipboard_append(text)
+        except Exception as exc:
+            logging.error("Failed to copy text to clipboard: %s", exc, exc_info=True)
+            return
+        self.show_status_tooltip("Comando copiado para a área de transferência.")
+
+    def _open_dependency_audit_docs(self) -> None:
+        doc_path = self._dependency_audit_docs_path
+        try:
+            resolved = doc_path.resolve(strict=True)
+        except FileNotFoundError:
+            logging.warning("Dependency audit documentation not found at %s", doc_path)
+            self.show_status_tooltip("Arquivo de documentação não encontrado.")
+            return
+        webbrowser.open(resolved.as_uri())
+
+    def _close_dependency_audit_window(self) -> None:
+        window = self._dependency_audit_window
+        if not window:
+            return
+        try:
+            window.destroy()
+        except Exception:
+            logging.debug("Failed to destroy dependency audit window.", exc_info=True)
+        finally:
+            self._dependency_audit_window = None
+            self._dependency_audit_summary_label = None
+            self._dependency_audit_timestamp_label = None
+            self._dependency_audit_content = None
+            self._dependency_audit_copy_all_btn = None
+            self._dependency_audit_commands = []
+
     def _build_vad_section(self, parent, use_vad_var, vad_threshold_var, vad_silence_duration_var, vad_pre_speech_padding_ms_var, vad_post_speech_padding_ms_var):
         vad_frame = ctk.CTkFrame(parent)
         vad_frame.pack(fill="x", pady=5)
@@ -1898,6 +2206,15 @@ class UIManager:
         state_str = str(resolved_state)
 
         event_obj = context.get("event") if context else None
+        if (
+            event_obj == StateEvent.DEPENDENCY_AUDIT_READY
+            and not self._dependency_audit_presented
+        ):
+            result = getattr(self.core_instance_ref, "dependency_audit_result", None)
+            failure_message = getattr(
+                self.core_instance_ref, "dependency_audit_failure_message", None
+            )
+            self.present_dependency_audit(result, error_message=failure_message)
         if context:
             self._last_state_notification = context.get("notification")
             self._state_context_suffix = self._build_state_context_suffix(state_str, context)

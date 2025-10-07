@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox
-from typing import Any, List
+from typing import Any, List, Mapping
 
 import requests
 
@@ -387,6 +387,7 @@ class ConfigManager:
             self._bootstrap_state["secrets"]["migrated_from"] = migrated_secrets
 
         self._bootstrap_logged = False
+        self._runtime_notices: list[dict[str, Any]] = []
         self.load_config()
         url = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
         if url:
@@ -2290,3 +2291,35 @@ class ConfigManager:
         )
         if save:
             self.save_config()
+
+    # ------------------------------------------------------------------
+    # Runtime notices
+
+    def record_runtime_notice(
+        self,
+        message: str,
+        *,
+        category: str = "general",
+        details: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persiste um aviso operacional na memória do gerenciador.
+
+        O objetivo é expor mensagens de diagnóstico efêmeras (como o
+        relatório de auditoria de dependências) sem poluir o arquivo de
+        configuração persistente.
+        """
+
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "category": str(category),
+            "message": str(message),
+        }
+        if details is not None:
+            payload["details"] = dict(details)
+        self._runtime_notices.append(payload)
+        return payload
+
+    def get_runtime_notices(self) -> list[dict[str, Any]]:
+        """Retorna uma cópia dos avisos de runtime registrados."""
+
+        return list(self._runtime_notices)

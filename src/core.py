@@ -68,6 +68,7 @@ from .logging_utils import (
     log_duration,
     scoped_correlation_id,
 )
+from .utils.dependency_audit import DependencyAuditResult, audit_environment
 
 
 LOGGER = get_logger('whisper_flash_transcriber.core', component='Core')
@@ -107,13 +108,36 @@ class AppCore:
 
         # --- Módulos ---
         self.config_manager = config_manager or ConfigManager()
+        self.dependency_audit_result: DependencyAuditResult | None = None
+        self._dependency_audit_failure_message: str | None = None
+        self._dependency_audit_event_sent = False
+        self._dependency_audit_presented_to_ui = False
+
+        try:
+            audit_result = audit_environment()
+        except Exception as exc:  # pragma: no cover - diagnóstico defensivo
+            failure_message = f"Dependency audit failed: {exc}"
+            LOGGER.exception("Failed to complete dependency audit during bootstrap.")
+            self._dependency_audit_failure_message = failure_message
+            self.config_manager.record_runtime_notice(
+                failure_message,
+                category="dependency_audit",
+            )
+        else:
+            self.dependency_audit_result = audit_result
+            self.config_manager.record_runtime_notice(
+                audit_result.summary_message(),
+                category="dependency_audit",
+                details=audit_result.to_serializable(),
+            )
+
         self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
         self._ui_manager = None  # Será setado externamente pelo main.py
         self._pending_tray_tooltips: list[str] = []
 
-        self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
-
         self.full_transcription = ""
+
+        self._publish_dependency_audit_state_event()
 
         self.action_orchestrator = ActionOrchestrator(
             state_manager=self.state_manager,
@@ -179,6 +203,10 @@ class AppCore:
         self._recording_started_at: float | None = None
 
     @property
+    def dependency_audit_failure_message(self) -> str | None:
+        return self._dependency_audit_failure_message
+
+    @property
     def ui_manager(self):
         return self._ui_manager
 
@@ -187,6 +215,8 @@ class AppCore:
         self._ui_manager = ui_manager_instance
         if ui_manager_instance:
             self.state_manager.subscribe(ui_manager_instance.update_tray_icon)
+            self._publish_dependency_audit_state_event()
+            self._present_dependency_audit_to_ui()
 
         # --- Hotkey Manager ---
         config_path = getattr(self, "hotkey_config_path", HOTKEY_CONFIG_FILE)
@@ -707,6 +737,55 @@ class AppCore:
             if message not in self._pending_tray_tooltips:
                 self._pending_tray_tooltips.append(message)
                 LOGGER.debug("AppCore: tooltip pendente armazenada: %s", message)
+
+    def _publish_dependency_audit_state_event(self) -> None:
+        if self._dependency_audit_event_sent:
+            return
+        message: str | None = None
+        if self.dependency_audit_result is not None:
+            message = self.dependency_audit_result.summary_message()
+        elif self._dependency_audit_failure_message:
+            message = self._dependency_audit_failure_message
+        if not message:
+            return
+        try:
+            self.state_manager.set_state(
+                sm.StateEvent.DEPENDENCY_AUDIT_READY,
+                details=message,
+                source="dependency_audit",
+            )
+        except Exception:  # pragma: no cover - caminho defensivo
+            LOGGER.exception("Failed to dispatch dependency audit state event.")
+            return
+        self._dependency_audit_event_sent = True
+
+    def _present_dependency_audit_to_ui(self) -> None:
+        if self._dependency_audit_presented_to_ui:
+            return
+        ui_manager = getattr(self, "_ui_manager", None)
+        if ui_manager is None or not hasattr(ui_manager, "present_dependency_audit"):
+            return
+        if self.dependency_audit_result is None and not self._dependency_audit_failure_message:
+            return
+
+        def _invoke() -> None:
+            try:
+                ui_manager.present_dependency_audit(
+                    self.dependency_audit_result,
+                    error_message=self._dependency_audit_failure_message,
+                )
+            except Exception:  # pragma: no cover - defensivo
+                LOGGER.exception("UI manager failed to present dependency audit result.")
+
+        self._dependency_audit_presented_to_ui = True
+        try:
+            self.main_tk_root.after(0, _invoke)
+        except Exception:  # pragma: no cover - fallback síncrono
+            LOGGER.debug(
+                "Failed to schedule dependency audit UI callback; invoking inline.",
+                exc_info=True,
+            )
+            _invoke()
 
     def report_runtime_notice(self, message: str, *, level: int = logging.WARNING) -> None:
         """Publica um aviso em log e encaminha mensagem para a UI."""
