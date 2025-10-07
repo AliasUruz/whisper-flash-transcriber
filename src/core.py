@@ -64,6 +64,7 @@ from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from . import model_manager as model_manager_module
+from .model_download_controller import ModelDownloadController, DownloadTask
 from .logging_utils import (
     StructuredMessage,
     get_logger,
@@ -161,6 +162,15 @@ class AppCore:
             "DownloadCancelledError",
             Exception,
         )
+        max_parallel_downloads = self.config_manager.get_max_parallel_downloads()
+        self.model_download_controller = ModelDownloadController(
+            state_manager=self.state_manager,
+            config_manager=self.config_manager,
+            max_parallel_downloads=max_parallel_downloads,
+            on_task_finished=self._on_download_task_finished,
+        )
+        self._tracked_download_tasks: set[str] = set()
+        self._auto_reload_tasks: set[str] = set()
 
         # Sincronizar modelos ASR já presentes no disco no início da aplicação
         try:
@@ -236,7 +246,6 @@ class AppCore:
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
 
-        self._active_model_download_event: threading.Event | None = None
         self.model_download_timeout = self._resolve_model_download_timeout()
 
     def build_bootstrap_report(self) -> dict[str, Any]:
@@ -334,15 +343,12 @@ class AppCore:
                 )
                 if messagebox.askyesno("Model Download", prompt_text):
                     self.config_manager.record_model_prompt_decision("accept", model_id, backend)
-                    cancel_event = threading.Event()
-                    self._active_model_download_event = cancel_event
                     self._start_model_download(
                         model_id,
                         backend,
                         cache_dir,
                         ct2_type,
                         timeout=self.model_download_timeout,
-                        cancel_event=cancel_event,
                     )
                 else:
                     self.config_manager.record_model_prompt_decision("defer", model_id, backend)
@@ -364,110 +370,122 @@ class AppCore:
 
         self.main_tk_root.after(0, _ask_user)
 
-    def _record_download_status(
+    def schedule_model_download(
         self,
-        status: str,
         model_id: str,
         backend: str,
+        cache_dir: str,
+        quant: str | None,
         *,
-        message: str = "",
-        details: str = "",
-    ) -> None:
-        """Persist structured information about download attempts."""
+        auto_reload: bool = False,
+        timeout: float | None = None,
+    ) -> DownloadTask:
+        normalized_backend = model_manager_module.normalize_backend_label(backend)
+        task = self.model_download_controller.schedule_download(
+            model_id,
+            normalized_backend or backend,
+            cache_dir,
+            quant,
+            timeout=timeout if timeout is not None else self.model_download_timeout,
+        )
+        self._tracked_download_tasks.add(task.task_id)
+        if auto_reload:
+            self._auto_reload_tasks.add(task.task_id)
+        self.state_manager.set_state(
+            sm.StateEvent.MODEL_DOWNLOAD_STARTED,
+            details={
+                "message": f"Download scheduled for {model_id}",
+                "task_id": task.task_id,
+                "model_id": model_id,
+                "backend": normalized_backend,
+            },
+            source="model_download",
+        )
+        return task
 
-        config_manager = getattr(self, "config_manager", None)
-        if not config_manager:
-            return
-        try:
-            config_manager.record_model_download_status(
-                status=status,
-                model_id=model_id,
-                backend=backend,
-                message=message,
-                details=details,
+    def get_model_downloads_snapshot(self) -> dict:
+        return self.model_download_controller.snapshot()
+
+    def cancel_download_task(self, task_id: str) -> bool:
+        return self.model_download_controller.cancel(task_id)
+
+    def pause_download_task(self, task_id: str) -> bool:
+        return self.model_download_controller.pause(task_id)
+
+    def resume_download_task(self, task_id: str) -> DownloadTask | None:
+        task = self.model_download_controller.resume(task_id)
+        if task is not None:
+            self._tracked_download_tasks.add(task.task_id)
+        return task
+
+    def _on_download_task_finished(self, task: DownloadTask) -> None:
+        task_id = getattr(task, "task_id", None)
+        if task_id in self._tracked_download_tasks and task.status not in {"queued", "running"}:
+            self._tracked_download_tasks.discard(task_id)
+
+        if task_id in self._auto_reload_tasks:
+            should_reload = task.status in {"completed", "skipped"}
+            should_remove = task.status not in {"paused"}
+            if should_reload:
+                def _do_reload() -> None:
+                    try:
+                        self._refresh_installed_models("post_download", raise_errors=False)
+                    except Exception:
+                        LOGGER.warning("Failed to refresh models after download.", exc_info=True)
+                    try:
+                        self.transcription_handler.reload_asr()
+                    except Exception:
+                        LOGGER.error("Failed to reload ASR after download.", exc_info=True)
+
+                if self.main_tk_root is not None:
+                    self.main_tk_root.after(0, _do_reload)
+                else:
+                    _do_reload()
+            if should_remove:
+                self._auto_reload_tasks.discard(task_id)
+
+        message_details = {
+            "message": task.message,
+            "task_id": task.task_id,
+            "model_id": task.model_id,
+            "backend": task.backend,
+            "status": task.status,
+        }
+
+        if task.status == "error":
+            self.state_manager.set_state(
+                sm.StateEvent.MODEL_DOWNLOAD_FAILED,
+                details=message_details,
+                source="model_download",
             )
-        except Exception:  # pragma: no cover - persistence best effort
-            LOGGER.debug(
-                "Failed to persist download status for model %s (status=%s).",
-                model_id,
-                status,
-                exc_info=True,
+            if self.main_tk_root is not None:
+                self.main_tk_root.after(
+                    0,
+                    lambda msg=task.message: messagebox.showerror("Model", msg or "Model download failed."),
+                )
+        elif task.status in {"cancelled", "timed_out"}:
+            self.state_manager.set_state(
+                sm.StateEvent.MODEL_DOWNLOAD_CANCELLED,
+                details=message_details,
+                source="model_download",
             )
+            if self.main_tk_root is not None:
+                self.main_tk_root.after(
+                    0,
+                    lambda msg=task.message: messagebox.showinfo("Model", msg or "Model download cancelled."),
+                )
 
     def download_model_and_reload(self, model_id, backend, cache_dir, quant):
-        """
-        Handles the full model download and subsequent reload process.
-        This method is designed to be called from a background thread started by the UI.
-        It raises exceptions back to the caller thread.
-        """
-        cancel_event = threading.Event()
-        self._active_model_download_event = cancel_event
-        
-        try:
-            self.state_manager.set_state(sm.STATE_LOADING_MODEL)
-            self._record_download_status(
-                "in_progress",
-                model_id,
-                backend,
-                message="Model download started.",
-            )
+        """Compat wrapper that schedules a download and reload sequence."""
 
-            ensure_kwargs = {
-                "quant": quant,
-                "timeout": self.model_download_timeout,
-                "cancel_event": cancel_event,
-                "hf_cache_dir": self.config_manager.get_hf_cache_dir(),
-            }
-
-            result = self.model_manager.ensure_download(
-                model_id,
-                backend,
-                cache_dir,
-                **ensure_kwargs,
-            )
-
-            downloaded = bool(getattr(result, "downloaded", True))
-            result_path = getattr(result, "path", "")
-            status = "success" if downloaded else "skipped"
-            message = (
-                "Model download completed."
-                if downloaded
-                else "Model already present; download skipped."
-            )
-            self._record_download_status(
-                status,
-                model_id,
-                backend,
-                message=message,
-                details=result_path,
-            )
-
-            # If download was not cancelled and did not raise an error, reload
-            self._refresh_installed_models("post_download", raise_errors=False)
-            self.transcription_handler.reload_asr()
-
-        except self._download_cancelled_error as e:
-            LOGGER.info(f"Download was cancelled for model {model_id}: {e}")
-            self._record_download_status(
-                "cancelled",
-                model_id,
-                backend,
-                message=str(e) or "Model download cancelled.",
-            )
-            raise # Re-raise for the UI thread to handle
-        except Exception as e:
-            LOGGER.error(f"An error occurred during model download/reload for {model_id}: {e}", exc_info=True)
-            self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-            self._record_download_status(
-                "error",
-                model_id,
-                backend,
-                message="Model download failed.",
-                details=str(e),
-            )
-            raise # Re-raise for the UI thread to handle
-        finally:
-            self._active_model_download_event = None
+        self.schedule_model_download(
+            model_id,
+            backend,
+            cache_dir,
+            quant,
+            auto_reload=True,
+            timeout=self.model_download_timeout,
+        )
 
     def _start_model_download(
         self,
@@ -479,116 +497,20 @@ class AppCore:
         timeout: float | None = None,
         cancel_event: threading.Event | None = None,
     ):
-        """Inicia o download do modelo em uma thread separada."""
+        """Agenda o download do modelo respeitando o controlador unificado."""
 
+        task = self.schedule_model_download(
+            model_id,
+            backend,
+            cache_dir,
+            ct2_type,
+            auto_reload=True,
+            timeout=timeout,
+        )
         if cancel_event is not None:
+            # Mantém compatibilidade com fluxos que esperam um Event.
             cancel_event.clear()
-
-        def _download():
-            try:
-                self.state_manager.set_state(sm.STATE_LOADING_MODEL)
-                self._record_download_status(
-                    "in_progress",
-                    model_id,
-                    backend,
-                    message="Model download started.",
-                )
-                ensure_kwargs = {
-                    "quant": ct2_type,
-                    "timeout": timeout,
-                    "cancel_event": cancel_event,
-                    "hf_cache_dir": self.config_manager.get_hf_cache_dir(),
-                }
-                result = self.model_manager.ensure_download(
-                    model_id,
-                    backend,
-                    cache_dir,
-                    **ensure_kwargs,
-                )
-                downloaded = bool(getattr(result, "downloaded", True))
-                result_path = getattr(result, "path", "")
-                status = "success" if downloaded else "skipped"
-                message = (
-                    "Model download completed."
-                    if downloaded
-                    else "Model already present; download skipped."
-                )
-                self._record_download_status(
-                    status,
-                    model_id,
-                    backend,
-                    message=message,
-                    details=result_path,
-                )
-            except self._download_cancelled_error as cancel_exc:
-                by_user = bool(getattr(cancel_exc, "by_user", False))
-                timed_out = bool(getattr(cancel_exc, "timed_out", False))
-                reason = str(cancel_exc).strip()
-                if not reason:
-                    if timed_out:
-                        reason = "Model download timed out."
-                    elif by_user:
-                        reason = "Model download cancelled by user."
-                    else:
-                        reason = "Model download cancelled."
-                self._record_download_status(
-                    "cancelled",
-                    model_id,
-                    backend,
-                    message=reason,
-                )
-                context_flags = []
-                if by_user:
-                    context_flags.append("by_user=True")
-                if timed_out:
-                    context_flags.append("timed_out=True")
-                context_suffix = f" ({', '.join(context_flags)})" if context_flags else ""
-                MODEL_LOGGER.info(
-                    "Model download cancelled%s: backend=%s model_id=%s reason=%s",
-                    context_suffix,
-                    backend,
-                    model_id,
-                    reason,
-                )
-                self.state_manager.set_state(
-                    sm.StateEvent.MODEL_DOWNLOAD_CANCELLED,
-                    details=f"Download for '{model_id}' cancelled: {reason}",
-                    source="model_download",
-                )
-                self.main_tk_root.after(
-                    0,
-                    lambda msg=reason: messagebox.showinfo("Model", msg),
-                )
-                return
-            except OSError:
-                MODEL_LOGGER.error("Invalid cache directory during model download.", exc_info=True)
-                self._record_download_status(
-                    "error",
-                    model_id,
-                    backend,
-                    message="Invalid cache directory during model download.",
-                )
-                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                self.main_tk_root.after(0, lambda: messagebox.showerror("Model", "Invalid cache directory. Check your settings."))
-            except Exception as exc:
-                MODEL_LOGGER.error(f"Model download failed: {exc}", exc_info=True)
-                self._record_download_status(
-                    "error",
-                    model_id,
-                    backend,
-                    message="Model download failed.",
-                    details=str(exc),
-                )
-                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                self.main_tk_root.after(0, lambda exc=exc: messagebox.showerror("Model", f"Download failed: {exc}"))  # noqa: F821
-            else:
-                MODEL_LOGGER.info("Model download completed successfully.")
-                self.main_tk_root.after(0, self.transcription_handler.start_model_loading)
-            finally:
-                active_event = getattr(self, "_active_model_download_event", None)
-                if active_event is cancel_event:
-                    self._active_model_download_event = None
-        threading.Thread(target=_download, daemon=True, name="ModelDownloadThread").start()
+            self._tracked_download_tasks.add(task.task_id)
 
     def _start_model_loading_with_synced_config(self):
         """Start model loading after asserting the ConfigManager linkage.
@@ -623,10 +545,9 @@ class AppCore:
         handler.start_model_loading()
 
     def cancel_model_download(self) -> None:
-        """Solicita o cancelamento do download de modelo em andamento."""
-        event = getattr(self, "_active_model_download_event", None)
-        if event is not None:
-            event.set()
+        """Solicita o cancelamento de todos os downloads de modelo ativos."""
+        for task_id in list(self._tracked_download_tasks):
+            self.model_download_controller.cancel(task_id)
 
     def _apply_initial_config_to_core_attributes(self):
         # Mover a atribuição de self.record_key, self.record_mode, etc.
@@ -1620,6 +1541,7 @@ class AppCore:
             "new_chunk_length_mode": "chunk_length_mode",
             "new_chunk_length_sec": "chunk_length_sec",
             "new_enable_torch_compile": "enable_torch_compile",
+            "new_max_parallel_downloads": "max_parallel_downloads",
         }
 
         legacy_key_aliases = {
@@ -1700,6 +1622,17 @@ class AppCore:
         }
         reload_required = bool(changed_mapped_keys & reload_keys)
         launch_changed = LAUNCH_AT_STARTUP_CONFIG_KEY in changed_mapped_keys
+
+        if "max_parallel_downloads" in changed_mapped_keys:
+            try:
+                new_limit = self.config_manager.get_max_parallel_downloads()
+                self.model_download_controller.update_parallel_limit(new_limit)
+                LOGGER.info("Updated model download concurrency to %d", new_limit)
+            except Exception:
+                LOGGER.warning(
+                    "Failed to propagate max_parallel_downloads change to controller.",
+                    exc_info=True,
+                )
 
         self._apply_initial_config_to_core_attributes()
 
@@ -1829,6 +1762,17 @@ class AppCore:
 
         # Re-aplicar configurações aos atributos do AppCore
         self._apply_initial_config_to_core_attributes()
+
+        if key == "max_parallel_downloads":
+            try:
+                new_limit = self.config_manager.get_max_parallel_downloads()
+                self.model_download_controller.update_parallel_limit(new_limit)
+                LOGGER.info("Updated model download concurrency to %d", new_limit)
+            except Exception:
+                LOGGER.warning(
+                    "Failed to propagate max_parallel_downloads update via update_setting.",
+                    exc_info=True,
+                )
 
         if key == "launch_at_startup":
             from .utils.autostart import set_launch_at_startup
