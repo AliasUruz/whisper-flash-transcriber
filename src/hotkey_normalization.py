@@ -66,6 +66,7 @@ _KEY_ALIASES: dict[str, str] = {
     "tabulacao": "tab",
     "delete": "del",
     "seta": "arrow",
+    "+": "plus",
 }
 
 def _strip_accents(value: str) -> str:
@@ -118,9 +119,25 @@ def _normalize_key_name(value: str | None) -> str:
     if not text:
         return ""
 
-    parts = _HOTKEY_SEPARATOR.split(text)
     normalized_parts: list[str] = []
-    for raw_part in parts:
+    tokens: list[str] = []
+    last_index = 0
+
+    for match in _HOTKEY_SEPARATOR.finditer(text):
+        token = text[last_index : match.start()]
+        if token:
+            tokens.append(token)
+        else:
+            tokens.append("+")
+        last_index = match.end()
+
+    trailing = text[last_index:]
+    if trailing:
+        tokens.append(trailing)
+    elif not tokens and text:
+        tokens.append(text)
+
+    for raw_part in tokens:
         candidate = _sanitize_token(raw_part)
         if not candidate:
             continue
