@@ -235,23 +235,28 @@ def _normalize_asr_backend(name: str | None) -> str | None:
     if not normalized:
         return ""
 
-    allowed_aliases = {
-        "ct2",
-        "ctranslate2",
-        "faster whisper",
-        "faster_whisper",
-        "faster-whisper",
-        "auto",
+    alias_map = {
+        "ct2": "ctranslate2",
+        "ctranslate2": "ctranslate2",
+        "faster whisper": "ctranslate2",
+        "faster_whisper": "ctranslate2",
+        "faster-whisper": "ctranslate2",
+        "transformer": "ctranslate2",
+        "transformers": "ctranslate2",
+        "auto": "auto",
     }
-    if normalized not in allowed_aliases:
-        CONFIG_LOGGER.debug(
-            log_context(
-                "Mapping unsupported ASR backend to 'ctranslate2'.",
-                event="config.unsupported_backend_normalized",
-                backend=name,
-            )
-        )
 
+    mapped = alias_map.get(normalized)
+    if mapped:
+        return mapped
+
+    CONFIG_LOGGER.debug(
+        log_context(
+            "Mapping unsupported ASR backend to 'ctranslate2'.",
+            event="config.unsupported_backend_normalized",
+            backend=name,
+        )
+    )
     return "ctranslate2"
 
 
