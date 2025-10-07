@@ -812,6 +812,7 @@ def main(argv: list[str] | None = None) -> int:
             app_core_instance.config_manager,
             app_core_instance,
             model_manager=app_core_instance.model_manager,
+            is_running_as_admin=app_core_instance.is_running_as_admin,
         )
         app_core_instance.ui_manager = ui_manager_instance
         ui_manager_instance.setup_tray_icon()

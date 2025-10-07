@@ -149,7 +149,15 @@ SETTINGS_WINDOW_TITLE = f"{APP_DISPLAY_NAME} Settings"
 
 
 class UIManager:
-    def __init__(self, main_tk_root, config_manager, core_instance_ref, model_manager=None):
+    def __init__(
+        self,
+        main_tk_root,
+        config_manager,
+        core_instance_ref,
+        model_manager=None,
+        *,
+        is_running_as_admin: bool = False,
+    ):
         self.main_tk_root = main_tk_root
         self.config_manager = config_manager
         self.core_instance_ref = core_instance_ref # Reference to the AppCore instance
@@ -185,7 +193,8 @@ class UIManager:
         self._download_snapshot: list[dict[str, Any]] = []
         self._download_history: list[dict[str, Any]] = []
 
-        self._last_operation_id: str | None = None
+        self.is_running_as_admin = bool(is_running_as_admin)
+        self._is_windows = sys.platform.startswith("win")
 
 
         # Assign methods to the instance
@@ -209,7 +218,9 @@ class UIManager:
 
         # Controle interno para atualizar a tooltip durante a gravação
         self.recording_timer_thread = None
-        self._hotkey_driver_status_text: str = self._format_hotkey_driver_status_text(None)
+
+    def _should_warn_about_elevation(self) -> bool:
+        return self._is_windows and not self.is_running_as_admin
         self.stop_recording_timer_event = threading.Event()
 
         # Controle interno para atualizar a tooltip durante a transcrição
@@ -4134,6 +4145,25 @@ class UIManager:
                 general_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(general_frame, text="Configurações Gerais", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
 
+                if self._should_warn_about_elevation():
+                    warning_frame = ctk.CTkFrame(general_frame, fg_color=("#2d2416", "#1f1f1f"))
+                    warning_frame.pack(fill="x", padx=5, pady=(0, 8))
+                    warning_label = ctk.CTkLabel(
+                        warning_frame,
+                        text=(
+                            "Aviso: o Windows bloqueia automações entre níveis de privilégio. "
+                            "Se precisar auto-colar em aplicativos executados como administrador, "
+                            "execute o Whisper Flash Transcriber com o mesmo nível para evitar falhas."
+                        ),
+                        wraplength=520,
+                        justify="left",
+                    )
+                    warning_label.pack(anchor="w", padx=8, pady=8)
+                    Tooltip(
+                        warning_frame,
+                        "Auto-colar pode ser bloqueado por aplicativos elevados quando o transcritor roda sem privilégios de administrador.",
+                    )
+
                 # Record Hotkey
                 key_frame = ctk.CTkFrame(general_frame)
                 key_frame.pack(fill="x", pady=5)
@@ -4192,7 +4222,13 @@ class UIManager:
                 paste_frame.pack(fill="x", pady=5)
                 paste_switch = ctk.CTkSwitch(paste_frame, text="Auto-colar", variable=auto_paste_var)
                 paste_switch.pack(side="left", padx=5)
-                Tooltip(paste_switch, "Cola automaticamente a transcrição.")
+                paste_tooltip = "Cola automaticamente a transcrição."
+                if self._should_warn_about_elevation():
+                    paste_tooltip += (
+                        "\nObservação: No Windows, aplicativos executados como administrador ignoram o auto-colar"
+                        " se este aplicativo não estiver com o mesmo nível de privilégio."
+                    )
+                Tooltip(paste_switch, paste_tooltip)
 
                 # Hotkey Stability Service
                 stability_service_frame = ctk.CTkFrame(general_frame)
