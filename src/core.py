@@ -118,6 +118,7 @@ class AppCore:
         config_manager: ConfigManager | None = None,
         hotkey_config_path: str = HOTKEY_CONFIG_FILE,
         startup_diagnostics: "StartupDiagnosticsReport | None" = None,
+        enable_onboarding: bool = True,
     ):
         self.main_tk_root = main_tk_root # Referência para a raiz Tkinter
         self.hotkey_config_path = hotkey_config_path
@@ -167,6 +168,7 @@ class AppCore:
         self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
         self._ui_manager = None  # Será setado externamente pelo main.py
         self._pending_tray_tooltips: list[str] = []
+        self._onboarding_enabled = enable_onboarding
 
         self.full_transcription = ""
         self._segment_stream_finalized = False
@@ -360,7 +362,12 @@ class AppCore:
         self._apply_initial_config_to_core_attributes()
 
         self.model_download_timeout = self._resolve_model_download_timeout()
-        self._maybe_run_initial_onboarding()
+        if self._onboarding_enabled:
+            self._maybe_run_initial_onboarding()
+        else:
+            LOGGER.debug(
+                "Initial onboarding disabled for this session; skipping wizard launch."
+            )
 
     def _maybe_run_initial_onboarding(self) -> None:
         try:
