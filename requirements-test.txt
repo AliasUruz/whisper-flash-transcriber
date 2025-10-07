@@ -3,7 +3,6 @@ pytest
 flake8==7.2.0
 
 # Dependências da Aplicação usadas nos Testes
-transformers
 sounddevice
 numpy>=2.3.0
 pyautogui

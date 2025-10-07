@@ -455,7 +455,7 @@ class FirstRunWizard(ctk.CTkToplevel):
         backend_menu = ctk.CTkOptionMenu(
             form,
             variable=self.backend_var,
-            values=["ctranslate2", "faster-whisper", "transformers"],
+            values=["ctranslate2"],
             command=lambda _: self._sync_quant_visibility(),
         )
         backend_menu.grid(row=1, column=1, sticky="w", pady=8)
@@ -651,10 +651,10 @@ class FirstRunWizard(ctk.CTkToplevel):
         if not model_id:
             messagebox.showerror("Modelo", "Informe o identificador do modelo.", parent=self)
             return False
-        if backend not in {"ctranslate2", "faster-whisper", "transformers"}:
+        if backend != "ctranslate2":
             messagebox.showerror(
                 "Modelo",
-                "Backend inválido. Escolha entre 'ctranslate2', 'faster-whisper' ou 'transformers'.",
+                "Backend inválido. Utilize 'ctranslate2'.",
                 parent=self,
             )
             return False

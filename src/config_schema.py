@@ -42,10 +42,7 @@ _SUPPORTED_UI_LANGUAGE_MAP = {
 _DEFAULT_UI_LANGUAGE = "en-US"
 
 _CURATED_MODEL_IDS = {entry["id"] for entry in CURATED}
-_ALLOWED_ASR_BACKENDS = {
-    normalize_backend_label(entry.get("backend"))
-    for entry in CURATED
-} | {"transformers"}
+_ALLOWED_ASR_BACKENDS = {"ctranslate2"}
 
 
 class ASRDownloadStatus(BaseModel):
@@ -377,6 +374,8 @@ class AppConfig(BaseModel):
         if not isinstance(value, str):
             raise ValueError("asr_backend must be a string")
         normalized = normalize_backend_label(value)
+        if normalized == "auto":
+            normalized = "ctranslate2"
         if normalized not in _ALLOWED_ASR_BACKENDS:
             raise ValueError(
                 f"asr_backend must be one of {sorted(_ALLOWED_ASR_BACKENDS)}"

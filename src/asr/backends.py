@@ -25,8 +25,11 @@ def make_backend(name: str) -> ASRBackend:
     """Factory that returns an ASR backend by name."""
     normalized = name.strip().lower()
     if normalized == "transformers":
-        from .backend_transformers import TransformersBackend
-        return TransformersBackend()
+        raise ValueError(
+            "The legacy Transformers backend is no longer bundled. Configure the "
+            "application to use the CTranslate2 runtime or reinstall a fork that "
+            "ships the Transformers pipeline."
+        )
     if normalized in {"faster-whisper", "faster_whisper", "ct2", "ctranslate2"}:
         from .backend_faster_whisper import FasterWhisperBackend
         return FasterWhisperBackend()
