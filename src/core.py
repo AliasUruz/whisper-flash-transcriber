@@ -1,4 +1,5 @@
 import atexit
+import ctypes
 import json
 import logging
 import os
@@ -185,6 +186,12 @@ class AppCore:
         )
         self._tracked_download_tasks: set[str] = set()
         self._auto_reload_tasks: set[str] = set()
+
+        self._running_with_elevated_privileges = self._detect_admin_privileges()
+        if self._running_with_elevated_privileges:
+            LOGGER.debug(
+                "Core detected elevated privileges; prioritizing keyboard-based paste automation."
+            )
 
         self.startup_diagnostics: "StartupDiagnosticsReport | None" = startup_diagnostics
         if self.startup_diagnostics is not None:
@@ -1561,16 +1568,102 @@ class AppCore:
             except Exception:  # pragma: no cover - apenas log defensivo
                 LOGGER.debug("Failed to close live transcription window.", exc_info=True)
 
+    @staticmethod
+    def _detect_admin_privileges() -> bool:
+        """Detecta privilégios elevados no Windows para ajustar a automação."""
+
+        if sys.platform != "win32":
+            return False
+
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:  # pragma: no cover - fallback defensivo
+            LOGGER.debug(
+                "Failed to query elevated privileges via IsUserAnAdmin.",
+                exc_info=True,
+            )
+            return False
+
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
+        hotkey_sequence = self._resolve_paste_hotkey_sequence()
+        prefer_keyboard = self._running_with_elevated_privileges and sys.platform == "win32"
+
+        if not prefer_keyboard:
+            try:
+                pyautogui.hotkey(*hotkey_sequence)
+            except Exception as exc:
+                LOGGER.warning(
+                    "PyAutoGUI paste automation failed; attempting keyboard fallback.",
+                    exc_info=True,
+                )
+            else:
+                LOGGER.info("Text pasted.")
+                self._log_status("Text pasted.")
+                return
+
+        if self._attempt_keyboard_paste(hotkey_sequence):
+            return
+
+        if prefer_keyboard:
+            try:
+                pyautogui.hotkey(*hotkey_sequence)
+            except Exception as exc:
+                LOGGER.error(
+                    "PyAutoGUI paste automation failed after keyboard fallback.",
+                    exc_info=True,
+                )
+            else:
+                LOGGER.info("Text pasted via PyAutoGUI (secondary attempt).")
+                self._log_status("Text pasted.")
+                return
+
+        self._log_status(
+            "Error: automatic paste failed. Press the configured paste shortcut manually in the target window.",
+            error=True,
+        )
+        LOGGER.error("All paste automation strategies failed; user notified for manual intervention.")
+
+    def _attempt_keyboard_paste(self, hotkey_sequence: tuple[str, ...]) -> bool:
+        """Tenta colar utilizando bibliotecas alternativas como fallback."""
+
         try:
-            hotkey_sequence = self._resolve_paste_hotkey_sequence()
-            pyautogui.hotkey(*hotkey_sequence)
-            LOGGER.info("Text pasted.")
-            self._log_status("Text pasted.")
-        except Exception as e:
-            LOGGER.error(f"Failed to execute paste automation: {e}")
-            self._log_status("Error: failed to simulate the paste hotkey.", error=True)
+            clipboard_snapshot = pyperclip.paste()
+        except pyperclip.PyperclipException:
+            clipboard_snapshot = None
+            LOGGER.debug("Unable to read clipboard contents before fallback paste.", exc_info=True)
+        except Exception:  # pragma: no cover - leitura defensiva
+            clipboard_snapshot = None
+            LOGGER.debug("Unexpected clipboard access error before fallback paste.", exc_info=True)
+
+        try:
+            import keyboard
+        except ImportError:
+            LOGGER.error(
+                "Keyboard library is unavailable; cannot execute fallback paste automation."
+            )
+            return False
+
+        combo = "+".join(hotkey_sequence) if hotkey_sequence else "ctrl+v"
+
+        try:
+            keyboard.send(combo)
+        except Exception:
+            LOGGER.error("Keyboard-based paste fallback failed.", exc_info=True)
+            return False
+
+        LOGGER.info("Text pasted via keyboard fallback automation.")
+        self._log_status("Text pasted (fallback automation).")
+
+        if clipboard_snapshot is None:
+            LOGGER.debug("Clipboard snapshot unavailable during fallback paste.")
+        else:
+            LOGGER.debug(
+                "Clipboard snapshot captured for fallback paste (length=%d).",
+                len(clipboard_snapshot),
+            )
+
+        return True
 
     def _resolve_paste_hotkey_sequence(self) -> tuple[str, ...]:
         """Resolve the hotkey combination used for auto-paste."""
