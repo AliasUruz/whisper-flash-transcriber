@@ -180,6 +180,7 @@ DEFAULT_CONFIG = {
         "decision": "",
         "timestamp": 0,
     },
+    "first_run_completed": False,
 }
 
 
@@ -242,6 +243,7 @@ GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
 OPENROUTER_AGENT_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
+FIRST_RUN_COMPLETED_CONFIG_KEY = "first_run_completed"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
 REREGISTER_INTERVAL_SECONDS = 60
 MAX_HOTKEY_FAILURES = 3
@@ -365,6 +367,7 @@ class ConfigManager:
         self._config_hash = None
         self._secrets_hash = None
         self._invalid_timeout_cache: dict[str, Any] = {}
+        self._config_existed_on_boot = config_existed
         self._bootstrap_state: dict[str, dict[str, Any]] = {
             "config": {
                 "path": self._config_path,
@@ -474,6 +477,9 @@ class ConfigManager:
         if raw_cfg.get("prompt_agentico") == old_agent_prompt:
             raw_cfg["prompt_agentico"] = self.default_config["prompt_agentico"]
             logging.info("Old agent prompt detected and migrated to the new standard.")
+
+        if FIRST_RUN_COMPLETED_CONFIG_KEY not in loaded_config_from_file:
+            raw_cfg[FIRST_RUN_COMPLETED_CONFIG_KEY] = bool(self._config_existed_on_boot)
 
         secrets_loaded: dict[str, Any] = {}
         if self.secrets_path.exists():
@@ -1846,6 +1852,18 @@ class ConfigManager:
         if key == ASR_BACKEND_CONFIG_KEY:
             value = _normalize_asr_backend(value)
         self.config[key] = value
+
+    def is_first_run(self) -> bool:
+        """Return ``True`` when the onboarding wizard must be executed."""
+
+        return not bool(self.config.get(FIRST_RUN_COMPLETED_CONFIG_KEY, False))
+
+    def mark_first_run_complete(self, *, persist: bool = True) -> None:
+        """Persistently mark the onboarding flow as completed."""
+
+        self.config[FIRST_RUN_COMPLETED_CONFIG_KEY] = True
+        if persist:
+            self.save_config()
 
     def get_asr_model(self) -> str:
         """Compatibilidade: retorna o ``asr_model_id`` atual."""

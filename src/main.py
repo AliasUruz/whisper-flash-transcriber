@@ -18,6 +18,7 @@ if PROJECT_ROOT not in sys.path:
 from typing import Mapping, cast
 
 import src.config_manager as config_module
+from src.model_manager import get_curated_entry, normalize_backend_label
 
 
 ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
@@ -511,6 +512,59 @@ def main() -> None:
         config_manager = ConfigManager()
         run_startup_preflight(config_manager, hotkey_config_path=HOTKEY_CONFIG_PATH)
 
+        main_tk_root = tk.Tk()
+        main_tk_root.withdraw()
+
+        initial_model_queue: list[str] = []
+        initial_package_queue: list[str] = []
+        wizard_plan_path: Path | None = None
+
+        if config_manager.is_first_run():
+            from src.ui.first_run_wizard import FirstRunWizard  # noqa: E402
+
+            wizard_result = FirstRunWizard.launch(main_tk_root, config_manager)
+            if wizard_result is None:
+                LOGGER.info(
+                    StructuredMessage(
+                        "First run wizard dismissed by the operator.",
+                        event="first_run.aborted",
+                    )
+                )
+                main_tk_root.destroy()
+                return
+
+            changed_keys, wizard_warnings = config_manager.apply_updates(
+                wizard_result.config_updates
+            )
+            for warning in wizard_warnings:
+                LOGGER.warning(warning)
+
+            initial_model_queue = list(dict.fromkeys(wizard_result.selected_models))
+            initial_package_queue = list(dict.fromkeys(wizard_result.selected_packages))
+            wizard_plan_path = wizard_result.plan_path
+
+            if wizard_plan_path:
+                LOGGER.info(
+                    StructuredMessage(
+                        "First run snapshot exported.",
+                        event="first_run.plan_exported",
+                        path=str(wizard_plan_path),
+                    )
+                )
+
+            LOGGER.info(
+                StructuredMessage(
+                    "First run configuration captured.",
+                    event="first_run.applied",
+                    changed_keys=sorted(changed_keys),
+                    models=initial_model_queue,
+                    packages=initial_package_queue,
+                )
+            )
+
+            main_tk_root.update_idletasks()
+            main_tk_root.withdraw()
+
         app_core_instance = None
         ui_manager_instance = None
 
@@ -536,8 +590,6 @@ def main() -> None:
             )
         )
 
-        main_tk_root = tk.Tk()
-        main_tk_root.withdraw()
         icon_path = ICON_PATH
         if not os.path.exists(icon_path):
             LOGGER.warning(
@@ -574,6 +626,70 @@ def main() -> None:
         ui_manager_instance.setup_tray_icon()
         app_core_instance.flush_pending_ui_notifications()
         ui_manager_instance.on_exit_app = on_exit_app_enhanced
+
+        if initial_model_queue or initial_package_queue:
+
+            def _bootstrap_initial_assets() -> None:
+                cache_dir = config_manager.config.get(
+                    config_module.ASR_CACHE_DIR_CONFIG_KEY,
+                    config_manager.default_config[
+                        config_module.ASR_CACHE_DIR_CONFIG_KEY
+                    ],
+                )
+
+                if initial_model_queue:
+                    for model_id in initial_model_queue:
+                        curated_entry = get_curated_entry(model_id) or {}
+                        backend = normalize_backend_label(
+                            curated_entry.get("backend")
+                        ) or normalize_backend_label(
+                            config_manager.config.get(
+                                config_module.ASR_BACKEND_CONFIG_KEY
+                            )
+                        )
+                        try:
+                            result = app_core_instance.model_manager.ensure_download(
+                                model_id,
+                                backend,
+                                cache_dir,
+                            )
+                        except Exception as exc:
+                            LOGGER.error(
+                                StructuredMessage(
+                                    "Failed to pre-install ASR model selected during onboarding.",
+                                    event="first_run.model_download_failed",
+                                    model=model_id,
+                                    backend=backend,
+                                    error=str(exc),
+                                ),
+                                exc_info=True,
+                            )
+                        else:
+                            LOGGER.info(
+                                StructuredMessage(
+                                    "Initial ASR model ensured.",
+                                    event="first_run.model_download",
+                                    model=model_id,
+                                    backend=backend,
+                                    downloaded=result.downloaded,
+                                    path=result.path,
+                                )
+                            )
+
+                if initial_package_queue:
+                    LOGGER.info(
+                        StructuredMessage(
+                            "Optional Python packages flagged during onboarding.",
+                            event="first_run.packages_selected",
+                            packages=initial_package_queue,
+                        )
+                    )
+
+            threading.Thread(
+                target=_bootstrap_initial_assets,
+                name="FirstRunBootstrapThread",
+                daemon=True,
+            ).start()
 
         LOGGER.info(
             StructuredMessage(
