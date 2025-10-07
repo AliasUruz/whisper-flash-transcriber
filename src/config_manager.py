@@ -2401,6 +2401,18 @@ class ConfigManager:
     def set_deps_install_dir(self, value: str):
         self.config[DEPS_INSTALL_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
+    def get_python_packages_dir(self) -> str:
+        return self.config.get(
+            PYTHON_PACKAGES_DIR_CONFIG_KEY,
+            self.default_config.get(
+                PYTHON_PACKAGES_DIR_CONFIG_KEY,
+                _DEFAULT_PYTHON_PACKAGES_DIR,
+            ),
+        )
+
+    def set_python_packages_dir(self, value: str):
+        self.config[PYTHON_PACKAGES_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
     def get_hf_home_dir(self) -> str:
         return self.config.get(
             HF_HOME_DIR_CONFIG_KEY,
@@ -2412,6 +2424,18 @@ class ConfigManager:
 
     def set_hf_home_dir(self, value: str):
         self.config[HF_HOME_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_hf_cache_dir(self) -> str:
+        return self.config.get(
+            HF_CACHE_DIR_CONFIG_KEY,
+            self.default_config.get(
+                HF_CACHE_DIR_CONFIG_KEY,
+                _DEFAULT_HF_CACHE_DIR,
+            ),
+        )
+
+    def set_hf_cache_dir(self, value: str):
+        self.config[HF_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
     def get_recordings_dir(self) -> str:
         return self.config.get(

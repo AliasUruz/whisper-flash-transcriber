@@ -616,6 +616,9 @@ def main(argv: list[str] | None = None) -> int:
         from src.config_manager import ConfigManager  # noqa: E402
         from src.core import AppCore  # noqa: E402
         from src.ui_manager import UIManager  # noqa: E402
+        from src.installers.dependency_installer import (  # noqa: E402
+            DependencyInstaller,
+        )
         from src.startup_diagnostics import (  # noqa: E402
             format_report_for_console,
             run_startup_diagnostics,
@@ -670,22 +673,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             return exit_code
 
-        if headless:
-            _patch_messagebox_for_headless()
-            headless_loop = HeadlessEventLoop()
-            main_tk_root = headless_loop
-        else:
-            main_tk_root = tk.Tk()
-            try:
-                main_tk_root.withdraw()
-            except Exception:
-                LOGGER.debug(
-                    StructuredMessage(
-                        "Failed to withdraw Tk root window during bootstrap.",
-                        event="ui.withdraw_failed",
-                    ),
-                    exc_info=True,
+        main_tk_root: tk.Tk | None = None
+        app_core_instance = None
+        ui_manager_instance = None
+
+        def on_exit_app_enhanced(*_):
+            LOGGER.info(
+                StructuredMessage(
+                    "Exit requested from tray icon.",
+                    event="ui.exit_requested",
                 )
+            )
+            if app_core_instance:
+                app_core_instance.shutdown()
+            if ui_manager_instance and ui_manager_instance.tray_icon:
+                ui_manager_instance.tray_icon.stop()
+            if main_tk_root is not None:
+                main_tk_root.after(0, main_tk_root.quit)
 
         atexit.register(
             lambda: LOGGER.info(
@@ -696,80 +700,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-        app_core_instance = AppCore(
-            main_tk_root,
-            config_manager=config_manager,
-            hotkey_config_path=str(HOTKEY_CONFIG_PATH),
-            startup_diagnostics=diagnostics_report,
-        )
-        app_core_instance.dependency_installer = dependency_installer
-
-        if headless:
-            LOGGER.info(
-                StructuredMessage(
-                    "Headless mode enabled; skipping UI bootstrap.",
-                    event="headless.bootstrap",
-                )
-            )
-
-            original_onboarding = app_core_instance._maybe_run_initial_onboarding
-
-            def _skip_onboarding() -> None:
-                LOGGER.info(
-                    StructuredMessage(
-                        "Onboarding wizard suppressed in headless mode.",
-                        event="headless.onboarding_skipped",
-                    )
-                )
-
-            app_core_instance._maybe_run_initial_onboarding = _skip_onboarding
-            try:
-                app_core_instance.ui_manager = None
-            finally:
-                app_core_instance._maybe_run_initial_onboarding = original_onboarding
-
-            app_core_instance.register_hotkeys()
-
-            original_shutdown = app_core_instance.shutdown
-
-            def _shutdown_wrapper() -> None:
-                try:
-                    original_shutdown()
-                finally:
-                    headless_loop.request_shutdown()
-
-            app_core_instance.shutdown = _shutdown_wrapper
-
-            if diagnostics_report.has_fatal_errors:
-                LOGGER.error(
-                    StructuredMessage(
-                        "Startup diagnostics reported fatal errors in headless mode.",
-                        event="headless.diagnostics_failure",
-                        summary=diagnostics_report.user_friendly_summary(
-                            include_success=False
-                        ),
-                    )
-                )
-
-            LOGGER.info(
-                StructuredMessage(
-                    "Headless mode ready. Awaiting shutdown signal.",
-                    event="headless.ready",
-                )
-            )
-            try:
-                headless_loop.wait()
-            except KeyboardInterrupt:
-                LOGGER.info(
-                    StructuredMessage(
-                        "KeyboardInterrupt received; shutting down headless runtime.",
-                        event="headless.keyboard_interrupt",
-                    )
-                )
-                app_core_instance.shutdown()
-            finally:
-                headless_loop.close()
-            return 0
+        main_tk_root = tk.Tk()
+        main_tk_root.withdraw()
+        main_tk_root.title("Whisper Flash Transcriber")
+        main_tk_root.protocol("WM_DELETE_WINDOW", on_exit_app_enhanced)
 
         icon_path = ICON_PATH
         if not os.path.exists(icon_path):
@@ -792,21 +726,12 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
 
-        ui_manager_instance = None
-
-        def on_exit_app_enhanced(*_):
-            LOGGER.info(
-                StructuredMessage(
-                    "Exit requested from tray icon.",
-                    event="ui.exit_requested",
-                )
-            )
-            if app_core_instance:
-                app_core_instance.shutdown()
-            if ui_manager_instance and ui_manager_instance.tray_icon:
-                ui_manager_instance.tray_icon.stop()
-            main_tk_root.after(0, main_tk_root.quit)
-
+        app_core_instance = AppCore(
+            main_tk_root,
+            config_manager=config_manager,
+            hotkey_config_path=str(HOTKEY_CONFIG_PATH),
+            startup_diagnostics=diagnostics_report,
+        )
         ui_manager_instance = UIManager(
             main_tk_root,
             app_core_instance.config_manager,
@@ -846,6 +771,7 @@ def main(argv: list[str] | None = None) -> int:
                 event="ui.mainloop.stop",
             )
         )
+        return 0
     except Exception as exc:
         LOGGER.critical(
             StructuredMessage(
