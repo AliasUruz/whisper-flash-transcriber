@@ -2018,6 +2018,7 @@ class AppCore:
                 start_success = self.audio_handler.start_recording()
                 collected["audio_session_id"] = getattr(self.audio_handler, "_session_id", None)
                 collected["audio_handler_ack"] = bool(start_success)
+                failure_payload = getattr(self.audio_handler, "last_start_failure", None)
                 if start_success:
                     self._reset_full_transcription()
                     self.action_orchestrator.deactivate_agent_mode()
@@ -2025,16 +2026,36 @@ class AppCore:
                     collected["storage_mode"] = getattr(self.audio_handler, "record_storage_mode", None)
                     collected["storage_in_memory"] = getattr(self.audio_handler, "in_memory_mode", None)
                 else:
-                    collected.setdefault("status", "noop")
+                    collected.setdefault("status", "rejected")
+                    if isinstance(failure_payload, Mapping):
+                        collected["failure"] = dict(failure_payload)
+                    else:
+                        collected.setdefault("status", "noop")
             if not start_success:
                 self._active_recording_correlation_id = None
                 self._recording_started_at = None
+                failure_details = self._recording_log_details()
+                message = "Audio subsystem rejected the recording start request."
+                suggestion: str | None = None
+                if isinstance(failure_payload, Mapping):
+                    message = str(failure_payload.get("message") or message)
+                    suggestion = failure_payload.get("suggestion") or failure_payload.get("recommendation")
+                    extras = {
+                        key: value
+                        for key, value in failure_payload.items()
+                        if key not in {"message", "suggestion", "recommendation"}
+                    }
+                    failure_details.update(extras)
                 self._log_status(
-                    "Audio subsystem rejected the recording start request.",
+                    message if not suggestion else f"{message} Sugestão: {suggestion}",
                     error=True,
-                    event="core.recording.failed",
-                    details=self._recording_log_details(),
+                    event="core.recording.preflight_failed",
+                    details=failure_details,
                 )
+                tooltip_message = message
+                if suggestion:
+                    tooltip_message = f"{tooltip_message}\n• Sugestão: {suggestion}"
+                self._queue_tooltip_update(tooltip_message)
 
     def stop_recording(self):
         with self.recording_lock:

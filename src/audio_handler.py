@@ -17,6 +17,7 @@ import soundfile as sf
 
 # Observação: em ambientes WSL, a biblioteca sounddevice depende de servidores PulseAudio;
 # mantenha esta limitação em mente ao depurar gravações.
+from . import state_manager as sm
 from .utils.memory import get_available_memory_mb, get_total_memory_mb
 
 from .vad_manager import VADManager
@@ -124,6 +125,7 @@ class AudioHandler:
         self.storage_root_dir: Path | None = None
         self.recordings_dir: Path | None = None
         self._session_id: str | None = None
+        self._last_start_failure: dict[str, Any] | None = None
 
         # Dedicated queue and thread for audio processing
         self.audio_queue = queue.Queue()
@@ -152,6 +154,101 @@ class AudioHandler:
         storage_mode = "memory" if self.in_memory_mode else "disk"
         thread_name = threading.current_thread().name
         return self._logger.bind(storage=storage_mode, thread=thread_name)
+
+    @property
+    def last_start_failure(self) -> dict[str, Any] | None:
+        """Return structured information about the last start failure, if any."""
+
+        return self._last_start_failure
+
+    def _resolve_default_input_device(self) -> tuple[str, int | None, str | None]:
+        """Return the default input device label, index and lookup error (if any)."""
+
+        device_name = "dispositivo padrão"
+        device_index: int | None = None
+        lookup_error: str | None = None
+
+        try:
+            default_input = sd.query_devices(None, "input")
+        except Exception as exc:  # pragma: no cover - dependent on host OS
+            lookup_error = str(exc)
+        else:
+            if isinstance(default_input, Mapping):
+                device_name = str(default_input.get("name") or device_name)
+                try:
+                    raw_index = default_input.get("index")
+                    device_index = int(raw_index) if raw_index is not None else None
+                except (TypeError, ValueError):
+                    device_index = None
+            else:
+                device_name = str(default_input)
+
+        return device_name, device_index, lookup_error
+
+    def _preflight_input_stream(self) -> bool:
+        """Validate that the default input device accepts the configured format."""
+
+        device_name, device_index, lookup_error = self._resolve_default_input_device()
+
+        try:
+            sd.check_input_settings(
+                device=device_index if device_index is not None else None,
+                channels=AUDIO_CHANNELS,
+                samplerate=AUDIO_SAMPLE_RATE,
+            )
+        except Exception as exc:
+            channel_label = "canal" if AUDIO_CHANNELS == 1 else "canais"
+            suggestion = (
+                "Selecione outro microfone nas configurações ou reduza a taxa de "
+                "amostragem ou o número de canais nas opções avançadas."
+            )
+            message = (
+                f"Não foi possível iniciar a captura: o dispositivo '{device_name}' "
+                f"não aceita {AUDIO_SAMPLE_RATE} Hz / {AUDIO_CHANNELS} {channel_label}."
+            )
+            failure_payload: dict[str, Any] = {
+                "message": message,
+                "suggestion": suggestion,
+                "recommendation": suggestion,
+                "error": str(exc),
+                "device_name": device_name,
+                "device_index": device_index,
+                "samplerate": AUDIO_SAMPLE_RATE,
+                "channels": AUDIO_CHANNELS,
+            }
+            if lookup_error:
+                failure_payload["device_lookup_error"] = lookup_error
+            self._last_start_failure = failure_payload
+
+            log_payload: dict[str, Any] = {
+                "event": "audio.recording.preflight_failed",
+                "device_name": device_name,
+                "device_index": device_index,
+                "sample_rate": AUDIO_SAMPLE_RATE,
+                "channels": AUDIO_CHANNELS,
+                "suggestion": suggestion,
+                "error": str(exc),
+            }
+            if lookup_error:
+                log_payload["device_lookup_error"] = lookup_error
+            self._log.error(StructuredMessage("Audio input preflight failed.", **log_payload))
+
+            details_message = f"{message} Sugestão: {suggestion}"
+            try:
+                self.state_manager.set_state(
+                    sm.StateEvent.AUDIO_ERROR,
+                    details=details_message,
+                    source="audio_handler",
+                )
+            except Exception:  # pragma: no cover - defensive guard around state updates
+                self._log.error(
+                    "Failed to dispatch audio error state after preflight failure.",
+                    exc_info=True,
+                )
+            return False
+
+        self._last_start_failure = None
+        return True
 
     def _audio_callback(self, indata, frames, time_data, status):
         if status:
@@ -619,6 +716,14 @@ class AudioHandler:
                     self._stop_event.clear()
 
                     self._enforce_record_storage_limit(exclude_paths=[self.temp_file_path])
+
+                    if not self._preflight_input_stream():
+                        self._log.debug(
+                            "Audio input preflight failed; aborting recording startup.",
+                            extra={"event": "audio.preflight_abort", "stage": "recording"},
+                        )
+                        self._session_id = None
+                        return False
 
                     if self.record_storage_mode == "memory":
                         self.in_memory_mode = True
@@ -1484,10 +1589,12 @@ class AudioHandler:
         message: str
         status_ok = samplerate_check_passed
         suggestion: str | None = None
+        recommendation: str | None = None
         fatal = False
+        channel_label = "canal" if channels == 1 else "canais"
         if samplerate_check_passed:
             message = (
-                f"Default input '{default_name}' is available for {sample_rate} Hz / {channels} channel capture."
+                f"O dispositivo padrão '{default_name}' está apto para captura em {sample_rate} Hz / {channels} {channel_label}."
             )
             LOGGER.info(
                 StructuredMessage(
@@ -1501,11 +1608,12 @@ class AudioHandler:
             )
         else:
             message = (
-                f"Default input '{default_name}' is not compatible with {sample_rate} Hz / {channels} channel capture."
+                f"O dispositivo padrão '{default_name}' não é compatível com {sample_rate} Hz / {channels} {channel_label}."
             )
             suggestion = (
-                "Pick another microphone in the application settings or reduce the sample rate/channels in advanced options."
+                "Selecione outro microfone nas configurações ou reduza a taxa de amostragem ou o número de canais nas opções avançadas."
             )
+            recommendation = suggestion
             LOGGER.warning(
                 StructuredMessage(
                     "Audio diagnostics detected incompatible format.",
@@ -1529,5 +1637,6 @@ class AudioHandler:
                 "format_error": samplerate_error,
             },
             "suggestion": suggestion,
+            "recommendation": recommendation,
             "fatal": fatal,
         }
