@@ -166,13 +166,12 @@ def configure_cuda_logging() -> None:
                     has_flash_attn = importlib.util.find_spec("flash_attn") is not None
                 except Exception:
                     has_flash_attn = False
-                LOGGER.info(
-                    StructuredMessage(
-                        "FlashAttention 2 availability checked.",
-                        event="cuda.flash_attention_probe",
-                        available=has_flash_attn,
-                    )
+                flash_attn_probe_message = StructuredMessage(
+                    "FlashAttention 2 availability checked.",
+                    event="cuda.flash_attention_probe",
+                    available=has_flash_attn,
                 )
+                LOGGER.info(flash_attn_probe_message)
             except Exception as diag_exc:
                 LOGGER.warning(
                     StructuredMessage(
@@ -182,12 +181,11 @@ def configure_cuda_logging() -> None:
                     )
                 )
         else:
-            LOGGER.info(
-                StructuredMessage(
-                    "CUDA runtime not detected; defaulting to CPU execution.",
-                    event="cuda.cpu_fallback",
-                )
+            cpu_fallback_message = StructuredMessage(
+                "CUDA runtime not detected; defaulting to CPU execution.",
+                event="cuda.cpu_fallback",
             )
+            LOGGER.info(cpu_fallback_message)
     except Exception as exc:  # pragma: no cover - defensive guard
         LOGGER.warning(
             StructuredMessage(
