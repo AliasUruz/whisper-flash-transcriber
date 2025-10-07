@@ -128,6 +128,7 @@ DEFAULT_CONFIG = {
         "- Return ONLY the corrected text, with no additional comments or explanations. "
         "Transcribed speech: {text}"
     ),
+    "ui_language": "en-US",
     "batch_size": 16,  # Valor padrão para o modo automático
     "batch_size_mode": "auto",  # Novo: 'auto' ou 'manual'
     "manual_batch_size": 8,  # Novo: Valor para o modo manual
@@ -228,6 +229,7 @@ PYTHON_PACKAGES_DIR_CONFIG_KEY = "python_packages_dir"
 VAD_MODELS_DIR_CONFIG_KEY = "vad_models_dir"
 HF_CACHE_DIR_CONFIG_KEY = "hf_cache_dir"
 MAX_MEMORY_SECONDS_MODE_CONFIG_KEY = "max_memory_seconds_mode"
+UI_LANGUAGE_CONFIG_KEY = "ui_language"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
 VAD_THRESHOLD_CONFIG_KEY = "vad_threshold"
@@ -1754,6 +1756,34 @@ class ConfigManager:
                 "error": payload.get("error"),
             }
         return report
+
+    def describe_persistence_state(self) -> dict[str, Any]:
+        """Describe persistence health and detect first-run scenarios."""
+
+        snapshot = self.get_bootstrap_report()
+        config_state = snapshot.get("config", {}).copy()
+        secrets_state = snapshot.get("secrets", {}).copy()
+
+        config_existed = bool(config_state.get("existed"))
+        secrets_existed = bool(secrets_state.get("existed"))
+        config_created = bool(config_state.get("created"))
+        secrets_created = bool(secrets_state.get("created"))
+
+        first_run_detected = (
+            not (config_existed and secrets_existed)
+            or config_created
+            or secrets_created
+        )
+
+        payload: dict[str, Any] = {
+            "first_run": bool(first_run_detected),
+            "config": config_state,
+            "secrets": secrets_state,
+            "profile_dir": str(self.profile_dir),
+            "config_path": str(self.config_path),
+            "secrets_path": str(self.secrets_path),
+        }
+        return payload
 
     def save_config(self) -> PersistenceOutcome:
         """Salva as configurações não sensíveis no config.json e as sensíveis no secrets.json."""

@@ -542,6 +542,16 @@ def main() -> None:
             )
 
         run_startup_preflight(config_manager, hotkey_config_path=HOTKEY_CONFIG_PATH)
+        persistence_state = config_manager.describe_persistence_state()
+        LOGGER.info(
+            StructuredMessage(
+                "Persistence state evaluated.",
+                event="startup.persistence_state",
+                first_run=bool(persistence_state.get("first_run")),
+                config_path=persistence_state.get("config_path"),
+                secrets_path=persistence_state.get("secrets_path"),
+            )
+        )
 
         main_tk_root = tk.Tk()
         main_tk_root.withdraw()
