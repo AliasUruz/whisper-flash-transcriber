@@ -984,6 +984,7 @@ def ensure_download(
     cache_dir: str | Path,
     quant: str | None = None,
     *,
+    hf_cache_dir: str | Path | None = None,
     timeout: float | int | None = None,
     cancel_event: Event | None = None,
 ) -> ModelDownloadResult:
@@ -999,6 +1000,8 @@ def ensure_download(
         Root directory where models are cached.
     quant: str | None
         Quantization branch for CT2 models. Ignored for Transformers.
+    hf_cache_dir: str | Path | None, optional
+        Custom Hugging Face cache directory used while resolving artifacts.
     timeout: float | int | None, optional
         Maximum number of seconds to wait before aborting the download. ``None`` disables the timeout.
     cancel_event: Event | None, optional
@@ -1158,6 +1161,18 @@ def ensure_download(
         "repo_id": model_id,
         "local_dir": str(local_dir),
     }
+    if hf_cache_dir:
+        try:
+            cache_path = Path(hf_cache_dir).expanduser()
+            cache_path.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            MODEL_LOGGER.debug(
+                "Failed to prepare Hugging Face cache directory '%s'.",
+                hf_cache_dir,
+                exc_info=True,
+            )
+        else:
+            _set_snapshot_kwarg(download_kwargs, "cache_dir", str(cache_path))
     if progress_class is not None:
         _set_snapshot_kwarg(download_kwargs, "tqdm_class", progress_class)
     _set_snapshot_kwarg(download_kwargs, "resume_download", True)

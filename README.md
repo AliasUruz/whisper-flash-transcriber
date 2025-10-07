@@ -93,7 +93,26 @@ installation directory is read-only.
     - Set a base storage root for cached data.
     - Override the dedicated models directory and its derived ASR cache path.
     - Choose a separate recordings folder for WAV artifacts.
+    - Point the embedded dependency installer to a custom Python packages directory.
+    - Choose explicit locations for the Silero VAD model and the shared Hugging Face cache.
   - Configure AI services, audio feedback sounds, and additional quality-of-life options.
+
+### Custom installation directories
+
+The application allows you to relocate heavyweight assets so that ephemeral or slow system drives do not become bottlenecks. The
+following directories can be configured either directly in `config.json` or through the first-run wizard and the Settings UI:
+
+- **`python_packages_dir`** — Target passed to `pip install --target` when optional packages (faster-whisper, ctranslate2,
+  onnxruntime, etc.) are installed through the dependency remediation workflow. When you place this directory outside the active
+virtual environment, ensure that `PYTHONPATH` includes the path before launching the application. The bootstrap logic adds the
+directory to `sys.path`, but external scripts or shells may require explicit exports.
+- **`vad_models_dir`** — Dedicated folder for the Silero VAD model. If empty, the packaged copy is copied into the directory on
+  first use. Keep this path on a fast local drive to avoid I/O stalls during VAD activation.
+- **`hf_cache_dir`** — Shared Hugging Face cache that backs `snapshot_download` calls and any Transformers pipelines. The
+  bootstrap sequence creates the directory and sets `HF_HOME`/`HUGGINGFACE_HUB_CACHE` accordingly.
+
+Because all these directories default to the storage root, you can move the entire cache tree by changing `storage_root_dir` or
+override each path individually for more granular layouts.
 
 ### Recording and Transcribing
 

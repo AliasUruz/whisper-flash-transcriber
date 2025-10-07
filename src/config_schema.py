@@ -15,6 +15,9 @@ LOGGER = get_logger(__name__, component='ConfigSchema')
 
 _DEFAULT_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
 _DEFAULT_MODELS_STORAGE_DIR = str((_DEFAULT_STORAGE_ROOT / "models").expanduser())
+_DEFAULT_PYTHON_PACKAGES_DIR = str((_DEFAULT_STORAGE_ROOT / "python_packages").expanduser())
+_DEFAULT_VAD_MODELS_DIR = str((_DEFAULT_STORAGE_ROOT / "vad").expanduser())
+_DEFAULT_HF_CACHE_DIR = str((_DEFAULT_STORAGE_ROOT / "hf_cache").expanduser())
 
 
 class ASRDownloadStatus(BaseModel):
@@ -99,6 +102,9 @@ class AppConfig(BaseModel):
     models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
+    python_packages_dir: str = _DEFAULT_PYTHON_PACKAGES_DIR
+    vad_models_dir: str = _DEFAULT_VAD_MODELS_DIR
+    hf_cache_dir: str = _DEFAULT_HF_CACHE_DIR
     asr_model_id: str = "openai/whisper-large-v3-turbo"
     asr_backend: str = "ctranslate2"
     asr_compute_device: str = "auto"
@@ -232,6 +238,9 @@ class AppConfig(BaseModel):
         "storage_root_dir",
         "models_storage_dir",
         "recordings_dir",
+        "python_packages_dir",
+        "vad_models_dir",
+        "hf_cache_dir",
         "asr_cache_dir",
         mode="before",
     )

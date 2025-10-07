@@ -39,6 +39,9 @@ from .config_manager import (
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
+    PYTHON_PACKAGES_DIR_CONFIG_KEY,
+    VAD_MODELS_DIR_CONFIG_KEY,
+    HF_CACHE_DIR_CONFIG_KEY,
     GPU_INDEX_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
@@ -731,6 +734,7 @@ class UIManager:
                 backend,
                 cache_dir,
                 quant if backend == "ctranslate2" else None,
+                hf_cache_dir=self.config_manager.get_hf_cache_dir(),
             )
             installed_models = self.model_manager.list_installed(cache_dir)
             self.config_manager.set_asr_installed_models(installed_models)
@@ -1171,6 +1175,9 @@ class UIManager:
         _set_var("asr_cache_dir_var", DEFAULT_CONFIG["asr_cache_dir"])
         _set_var("storage_root_dir_var", DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
         _set_var("recordings_dir_var", DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
+        _set_var("python_packages_dir_var", DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
+        _set_var("vad_models_dir_var", DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
+        _set_var("hf_cache_dir_var", DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
 
         self.config_manager.set_asr_model_id(default_model_id)
         self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
@@ -1179,6 +1186,9 @@ class UIManager:
         self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
         self.config_manager.set_storage_root_dir(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
         self.config_manager.set_recordings_dir(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
+        self.config_manager.set_python_packages_dir(DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
+        self.config_manager.set_vad_models_dir(DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
+        self.config_manager.set_hf_cache_dir(DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
         self.config_manager.save_config()
 
         backend_var = self._get_settings_var("asr_backend_var")
@@ -1379,6 +1389,96 @@ class UIManager:
         sync_button.pack(side="left", padx=5)
         Tooltip(sync_button, "Atualiza o diretório de cache ASR para ficar dentro do diretório de modelos.")
 
+        def _choose_python_packages_dir() -> None:
+            initial = python_packages_dir_var.get() if python_packages_dir_var else ""
+            try:
+                initial_dir = Path(initial).expanduser()
+            except Exception:
+                initial_dir = Path.home()
+            selected = filedialog.askdirectory(initialdir=str(initial_dir))
+            if selected:
+                python_packages_dir_var.set(selected)
+
+        python_packages_frame = ctk.CTkFrame(asr_frame)
+        python_packages_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(python_packages_frame, text="Pacotes Python (isolados):").pack(side="left", padx=(5, 10))
+        python_packages_entry = ctk.CTkEntry(
+            python_packages_frame,
+            textvariable=python_packages_dir_var,
+            width=240,
+        )
+        python_packages_entry.pack(side="left", padx=5)
+        Tooltip(
+            python_packages_entry,
+            "Destino para bibliotecas instaladas via DependencyInstaller.",
+        )
+        ctk.CTkButton(
+            python_packages_frame,
+            text="Selecionar...",
+            command=_choose_python_packages_dir,
+            width=110,
+        ).pack(side="left", padx=5)
+
+        def _choose_vad_models_dir() -> None:
+            initial = vad_models_dir_var.get() if vad_models_dir_var else ""
+            try:
+                initial_dir = Path(initial).expanduser()
+            except Exception:
+                initial_dir = Path.home()
+            selected = filedialog.askdirectory(initialdir=str(initial_dir))
+            if selected:
+                vad_models_dir_var.set(selected)
+
+        vad_models_frame = ctk.CTkFrame(asr_frame)
+        vad_models_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(vad_models_frame, text="Diretório VAD:").pack(side="left", padx=(5, 10))
+        vad_models_entry = ctk.CTkEntry(
+            vad_models_frame,
+            textvariable=vad_models_dir_var,
+            width=240,
+        )
+        vad_models_entry.pack(side="left", padx=5)
+        Tooltip(
+            vad_models_entry,
+            "Local onde o modelo Silero VAD será mantido.",
+        )
+        ctk.CTkButton(
+            vad_models_frame,
+            text="Selecionar...",
+            command=_choose_vad_models_dir,
+            width=110,
+        ).pack(side="left", padx=5)
+
+        def _choose_hf_cache_dir() -> None:
+            initial = hf_cache_dir_var.get() if hf_cache_dir_var else ""
+            try:
+                initial_dir = Path(initial).expanduser()
+            except Exception:
+                initial_dir = Path.home()
+            selected = filedialog.askdirectory(initialdir=str(initial_dir))
+            if selected:
+                hf_cache_dir_var.set(selected)
+
+        hf_cache_frame = ctk.CTkFrame(asr_frame)
+        hf_cache_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(hf_cache_frame, text="Hugging Face Cache:").pack(side="left", padx=(5, 10))
+        hf_cache_entry = ctk.CTkEntry(
+            hf_cache_frame,
+            textvariable=hf_cache_dir_var,
+            width=240,
+        )
+        hf_cache_entry.pack(side="left", padx=5)
+        Tooltip(
+            hf_cache_entry,
+            "Cache compartilhado para artefatos do Hugging Face Hub.",
+        )
+        ctk.CTkButton(
+            hf_cache_frame,
+            text="Selecionar...",
+            command=_choose_hf_cache_dir,
+            width=110,
+        ).pack(side="left", padx=5)
+
         asr_backend_frame = ctk.CTkFrame(asr_frame)
         _register_advanced(asr_backend_frame, fill="x", pady=5)
         ctk.CTkLabel(asr_backend_frame, text="Backend ASR:").pack(side="left", padx=(5, 0))
@@ -1536,6 +1636,9 @@ class UIManager:
             asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
             storage_root_dir_var.set(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
             recordings_dir_var.set(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
+            python_packages_dir_var.set(DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
+            vad_models_dir_var.set(DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
+            hf_cache_dir_var.set(DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
             _on_backend_change(asr_backend_var.get())
             _update_model_info(default_model_id)
             self.config_manager.set_asr_model_id(default_model_id)
@@ -1544,6 +1647,9 @@ class UIManager:
             self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
             self.config_manager.set_storage_root_dir(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
             self.config_manager.set_recordings_dir(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
+            self.config_manager.set_python_packages_dir(DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
+            self.config_manager.set_vad_models_dir(DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
+            self.config_manager.set_hf_cache_dir(DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
             self.config_manager.save_config()
 
         reset_asr_button = ctk.CTkButton(
@@ -1664,6 +1770,7 @@ class UIManager:
                     backend,
                     cache_dir,
                     asr_ct2_compute_type_var.get() if backend == "ctranslate2" else None,
+                    hf_cache_dir=self.config_manager.get_hf_cache_dir(),
                 )
                 installed_models = model_manager.list_installed(cache_dir)
                 self.config_manager.set_asr_installed_models(installed_models)
@@ -2451,6 +2558,9 @@ class UIManager:
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
                 models_storage_dir_var = ctk.StringVar(value=self.config_manager.get_models_storage_dir())
                 asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
+                python_packages_dir_var = ctk.StringVar(value=self.config_manager.get_python_packages_dir())
+                vad_models_dir_var = ctk.StringVar(value=self.config_manager.get_vad_models_dir())
+                hf_cache_dir_var = ctk.StringVar(value=self.config_manager.get_hf_cache_dir())
 
                 for name, var in [
                     ("auto_paste_var", auto_paste_var),
@@ -2493,6 +2603,9 @@ class UIManager:
                     ("asr_ct2_compute_type_var", asr_ct2_compute_type_var),
                     ("models_storage_dir_var", models_storage_dir_var),
                     ("asr_cache_dir_var", asr_cache_dir_var),
+                    ("python_packages_dir_var", python_packages_dir_var),
+                    ("vad_models_dir_var", vad_models_dir_var),
+                    ("hf_cache_dir_var", hf_cache_dir_var),
                     ("recordings_dir_var", recordings_dir_var),
                 ]:
                     self._set_settings_var(name, var)
@@ -2617,6 +2730,39 @@ class UIManager:
                         )
                         return
 
+                    python_packages_dir_to_apply = python_packages_dir_var.get()
+                    try:
+                        Path(python_packages_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Invalid Path",
+                            f"Python packages directory is invalid:\n{exc}",
+                            parent=settings_win,
+                        )
+                        return
+
+                    vad_models_dir_to_apply = vad_models_dir_var.get()
+                    try:
+                        Path(vad_models_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Invalid Path",
+                            f"VAD models directory is invalid:\n{exc}",
+                            parent=settings_win,
+                        )
+                        return
+
+                    hf_cache_dir_to_apply = hf_cache_dir_var.get()
+                    try:
+                        Path(hf_cache_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Invalid Path",
+                            f"Hugging Face cache directory is invalid:\n{exc}",
+                            parent=settings_win,
+                        )
+                        return
+
                     # Logic for converting UI to GPU index
                     selected_device_str = asr_compute_device_var.get()
                     gpu_index_to_apply = -1 # Default to "Auto-select"
@@ -2687,6 +2833,9 @@ class UIManager:
                             "new_asr_cache_dir": asr_cache_dir_to_apply,
                             "new_storage_root_dir": storage_root_dir_var.get(),
                             "new_recordings_dir": recordings_dir_var.get(),
+                            "new_python_packages_dir": python_packages_dir_to_apply,
+                            "new_vad_models_dir": vad_models_dir_to_apply,
+                            "new_hf_cache_dir": hf_cache_dir_to_apply,
                         }
                     )
                     self._close_settings_window() # Call class method

@@ -46,6 +46,9 @@ from .config_manager import (
     ASR_CACHE_DIR_CONFIG_KEY,
     STORAGE_ROOT_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
+    PYTHON_PACKAGES_DIR_CONFIG_KEY,
+    VAD_MODELS_DIR_CONFIG_KEY,
+    HF_CACHE_DIR_CONFIG_KEY,
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
@@ -383,6 +386,7 @@ class AppCore:
                 "quant": quant,
                 "timeout": self.model_download_timeout,
                 "cancel_event": cancel_event,
+                "hf_cache_dir": self.config_manager.get_hf_cache_dir(),
             }
 
             result = self.model_manager.ensure_download(
@@ -463,6 +467,7 @@ class AppCore:
                     "quant": ct2_type,
                     "timeout": timeout,
                     "cancel_event": cancel_event,
+                    "hf_cache_dir": self.config_manager.get_hf_cache_dir(),
                 }
                 result = self.model_manager.ensure_download(
                     model_id,
@@ -1518,6 +1523,9 @@ class AppCore:
             "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
             "new_storage_root_dir": STORAGE_ROOT_DIR_CONFIG_KEY,
             "new_recordings_dir": RECORDINGS_DIR_CONFIG_KEY,
+            "new_python_packages_dir": PYTHON_PACKAGES_DIR_CONFIG_KEY,
+            "new_vad_models_dir": VAD_MODELS_DIR_CONFIG_KEY,
+            "new_hf_cache_dir": HF_CACHE_DIR_CONFIG_KEY,
             "new_ct2_cpu_threads": ASR_CT2_CPU_THREADS_CONFIG_KEY,
             "new_clear_gpu_cache": CLEAR_GPU_CACHE_CONFIG_KEY,
             "new_use_vad": USE_VAD_CONFIG_KEY,
