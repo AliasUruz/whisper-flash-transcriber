@@ -8,7 +8,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+try:  # Optional dependency used only for direct keyboard hook cleanup in tests
+    import keyboard  # type: ignore[import]
+except ModuleNotFoundError:  # pragma: no cover - optional in headless environments
+    keyboard = None  # type: ignore[assignment]
+
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
+from .hotkey_normalization import _normalize_key_name
+from .hotkeys import BaseHotkeyDriver, build_available_drivers
 from .logging_utils import get_logger, join_thread_with_timeout, log_context
 
 LOGGER = get_logger(
@@ -45,6 +52,10 @@ class KeyboardHotkeyManager:
         self._active_driver_index: int | None = None
         self._driver_lock = threading.Lock()
         self._driver_failures: list[dict[str, Any]] = []
+        self.hotkey_handlers: dict[str, list[Any]] = {}
+        self._debounce_window_seconds: float = 0.0
+        self._last_event_timestamps: dict[str, float] = {}
+        self._last_trigger_ts = self._last_event_timestamps
 
         self._auxiliary_threads: dict[str, dict[str, Any]] = {}
         self._aux_threads_lock = threading.Lock()
@@ -429,6 +440,19 @@ class KeyboardHotkeyManager:
     def stop(self):
         """Para o gerenciador de hotkeys."""
         self._stop_auxiliary_threads()
+        if keyboard is not None and self.hotkey_handlers:
+            for handles in list(self.hotkey_handlers.values()):
+                for handle in handles:
+                    try:
+                        keyboard.unhook(handle)
+                    except Exception:  # pragma: no cover - defensive cleanup
+                        self._log(
+                            logging.DEBUG,
+                            "Failed to unhook keyboard handle during stop.",
+                            event="hotkeys.stop_unhook_failed",
+                            handle=str(handle),
+                        )
+            self.hotkey_handlers.clear()
         # Sempre tente remover as hotkeys, mesmo que o estado esteja incorreto
         driver_name = self.get_active_driver_name()
         self._unregister_hotkeys()
@@ -511,6 +535,28 @@ class KeyboardHotkeyManager:
                 exc_info=True,
             )
             return False
+
+    def set_debounce_window(self, debounce_ms: float | int) -> None:
+        """Configura o período de debounce entre eventos de hotkey."""
+
+        try:
+            window_seconds = max(0.0, float(debounce_ms) / 1000.0)
+        except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+            self._log(
+                logging.WARNING,
+                "Invalid debounce window provided; ignoring update.",
+                event="hotkeys.debounce_invalid",
+                error=str(exc),
+            )
+            return
+
+        self._debounce_window_seconds = window_seconds
+        self._log(
+            logging.INFO,
+            "Hotkey debounce window updated.",
+            event="hotkeys.debounce_updated",
+            debounce_ms=int(window_seconds * 1000),
+        )
 
     def set_callbacks(self, toggle=None, start=None, stop=None, agent=None):
         """
@@ -646,10 +692,17 @@ class KeyboardHotkeyManager:
                 handle_id=handle_id,
             )
             return
+        handles = self.hotkey_handlers.setdefault(handle_id, [])
+        handles.append(handle)
+
+    def _unregister_hotkeys(self) -> None:
+        """Remove todas as hotkeys registradas pelos drivers ativos."""
+
+        entries = self._driver_entries()
         for _, driver in entries:
             try:
                 driver.unregister()
-            except Exception as exc:
+            except Exception as exc:  # pragma: no cover - defensive cleanup
                 self._log(
                     logging.DEBUG,
                     "Driver failed to unregister hotkeys.",
@@ -774,7 +827,7 @@ class KeyboardHotkeyManager:
                     "Fallback hotkey driver activated.",
                     event="hotkeys.driver_fallback",
                     driver=driver.name,
-                )
+            )
             return True
 
         with self._driver_lock:
@@ -787,6 +840,25 @@ class KeyboardHotkeyManager:
             "All hotkey drivers failed to register.",
             event="hotkeys.register_failure",
             last_error=str(last_error) if last_error else None,
+        )
+        return False
+
+    def _should_process_event(self, event_type: str) -> bool:
+        """Determine whether a hotkey event should trigger callbacks."""
+
+        window = self._debounce_window_seconds
+        now = time.perf_counter()
+        last = self._last_event_timestamps.get(event_type)
+        if window <= 0 or last is None or (now - last) >= window:
+            self._last_event_timestamps[event_type] = now
+            return True
+        self._log(
+            logging.DEBUG,
+            "Hotkey event suppressed by debounce window.",
+            event="hotkeys.debounce_suppressed",
+            event_type=event_type,
+            debounce_ms=int(window * 1000),
+            elapsed_ms=int((now - last) * 1000),
         )
         return False
 

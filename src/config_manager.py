@@ -18,6 +18,7 @@ import requests
 
 from .config_schema import (
     AppConfig,
+    DEFAULT_CONFIG_TREE,
     coerce_with_defaults,
     flatten_config_tree,
     normalize_payload_tree,
@@ -82,6 +83,20 @@ def _resolve_profile_dir() -> Path:
     return _BASE_STORAGE_ROOT
 
 
+def _deduplicate_paths(*candidates: Path) -> tuple[Path, ...]:
+    """Return the candidate paths preserving order but without duplicates."""
+
+    ordered: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(candidate)
+    return tuple(ordered)
+
+
 PROFILE_DIR = _resolve_profile_dir().expanduser()
 CONFIG_FILE_NAME = "config.json"
 SECRETS_FILE_NAME = "secrets.json"
@@ -89,17 +104,17 @@ HOTKEY_CONFIG_FILE_NAME = "hotkey_config.json"
 CONFIG_FILE = str((PROFILE_DIR / CONFIG_FILE_NAME).expanduser())
 SECRETS_FILE = str((PROFILE_DIR / SECRETS_FILE_NAME).expanduser())
 HOTKEY_CONFIG_FILE = str((PROFILE_DIR / HOTKEY_CONFIG_FILE_NAME).expanduser())
-LEGACY_CONFIG_LOCATIONS: tuple[Path, ...] = (
-    (_PROJECT_ROOT / CONFIG_FILE_NAME).expanduser(),
+LEGACY_CONFIG_LOCATIONS: tuple[Path, ...] = _deduplicate_paths(
     (Path.cwd() / CONFIG_FILE_NAME).expanduser(),
+    (_PROJECT_ROOT / CONFIG_FILE_NAME).expanduser(),
 )
-LEGACY_SECRETS_LOCATIONS: tuple[Path, ...] = (
-    (_PROJECT_ROOT / SECRETS_FILE_NAME).expanduser(),
+LEGACY_SECRETS_LOCATIONS: tuple[Path, ...] = _deduplicate_paths(
     (Path.cwd() / SECRETS_FILE_NAME).expanduser(),
+    (_PROJECT_ROOT / SECRETS_FILE_NAME).expanduser(),
 )
-LEGACY_HOTKEY_LOCATIONS: tuple[Path, ...] = (
-    (_PROJECT_ROOT / HOTKEY_CONFIG_FILE_NAME).expanduser(),
+LEGACY_HOTKEY_LOCATIONS: tuple[Path, ...] = _deduplicate_paths(
     (Path.cwd() / HOTKEY_CONFIG_FILE_NAME).expanduser(),
+    (_PROJECT_ROOT / HOTKEY_CONFIG_FILE_NAME).expanduser(),
 )
 
 
