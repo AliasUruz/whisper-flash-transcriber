@@ -52,6 +52,94 @@ ENV_DEFAULTS = {
 }
 
 
+class HeadlessEventLoop:
+    """Minimal event loop shim used when running without Tk."""
+
+    def __init__(self, *, shutdown_event: threading.Event | None = None) -> None:
+        self._shutdown_event = shutdown_event or threading.Event()
+        self._timers: set[threading.Timer] = set()
+        self._lock = threading.Lock()
+
+    def after(self, delay_ms: int, callback, *args):  # type: ignore[override]
+        delay_seconds = max(delay_ms, 0) / 1000
+
+        def _invoke() -> None:
+            try:
+                callback(*args)
+            finally:
+                with self._lock:
+                    self._timers.discard(timer)
+
+        timer = threading.Timer(delay_seconds, _invoke)
+        timer.daemon = True
+        with self._lock:
+            self._timers.add(timer)
+        timer.start()
+        return timer
+
+    def after_cancel(self, timer: threading.Timer) -> None:
+        timer.cancel()
+        with self._lock:
+            self._timers.discard(timer)
+
+    def request_shutdown(self) -> None:
+        self._shutdown_event.set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._shutdown_event.wait(timeout)
+
+    def close(self) -> None:
+        self.request_shutdown()
+        with self._lock:
+            timers = tuple(self._timers)
+            self._timers.clear()
+        for timer in timers:
+            timer.cancel()
+
+
+def _patch_messagebox_for_headless() -> None:
+    """Replace Tk messageboxes with log-based fallbacks for headless execution."""
+
+    dialog_defaults: dict[str, object] = {
+        "showinfo": "ok",
+        "showwarning": "ok",
+        "showerror": "ok",
+        "askyesno": False,
+        "askokcancel": False,
+        "askretrycancel": False,
+        "askyesnocancel": False,
+        "askquestion": "no",
+    }
+
+    for name, default in dialog_defaults.items():
+        original = getattr(messagebox, name, None)
+        if original is None:
+            continue
+
+        def _make_stub(dialog_name: str, fallback: object):
+            def _stub(*args, **kwargs):
+                title = kwargs.get("title")
+                message = kwargs.get("message")
+                if args:
+                    title = title or args[0]
+                if len(args) > 1:
+                    message = message or args[1]
+                LOGGER.warning(
+                    StructuredMessage(
+                        "Suppressed Tkinter messagebox while running headless.",
+                        event="headless.messagebox",
+                        dialog=dialog_name,
+                        title=title,
+                        message=message,
+                    )
+                )
+                return fallback
+
+            return _stub
+
+        setattr(messagebox, name, _make_stub(name, default))
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Whisper Flash Transcriber bootstrap entry point.",
@@ -60,6 +148,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--diagnostics",
         action="store_true",
         help="Run startup diagnostics and exit without launching the UI.",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without initializing the Tk UI or system tray icon.",
     )
     return parser.parse_args(argv)
 
@@ -487,6 +580,7 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    headless = bool(args.headless)
     setup_logging()
     install_exception_hooks(logger=LOGGER)
     LOGGER.debug(
@@ -508,12 +602,13 @@ def main(argv: list[str] | None = None) -> int:
             python_version=sys.version.split()[0],
             working_directory=PROJECT_ROOT,
             diagnostics_only=bool(args.diagnostics),
+            headless=headless,
         )
     )
 
     try:
         configure_environment()
-        if not args.diagnostics:
+        if not args.diagnostics and not headless:
             ensure_display_available()
         configure_cuda_logging()
         patch_tk_variable_cleanup()
@@ -575,21 +670,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             return exit_code
 
-        app_core_instance = None
-        ui_manager_instance = None
-
-        def on_exit_app_enhanced(*_):
-            LOGGER.info(
-                StructuredMessage(
-                    "Exit requested from tray icon.",
-                    event="ui.exit_requested",
+        if headless:
+            _patch_messagebox_for_headless()
+            headless_loop = HeadlessEventLoop()
+            main_tk_root = headless_loop
+        else:
+            main_tk_root = tk.Tk()
+            try:
+                main_tk_root.withdraw()
+            except Exception:
+                LOGGER.debug(
+                    StructuredMessage(
+                        "Failed to withdraw Tk root window during bootstrap.",
+                        event="ui.withdraw_failed",
+                    ),
+                    exc_info=True,
                 )
-            )
-            if app_core_instance:
-                app_core_instance.shutdown()
-            if ui_manager_instance and ui_manager_instance.tray_icon:
-                ui_manager_instance.tray_icon.stop()
-            main_tk_root.after(0, main_tk_root.quit)
 
         atexit.register(
             lambda: LOGGER.info(
@@ -599,6 +695,81 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         )
+
+        app_core_instance = AppCore(
+            main_tk_root,
+            config_manager=config_manager,
+            hotkey_config_path=str(HOTKEY_CONFIG_PATH),
+            startup_diagnostics=diagnostics_report,
+        )
+        app_core_instance.dependency_installer = dependency_installer
+
+        if headless:
+            LOGGER.info(
+                StructuredMessage(
+                    "Headless mode enabled; skipping UI bootstrap.",
+                    event="headless.bootstrap",
+                )
+            )
+
+            original_onboarding = app_core_instance._maybe_run_initial_onboarding
+
+            def _skip_onboarding() -> None:
+                LOGGER.info(
+                    StructuredMessage(
+                        "Onboarding wizard suppressed in headless mode.",
+                        event="headless.onboarding_skipped",
+                    )
+                )
+
+            app_core_instance._maybe_run_initial_onboarding = _skip_onboarding
+            try:
+                app_core_instance.ui_manager = None
+            finally:
+                app_core_instance._maybe_run_initial_onboarding = original_onboarding
+
+            app_core_instance.register_hotkeys()
+
+            original_shutdown = app_core_instance.shutdown
+
+            def _shutdown_wrapper() -> None:
+                try:
+                    original_shutdown()
+                finally:
+                    headless_loop.request_shutdown()
+
+            app_core_instance.shutdown = _shutdown_wrapper
+
+            if diagnostics_report.has_fatal_errors:
+                LOGGER.error(
+                    StructuredMessage(
+                        "Startup diagnostics reported fatal errors in headless mode.",
+                        event="headless.diagnostics_failure",
+                        summary=diagnostics_report.user_friendly_summary(
+                            include_success=False
+                        ),
+                    )
+                )
+
+            LOGGER.info(
+                StructuredMessage(
+                    "Headless mode ready. Awaiting shutdown signal.",
+                    event="headless.ready",
+                )
+            )
+            try:
+                headless_loop.wait()
+            except KeyboardInterrupt:
+                LOGGER.info(
+                    StructuredMessage(
+                        "KeyboardInterrupt received; shutting down headless runtime.",
+                        event="headless.keyboard_interrupt",
+                    )
+                )
+                app_core_instance.shutdown()
+            finally:
+                headless_loop.close()
+            return 0
 
         icon_path = ICON_PATH
         if not os.path.exists(icon_path):
@@ -621,13 +792,21 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
 
-        app_core_instance = AppCore(
-            main_tk_root,
-            config_manager=config_manager,
-            hotkey_config_path=str(HOTKEY_CONFIG_PATH),
-            startup_diagnostics=diagnostics_report,
-        )
-        app_core_instance.dependency_installer = dependency_installer
+        ui_manager_instance = None
+
+        def on_exit_app_enhanced(*_):
+            LOGGER.info(
+                StructuredMessage(
+                    "Exit requested from tray icon.",
+                    event="ui.exit_requested",
+                )
+            )
+            if app_core_instance:
+                app_core_instance.shutdown()
+            if ui_manager_instance and ui_manager_instance.tray_icon:
+                ui_manager_instance.tray_icon.stop()
+            main_tk_root.after(0, main_tk_root.quit)
+
         ui_manager_instance = UIManager(
             main_tk_root,
             app_core_instance.config_manager,

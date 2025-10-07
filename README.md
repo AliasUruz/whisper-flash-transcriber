@@ -86,6 +86,22 @@ tuning. You can later review and change the model from the **Settings → Transc
 ASR** section, where recommended and advanced options are grouped with download and
 installation estimates.
 
+### Headless Mode
+
+When you need background operation without the system tray icon or any Tk windows,
+launch Whisper Flash Transcriber in headless mode:
+
+```bash
+python src/main.py --headless
+```
+
+The recorder, transcription pipeline, hotkeys, and automatic paste continue to work,
+but all Tk-based UI surfaces (settings window, onboarding wizard, diagnostic dialogs)
+are suppressed. Any message box that would normally appear is logged instead so you
+can monitor issues from the console. Exit the process with <kbd>Ctrl</kbd> + <kbd>C</kbd>
+or by calling the shutdown hotkeys configured for your environment.
+On Windows you can achieve the same by invoking `Run Whisper.bat --headless`.
+
 ### Configuration
 
 - The application icon appears in the system tray.
