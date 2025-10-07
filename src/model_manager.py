@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from threading import Event, RLock
-from typing import Dict, List, NamedTuple
+from typing import Callable, Dict, List, NamedTuple, Optional
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
@@ -54,6 +54,9 @@ class ModelDownloadResult:
 
     path: str
     downloaded: bool
+    bytes_downloaded: Optional[int] = None
+    duration_seconds: Optional[float] = None
+    target_dir: Optional[str] = None
 
 
 class DownloadCancelledError(Exception):
@@ -986,6 +989,8 @@ def ensure_download(
     *,
     timeout: float | int | None = None,
     cancel_event: Event | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    on_stage_change: Callable[[str, dict], None] | None = None,
 ) -> ModelDownloadResult:
     """Ensure that the given model is present locally.
 
@@ -1003,6 +1008,13 @@ def ensure_download(
         Maximum number of seconds to wait before aborting the download. ``None`` disables the timeout.
     cancel_event: Event | None, optional
         When provided, the download is aborted if the event is set.
+    on_progress: Callable[[int, int], None] | None, optional
+        Observer invoked whenever progress metrics are updated. Receives the
+        number of downloaded bytes and the total expected bytes.
+    on_stage_change: Callable[[str, dict], None] | None, optional
+        Observer invoked whenever the internal stage changes. Receives the
+        stage identifier and a metadata dictionary derived from existing log
+        metrics.
 
     Returns
     -------
@@ -1012,6 +1024,32 @@ def ensure_download(
     """
 
     cache_dir = Path(cache_dir)
+
+    def _emit_stage(stage_id: str, **metadata) -> None:
+        if on_stage_change is None:
+            return
+        payload = {
+            "model_id": model_id,
+            "backend": backend,
+            "quant": quant,
+            "target_dir": str(cache_dir),
+        }
+        payload.update(metadata)
+        try:
+            on_stage_change(stage_id, payload)
+        except Exception:  # pragma: no cover - observer callbacks
+            MODEL_LOGGER.debug("Stage callback failed for %s", stage_id, exc_info=True)
+
+    def _emit_progress(done: int, total: int) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(int(done), int(total))
+        except Exception:  # pragma: no cover - observer callbacks
+            MODEL_LOGGER.debug(
+                "Progress callback failed (done=%s, total=%s)", done, total, exc_info=True
+            )
+
     backend_label = normalize_backend_label(backend)
     curated_entry = _resolve_catalog_entry(model_id)
     curated_backend = normalize_backend_label(curated_entry.get("backend")) if curated_entry else ""
@@ -1047,6 +1085,7 @@ def ensure_download(
                 ready_path,
                 exc_info=True,
             )
+        _emit_stage("already_present", path=str(ready_path))
         MODEL_LOGGER.info(
             log_context(
                 "Model download skipped because artifacts already exist.",
@@ -1056,7 +1095,8 @@ def ensure_download(
                 path=str(prepared.ready_path),
             )
         )
-        return ModelDownloadResult(str(ready_path), downloaded=False)
+        _emit_progress(0, 0)
+        return ModelDownloadResult(str(ready_path), downloaded=False, target_dir=str(ready_path))
 
     stale_local_dir = prepared.stale_local_dir
 
@@ -1064,6 +1104,7 @@ def ensure_download(
 
     estimated_bytes = 0
     estimated_files = 0
+    _emit_stage("estimating_size")
     try:
         estimated_bytes, estimated_files = get_model_download_size(model_id)
     except Exception:  # pragma: no cover - metadata retrieval best effort
@@ -1072,6 +1113,7 @@ def ensure_download(
             model_id,
             exc_info=True,
         )
+        _emit_stage("size_estimate_failed")
     else:
         if estimated_bytes > 0:
             try:
@@ -1092,6 +1134,13 @@ def ensure_download(
                     free_bytes=free_bytes,
                 )
             )
+            _emit_stage(
+                "size_estimated",
+                estimated_bytes=estimated_bytes,
+                estimated_files=estimated_files,
+                free_bytes=free_bytes,
+                required_bytes=required_bytes,
+            )
             if free_bytes < required_bytes:
                 MODEL_LOGGER.error(
                     "Insufficient free space for model %s: required %s (with safety margin) but only %s available.",
@@ -1108,7 +1157,6 @@ def ensure_download(
                     required_bytes=required_bytes,
                     free_bytes=free_bytes,
                 )
-
     timeout_value: float | None = None
     deadline: float | None = None
     if timeout is not None:
@@ -1146,8 +1194,8 @@ def ensure_download(
             logging.debug("Failed to clean up partial download at %s", local_dir, exc_info=True)
 
     progress_class = None
-    if cancel_event is not None or deadline is not None:
-        progress_class = _make_cancellable_progress(_check_abort)
+    if cancel_event is not None or deadline is not None or on_progress is not None:
+        progress_class = _make_cancellable_progress(_check_abort, _emit_progress)
 
     # Seleciona branch de quantização quando aplicável (modelos CT2).
     revision = None
@@ -1170,6 +1218,16 @@ def ensure_download(
         _cleanup_partial("stale_before_download")
 
     start_time = time.perf_counter()
+    _emit_stage(
+        "download_start",
+        path=str(local_dir),
+        estimated_bytes=estimated_bytes,
+        estimated_files=estimated_files,
+    )
+    if estimated_bytes:
+        _emit_progress(0, estimated_bytes)
+    else:
+        _emit_progress(0, 0)
     MODEL_LOGGER.info(
         "Starting model download: model=%s backend=%s quant=%s target=%s",
         model_id,
@@ -1189,6 +1247,12 @@ def ensure_download(
         _check_abort()
     except DownloadCancelledError as cancel_exc:
         _cleanup_partial("cancelled" if not getattr(cancel_exc, "timed_out", False) else "timeout")
+        _emit_stage(
+            "cancelled",
+            timed_out=getattr(cancel_exc, "timed_out", False),
+            by_user=getattr(cancel_exc, "by_user", False),
+            message=str(cancel_exc) or "",
+        )
         raise
     except KeyboardInterrupt as exc:
         _cleanup_partial("keyboard_interrupt")
@@ -1201,6 +1265,7 @@ def ensure_download(
         )
         _cleanup_partial()
         _invalidate_list_installed_cache(cache_dir)
+        _emit_stage("cancelled", by_user=True, message="Keyboard interrupt")
         raise DownloadCancelledError(
             "Model download cancelled by user.",
             by_user=True,
@@ -1222,16 +1287,18 @@ def ensure_download(
         )
         _cleanup_partial()
         _invalidate_list_installed_cache(cache_dir)
+        _emit_stage("error", duration_ms=duration_ms, message="Download failed")
         raise
 
     if not _is_installation_complete(local_dir):
         _cleanup_partial("incomplete")
         _invalidate_list_installed_cache(cache_dir)
+        _emit_stage("error", message="Installation incomplete")
         raise RuntimeError(
             "Model download completed but installation is missing essential files."
         )
 
-    duration_ms = (time.perf_counter() - start_time) * 1000.0
+    duration_seconds = time.perf_counter() - start_time
     try:
         _write_install_metadata(
             local_dir,
@@ -1247,14 +1314,34 @@ def ensure_download(
         "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
         model_id,
         backend_label,
-        duration_ms,
+        duration_seconds * 1000.0,
         local_dir,
     )
+    effective_bytes, _ = get_installed_size(local_dir)
+    if effective_bytes:
+        _emit_progress(effective_bytes, effective_bytes)
+    else:
+        _emit_progress(0, 0)
+    throughput = None
+    if duration_seconds > 0 and effective_bytes:
+        throughput = effective_bytes / duration_seconds
+    _emit_stage(
+        "success",
+        duration_seconds=duration_seconds,
+        bytes_downloaded=effective_bytes,
+        throughput_bps=throughput,
+        path=str(local_dir),
+    )
     _invalidate_list_installed_cache(cache_dir)
-    return ModelDownloadResult(str(local_dir), downloaded=True)
+    return ModelDownloadResult(
+        str(local_dir),
+        downloaded=True,
+        bytes_downloaded=effective_bytes or None,
+        duration_seconds=duration_seconds,
+        target_dir=str(local_dir),
+    )
 
-
-def _make_cancellable_progress(check_abort):
+def _make_cancellable_progress(check_abort, progress_callback: Callable[[int, int], None] | None = None):
     from tqdm.auto import tqdm
 
     class _Progress(tqdm):
@@ -1262,6 +1349,11 @@ def _make_cancellable_progress(check_abort):
             check_abort()
             result = super().update(n)
             check_abort()
+            if progress_callback is not None:
+                try:
+                    progress_callback(int(self.n), int(self.total or 0))
+                except Exception:  # pragma: no cover - observer callbacks
+                    MODEL_LOGGER.debug("Progress callback failed.", exc_info=True)
             return result
 
         def refresh(self, *args, **kwargs):

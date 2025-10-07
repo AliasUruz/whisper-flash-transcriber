@@ -4,7 +4,7 @@ This file will contain the StateManager class and related state management logic
 from threading import RLock
 from dataclasses import dataclass
 from enum import Enum, auto, unique
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from .logging_utils import get_logger, log_context, log_duration
 
@@ -43,6 +43,7 @@ class StateEvent(Enum):
     MODEL_DOWNLOAD_CANCELLED = auto()
     MODEL_DOWNLOAD_INVALID_CACHE = auto()
     MODEL_DOWNLOAD_FAILED = auto()
+    MODEL_DOWNLOAD_PROGRESS = auto()
     MODEL_CACHE_NOT_CONFIGURED = auto()
     MODEL_CACHE_MISSING = auto()
     MODEL_READY = auto()
@@ -67,7 +68,7 @@ class StateNotification:
     event: StateEvent | None
     state: str
     previous_state: str | None = None
-    details: str | None = None
+    details: object | None = None
     source: str | None = None
 
 
@@ -80,6 +81,7 @@ STATE_FOR_EVENT: dict[StateEvent, str] = {
     StateEvent.MODEL_DOWNLOAD_CANCELLED: STATE_ERROR_MODEL,
     StateEvent.MODEL_DOWNLOAD_INVALID_CACHE: STATE_ERROR_MODEL,
     StateEvent.MODEL_DOWNLOAD_FAILED: STATE_ERROR_MODEL,
+    StateEvent.MODEL_DOWNLOAD_PROGRESS: STATE_LOADING_MODEL,
     StateEvent.MODEL_CACHE_NOT_CONFIGURED: STATE_ERROR_MODEL,
     StateEvent.MODEL_CACHE_MISSING: STATE_ERROR_MODEL,
     StateEvent.MODEL_READY: STATE_IDLE,
@@ -107,6 +109,7 @@ EVENT_DEFAULT_DETAILS: dict[StateEvent, str] = {
     StateEvent.MODEL_DOWNLOAD_CANCELLED: "Model download was cancelled",
     StateEvent.MODEL_DOWNLOAD_INVALID_CACHE: "Model download aborted due to invalid cache directory",
     StateEvent.MODEL_DOWNLOAD_FAILED: "Model download failed",
+    StateEvent.MODEL_DOWNLOAD_PROGRESS: "Model download progress updated",
     StateEvent.MODEL_CACHE_NOT_CONFIGURED: "ASR cache directory not configured",
     StateEvent.MODEL_CACHE_MISSING: "ASR cache directory missing on disk",
     StateEvent.MODEL_READY: "Model loaded successfully",
@@ -197,11 +200,19 @@ class StateManager:
             if had_errors:
                 log_details["status"] = "partial"
 
-    def set_state(self, event: StateEvent | str, *, details: str | None = None, source: str | None = None):
+    def set_state(
+        self,
+        event: StateEvent | str,
+        *,
+        details: object | None = None,
+        source: str | None = None,
+    ):
         """Applies a state transition and notifies subscribers."""
         event_obj: StateEvent | None
         mapped_state: str
         message: str | None
+
+        detail_payload = details
 
         if isinstance(event, StateEvent):
             event_obj = event
@@ -209,14 +220,20 @@ class StateManager:
                 mapped_state = STATE_FOR_EVENT[event_obj]
             except KeyError as exc:
                 raise ValueError(f"No state mapping defined for event {event_obj!r}") from exc
-            message = details or EVENT_DEFAULT_DETAILS.get(event_obj)
+            if isinstance(detail_payload, Mapping):
+                message = detail_payload.get("message") or EVENT_DEFAULT_DETAILS.get(event_obj)
+            else:
+                message = detail_payload or EVENT_DEFAULT_DETAILS.get(event_obj)
         elif isinstance(event, str):
             normalized = event.strip().upper()
             if normalized not in LEGACY_STATE_DEFAULT_DETAILS:
                 raise ValueError(f"Unsupported state event payload: {event!r}")
             event_obj = None
             mapped_state = normalized
-            message = details or LEGACY_STATE_DEFAULT_DETAILS.get(normalized)
+            if isinstance(detail_payload, Mapping):
+                message = detail_payload.get("message") or LEGACY_STATE_DEFAULT_DETAILS.get(normalized)
+            else:
+                message = detail_payload or LEGACY_STATE_DEFAULT_DETAILS.get(normalized)
         else:
             raise ValueError(f"Unsupported state event payload: {event!r}")
 
@@ -240,7 +257,7 @@ class StateManager:
                 event=event_obj,
                 state=mapped_state,
                 previous_state=previous_state,
-                details=message,
+                details=detail_payload if detail_payload is not None else message,
                 source=source,
             )
             self._current_state = mapped_state

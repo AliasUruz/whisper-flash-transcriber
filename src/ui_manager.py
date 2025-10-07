@@ -1,7 +1,7 @@
 
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
-from tkinter import filedialog, simpledialog  # Adicionado para diálogos
+from tkinter import BooleanVar, filedialog, simpledialog  # Adicionado para diálogos
 import logging
 import threading
 import time
@@ -44,6 +44,7 @@ from .config_manager import (
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     DEFAULT_CONFIG,
 )
+from . import state_manager as sm
 
 from .utils.form_validation import safe_get_float, safe_get_int
 from .utils.tooltip import Tooltip
@@ -165,6 +166,12 @@ class UIManager:
 
         self._divergent_keys_logged: set[str] = set()
 
+        self._download_window = None
+        self._download_window_widgets: Dict[str, dict[str, Any]] = {}
+        self._download_window_lock = threading.Lock()
+        self._download_snapshot: list[dict[str, Any]] = []
+        self._download_history: list[dict[str, Any]] = []
+
 
         # Assign methods to the instance
         self.show_live_transcription_window = self._show_live_transcription_window
@@ -237,6 +244,309 @@ class UIManager:
     def _clear_settings_context(self) -> None:
         self._settings_vars.clear()
         self._settings_meta.clear()
+
+    def _open_model_downloads_window(self) -> None:
+        with self._download_window_lock:
+            if self._download_window and self._download_window.winfo_exists():
+                self._download_window.lift()
+                self._download_window.focus_force()
+                return
+            window = ctk.CTkToplevel(self.main_tk_root)
+            window.title("Model Downloads")
+            window.geometry("620x520")
+            window.protocol("WM_DELETE_WINDOW", self._close_model_downloads_window)
+            outer = ctk.CTkFrame(window)
+            outer.pack(fill="both", expand=True, padx=10, pady=10)
+            active_container = ctk.CTkScrollableFrame(outer, label_text="Active Downloads")
+            active_container.pack(fill="both", expand=True)
+            history_container = ctk.CTkScrollableFrame(
+                outer,
+                label_text="Recent Download History",
+                height=180,
+            )
+            history_container.pack(fill="both", expand=True, pady=(10, 0))
+            self._download_window = window
+            self._download_window_widgets.clear()
+            self._download_window_widgets["_container"] = active_container
+            self._download_window_widgets["_history_container"] = history_container
+
+        snapshot = {}
+        core = getattr(self, "core_instance_ref", None)
+        if core is not None and hasattr(core, "get_model_downloads_snapshot"):
+            try:
+                snapshot = core.get_model_downloads_snapshot()
+            except Exception:
+                logging.debug("Failed to obtain download snapshot from core.", exc_info=True)
+        tasks = snapshot.get("tasks", []) if isinstance(snapshot, dict) else []
+        if tasks:
+            self._download_snapshot = tasks
+        self._refresh_download_window(self._download_snapshot)
+        self._update_download_history_cache()
+        self._refresh_download_history()
+
+    def _close_model_downloads_window(self) -> None:
+        with self._download_window_lock:
+            if self._download_window and self._download_window.winfo_exists():
+                self._download_window.destroy()
+            self._download_window = None
+
+    def _refresh_download_window(self, tasks: list[dict[str, Any]]) -> None:
+        with self._download_window_lock:
+            window = self._download_window
+            container = self._download_window_widgets.get("_container")
+        if not window or not window.winfo_exists() or container is None:
+            return
+
+        existing_ids = {
+            key
+            for key in self._download_window_widgets.keys()
+            if key not in {"_container", "_history_container"}
+        }
+        new_ids: set[str] = set()
+
+        for task in tasks:
+            task_id = str(task.get("task_id") or "").strip()
+            if not task_id:
+                continue
+            new_ids.add(task_id)
+            self._ensure_download_row(container, task_id, task)
+
+        stale_ids = existing_ids - new_ids
+        for task_id in stale_ids:
+            widgets = self._download_window_widgets.pop(task_id, None)
+            if widgets:
+                frame = widgets.get("frame")
+                if frame is not None:
+                    frame.destroy()
+
+    def _update_download_history_cache(self) -> None:
+        try:
+            history = self.config_manager.get_model_download_history(limit=50)
+        except Exception:
+            logging.debug("Unable to obtain download history.", exc_info=True)
+            history = []
+        self._download_history = history
+
+    def _refresh_download_history(self) -> None:
+        with self._download_window_lock:
+            history_container = self._download_window_widgets.get("_history_container")
+            window = self._download_window
+        if history_container is None or window is None or not window.winfo_exists():
+            return
+
+        for child in list(history_container.winfo_children()):
+            child.destroy()
+
+        if not self._download_history:
+            empty_label = ctk.CTkLabel(history_container, text="No recent downloads recorded.")
+            empty_label.pack(anchor="w", padx=6, pady=4)
+            return
+
+        for entry in reversed(self._download_history):
+            status = str(entry.get("status", "unknown")).upper()
+            model_id = entry.get("model_id", "?")
+            backend = entry.get("backend", "?")
+            timestamp = entry.get("timestamp", "")
+            header = ctk.CTkLabel(
+                history_container,
+                text=f"{timestamp} — {model_id} [{backend}] — {status}",
+                anchor="w",
+            )
+            header.pack(fill="x", padx=6, pady=(4, 0))
+            details_parts: list[str] = []
+            message = entry.get("message") or ""
+            details = entry.get("details") or ""
+            target_dir = entry.get("target_dir") or details
+            bytes_downloaded = entry.get("bytes_downloaded")
+            throughput = entry.get("throughput_bps")
+            duration = entry.get("duration_seconds")
+            if bytes_downloaded:
+                details_parts.append(f"Size {self._format_bytes(int(bytes_downloaded))}")
+            if throughput:
+                details_parts.append(f"Throughput {self._format_throughput(float(throughput))}")
+            if duration:
+                details_parts.append(f"Duration {self._format_eta(float(duration))}")
+            if target_dir:
+                details_parts.append(f"Target {target_dir}")
+            if message:
+                details_parts.append(message)
+            info = " | ".join(details_parts) if details_parts else ""
+            if info:
+                info_label = ctk.CTkLabel(history_container, text=info, anchor="w")
+                info_label.pack(fill="x", padx=8, pady=(0, 4))
+
+    def _ensure_download_row(self, container, task_id: str, task: dict[str, Any]) -> None:
+        widgets = self._download_window_widgets.get(task_id)
+        if widgets is None:
+            row = ctk.CTkFrame(container)
+            row.pack(fill="x", pady=6)
+            title = ctk.CTkLabel(row, text="", anchor="w")
+            title.pack(fill="x")
+            progress = ctk.CTkProgressBar(row)
+            progress.pack(fill="x", pady=(2, 2))
+            info = ctk.CTkLabel(row, text="", anchor="w")
+            info.pack(fill="x")
+            target = ctk.CTkLabel(row, text="", anchor="w")
+            target.pack(fill="x")
+            btn_frame = ctk.CTkFrame(row)
+            btn_frame.pack(fill="x", pady=(6, 0))
+            pause_btn = ctk.CTkButton(
+                btn_frame,
+                text="Pause",
+                width=90,
+                command=lambda tid=task_id: self._on_download_action(tid, "pause"),
+            )
+            pause_btn.pack(side="left", padx=4)
+            resume_btn = ctk.CTkButton(
+                btn_frame,
+                text="Resume",
+                width=90,
+                command=lambda tid=task_id: self._on_download_action(tid, "resume"),
+            )
+            resume_btn.pack(side="left", padx=4)
+            cancel_btn = ctk.CTkButton(
+                btn_frame,
+                text="Cancel",
+                width=90,
+                command=lambda tid=task_id: self._on_download_action(tid, "cancel"),
+            )
+            cancel_btn.pack(side="left", padx=4)
+            widgets = {
+                "frame": row,
+                "title": title,
+                "progress": progress,
+                "info": info,
+                "target": target,
+                "pause": pause_btn,
+                "resume": resume_btn,
+                "cancel": cancel_btn,
+            }
+            self._download_window_widgets[task_id] = widgets
+
+        title_label: ctk.CTkLabel = widgets["title"]
+        progress_bar: ctk.CTkProgressBar = widgets["progress"]
+        info_label: ctk.CTkLabel = widgets["info"]
+        target_label: ctk.CTkLabel = widgets["target"]
+        pause_btn: ctk.CTkButton = widgets["pause"]
+        resume_btn: ctk.CTkButton = widgets["resume"]
+        cancel_btn: ctk.CTkButton = widgets["cancel"]
+
+        model_id = task.get("model_id", "?")
+        backend = task.get("backend", "?")
+        status = str(task.get("status", "queued"))
+        stage = task.get("stage", "")
+        message = task.get("message") or ""
+        bytes_done = int(task.get("bytes_done") or 0)
+        bytes_total = int(task.get("bytes_total") or 0)
+        percent = task.get("percent")
+        target_dir = task.get("target_dir") or ""
+        eta_seconds = task.get("eta_seconds")
+        throughput = task.get("throughput_bps")
+
+        title_label.configure(text=f"{model_id} [{backend}] — {status.upper()}")
+        if percent is None or percent <= 0:
+            progress_bar.set(0.0)
+        else:
+            progress_bar.set(min(100.0, float(percent)) / 100.0)
+
+        progress_parts = [f"{self._format_bytes(bytes_done)}"]
+        if bytes_total:
+            progress_parts.append(f"of {self._format_bytes(bytes_total)}")
+        if throughput:
+            progress_parts.append(f"@ {self._format_throughput(throughput)}")
+        if eta_seconds:
+            progress_parts.append(f"ETA {self._format_eta(float(eta_seconds))}")
+        if stage and stage not in status:
+            progress_parts.append(f"stage={stage}")
+        info_text = " | ".join(progress_parts)
+        if message:
+            info_text = f"{info_text} — {message}" if info_text else message
+        info_label.configure(text=info_text)
+
+        target_label.configure(text=f"Target: {target_dir}" if target_dir else "Target: <pending>")
+
+        if status in {"completed", "skipped"}:
+            pause_btn.configure(state="disabled")
+            resume_btn.configure(state="disabled")
+            cancel_btn.configure(state="disabled")
+        elif status == "running":
+            pause_btn.configure(state="normal")
+            resume_btn.configure(state="disabled")
+            cancel_btn.configure(state="normal")
+        elif status == "paused":
+            pause_btn.configure(state="disabled")
+            resume_btn.configure(state="normal")
+            cancel_btn.configure(state="normal")
+        elif status in {"cancelled", "timed_out", "error"}:
+            pause_btn.configure(state="disabled")
+            resume_btn.configure(state="disabled")
+            cancel_btn.configure(state="disabled")
+        else:
+            pause_btn.configure(state="normal")
+            resume_btn.configure(state="disabled")
+            cancel_btn.configure(state="normal")
+
+    def _on_download_action(self, task_id: str, action: str) -> None:
+        core = getattr(self, "core_instance_ref", None)
+        if core is None:
+            return
+        try:
+            if action == "pause":
+                core.pause_download_task(task_id)
+            elif action == "resume":
+                core.resume_download_task(task_id)
+            elif action == "cancel":
+                core.cancel_download_task(task_id)
+        except Exception as exc:
+            messagebox.showerror("Model Downloads", f"Unable to {action} task: {exc}")
+
+    def _handle_download_progress(self, context: dict[str, Any] | None) -> None:
+        if not context:
+            return
+        details = context.get("details") if isinstance(context, dict) else None
+        tasks = []
+        if isinstance(details, dict):
+            tasks = details.get("tasks") or []
+        if tasks:
+            self._download_snapshot = tasks
+        should_refresh_history = False
+        missing_history = not self._download_history and isinstance(details, dict)
+        if isinstance(details, dict):
+            status = str(details.get("status") or "").lower()
+            if status in {"completed", "skipped", "cancelled", "timed_out", "error", "success", "timeout"}:
+                should_refresh_history = True
+        refresh_history_view = should_refresh_history or missing_history
+        if refresh_history_view:
+            self._update_download_history_cache()
+        if self._download_window and self._download_window.winfo_exists():
+            self._refresh_download_window(self._download_snapshot)
+            if refresh_history_view:
+                self._refresh_download_history()
+
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        units = ["B", "KB", "MB", "GB", "TB"]
+        amount = float(max(0, int(value)))
+        for unit in units:
+            if amount < 1024 or unit == units[-1]:
+                return f"{amount:.2f} {unit}"
+            amount /= 1024
+        return f"{amount:.2f} PB"
+
+    @staticmethod
+    def _format_throughput(value: float) -> str:
+        if value <= 0:
+            return "0 B/s"
+        return f"{UIManager._format_bytes(int(value))}/s"
+
+    @staticmethod
+    def _format_eta(seconds: float) -> str:
+        if seconds <= 0:
+            return "0s"
+        minutes, secs = divmod(int(seconds), 60)
+        if minutes:
+            return f"{minutes}m {secs}s"
+        return f"{secs}s"
         self._pending_key_var_name = None
 
     def _handle_detected_key(self, key: str | None) -> None:
@@ -812,6 +1122,7 @@ class UIManager:
         models_storage_dir_var = _var("models_storage_dir_var")
         asr_cache_dir_var = _var("asr_cache_dir_var")
         recordings_dir_var = _var("recordings_dir_var")
+        max_parallel_downloads_var = _var("max_parallel_downloads_var")
 
         if detected_key_var is None or mode_var is None or auto_paste_var is None:
             return
@@ -1019,6 +1330,29 @@ class UIManager:
             messagebox.showwarning("Invalid Value", "The model list cannot be empty. Please add at least one model.", parent=settings_win)
             return
 
+        max_parallel_downloads_to_apply = self.config_manager.get_max_parallel_downloads()
+        if max_parallel_downloads_var is not None:
+            try:
+                candidate = int(max_parallel_downloads_var.get())
+            except (TypeError, ValueError):
+                candidate = max_parallel_downloads_to_apply
+            else:
+                if candidate < 1:
+                    candidate = 1
+                elif candidate > 8:
+                    candidate = 8
+            max_parallel_downloads_to_apply = candidate
+        self.config_manager.set_max_parallel_downloads(max_parallel_downloads_to_apply)
+        core_ref = getattr(self, "core_instance_ref", None)
+        if core_ref is not None and hasattr(core_ref, "model_download_controller"):
+            try:
+                core_ref.model_download_controller.update_parallel_limit(max_parallel_downloads_to_apply)
+            except Exception:
+                logging.debug(
+                    "Unable to propagate max_parallel_downloads to controller.",
+                    exc_info=True,
+                )
+
         self.core_instance_ref.apply_settings_from_external(
             new_key=key_to_apply,
             new_mode=mode_to_apply,
@@ -1167,6 +1501,8 @@ class UIManager:
                 ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
             except Exception:
                 pass
+
+        _set_var("max_parallel_downloads_var", str(DEFAULT_CONFIG.get("max_parallel_downloads", 1)))
 
         _set_var("asr_cache_dir_var", DEFAULT_CONFIG["asr_cache_dir"])
         _set_var("storage_root_dir_var", DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
@@ -1701,6 +2037,163 @@ class UIManager:
         )
         reload_button.pack(pady=5)
 
+        download_vars: dict[str, BooleanVar] = {}
+
+        def _schedule_selected_models() -> None:
+            core = getattr(self, "core_instance_ref", None)
+            if core is None or not hasattr(core, "schedule_model_download"):
+                messagebox.showerror(
+                    "Model Downloads",
+                    "Core instance is not available to schedule downloads.",
+                )
+                return
+            cache_dir_value = asr_cache_dir_var.get()
+            if not cache_dir_value:
+                messagebox.showerror(
+                    "Model Downloads",
+                    "Configure the ASR cache directory before scheduling downloads.",
+                )
+                return
+            try:
+                Path(cache_dir_value).mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                messagebox.showerror(
+                    "Model Downloads",
+                    f"Invalid cache directory: {exc}",
+                )
+                return
+
+            active_pairs: set[tuple[str, str]] = set()
+            snapshot = {}
+            if hasattr(core, "get_model_downloads_snapshot"):
+                try:
+                    snapshot = core.get_model_downloads_snapshot()
+                except Exception:
+                    logging.debug("Unable to fetch download snapshot before scheduling.", exc_info=True)
+            if isinstance(snapshot, dict):
+                for existing in snapshot.get("tasks", []) or []:
+                    if not isinstance(existing, dict):
+                        continue
+                    status_value = str(existing.get("status") or "").lower()
+                    if status_value in {
+                        "completed",
+                        "skipped",
+                        "cancelled",
+                        "timed_out",
+                        "error",
+                    }:
+                        continue
+                    model_key = str(existing.get("model_id") or "").strip()
+                    backend_key = str(existing.get("backend") or "").strip()
+                    if model_key:
+                        active_pairs.add((model_key, backend_key))
+
+            scheduled = 0
+            skipped_duplicates: list[str] = []
+            for model_id, var in download_vars.items():
+                if not bool(var.get()):
+                    continue
+                backend_for_model = _derive_backend_from_model(model_id) or asr_backend_var.get()
+                if not backend_for_model:
+                    messagebox.showerror(
+                        "Model Downloads",
+                        f"Unable to determine backend for {model_id}.",
+                    )
+                    continue
+                quant_value = (
+                    asr_ct2_compute_type_var.get() if backend_for_model == "ctranslate2" else None
+                )
+                normalized_backend_key = str(backend_for_model).strip()
+                dedup_key = (model_id, normalized_backend_key)
+                if dedup_key in active_pairs:
+                    skipped_duplicates.append(model_id)
+                    continue
+                try:
+                    core.schedule_model_download(
+                        model_id,
+                        backend_for_model,
+                        cache_dir_value,
+                        quant_value,
+                        auto_reload=False,
+                    )
+                    scheduled += 1
+                    active_pairs.add(dedup_key)
+                except Exception as exc:
+                    messagebox.showerror(
+                        "Model Downloads",
+                        f"Failed to schedule download for {model_id}: {exc}",
+                    )
+            if scheduled:
+                for var in download_vars.values():
+                    var.set(False)
+                messagebox.showinfo(
+                    "Model Downloads",
+                    f"Scheduled {scheduled} model download(s).",
+                )
+                self._open_model_downloads_window()
+            if skipped_duplicates:
+                skipped_list = "\n".join(sorted(set(skipped_duplicates)))
+                messagebox.showinfo(
+                    "Model Downloads",
+                    "The following models already have an active task and were not scheduled:\n"
+                    f"{skipped_list}",
+                )
+            elif not scheduled:
+                messagebox.showinfo(
+                    "Model Downloads",
+                    "No downloads were scheduled. Select at least one model that is not already queued.",
+                )
+
+        multi_frame = ctk.CTkFrame(asr_frame)
+        multi_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(multi_frame, text="Curated downloads queue:").pack(
+            anchor="w", padx=5
+        )
+        selection_frame = ctk.CTkScrollableFrame(multi_frame, height=150)
+        selection_frame.pack(fill="x", pady=(2, 6))
+        for entry in catalog:
+            model_id = entry.get("id")
+            display_label = id_to_display.get(model_id, model_id)
+            var = BooleanVar(value=False)
+            checkbox = ctk.CTkCheckBox(
+                selection_frame,
+                text=display_label,
+                variable=var,
+            )
+            checkbox.pack(anchor="w", padx=4, pady=2)
+            download_vars[model_id] = var
+
+        self._set_settings_meta("download_check_vars", download_vars)
+
+        button_frame = ctk.CTkFrame(multi_frame)
+        button_frame.pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(
+            button_frame,
+            text="Download Selected",
+            command=_schedule_selected_models,
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            button_frame,
+            text="Open Downloads Window",
+            command=self._open_model_downloads_window,
+        ).pack(side="left", padx=4)
+
+        max_parallel_downloads_var = ctk.StringVar(
+            value=str(self.config_manager.get_max_parallel_downloads())
+        )
+        self._set_settings_var("max_parallel_downloads_var", max_parallel_downloads_var)
+        parallel_frame = ctk.CTkFrame(multi_frame)
+        parallel_frame.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(parallel_frame, text="Max parallel downloads:").pack(
+            side="left", padx=5
+        )
+        parallel_menu = ctk.CTkOptionMenu(
+            parallel_frame,
+            variable=max_parallel_downloads_var,
+            values=[str(i) for i in range(1, 9)],
+        )
+        parallel_menu.pack(side="left", padx=5)
+
         _on_model_change(asr_model_display_var.get())
         _update_model_info(asr_model_id_var.get())
         _update_install_button_state()
@@ -1898,6 +2391,8 @@ class UIManager:
         state_str = str(resolved_state)
 
         event_obj = context.get("event") if context else None
+        if event_obj == sm.StateEvent.MODEL_DOWNLOAD_PROGRESS:
+            self._handle_download_progress(context)
         if context:
             self._last_state_notification = context.get("notification")
             self._state_context_suffix = self._build_state_context_suffix(state_str, context)

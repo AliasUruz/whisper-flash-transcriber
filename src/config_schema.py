@@ -28,6 +28,17 @@ class ASRDownloadStatus(BaseModel):
     backend: str = ""
     message: str = ""
     details: str = ""
+    target_dir: str = ""
+    bytes_downloaded: int | None = None
+    throughput_bps: float | None = None
+    duration_seconds: float | None = None
+    task_id: str | None = None
+
+
+class ASRDownloadHistoryEntry(ASRDownloadStatus):
+    """Historical record capturing metadata of a download attempt."""
+
+    pass
 
 
 class ASRPromptDecision(BaseModel):
@@ -90,6 +101,7 @@ class AppConfig(BaseModel):
     max_memory_seconds: float = Field(default=30.0, ge=0.0)
     min_free_ram_mb: int = Field(default=1000, ge=0)
     auto_ram_threshold_percent: int = Field(default=10, ge=1, le=50)
+    max_parallel_downloads: int = Field(default=1, ge=1, le=8)
     min_transcription_duration: float = Field(default=1.0, ge=0.0)
     chunk_length_sec: float = Field(default=30.0, ge=0.0)
     chunk_length_mode: str = "manual"
@@ -110,6 +122,7 @@ class AppConfig(BaseModel):
     asr_curated_catalog: list[str] = Field(default_factory=list)
     asr_curated_catalog_url: str = ""
     asr_last_download_status: ASRDownloadStatus = Field(default_factory=ASRDownloadStatus)
+    asr_download_history: list[ASRDownloadHistoryEntry] = Field(default_factory=list)
     asr_last_prompt_decision: ASRPromptDecision = Field(default_factory=ASRPromptDecision)
 
     @staticmethod

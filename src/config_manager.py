@@ -148,6 +148,7 @@ DEFAULT_CONFIG = {
     "max_memory_seconds": 30,
     "min_free_ram_mb": 1000,
     "auto_ram_threshold_percent": 10,
+    "max_parallel_downloads": 1,
     "min_transcription_duration": 1.0,  # Nova configuração
     "chunk_length_sec": 30,
     "chunk_length_mode": "manual",
@@ -173,7 +174,12 @@ DEFAULT_CONFIG = {
         "backend": "",
         "message": "",
         "details": "",
+        "target_dir": "",
+        "bytes_downloaded": 0,
+        "throughput_bps": 0.0,
+        "duration_seconds": 0.0,
     },
+    "asr_download_history": [],
     "asr_last_prompt_decision": {
         "model_id": "",
         "backend": "",
@@ -1213,14 +1219,55 @@ class ConfigManager:
         if not isinstance(stored_status, dict):
             stored_status = default_download_status
         sanitized_status = copy.deepcopy(default_download_status)
+        numeric_status_keys = {"bytes_downloaded", "throughput_bps", "duration_seconds"}
         if isinstance(stored_status, dict):
             for key, value in stored_status.items():
                 if key not in sanitized_status:
                     sanitized_status[key] = ""
-                sanitized_status[key] = "" if value is None else str(value)
+                if value is None:
+                    sanitized_status[key] = "" if key not in numeric_status_keys else None
+                elif key in numeric_status_keys:
+                    try:
+                        sanitized_status[key] = (
+                            int(value)
+                            if key == "bytes_downloaded"
+                            else float(value)
+                        )
+                    except (TypeError, ValueError):
+                        sanitized_status[key] = None if key != "bytes_downloaded" else 0
+                else:
+                    sanitized_status[key] = str(value)
         if not sanitized_status.get("status"):
             sanitized_status["status"] = default_download_status.get("status", "unknown")
         self.config[ASR_LAST_DOWNLOAD_STATUS_KEY] = sanitized_status
+
+        history_entries = self.config.get("asr_download_history", [])
+        sanitized_history: list[dict[str, object]] = []
+        if isinstance(history_entries, list):
+            for entry in history_entries:
+                if not isinstance(entry, dict):
+                    continue
+                normalized_entry: dict[str, object] = {}
+                for key, value in entry.items():
+                    if key in numeric_status_keys:
+                        if value is None:
+                            normalized_entry[key] = None
+                        else:
+                            try:
+                                normalized_entry[key] = (
+                                    int(value)
+                                    if key == "bytes_downloaded"
+                                    else float(value)
+                                )
+                            except (TypeError, ValueError):
+                                normalized_entry[key] = None if key != "bytes_downloaded" else 0
+                    else:
+                        normalized_entry[key] = "" if value is None else str(value)
+                sanitized_history.append(normalized_entry)
+        history_limit = 50
+        if len(sanitized_history) > history_limit:
+            sanitized_history = sanitized_history[-history_limit:]
+        self.config["asr_download_history"] = sanitized_history
 
         safe_config = dict(self.config)
         safe_config.pop(GEMINI_API_KEY_CONFIG_KEY, None)
@@ -2007,8 +2054,14 @@ class ConfigManager:
         backend: str,
         message: str = "",
         details: str = "",
+        target_dir: str | None = None,
+        bytes_downloaded: int | None = None,
+        throughput_bytes_per_sec: float | None = None,
+        duration_seconds: float | None = None,
+        task_id: str | None = None,
         timestamp: datetime | None = None,
         save: bool = True,
+        history_limit: int = 50,
     ) -> None:
         """Capture and persist metadata about the last model download attempt."""
 
@@ -2024,15 +2077,72 @@ class ConfigManager:
             "message": str(message or ""),
             "details": str(details or ""),
         }
+        if target_dir:
+            payload["target_dir"] = str(target_dir)
+        if bytes_downloaded is not None:
+            try:
+                payload["bytes_downloaded"] = int(bytes_downloaded)
+            except (TypeError, ValueError):
+                payload["bytes_downloaded"] = None
+        if throughput_bytes_per_sec is not None:
+            try:
+                payload["throughput_bps"] = float(throughput_bytes_per_sec)
+            except (TypeError, ValueError):
+                payload["throughput_bps"] = None
+        if duration_seconds is not None:
+            try:
+                payload["duration_seconds"] = float(duration_seconds)
+            except (TypeError, ValueError):
+                payload["duration_seconds"] = None
+        if task_id:
+            payload["task_id"] = str(task_id)
         self.set_last_asr_download_status(payload)
+
+        history_payload = dict(payload)
+        history_entries = self.config.get("asr_download_history")
+        if not isinstance(history_entries, list):
+            history_entries = []
+        history_entries.append(history_payload)
+        if history_limit > 0:
+            history_entries = history_entries[-history_limit:]
+        self.config["asr_download_history"] = history_entries
         if save:
             self.save_config()
+
+    def get_model_download_history(self, limit: int | None = None) -> list[dict[str, object]]:
+        history_entries = self.config.get("asr_download_history", [])
+        if not isinstance(history_entries, list):
+            return []
+        normalized: list[dict[str, object]] = []
+        for entry in history_entries:
+            if isinstance(entry, dict):
+                normalized.append(dict(entry))
+        if limit is not None and limit > 0:
+            return normalized[-limit:]
+        return normalized
 
     def get_asr_curated_catalog(self):
         return self.config.get(
             ASR_CURATED_CATALOG_CONFIG_KEY,
             self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
         )
+
+    def get_max_parallel_downloads(self) -> int:
+        value = self.config.get("max_parallel_downloads", self.default_config.get("max_parallel_downloads", 1))
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return int(self.default_config.get("max_parallel_downloads", 1))
+        return max(1, normalized)
+
+    def set_max_parallel_downloads(self, value: int) -> None:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            normalized = int(self.default_config.get("max_parallel_downloads", 1))
+        if normalized < 1:
+            normalized = 1
+        self.config["max_parallel_downloads"] = normalized
 
     def set_asr_curated_catalog(self, value: list):
         if isinstance(value, list):
