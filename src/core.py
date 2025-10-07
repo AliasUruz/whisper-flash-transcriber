@@ -58,6 +58,7 @@ from .config_manager import (
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     AUTO_PASTE_MODIFIER_CONFIG_KEY,
+    UI_LANGUAGE_CONFIG_KEY,
     HOTKEY_CONFIG_FILE,
 )
 from .audio_handler import AudioHandler
