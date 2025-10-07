@@ -359,7 +359,7 @@ def _normalize_asr_backend(name: str | None) -> str | None:
         "faster-whisper": "ctranslate2",
         "transformer": "ctranslate2",
         "transformers": "ctranslate2",
-        "auto": "auto",
+        "auto": "ctranslate2",
     }
 
     mapped = alias_map.get(normalized)
