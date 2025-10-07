@@ -10,6 +10,7 @@ Whisper Flash Transcriber is a high-performance, hotkey-driven audio transcripti
 - **Optional AI Post-processing:** Connect services such as Gemini or OpenRouter to automatically polish punctuation and grammar.
 - **Agent Mode:** Run more advanced AI-driven commands over captured audio segments.
 - **Automatic Paste:** Optionally paste the final transcription directly into the currently focused application.
+- **Resilient Model Management:** Automatic resume/cancel support, disk-space validation with safety margin, and metadata tracking make model installs safer and fully observable.
 
 ## Installation
 
@@ -118,9 +119,9 @@ requested storage locations and backend already applied.
     - Set a base storage root for cached data.
     - Override the dedicated models directory and its derived ASR cache path.
     - Choose a separate recordings folder for WAV artifacts.
-    - Point the embedded dependency installer to a custom Python packages directory.
-    - Choose explicit locations for the Silero VAD model and the shared Hugging Face cache.
+    - Trigger safe migration of existing caches/recordings when moving the storage root without losing files.
   - Configure AI services, audio feedback sounds, and additional quality-of-life options.
+  - Calibrate VAD behaviour with pre/post speech padding, minimum durations, and silence thresholds.
 
 ### Custom installation directories
 
@@ -145,9 +146,53 @@ override each path individually for more granular layouts.
 - Press again (or release, depending on the chosen mode) to stop.
 - The application transcribes the captured audio and, if enabled, copies the final result to the clipboard and pastes it into the active window.
 
+### Model download lifecycle
+
+When a model install is required, the core service performs a deterministic sequence:
+
+1. Persist `status=in_progress` with the selected model/backend so the UI and logs remain aligned.
+2. Estimate download size via Hugging Face, add a 10% (minimum 256 MiB) safety margin, and abort with a descriptive error if free space is insufficient.
+3. Clean up any stale directories, resume partial transfers when possible, and expose a cancellable progress bar.
+4. Validate the installation (including essential files and metadata) before returning the application to `IDLE`.
+5. Persist the resulting status (`success`, `skipped`, `cancelled`, or `error`) alongside the resolved installation path for future audits.
+
+These safeguards ensure that repeated launches avoid redundant downloads and that any failure is actionable without inspecting the filesystem manually.
+
+### Storage relocation workflow
+
+Changing the storage root inside **Settings** immediately evaluates whether the previous base directory differs from the new target. When the user has not overridden the model cache or recordings directories, the configuration manager automatically moves the existing folders, skipping migration if the destination already hosts data. Every move operation is logged with structured metadata so audits can confirm where heavy assets live after the change.
+
+### Advanced VAD controls
+
+Voice Activity Detection now exposes pre- and post-speech padding in milliseconds. These values let you preserve audio context before the first spoken frame and keep trailing silence to avoid clipping. Invalid inputs automatically fall back to safe defaults, and the pipeline stays in sync with the stored configuration even when values are edited manually in `config.json`.
+
 ### Windows permissions and global hotkeys
 
 The application registers global shortcuts using the [`keyboard`](https://github.com/boppreh/keyboard) library. Key suppression is intentionally disabled so that hotkeys work without elevated privileges on Windows. If you customize the code to block the underlying key events system-wide, make sure to run the application as an administrator to satisfy the library requirements.
+
+## Testing and validation
+
+Automated checks:
+
+- `python -m compileall src` — validates that all Python modules compile.
+- `pytest` — executes the available test suite.
+
+Manual verification (recommended after storage or model changes):
+
+1. **Model download resilience**
+   - Delete or rename the cached model directory for a small model.
+   - Launch the app and accept the download prompt.
+   - Confirm that the download can be cancelled mid-transfer and that the settings window reflects the `cancelled` status before retrying.
+   - Retry the download to ensure the installation completes and `status=success` is recorded.
+2. **Storage relocation**
+   - In Settings, change the storage root to an empty directory.
+   - Ensure that both the model cache and recordings directories move automatically when no overrides are present.
+   - Repeat the process with overrides enabled to confirm that migrations are skipped and logs report the decision.
+3. **Dependency audit**
+   - Run `pip list --outdated` inside the virtual environment to review available updates.
+   - For each candidate library, cross-check release notes before upgrading and rerun `pytest` to verify compatibility.
+
+Document any deviations or failures inside the `plans/` folder so future operators can trace remediation steps.
 
 ## Architecture Overview
 
