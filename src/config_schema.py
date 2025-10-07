@@ -697,9 +697,11 @@ def coerce_with_defaults(payload: dict[str, Any], defaults: dict[str, Any]) -> t
                 default_value = get_path_value(defaults_tree, path)
                 if default_value is None and len(path) == 1:
                     default_value = defaults_tree.get(path[0])
-                if default_value is None:
-                    continue
-                set_path_value(merged_tree, path, copy.deepcopy(default_value))
+
+                replacement_value = (
+                    None if default_value is None else copy.deepcopy(default_value)
+                )
+                set_path_value(merged_tree, path, replacement_value)
                 field_name = PATH_TO_KEY.get(path, ".".join(str(part) for part in path))
                 warnings.append(
                     f"Invalid value for '{field_name}': {error.get('msg')}. Using default instead."
