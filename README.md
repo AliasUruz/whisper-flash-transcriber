@@ -26,19 +26,22 @@ This cycle works out of the box on any machine that can install the base require
    ```
 3. Install the core dependencies:
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements.txt -c constraints.txt
    ```
-   The lockfile ships with the CPU build of PyTorch so the baseline experience is identical across Windows, Linux, and macOS without touching custom package indexes.
-4. Launch the tray application:
+   The optional `-c constraints.txt` flag keeps installations inside the validated compatibility window; omit it if you need to
+   prototype with newer packages temporarily. The base dependency set installs the faster-whisper/CTranslate2 runtime and all
+   core libraries needed for the default flow. PyTorch and the Transformers pipeline are no longer part of the mandatory stack.
+
+4. **Optional legacy stack:**
    ```bash
-   python src/main.py
+   pip install -r requirements-legacy.txt -c constraints.txt
    ```
    The first boot provisions `config.json`, `secrets.json`, and `hotkey_config.json` under `~/.cache/whisper_flash_transcriber/` (or the directory pointed to `WHISPER_FLASH_PROFILE_DIR`). The hardware probe then recommends a Whisper model and starts the background download if one is missing.
 
 ### GPU acceleration and quantization (optional)
 If you want CUDA-enabled PyTorch or advanced quantisation backends, install the base requirements first and then follow the [official PyTorch installation guide](https://pytorch.org/get-started/locally/) for your driver. Extra GPU-centric packages (such as `bitsandbytes`) remain in `requirements-optional.txt` and should only be installed when you actually need them:
 ```bash
-pip install -r requirements-optional.txt
+pip install -r requirements-optional.txt -c constraints.txt
 ```
 
 ## Configuration layout
@@ -102,4 +105,91 @@ When you opt into any of these features, double-check the related configuration 
 - Logs live under `logs/` and can be tailed while running `python src/main.py` to observe hotkey detection, ASR reloads, and paste automation.
 - The CLI helper `python -m compileall src` remains part of the pre-commit checklist to catch syntax errors quickly.
 
-With the minimal workflow locked down, feel free to explore the advanced namespaces only when the project requirements grow beyond the default hotkey-driven transcription loop.
+Whisper Flash Transcriber now distributes only the faster-whisper/CTranslate2 backend. The legacy Transformers
+pipeline has been removed from the packaged application. If you depend on the Transformers stack (for example,
+to experiment with custom attention implementations or torch-native quantization), fork the project, install
+`requirements-legacy.txt`, and re-enable the removed backend modules.
+
+### Custom installation directories
+
+The application allows you to relocate heavyweight assets so that ephemeral or slow system drives do not become bottlenecks. The
+following directories can be configured either directly in `config.json` or through the first-run wizard and the Settings UI:
+
+- **`python_packages_dir`** — Target passed to `pip install --target` when optional packages (faster-whisper, ctranslate2,
+  onnxruntime, etc.) are installed through the dependency remediation workflow. When you place this directory outside the active
+virtual environment, ensure that `PYTHONPATH` includes the path before launching the application. The bootstrap logic adds the
+directory to `sys.path`, but external scripts or shells may require explicit exports.
+- **`vad_models_dir`** — Dedicated folder for the Silero VAD model. If empty, the packaged copy is copied into the directory on
+  first use. Keep this path on a fast local drive to avoid I/O stalls during VAD activation.
+- **`hf_cache_dir`** — Shared Hugging Face cache that backs `snapshot_download` calls used by the CTranslate2 runtime. The
+  bootstrap sequence creates the directory and sets `HF_HOME`/`HUGGINGFACE_HUB_CACHE` accordingly.
+
+Because all these directories default to the storage root, you can move the entire cache tree by changing `storage_root_dir` or
+override each path individually for more granular layouts.
+
+### Recording and Transcribing
+
+- Press the configured hotkey to begin recording.
+- Press again (or release, depending on the chosen mode) to stop.
+- The application transcribes the captured audio and, if enabled, copies the final result to the clipboard and pastes it into the active window.
+
+### Model download lifecycle
+
+When a model install is required, the core service performs a deterministic sequence:
+
+1. Persist `status=in_progress` with the selected model/backend so the UI and logs remain aligned.
+2. Estimate download size via Hugging Face, add a 10% (minimum 256 MiB) safety margin, and abort with a descriptive error if free space is insufficient.
+3. Clean up any stale directories, resume partial transfers when possible, and expose a cancellable progress bar.
+4. Validate the installation (including essential files and metadata) before returning the application to `IDLE`.
+5. Persist the resulting status (`success`, `skipped`, `cancelled`, or `error`) alongside the resolved installation path for future audits.
+
+These safeguards ensure that repeated launches avoid redundant downloads and that any failure is actionable without inspecting the filesystem manually.
+
+### Storage relocation workflow
+
+Changing the storage root inside **Settings** immediately evaluates whether the previous base directory differs from the new target. When the user has not overridden the model cache or recordings directories, the configuration manager automatically moves the existing folders, skipping migration if the destination already hosts data. Every move operation is logged with structured metadata so audits can confirm where heavy assets live after the change.
+
+### Advanced VAD controls
+
+Voice Activity Detection now exposes pre- and post-speech padding in milliseconds. These values let you preserve audio context before the first spoken frame and keep trailing silence to avoid clipping. Invalid inputs automatically fall back to safe defaults, and the pipeline stays in sync with the stored configuration even when values are edited manually in `config.json`.
+
+### Windows permissions and global hotkeys
+
+The application registers global shortcuts using the [`keyboard`](https://github.com/boppreh/keyboard) library. Key suppression is intentionally disabled so that hotkeys work without elevated privileges on Windows. If you customize the code to block the underlying key events system-wide, make sure to run the application as an administrator to satisfy the library requirements.
+
+## Testing and validation
+
+Automated checks:
+
+- `python -m compileall src` — validates that all Python modules compile.
+- `pytest` — executes the available test suite.
+
+Manual verification (recommended after storage or model changes):
+
+1. **Model download resilience**
+   - Delete or rename the cached model directory for a small model.
+   - Launch the app and accept the download prompt.
+   - Confirm that the download can be cancelled mid-transfer and that the settings window reflects the `cancelled` status before retrying.
+   - Retry the download to ensure the installation completes and `status=success` is recorded.
+2. **Storage relocation**
+   - In Settings, change the storage root to an empty directory.
+   - Ensure that both the model cache and recordings directories move automatically when no overrides are present.
+   - Repeat the process with overrides enabled to confirm that migrations are skipped and logs report the decision.
+3. **Dependency audit**
+   - Run `pip list --outdated` inside the virtual environment to review available updates.
+  - For each candidate library, cross-check release notes before upgrading and rerun `pytest` to verify compatibility.
+  - Use `constraints.txt` during installations to remain within supported upper bounds, unless you are purposefully validating
+    newer releases.
+
+Document any deviations or failures inside the `plans/` folder so future operators can trace remediation steps.
+
+## Architecture Overview
+
+- **`main.py`:** Application entry point that initializes `AppCore` and the user interface.
+- **`core.py`:** Coordinates modules and maintains global application state.
+- **`ui_manager.py`:** Manages the GUI, settings window, and system tray icon.
+- **`audio_handler.py`:** Captures audio from the microphone and routes it to storage.
+- **`transcription_handler.py`:** Loads Whisper models and performs speech recognition.
+- **`config_manager.py`:** Loads and persists user configuration.
+
+For detailed developer notes and diagrams, review the files under the `docs/` directory.
