@@ -1,15 +1,28 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+"""Scanner para identificar strings não ASCII, com saída via logging estruturado."""
+
 import argparse
 import ast
+import logging
 import pathlib
 from typing import Iterable, List, Sequence, Tuple
 
+from src.logging_utils import get_logger, log_context, log_operation, setup_logging
+
 LOG_METHOD_NAMES = {"debug", "info", "warning", "error", "critical", "exception", "log"}
+
+LOGGER = get_logger(
+    "whisper_flash_transcriber.scripts.scan_non_ascii",
+    component="ScanNonASCII",
+    default_event="scripts.scan_non_ascii",
+)
 
 
 def parse_args() -> argparse.Namespace:
+    """Configura os argumentos da CLI, orientando o uso de logs estruturados."""
+
     parser = argparse.ArgumentParser(
         description="Scan Python files for logging strings that contain non ASCII characters.",
     )
@@ -173,61 +186,116 @@ def scan_file(path: pathlib.Path, include_all: bool) -> dict:
 
 
 def main() -> int:
+    """Execute a varredura reportando achados via o logger estruturado."""
+
+    setup_logging()
     args = parse_args()
-    files = discover_targets(args.roots)
-    if not files:
-        print("No Python files found under the requested roots.")
+
+    with log_operation(
+        LOGGER,
+        "Iniciando varredura por strings não ASCII.",
+        event="scripts.scan_non_ascii.run",
+        details={
+            "root_count": len(args.roots),
+            "include_all_literals": bool(args.all_strings),
+        },
+    ) as operation_id:
+        files = discover_targets(args.roots)
+        if not files:
+            LOGGER.info(
+                log_context(
+                    "Nenhum arquivo Python encontrado para análise.",
+                    event="scripts.scan_non_ascii.no_targets",
+                    operation_id=operation_id,
+                    roots=[to_ascii(str(root)) for root in args.roots],
+                )
+            )
+            return 0
+
+        base = pathlib.Path.cwd()
+        any_findings = False
+        totals = {
+            "files": len(files),
+            "logging_hits": 0,
+            "literal_hits": 0,
+            "utf16_markers": 0,
+        }
+
+        for path in sorted(files):
+            findings = scan_file(path, include_all=args.all_strings)
+            rel_path = to_ascii(str(path.relative_to(base)))
+            file_details = {
+                "path": rel_path,
+                "operation_id": operation_id,
+            }
+
+            if findings["logging"]:
+                any_findings = True
+                totals["logging_hits"] += len(findings["logging"])
+                for lineno, text, preview in findings["logging"]:
+                    LOGGER.warning(
+                        log_context(
+                            "String não ASCII utilizada em chamada de logging.",
+                            event="scripts.scan_non_ascii.logging_hit",
+                            **file_details,
+                            line=lineno,
+                            literal=text,
+                            preview=preview or None,
+                        )
+                    )
+
+            if args.all_strings and findings["literals"]:
+                any_findings = True
+                totals["literal_hits"] += len(findings["literals"])
+                for lineno, text, preview in findings["literals"]:
+                    LOGGER.warning(
+                        log_context(
+                            "Literal não ASCII detectado fora de chamadas de logging.",
+                            event="scripts.scan_non_ascii.literal_hit",
+                            **file_details,
+                            line=lineno,
+                            literal=text,
+                            preview=preview or None,
+                        )
+                    )
+
+            if findings["utf16"]:
+                totals["utf16_markers"] += len(findings["utf16"])
+                for lineno, preview in findings["utf16"]:
+                    LOGGER.info(
+                        log_context(
+                            "Marcador UTF-16 identificado no arquivo.",
+                            event="scripts.scan_non_ascii.utf16_marker",
+                            **file_details,
+                            line=lineno,
+                            preview=preview,
+                        )
+                    )
+
+            if findings["decode_issue"] or findings["null_bytes"]:
+                LOGGER.warning(
+                    log_context(
+                        "Anomalia de leitura detectada durante a varredura.",
+                        event="scripts.scan_non_ascii.file_note",
+                        **file_details,
+                        decode_issue=findings["decode_issue"],
+                        contains_null_bytes=findings["null_bytes"],
+                    )
+                )
+
+        summary_event = "scripts.scan_non_ascii.summary"
+        LOGGER.log(
+            logging.WARNING if any_findings else logging.INFO,
+            log_context(
+                "Varredura concluída.",
+                event=summary_event,
+                operation_id=operation_id,
+                findings_detected=any_findings,
+                totals=totals,
+            ),
+        )
+
         return 0
-    base = pathlib.Path.cwd()
-    any_findings = False
-    for path in sorted(files):
-        findings = scan_file(path, include_all=args.all_strings)
-        rel_path = to_ascii(str(path.relative_to(base)))
-        header_printed = False
-        if findings["logging"]:
-            if not header_printed:
-                print(f"\nFile: {rel_path}")
-                header_printed = True
-            print("  Non ASCII logging strings:")
-            for lineno, text, preview in findings["logging"]:
-                print(f"    line {lineno}: {text}")
-                if preview:
-                    print(f"      preview: {preview}")
-            any_findings = True
-        if args.all_strings and findings["literals"]:
-            if not header_printed:
-                print(f"\nFile: {rel_path}")
-                header_printed = True
-            print("  Other non ASCII literals:")
-            for lineno, text, preview in findings["literals"]:
-                print(f"    line {lineno}: {text}")
-                if preview:
-                    print(f"      preview: {preview}")
-            any_findings = True
-        notes: List[str] = []
-        if findings["decode_issue"]:
-            notes.append(f"decode issue: {findings['decode_issue']}")
-        if findings["null_bytes"]:
-            notes.append("contains NUL bytes")
-        if findings["utf16"]:
-            if not header_printed:
-                print(f"\nFile: {rel_path}")
-                header_printed = True
-            print("  UTF-16 markers:")
-            for lineno, preview in findings["utf16"]:
-                print(f"    line {lineno}: {preview}")
-        if notes:
-            if not header_printed:
-                print(f"\nFile: {rel_path}")
-                header_printed = True
-            print("  Notes:")
-            for note in notes:
-                print(f"    - {note}")
-    if any_findings:
-        print("\nScan finished with non ASCII strings detected.")
-    else:
-        print("Scan finished without non ASCII logging strings.")
-    return 0
 
 
 if __name__ == "__main__":
