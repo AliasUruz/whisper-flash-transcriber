@@ -100,7 +100,8 @@ class ActionOrchestrator:
                     operation_id=operation_id,
                 )
             )
-            self._state_manager.set_state(
+            self._state_manager.transition_if(
+                (sm.STATE_RECORDING, sm.STATE_IDLE),
                 sm.StateEvent.AUDIO_RECORDING_DISCARDED,
                 details=(
                     f"Segment shorter than minimum ({duration_seconds:.2f}s < "
@@ -222,7 +223,8 @@ class ActionOrchestrator:
         else:
             self._log_status("Transcription complete. Auto-paste disabled.")
 
-        self._state_manager.set_state(
+        self._state_manager.transition_if(
+            (sm.STATE_TRANSCRIBING, sm.STATE_IDLE),
             sm.StateEvent.TRANSCRIPTION_COMPLETED,
             details=f"Transcription finalized ({len(final_text)} chars)",
             source="transcription",
@@ -267,7 +269,8 @@ class ActionOrchestrator:
         else:
             self._log_status("Agent command executed (auto-paste disabled).")
 
-        self._state_manager.set_state(
+        self._state_manager.transition_if(
+            (sm.STATE_TRANSCRIBING, sm.STATE_IDLE),
             sm.StateEvent.AGENT_COMMAND_COMPLETED,
             details=f"Agent response delivered ({len(response)} chars)",
             source="agent_mode",

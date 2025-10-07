@@ -20,6 +20,7 @@ import soundfile as sf
 # mantenha esta limitação em mente ao depurar gravações.
 from .utils.memory import get_available_memory_mb, get_total_memory_mb
 
+from . import state_manager as sm
 from .vad_manager import VADManager
 from .config_manager import (
     RECORDINGS_DIR_CONFIG_KEY,
@@ -652,11 +653,11 @@ class AudioHandler:
             except sd.PortAudioError as e:
                 self._log.error(f"PortAudio error during recording: {e}", exc_info=True)
                 self.is_recording = False
-                self.state_manager.set_state("ERROR_AUDIO")
+                self.state_manager.set_state(sm.STATE_ERROR_AUDIO)
             except Exception as e:
                 self._log.error(f"Error in audio recording thread: {e}", exc_info=True)
                 self.is_recording = False
-                self.state_manager.set_state("ERROR_AUDIO")
+                self.state_manager.set_state(sm.STATE_ERROR_AUDIO)
             finally:
                 if self.audio_stream is not None:
                     self._close_input_stream()
@@ -773,7 +774,43 @@ class AudioHandler:
                             self._stop_event.set()
                             self._record_thread.join(timeout=2)
 
-                        self._stop_event.clear()
+                    if not self.state_manager.transition_if(
+                        sm.STATE_IDLE,
+                        sm.StateEvent.AUDIO_RECORDING_STARTED,
+                        source="audio_handler",
+                    ):
+                        self._log.debug(
+                            "Recording start aborted: state guard rejected transition.",
+                            extra={"event": "audio.state_guard_rejected", "stage": "recording"},
+                        )
+                        cleanup_path: str | os.PathLike[str] | None = None
+                        with self.storage_lock:
+                            self.is_recording = False
+                            self.start_time = None
+                            self._sample_count = 0
+                            self._memory_samples = 0
+                            if self._sf_writer is not None:
+                                try:
+                                    self._sf_writer.close()
+                                except Exception:
+                                    self._log.debug(
+                                        "Failed to close temporary writer after guard rejection.",
+                                        exc_info=True,
+                                        extra={"event": "audio.writer_cleanup", "stage": "recording"},
+                                    )
+                                self._sf_writer = None
+                            if not self.in_memory_mode:
+                                cleanup_path = self.temp_file_path
+                        if cleanup_path:
+                            try:
+                                self._cleanup_temp_file(target_path=cleanup_path)
+                            except Exception:
+                                self._log.debug(
+                                    "Failed to clean up temporary file after guard rejection.",
+                                    exc_info=True,
+                                    extra={"event": "audio.temp_cleanup", "stage": "recording"},
+                                )
+                        return False
 
                         self._enforce_record_storage_limit(exclude_paths=[self.temp_file_path])
 
@@ -959,9 +996,9 @@ class AudioHandler:
                         )
                     )
                     self._cleanup_temp_file()
-                    self.state_manager.set_state(
-                        "IDLE",
-                        operation_id=operation_id,
+                    self.state_manager.transition_if(
+                        (sm.STATE_RECORDING, sm.STATE_IDLE),
+                        sm.StateEvent.AUDIO_RECORDING_STOPPED,
                         source="audio_handler",
                     )
                     return False
@@ -990,9 +1027,9 @@ class AudioHandler:
                         )
                     )
                     self._cleanup_temp_file()
-                    self.state_manager.set_state(
-                        "IDLE",
-                        operation_id=operation_id,
+                    self.state_manager.transition_if(
+                        (sm.STATE_RECORDING, sm.STATE_IDLE),
+                        sm.StateEvent.AUDIO_RECORDING_STOPPED,
                         source="audio_handler",
                     )
                     return False

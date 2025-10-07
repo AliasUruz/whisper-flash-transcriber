@@ -2251,7 +2251,8 @@ class AppCore:
         if was_valid is False:
             if hasattr(self.transcription_handler, "stop_transcription"):
                 self.transcription_handler.stop_transcription()
-            self.state_manager.set_state(
+            self.state_manager.transition_if(
+                (sm.STATE_RECORDING, sm.STATE_IDLE),
                 sm.StateEvent.AUDIO_RECORDING_DISCARDED,
                 details="Recording discarded after stop",
                 source="audio_handler",
