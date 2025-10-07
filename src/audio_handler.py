@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -137,6 +138,14 @@ class AudioHandler:
             else None
         )
 
+        # Buffer pool para reutilizar arrays dos frames; reduz churn do GC,
+        # mas mantém alguns buffers vivos até atingir o limite configurado.
+        self._frame_pool: dict[tuple[int, ...], deque[np.ndarray]] = defaultdict(deque)
+        self._frame_pool_bucket_limit = 8
+        self._frame_pool_total_limit = 64
+        self._frame_pool_total = 0
+        self._frame_pool_lock = threading.Lock()
+
         self.stream_blocksize = int(AUDIO_SAMPLE_RATE / 10)  # ~100ms buffers
         self._overflow_log_window = 5.0  # seconds
         self._last_overflow_sample: tuple[float, int] | None = None
@@ -167,6 +176,86 @@ class AudioHandler:
         if self.is_recording:
             # Copy avoids references to buffers reused by SoundDevice
             self.audio_queue.put(indata.copy())
+
+    def _frame_pool_key(self, shape: Iterable[int]) -> tuple[int, ...]:
+        normalized = tuple(int(dim) for dim in shape) or (0,)
+        return normalized
+
+    def _acquire_frame_buffer(self, shape: Iterable[int]) -> np.ndarray:
+        key = self._frame_pool_key(shape)
+        with self._frame_pool_lock:
+            bucket = self._frame_pool.get(key)
+            if bucket:
+                self._frame_pool_total -= 1
+                buffer = bucket.pop()
+                return buffer
+        # Fora do pool: alocação explícita e log de debug para rastrear trade-offs.
+        buffer = np.empty(key, dtype=np.float32)
+        if self._log.isEnabledFor(logging.DEBUG):
+            self._log.debug(
+                "Allocated new frame buffer.",
+                extra={
+                    "event": "audio.frame_buffer_alloc", 
+                    "stage": "processing_loop",
+                    "shape": key,
+                },
+            )
+        return buffer
+
+    def _clone_frame(self, source: np.ndarray) -> np.ndarray:
+        array = np.asarray(source)
+        if array.dtype != np.float32:
+            array = array.astype(np.float32, copy=False)
+        buffer = self._acquire_frame_buffer(array.shape)
+        np.copyto(buffer, array, casting="no")
+        return buffer
+
+    def _release_frame_buffer(self, frame: np.ndarray | None) -> None:
+        if not isinstance(frame, np.ndarray):
+            return
+        if frame.dtype != np.float32:
+            return
+        key = self._frame_pool_key(frame.shape)
+        with self._frame_pool_lock:
+            if self._frame_pool_total >= self._frame_pool_total_limit:
+                if self._log.isEnabledFor(logging.DEBUG):
+                    self._log.debug(
+                        "Discarding frame buffer due to pool saturation.",
+                        extra={
+                            "event": "audio.frame_buffer_discard",
+                            "stage": "processing_loop",
+                            "shape": key,
+                            "reason": "pool_total_limit",
+                        },
+                    )
+                return
+            bucket = self._frame_pool.setdefault(key, deque())
+            if len(bucket) >= self._frame_pool_bucket_limit:
+                if self._log.isEnabledFor(logging.DEBUG):
+                    self._log.debug(
+                        "Discarding frame buffer due to bucket limit.",
+                        extra={
+                            "event": "audio.frame_buffer_discard",
+                            "stage": "processing_loop",
+                            "shape": key,
+                            "reason": "bucket_limit",
+                        },
+                    )
+                return
+            bucket.append(frame)
+            self._frame_pool_total += 1
+
+    def _reset_audio_frames(self) -> None:
+        if self._audio_frames:
+            for frame in self._audio_frames:
+                self._release_frame_buffer(frame)
+        self._audio_frames = []
+
+    def _capture_memory_probe(self) -> float | None:
+        try:
+            return float(get_available_memory_mb())
+        except Exception:
+            return None
 
     def _handle_audio_overflow(self, status) -> None:
         try:
@@ -278,6 +367,7 @@ class AudioHandler:
                     continue
 
                 frames_to_write: list[np.ndarray] = []
+                memory_before_mb = self._capture_memory_probe()
                 if self.use_vad and self.vad_manager:
                     try:
                         is_speech, vad_frames = self.vad_manager.process_chunk(indata)
@@ -285,9 +375,9 @@ class AudioHandler:
                         is_speech, vad_frames = self._handle_vad_exception(exc, indata)
                     frames_to_write.extend(vad_frames)
                     if is_speech and not vad_frames:
-                        frames_to_write.append(np.asarray(indata, dtype=np.float32).copy())
+                        frames_to_write.append(self._clone_frame(indata))
                 else:
-                    frames_to_write = [np.asarray(indata, dtype=np.float32).copy()]
+                    frames_to_write = [self._clone_frame(indata)]
 
                 if not frames_to_write:
                     continue
@@ -295,7 +385,8 @@ class AudioHandler:
                 with self.storage_lock:
                     for frame in frames_to_write:
                         if self.in_memory_mode:
-                            self._audio_frames.append(frame.copy())
+                            # Mantemos a referência original para permitir retorno ao pool
+                            self._audio_frames.append(frame)
                             self._memory_samples += len(frame)
 
                             max_samples = self._memory_limit_samples
@@ -380,8 +471,25 @@ class AudioHandler:
                         else:
                             if self._sf_writer:
                                 self._sf_writer.write(frame)
+                            self._release_frame_buffer(frame)
 
                         self._sample_count += len(frame)
+                memory_after_mb = self._capture_memory_probe()
+                if (
+                    memory_before_mb is not None
+                    and memory_after_mb is not None
+                    and self._log.isEnabledFor(logging.DEBUG)
+                ):
+                    self._log.debug(
+                        "Memory probe around queue iteration.",
+                        extra={
+                            "event": "audio.memory_probe",
+                            "stage": "processing_loop",
+                            "before_mb": round(memory_before_mb, 2),
+                            "after_mb": round(memory_after_mb, 2),
+                            "delta_mb": round(memory_after_mb - memory_before_mb, 2),
+                        },
+                    )
             except Exception as e:
                 self._log.error(
                     f"Error while processing audio queue: {e}",
@@ -389,7 +497,7 @@ class AudioHandler:
                 )
                 with self.storage_lock:
                     self._sf_writer = None
-                self._audio_frames = []
+                self._reset_audio_frames()
                 self._memory_samples = 0
 
     def _handle_vad_exception(self, exc: Exception, chunk: np.ndarray) -> tuple[bool, list[np.ndarray]]:
@@ -400,7 +508,7 @@ class AudioHandler:
         )
         frames: list[np.ndarray] = []
         if chunk is not None:
-            frames.append(np.asarray(chunk, dtype=np.float32).copy())
+            frames.append(self._clone_frame(chunk))
         if self.vad_manager:
             try:
                 self.vad_manager.reset_states()
@@ -572,7 +680,7 @@ class AudioHandler:
         if self._audio_frames:
             data = np.concatenate(self._audio_frames, axis=0)
             self._sf_writer.write(data)
-            self._audio_frames = []
+            self._reset_audio_frames()
         self._memory_samples = 0
         self.in_memory_mode = False
 
@@ -664,7 +772,7 @@ class AudioHandler:
                         if self.in_memory_mode:
                             self.temp_file_path = None
                             self._sf_writer = None
-                            self._audio_frames = []
+                            self._reset_audio_frames()
                         else:
                             raw_tmp = self._create_temp_wav_file()
                             self.temp_file_path = raw_tmp.name
@@ -823,6 +931,7 @@ class AudioHandler:
                         else np.empty((0, AUDIO_CHANNELS), dtype=np.float32)
                     )
                     self.on_audio_segment_ready_callback(audio_data.flatten())
+                    self._reset_audio_frames()
                 else:
                     if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
                         try:
@@ -874,7 +983,7 @@ class AudioHandler:
                             pass
                     self._enforce_record_storage_limit(protected_paths=protected_paths)
 
-                self._audio_frames = []
+                self._reset_audio_frames()
                 self._memory_samples = 0
                 self.start_time = None
 
@@ -1122,7 +1231,7 @@ class AudioHandler:
 
         with self.storage_lock:
             if target_path is None and self.in_memory_mode:
-                self._audio_frames = []
+                self._reset_audio_frames()
                 self._memory_samples = 0
                 self.temp_file_path = None
                 return 0
