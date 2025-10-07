@@ -137,10 +137,9 @@ class ActionOrchestrator:
             )
             return
 
-        previous_future = getattr(handler, "transcription_future", None)
         correlation_id = current_correlation_id()
         try:
-            handler.transcribe_audio_segment(
+            enqueued = handler.transcribe_audio_segment(
                 audio_source,
                 agent_mode,
                 correlation_id=correlation_id,
@@ -163,9 +162,7 @@ class ActionOrchestrator:
                 self._agent_mode_active = False
             return
 
-        new_future = getattr(handler, "transcription_future", None)
-        successfully_enqueued = new_future is not None and new_future is not previous_future
-        if not successfully_enqueued:
+        if not enqueued:
             if agent_mode:
                 self._agent_mode_active = True
                 LOGGER.warning(

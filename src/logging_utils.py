@@ -258,6 +258,80 @@ def log_operation(
         _operation_stack_var.reset(token)
 
 
+@contextmanager
+def operation_context(
+    headline: str,
+    *,
+    logger: logging.Logger | logging.LoggerAdapter | None = None,
+    event: str | None = None,
+    details: Mapping[str, Any] | None = None,
+    level: int = logging.INFO,
+    success_level: int | None = None,
+    failure_level: int | None = None,
+    operation_id: str | None = None,
+    emit_start: bool = True,
+    metrics: MutableMapping[str, Any] | None = None,
+    metric_key: str | None = None,
+) -> Iterator[str]:
+    """Context manager that records operation duration while preserving correlation metadata."""
+
+    target_logger = _resolve_logger(logger)
+
+    stack = _operation_stack_var.get()
+    if operation_id is None:
+        if stack:
+            operation_id = stack[-1][0]
+        else:
+            operation_id = uuid.uuid4().hex[:8]
+
+    operation_name = event or headline
+    token = _operation_stack_var.set(stack + ((operation_id, operation_name),))
+
+    start_event = f"{event}.start" if event else None
+    success_event = f"{event}.success" if event else None
+    failure_event = f"{event}.error" if event else None
+
+    payload = dict(details or {})
+    payload.setdefault("operation_id", operation_id)
+
+    started_at = time.perf_counter()
+    if emit_start:
+        target_logger.log(
+            level,
+            StructuredMessage(headline, event=start_event, details=payload),
+        )
+
+    try:
+        yield operation_id
+    except Exception:
+        duration_ms = (time.perf_counter() - started_at) * 1000.0
+        failure_payload = dict(details or {})
+        failure_payload.setdefault("operation_id", operation_id)
+        failure_payload.setdefault("duration_ms", round(duration_ms, 2))
+        if metrics is not None and metric_key:
+            metrics[metric_key] = round(duration_ms, 2)
+            metrics[f"{metric_key}_status"] = "error"
+        target_logger.log(
+            failure_level or logging.ERROR,
+            StructuredMessage(headline, event=failure_event, details=failure_payload),
+        )
+        raise
+    else:
+        duration_ms = (time.perf_counter() - started_at) * 1000.0
+        success_payload = dict(details or {})
+        success_payload.setdefault("operation_id", operation_id)
+        success_payload.setdefault("duration_ms", round(duration_ms, 2))
+        if metrics is not None and metric_key:
+            metrics[metric_key] = round(duration_ms, 2)
+            metrics[f"{metric_key}_status"] = "success"
+        target_logger.log(
+            success_level or level,
+            StructuredMessage(headline, event=success_event, details=success_payload),
+        )
+    finally:
+        _operation_stack_var.reset(token)
+
+
 class StructuredMessage:
     """Represent a log message with a concise headline and structured details."""
 
@@ -978,6 +1052,7 @@ __all__ = [
     "log_context",
     "log_event",
     "log_operation",
+    "operation_context",
     "install_exception_hooks",
     "scoped_correlation_id",
     "setup_logging",
