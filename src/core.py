@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 import time
+import ctypes
 from collections.abc import Callable, Iterable
 from typing import Any, Mapping, TYPE_CHECKING
 from pathlib import Path
@@ -89,6 +90,23 @@ LOGGER = get_logger('whisper_flash_transcriber.core', component='Core')
 MODEL_LOGGER = get_logger('whisper_recorder.model', component='ModelManager')
 
 
+def _detect_admin_privileges() -> bool:
+    """Return True when the current process has administrative privileges."""
+
+    if os.name != "nt":
+        return False
+
+    try:
+        # ``IsUserAnAdmin`` returns a non-zero value for administrators.
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+    except Exception:
+        LOGGER.debug(
+            "Failed to probe administrative privileges; assuming standard user.",
+            exc_info=True,
+        )
+        return False
+
+
 
 StateUpdateCallback = Callable[[sm.StateNotification], None]
 
@@ -123,6 +141,7 @@ class AppCore:
 
         # --- Módulos ---
         self.config_manager = config_manager or ConfigManager()
+        self.is_running_as_admin = _detect_admin_privileges()
         self.dependency_audit_result: DependencyAuditResult | None = None
         self._dependency_audit_failure_message: str | None = None
         self._dependency_audit_event_sent = False

@@ -354,6 +354,13 @@ class FirstRunWizard(ctk.CTkToplevel):
                     f"Os arquivos de configuração serão armazenados em:\n{self._profile_dir}",
                 ]
             )
+        message_lines.extend(
+            [
+                "\n",
+                "Se você precisar colar resultados em aplicativos que rodam como administrador, "
+                "execute o Whisper Flash Transcriber com o mesmo nível de privilégio para evitar bloqueios do Windows.",
+            ]
+        )
         text = " ".join(message_lines)
         label = ctk.CTkLabel(frame, text=text, wraplength=600, justify="left")
         label.pack(anchor="w", padx=16, pady=20)
@@ -731,6 +738,11 @@ class FirstRunWizard(ctk.CTkToplevel):
             f"Gravações: {self.recordings_dir_var.get().strip()}",
             "",
             "Download imediato: " + ("Sim" if self.download_now_var.get() else "Não"),
+            "",
+            (
+                "Dica: alinhe o nível de privilégio do aplicativo com o destino da auto-colagem para evitar que "
+                "o Windows bloqueie a automação."
+            ),
         ]
         self.summary_text_var.set("\n".join(lines))
 
