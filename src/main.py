@@ -185,109 +185,101 @@ def configure_environment() -> None:
 
 def configure_cuda_logging() -> None:
     try:
-        torch_spec = importlib.util.find_spec("torch")
-        if torch_spec is None:
-            LOGGER.debug(
-                StructuredMessage(
-                    "Torch module not available; skipping CUDA diagnostics.",
-                    event="startup.cuda_skipped",
-                    reason="torch_missing",
-                )
+        import ctranslate2  # type: ignore[import-untyped]
+    except ModuleNotFoundError:
+        LOGGER.debug(
+            StructuredMessage(
+                "CTranslate2 module not available; skipping CUDA diagnostics.",
+                event="startup.cuda_skipped",
+                reason="ctranslate2_missing",
             )
-            return
-
-        import torch  # type: ignore
-
-        if torch.cuda.is_available():
-            try:
-                torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
-                LOGGER.info(
-                    StructuredMessage(
-                        "cuDNN benchmark enabled for CUDA runtime.",
-                        event="cuda.cudnn_benchmark_enabled",
-                    )
-                )
-            except Exception as exc:
-                LOGGER.warning(
-                    StructuredMessage(
-                        "Unable to enable cuDNN benchmark mode.",
-                        event="cuda.cudnn_benchmark_failure",
-                        error=str(exc),
-                    )
-                )
-
-            try:
-                num_gpus = torch.cuda.device_count()
-                cuda_runtime_version = getattr(
-                    getattr(torch, "version", None), "cuda", None
-                )
-                LOGGER.info(
-                    StructuredMessage(
-                        "CUDA runtime detected.",
-                        event="cuda.runtime_detected",
-                        cuda_version=cuda_runtime_version,
-                        gpu_count=num_gpus,
-                    )
-                )
-                for idx in range(num_gpus):
-                    try:
-                        name = torch.cuda.get_device_name(idx)
-                        props = torch.cuda.get_device_properties(idx)
-                        total_mem_gb = props.total_memory / (1024 ** 3)
-                        capability = f"{props.major}.{props.minor}"
-                        LOGGER.info(
-                            StructuredMessage(
-                                "GPU device enumerated.",
-                                event="cuda.gpu_discovered",
-                                index=idx,
-                                name=name,
-                                vram_gb=f"{total_mem_gb:.2f}",
-                                compute_capability=capability,
-                            )
-                        )
-                    except Exception as gpu_exc:
-                        LOGGER.warning(
-                            StructuredMessage(
-                                "Unable to query GPU device properties.",
-                                event="cuda.gpu_introspection_failed",
-                                index=idx,
-                                error=str(gpu_exc),
-                            )
-                        )
-
-                try:
-                    has_flash_attn = importlib.util.find_spec("flash_attn") is not None
-                except Exception:
-                    has_flash_attn = False
-                flash_attn_probe_message = StructuredMessage(
-                    "FlashAttention 2 availability checked.",
-                    event="cuda.flash_attention_probe",
-                    available=has_flash_attn,
-                )
-                LOGGER.info(flash_attn_probe_message)
-            except Exception as diag_exc:
-                LOGGER.warning(
-                    StructuredMessage(
-                        "Unable to gather CUDA diagnostics.",
-                        event="cuda.diagnostics_failed",
-                        error=str(diag_exc),
-                    )
-                )
-        else:
-            cpu_fallback_message = StructuredMessage(
-                "CUDA runtime not detected; defaulting to CPU execution.",
-                event="cuda.cpu_fallback",
-            )
-            LOGGER.info(cpu_fallback_message)
+        )
+        return
     except Exception as exc:  # pragma: no cover - defensive guard
         LOGGER.warning(
             StructuredMessage(
-                "Skipping CUDA diagnostics due to unexpected error.",
+                "Failed to import CTranslate2 for CUDA diagnostics.",
                 event="cuda.diagnostics_exception",
                 error=str(exc),
             ),
             exc_info=True,
         )
+        return
+
+    try:
+        has_cuda = bool(getattr(ctranslate2, "has_cuda", lambda: False)())
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.warning(
+            StructuredMessage(
+                "Unable to query CUDA support via CTranslate2.",
+                event="cuda.diagnostics_failed",
+                error=str(exc),
+            ),
+            exc_info=True,
+        )
+        has_cuda = False
+
+    gpu_count = 0
+    if has_cuda and hasattr(ctranslate2, "get_device_count"):
+        try:
+            gpu_count = int(ctranslate2.get_device_count("cuda"))  # type: ignore[arg-type]
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                StructuredMessage(
+                    "Unable to enumerate CUDA devices via CTranslate2.",
+                    event="cuda.gpu_introspection_failed",
+                    error=str(exc),
+                ),
+                exc_info=True,
+            )
+            gpu_count = 0
+
+    if not has_cuda or gpu_count <= 0:
+        cpu_fallback_message = StructuredMessage(
+            "CUDA runtime not detected via CTranslate2; defaulting to CPU execution.",
+            event="cuda.cpu_fallback",
+            detector="ctranslate2",
+            has_cuda=has_cuda,
+            gpu_count=gpu_count,
+        )
+        LOGGER.info(cpu_fallback_message)
+        return
+
+    compute_types: tuple[str, ...] | None = None
+    if hasattr(ctranslate2, "get_supported_compute_types"):
+        try:
+            supported = ctranslate2.get_supported_compute_types("cuda")  # type: ignore[arg-type]
+            compute_types = tuple(supported)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.debug(
+                StructuredMessage(
+                    "Unable to determine supported CUDA compute types via CTranslate2.",
+                    event="cuda.compute_type_probe_failed",
+                    error=str(exc),
+                ),
+                exc_info=True,
+            )
+
+    LOGGER.info(
+        StructuredMessage(
+            "CUDA runtime detected via CTranslate2.",
+            event="cuda.runtime_detected",
+            detector="ctranslate2",
+            gpu_count=gpu_count,
+            compute_types=compute_types,
+        )
+    )
+
+    try:
+        has_flash_attn = importlib.util.find_spec("flash_attn") is not None
+    except Exception:
+        has_flash_attn = False
+    flash_attn_probe_message = StructuredMessage(
+        "FlashAttention 2 availability checked.",
+        event="cuda.flash_attention_probe",
+        available=has_flash_attn,
+    )
+    LOGGER.info(flash_attn_probe_message)
 
 
 def patch_tk_variable_cleanup() -> None:
