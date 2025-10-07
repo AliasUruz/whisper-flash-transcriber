@@ -326,7 +326,7 @@ def normalize_backend_label(backend: str | None) -> str:
         "faster-whisper": "ctranslate2",
         "transformer": "ctranslate2",
         "transformers": "ctranslate2",
-        "auto": "auto",
+        "auto": "ctranslate2",
     }
 
     mapped = alias_map.get(normalized)
