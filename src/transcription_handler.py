@@ -102,6 +102,8 @@ LOGGER = get_logger('whisper_flash_transcriber.transcription', component='Transc
 
 
 class TranscriptionHandler:
+    CORRECTION_FAILURE_LIMIT = 3
+    CORRECTION_DISABLE_SECONDS = 60.0
 
     def __init__(
         self,
@@ -198,6 +200,12 @@ class TranscriptionHandler:
         self._asr_loaded = False
 
         self._initialize_adaptive_state()
+
+        self._correction_failures: dict[str, int] = {
+            SERVICE_GEMINI: 0,
+            SERVICE_OPENROUTER: 0,
+        }
+        self._correction_disabled_until: dict[str, float] = {}
 
         self._init_api_clients()
 
@@ -836,6 +844,7 @@ class TranscriptionHandler:
 
         if correction_changed:
             self._init_api_clients()
+            self.reset_text_correction_breaker(reason="config_change")
 
         LOGGER.info(
             log_context(
@@ -1412,6 +1421,168 @@ class TranscriptionHandler:
             return SERVICE_GEMINI
         return SERVICE_NONE
 
+    def _provider_label(self, provider: str | None) -> str:
+        mapping = {
+            SERVICE_GEMINI: "gemini",
+            SERVICE_OPENROUTER: "openrouter",
+            SERVICE_NONE: "none",
+        }
+        if not provider:
+            return "unknown"
+        return mapping.get(provider, str(provider))
+
+    def _notify_correction_breaker_state(
+        self,
+        provider: str,
+        status: str,
+        *,
+        cooldown: float | None = None,
+        failures: int | None = None,
+        reason: str | None = None,
+    ) -> None:
+        core = getattr(self, "core_instance_ref", None)
+        state_mgr = getattr(core, "state_manager", None) if core is not None else None
+        provider_label = self._provider_label(provider)
+
+        if status == "tripped":
+            if cooldown is not None:
+                message = (
+                    f"Text correction provider '{provider_label}' disabled for {int(round(cooldown))}s "
+                    f"after {failures or 0} consecutive failure(s)."
+                )
+            else:
+                message = (
+                    f"Text correction provider '{provider_label}' disabled after {failures or 0} consecutive failure(s)."
+                )
+        else:
+            message = f"Text correction provider '{provider_label}' restored."
+
+        details: dict[str, object] = {
+            "message": message,
+            "provider": provider_label,
+            "status": status,
+        }
+        if failures is not None:
+            details["failures"] = failures
+        details["limit"] = self.CORRECTION_FAILURE_LIMIT
+        if cooldown is not None:
+            details["cooldown_seconds"] = float(max(0.0, cooldown))
+        if reason:
+            details["reason"] = reason
+
+        if state_mgr is None:
+            return
+
+        try:
+            event = (
+                sm.StateEvent.TEXT_CORRECTION_BREAKER_TRIPPED
+                if status == "tripped"
+                else sm.StateEvent.TEXT_CORRECTION_BREAKER_RESET
+            )
+            state_mgr.set_state(event, details=details, source="text_correction_breaker")
+        except Exception:
+            logging.debug("Failed to dispatch text correction breaker state event.", exc_info=True)
+
+    def _clear_correction_breaker(self, provider: str, *, notify: bool, reason: str | None = None) -> None:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return
+        previous_failures = self._correction_failures.get(provider, 0)
+        self._correction_failures[provider] = 0
+        disabled_was_active = self._correction_disabled_until.pop(provider, None) is not None
+        if notify and (disabled_was_active or previous_failures):
+            self._notify_correction_breaker_state(provider, "reset", reason=reason)
+
+    def _is_correction_breaker_active(self, provider: str) -> bool:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return False
+        disabled_until = self._correction_disabled_until.get(provider)
+        if disabled_until is None:
+            return False
+        now = time.monotonic()
+        if now >= disabled_until:
+            self._clear_correction_breaker(provider, notify=True, reason="cooldown_elapsed")
+            LOGGER.info(
+                "Text correction provider '%s' cooldown elapsed; breaker reset.",
+                self._provider_label(provider),
+            )
+            return False
+        return True
+
+    def _record_correction_failure(self, provider: str, exc: Exception) -> None:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return
+        failures = self._correction_failures.get(provider, 0) + 1
+        self._correction_failures[provider] = failures
+        provider_label = self._provider_label(provider)
+        LOGGER.warning(
+            "Text correction provider '%s' failure (%d/%d): %s",
+            provider_label,
+            failures,
+            self.CORRECTION_FAILURE_LIMIT,
+            exc,
+        )
+        if failures >= self.CORRECTION_FAILURE_LIMIT:
+            cooldown = self.CORRECTION_DISABLE_SECONDS
+            self._correction_disabled_until[provider] = time.monotonic() + cooldown
+            LOGGER.warning(
+                "Disabling text correction provider '%s' for %.0fs after %d consecutive failure(s).",
+                provider_label,
+                cooldown,
+                failures,
+            )
+            self._notify_correction_breaker_state(
+                provider,
+                "tripped",
+                cooldown=cooldown,
+                failures=failures,
+                reason=repr(exc),
+            )
+
+    def _record_correction_success(self, provider: str) -> None:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return
+        previous_failures = self._correction_failures.get(provider, 0)
+        was_disabled = provider in self._correction_disabled_until
+        if previous_failures or was_disabled:
+            LOGGER.info(
+                "Text correction provider '%s' recovered after %d failure(s).",
+                self._provider_label(provider),
+                previous_failures,
+            )
+        self._clear_correction_breaker(
+            provider,
+            notify=was_disabled,
+            reason="successful_call",
+        )
+        self._correction_failures[provider] = 0
+
+    def reset_text_correction_breaker(
+        self,
+        provider: str | None = None,
+        *,
+        reason: str | None = None,
+        notify: bool = True,
+    ) -> None:
+        """Permite reinicializar manualmente o circuito de correção de texto."""
+        providers = (
+            [provider]
+            if provider
+            else [SERVICE_GEMINI, SERVICE_OPENROUTER]
+        )
+        for entry in providers:
+            if entry not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+                continue
+            had_failures = self._correction_failures.get(entry, 0)
+            was_disabled = entry in self._correction_disabled_until
+            self._clear_correction_breaker(entry, notify=notify and was_disabled, reason=reason)
+            self._correction_failures[entry] = 0
+            if had_failures or was_disabled:
+                LOGGER.info(
+                    "Text correction provider '%s' breaker manually reset (reason=%s).",
+                    self._provider_label(entry),
+                    reason or "manual_reset",
+                )
+
     def _correct_text_with_openrouter(self, text):
         if not self.openrouter_client or not text:
             return text
@@ -1471,12 +1642,37 @@ class TranscriptionHandler:
                     metrics["ai_branch"] = branch
                 return transcribed_text
 
-            if is_agent_mode:
-                branch = "agent_mode"
-                if metrics is not None:
-                    metrics["ai_branch"] = branch
-                client = self.gemini_api
-                if not client or not getattr(client, "is_valid", False):
+        if active_provider == SERVICE_OPENROUTER and not self.openrouter_api:
+            logging.warning(
+                "OpenRouter client unavailable for text correction.",
+                extra={"event": "text_correction", "provider": "openrouter", "status": "unavailable"},
+            )
+            return transcribed_text
+
+        if self._is_correction_breaker_active(active_provider):
+            remaining = max(
+                0.0,
+                self._correction_disabled_until.get(active_provider, 0.0) - time.monotonic(),
+            )
+            logging.warning(
+                "Skipping text correction for provider '%s' while breaker cooldown active (%.0fs remaining).",
+                self._provider_label(active_provider),
+                remaining,
+            )
+            return transcribed_text
+
+        processed_text = transcribed_text
+        self.correction_in_progress = True
+        correction_attempted = False
+        correction_succeeded = False
+        try:
+            if active_provider == SERVICE_GEMINI:
+                correction_attempted = True
+                processed_text = self.gemini_api.get_correction(transcribed_text) or transcribed_text
+                correction_succeeded = True
+            elif active_provider == SERVICE_OPENROUTER:
+                api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
+                if not api_key:
                     logging.warning(
                         "Agent mode requested but the Gemini client is unavailable.",
                         extra={"event": "agent_mode_correction", "status": "unavailable"},
@@ -1494,10 +1690,32 @@ class TranscriptionHandler:
                     )
                     return transcribed_text
 
-            if not self.text_correction_enabled:
-                branch = "correction_disabled"
-                if metrics is not None:
-                    metrics["ai_branch"] = branch
+                model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
+                prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                try:
+                    self.openrouter_api.reinitialize_client(api_key=api_key, model_id=model)
+                except Exception as exc:
+                    logging.error(
+                        "Failed to reconfigure the OpenRouter client: %s",
+                        exc,
+                        exc_info=True,
+                        extra={"event": "text_correction", "provider": "openrouter", "status": "reconfigure_failed"},
+                    )
+                if prompt:
+                    correction_attempted = True
+                    processed_text = self.openrouter_api.correct_text_async(
+                        transcribed_text,
+                        prompt,
+                        api_key,
+                        model,
+                    )
+                    correction_succeeded = True
+                else:
+                    correction_attempted = True
+                    processed_text = self.openrouter_api.correct_text(transcribed_text)
+                    correction_succeeded = True
+            else:
+                logging.error(f"Unknown AI provider: {active_provider}")
                 return transcribed_text
 
             active_provider = self._get_text_correction_service()
@@ -1516,105 +1734,18 @@ class TranscriptionHandler:
                 return transcribed_text
 
             processed_text = transcribed_text
-            self.correction_in_progress = True
+            if correction_attempted:
+                self._record_correction_failure(active_provider, exc)
+        finally:
+            self.correction_in_progress = False
 
-            try:
-                if active_provider == SERVICE_GEMINI:
-                    branch = "gemini_correction"
-                    if metrics is not None:
-                        metrics["ai_branch"] = branch
-                    if not self.gemini_api or not getattr(self.gemini_api, "is_valid", False):
-                        logging.warning(
-                            "Gemini client unavailable for text correction.",
-                            extra={"event": "text_correction", "provider": "gemini", "status": "unavailable"},
-                        )
-                        return transcribed_text
-                    processed_text = self._correct_text_with_gemini(transcribed_text)
-                elif active_provider == SERVICE_OPENROUTER:
-                    branch = "openrouter_correction"
-                    if metrics is not None:
-                        metrics["ai_branch"] = branch
-                    if not self.openrouter_client:
-                        logging.warning(
-                            "OpenRouter client unavailable for text correction.",
-                            extra={"event": "text_correction", "provider": "openrouter", "status": "unavailable"},
-                        )
-                        return transcribed_text
+        if correction_attempted and correction_succeeded:
+            self._record_correction_success(active_provider)
 
-                    api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
-                    if not api_key:
-                        logging.warning(
-                            "No API key configured for the OpenRouter provider. Skipping text correction.",
-                            extra={"event": "text_correction", "provider": "openrouter", "status": "no_api_key"},
-                        )
-                        return transcribed_text
-
-                    model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-                    prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
-                    try:
-                        self.openrouter_api.reinitialize_client(api_key=api_key, model_id=model)
-                    except Exception as exc:
-                        branch = "openrouter_reconfigure_error"
-                        if metrics is not None:
-                            metrics["ai_branch"] = branch
-                        logging.error(
-                            "Failed to reconfigure the OpenRouter client: %s",
-                            exc,
-                            exc_info=True,
-                            extra={"event": "text_correction", "provider": "openrouter", "status": "reconfigure_failed"},
-                        )
-                        return transcribed_text
-
-                    if prompt:
-                        processed_text = self.openrouter_api.correct_text_async(
-                            transcribed_text,
-                            prompt,
-                            api_key,
-                            model,
-                        )
-                    else:
-                        processed_text = self.openrouter_api.correct_text(transcribed_text)
-                else:
-                    branch = f"unknown_provider_{active_provider}"
-                    if metrics is not None:
-                        metrics["ai_branch"] = branch
-                    logging.error("Unknown AI provider: %s", active_provider)
-                    return transcribed_text
-            except Exception as exc:
-                branch = f"{provider_label}_error" if provider_label else "provider_error"
-                logging.error(
-                    "Error while processing text with provider %s: %s",
-                    active_provider,
-                    exc,
-                    exc_info=True,
-                )
-                processed_text = transcribed_text
-            finally:
-                self.correction_in_progress = False
-                if metrics is not None:
-                    metrics["ai_branch"] = branch
-
-            if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
-                logging.info(
-                    "Text correction produced a result.",
-                    extra={"event": "text_correction", "status": "completed", "details": f"chars={len(processed_text)}"},
-                )
-
-            return processed_text or transcribed_text
-
-    def transcribe_audio_segment(
-        self,
-        audio_source: str | np.ndarray | bytes | bytearray | list[float],
-        agent_mode: bool,
-        *,
-        correlation_id: str | None = None,
-    ) -> None:
-        """Submit a transcription job and feed adaptive heuristics."""
-
-        if not self.is_model_ready():
-            logging.warning(
-                "Model not ready. Ignoring transcription request.",
-                extra={"event": "transcription", "status": "model_unready"},
+        if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
+            logging.info(
+                "Text correction produced a result.",
+                extra={"event": "text_correction", "status": "completed", "details": f"chars={len(processed_text)}"},
             )
             return
 
