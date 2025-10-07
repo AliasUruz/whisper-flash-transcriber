@@ -10,13 +10,6 @@ from collections.abc import Callable, Iterable
 from typing import Any, Mapping, TYPE_CHECKING
 from pathlib import Path
 from threading import RLock
-try:
-    import pyautogui  # Still required for _do_paste
-except ImportError as exc:
-    raise SystemExit(
-        "Error: the 'pyautogui' library is not installed. "
-        "Run 'pip install -r requirements.txt' before starting the application."
-    ) from exc
 import pyperclip  # Still required for _handle_transcription_result
 from tkinter import messagebox  # Added for message boxes in _on_model_load_failed
 
@@ -157,6 +150,10 @@ class AppCore:
         # Track the latest onboarding outcome so diagnostics and the UI can
         # inspect what happened without parsing log files.
         self._last_onboarding_outcome: dict[str, Any] | None = None
+
+        # Cache opcional para módulos importados sob demanda
+        self._pyautogui_module = None
+        self._pyautogui_unavailable = False
 
         self.action_orchestrator = ActionOrchestrator(
             state_manager=self.state_manager,
@@ -1586,84 +1583,44 @@ class AppCore:
 
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
-        hotkey_sequence = self._resolve_paste_hotkey_sequence()
-        prefer_keyboard = self._running_with_elevated_privileges and sys.platform == "win32"
-
-        if not prefer_keyboard:
-            try:
-                pyautogui.hotkey(*hotkey_sequence)
-            except Exception as exc:
-                LOGGER.warning(
-                    "PyAutoGUI paste automation failed; attempting keyboard fallback.",
-                    exc_info=True,
-                )
-            else:
-                LOGGER.info("Text pasted.")
-                self._log_status("Text pasted.")
-                return
-
-        if self._attempt_keyboard_paste(hotkey_sequence):
+        module = self._ensure_pyautogui_module()
+        if module is None:
             return
 
-        if prefer_keyboard:
-            try:
-                pyautogui.hotkey(*hotkey_sequence)
-            except Exception as exc:
-                LOGGER.error(
-                    "PyAutoGUI paste automation failed after keyboard fallback.",
-                    exc_info=True,
-                )
-            else:
-                LOGGER.info("Text pasted via PyAutoGUI (secondary attempt).")
-                self._log_status("Text pasted.")
-                return
+        try:
+            hotkey_sequence = self._resolve_paste_hotkey_sequence()
+            module.hotkey(*hotkey_sequence)
+            LOGGER.info("Text pasted.")
+            self._log_status("Text pasted.")
+        except Exception as exc:
+            LOGGER.error("Failed to execute paste automation: %s", exc)
+            self._log_status("Error: failed to simulate the paste hotkey.", error=True)
 
-        self._log_status(
-            "Error: automatic paste failed. Press the configured paste shortcut manually in the target window.",
-            error=True,
-        )
-        LOGGER.error("All paste automation strategies failed; user notified for manual intervention.")
+    def _ensure_pyautogui_module(self) -> Any | None:
+        """Load and cache ``pyautogui`` on demand for paste automation."""
 
-    def _attempt_keyboard_paste(self, hotkey_sequence: tuple[str, ...]) -> bool:
-        """Tenta colar utilizando bibliotecas alternativas como fallback."""
+        if self._pyautogui_module is not None:
+            return self._pyautogui_module
+
+        if self._pyautogui_unavailable:
+            return None
 
         try:
-            clipboard_snapshot = pyperclip.paste()
-        except pyperclip.PyperclipException:
-            clipboard_snapshot = None
-            LOGGER.debug("Unable to read clipboard contents before fallback paste.", exc_info=True)
-        except Exception:  # pragma: no cover - leitura defensiva
-            clipboard_snapshot = None
-            LOGGER.debug("Unexpected clipboard access error before fallback paste.", exc_info=True)
-
-        try:
-            import keyboard
-        except ImportError:
-            LOGGER.error(
-                "Keyboard library is unavailable; cannot execute fallback paste automation."
+            import pyautogui  # type: ignore
+        except ImportError as exc:  # pragma: no cover - depende da instalação do usuário
+            LOGGER.warning(
+                "Auto-paste unavailable because 'pyautogui' is missing: %s",
+                exc,
             )
-            return False
-
-        combo = "+".join(hotkey_sequence) if hotkey_sequence else "ctrl+v"
-
-        try:
-            keyboard.send(combo)
-        except Exception:
-            LOGGER.error("Keyboard-based paste fallback failed.", exc_info=True)
-            return False
-
-        LOGGER.info("Text pasted via keyboard fallback automation.")
-        self._log_status("Text pasted (fallback automation).")
-
-        if clipboard_snapshot is None:
-            LOGGER.debug("Clipboard snapshot unavailable during fallback paste.")
-        else:
-            LOGGER.debug(
-                "Clipboard snapshot captured for fallback paste (length=%d).",
-                len(clipboard_snapshot),
+            self._log_status(
+                "Auto-paste requires the 'pyautogui' package. Install it via 'pip install -r requirements.txt'.",
+                error=True,
             )
+            self._pyautogui_unavailable = True
+            return None
 
-        return True
+        self._pyautogui_module = pyautogui
+        return pyautogui
 
     def _resolve_paste_hotkey_sequence(self) -> tuple[str, ...]:
         """Resolve the hotkey combination used for auto-paste."""
