@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from threading import Event, RLock
-from typing import Dict, List, NamedTuple
+from typing import Any, Dict, List, NamedTuple
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
@@ -82,12 +82,181 @@ class InsufficientSpaceError(RuntimeError):
 
 # Curated catalog of officially supported ASR models.
 # Each entry maps a Hugging Face model id to the backend that powers it.
-CURATED: List[Dict[str, str]] = [
-    {"id": "openai/whisper-large-v3-turbo", "backend": "ctranslate2"},
+CURATED: List[Dict[str, Any]] = [
+    {
+        "id": "openai/whisper-large-v3-turbo",
+        "backend": "ctranslate2",
+        "display_name": "Whisper Large v3 Turbo",
+        "description": (
+            "Precisão premium para cenários complexos, com suporte completo a idiomas."
+        ),
+        "priority": 10,
+        "default_quantization": "int8_float16",
+        "variants": [
+            {
+                "quantization": "int8_float16",
+                "label": "Int8 + FP16 (recomendado)",
+                "description": (
+                    "Equilíbrio entre qualidade e VRAM; ideal para GPUs de 8 GB ou superiores."
+                ),
+                "min_vram_gb": 8,
+                "estimated_size_bytes": 6_700_000_000,
+                "estimated_file_count": 37,
+                "recommended": True,
+                "aliases": ["default", "balanced"],
+            },
+            {
+                "quantization": "int8",
+                "label": "Int8 (CPU/GPU moderada)",
+                "description": (
+                    "Reduz ainda mais o uso de memória com leve impacto na fidelidade."
+                ),
+                "min_vram_gb": 4,
+                "estimated_size_bytes": 4_300_000_000,
+                "estimated_file_count": 37,
+                "aliases": ["compact"],
+            },
+            {
+                "quantization": "float16",
+                "label": "FP16 (máxima fidelidade)",
+                "description": (
+                    "Maior qualidade possível, requer GPUs com 12 GB de VRAM ou mais."
+                ),
+                "min_vram_gb": 12,
+                "estimated_size_bytes": 9_400_000_000,
+                "estimated_file_count": 37,
+                "aliases": ["fp16", "full"],
+            },
+        ],
+    },
+    {
+        "id": "distil-whisper/distil-large-v3",
+        "backend": "ctranslate2",
+        "display_name": "Distil Whisper Large v3",
+        "description": (
+            "Versão destilada ~2× mais leve, mantendo boa cobertura multilingue."
+        ),
+        "priority": 20,
+        "default_quantization": "int8_float16",
+        "variants": [
+            {
+                "quantization": "int8_float16",
+                "label": "Int8 + FP16",
+                "description": "Excelente compromisso entre velocidade e qualidade.",
+                "min_vram_gb": 5,
+                "estimated_size_bytes": 3_200_000_000,
+                "estimated_file_count": 32,
+                "recommended": True,
+                "aliases": ["default"],
+            },
+            {
+                "quantization": "int8",
+                "label": "Int8 (ultra-compacto)",
+                "description": "Otimizando memória para CPU ou GPUs de 3 GB.",
+                "min_vram_gb": 3,
+                "estimated_size_bytes": 2_000_000_000,
+                "estimated_file_count": 32,
+                "aliases": ["compact"],
+            },
+        ],
+    },
+    {
+        "id": "Systran/faster-whisper-medium",
+        "backend": "faster-whisper",
+        "display_name": "Faster-Whisper Medium",
+        "description": "Modelo FP16 com boa acurácia e latência moderada.",
+        "priority": 30,
+        "min_vram_gb": 5,
+        "estimated_size_bytes": 2_900_000_000,
+        "estimated_file_count": 26,
+        "variants": [
+            {
+                "quantization": None,
+                "label": "FP16",
+                "description": "Padrão para GPUs ≥5 GB de VRAM.",
+                "min_vram_gb": 5,
+                "estimated_size_bytes": 2_900_000_000,
+                "estimated_file_count": 26,
+                "recommended": True,
+                "aliases": ["default"],
+            }
+        ],
+    },
+    {
+        "id": "Systran/faster-whisper-medium-int8",
+        "backend": "faster-whisper",
+        "display_name": "Faster-Whisper Medium Int8",
+        "description": "Variante int8 para reduzir VRAM mantendo boa qualidade.",
+        "priority": 40,
+        "min_vram_gb": 3,
+        "estimated_size_bytes": 1_500_000_000,
+        "estimated_file_count": 26,
+        "variants": [
+            {
+                "quantization": None,
+                "label": "Int8",
+                "description": "Ideal para GPUs de 3–4 GB ou execução em CPU.",
+                "min_vram_gb": 3,
+                "estimated_size_bytes": 1_500_000_000,
+                "estimated_file_count": 26,
+                "recommended": True,
+                "aliases": ["default", "int8"],
+            }
+        ],
+    },
+    {
+        "id": "Systran/faster-whisper-small",
+        "backend": "faster-whisper",
+        "display_name": "Faster-Whisper Small",
+        "description": "Modelo leve para baixa latência, ótimo para notebooks.",
+        "priority": 50,
+        "min_vram_gb": 2,
+        "estimated_size_bytes": 1_100_000_000,
+        "estimated_file_count": 18,
+        "variants": [
+            {
+                "quantization": None,
+                "label": "FP16",
+                "description": "Padrão em FP16 para GPUs de 2 GB.",
+                "min_vram_gb": 2,
+                "estimated_size_bytes": 1_100_000_000,
+                "estimated_file_count": 18,
+                "recommended": True,
+                "aliases": ["default"],
+            }
+        ],
+    },
+    {
+        "id": "Systran/faster-whisper-small-int8",
+        "backend": "faster-whisper",
+        "display_name": "Faster-Whisper Small Int8",
+        "description": "Consumo mínimo de memória, ideal para CPUs ou GPUs integradas.",
+        "priority": 60,
+        "min_vram_gb": 1,
+        "estimated_size_bytes": 650_000_000,
+        "estimated_file_count": 18,
+        "variants": [
+            {
+                "quantization": None,
+                "label": "Int8",
+                "description": "Ocupação mínima com pequena perda de fidelidade.",
+                "min_vram_gb": 1,
+                "estimated_size_bytes": 650_000_000,
+                "estimated_file_count": 18,
+                "recommended": True,
+                "aliases": ["default", "int8"],
+            }
+        ],
+    },
 ]
 
 DISPLAY_NAMES: Dict[str, str] = {
     "openai/whisper-large-v3-turbo": "Whisper Large v3 Turbo",
+    "distil-whisper/distil-large-v3": "Distil Whisper Large v3",
+    "Systran/faster-whisper-medium": "Faster-Whisper Medium",
+    "Systran/faster-whisper-medium-int8": "Faster-Whisper Medium Int8",
+    "Systran/faster-whisper-small": "Faster-Whisper Small",
+    "Systran/faster-whisper-small-int8": "Faster-Whisper Small Int8",
 }
 
 # Para reintroduzir outros modelos futuramente, basta estender as estruturas
@@ -122,12 +291,12 @@ def _write_install_metadata(
     metadata_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _resolve_catalog_entry(model_id: str) -> dict[str, str] | None:
+def _resolve_catalog_entry(model_id: str) -> dict[str, Any] | None:
     """Return the curated entry for ``model_id`` when available."""
 
     for entry in CURATED:
         if entry.get("id") == model_id:
-            return dict(entry)
+            return copy.deepcopy(entry)
     return None
 
 
@@ -266,7 +435,7 @@ def _normalize_quant_label(label: str | None) -> str:
     return normalized
 
 
-def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
+def get_curated_entry(model_id: str | None) -> Dict[str, Any] | None:
     """Return the curated catalog entry for ``model_id`` if available."""
 
     if not model_id:
@@ -274,10 +443,248 @@ def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
 
     for entry in CURATED:
         if entry.get("id") == model_id:
-            normalized = dict(entry)
+            normalized = copy.deepcopy(entry)
+            normalized.setdefault(
+                "display_name",
+                DISPLAY_NAMES.get(entry["id"], entry["id"]),
+            )
             normalized["backend"] = normalize_backend_label(entry.get("backend"))
+            variants = normalized.get("variants")
+            if isinstance(variants, list):
+                normalized["variants"] = [copy.deepcopy(v) for v in variants]
             return normalized
     return None
+
+
+_DEFAULT_DOWNLOAD_SPEED_MIB_PER_S = 20.0
+
+
+def _normalize_variant_token(value: str | None) -> str:
+    """Normalize quantization/variant tokens for matching and caching."""
+
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def _resolve_variant_metadata(
+    entry: dict[str, Any] | None, quantization: str | None
+) -> dict[str, Any] | None:
+    """Return curated variant metadata matching ``quantization`` when available."""
+
+    if not entry:
+        return None
+
+    variants = entry.get("variants") or []
+    if not isinstance(variants, list) or not variants:
+        return None
+
+    normalized_target = _normalize_variant_token(quantization)
+    if not normalized_target or normalized_target == "default":
+        normalized_default = _normalize_variant_token(entry.get("default_quantization"))
+        normalized_target = normalized_default or "default"
+
+    def _matches(candidate: dict[str, Any]) -> bool:
+        tokens = {_normalize_variant_token(candidate.get("quantization"))}
+        aliases = candidate.get("aliases") or []
+        for alias in aliases:
+            tokens.add(_normalize_variant_token(alias))
+        if "" in tokens:
+            tokens.add("default")
+        return normalized_target in tokens
+
+    for variant in variants:
+        if isinstance(variant, dict) and _matches(variant):
+            return copy.deepcopy(variant)
+
+    for variant in variants:
+        if isinstance(variant, dict) and variant.get("recommended"):
+            return copy.deepcopy(variant)
+
+    first_variant = next((v for v in variants if isinstance(v, dict)), None)
+    return copy.deepcopy(first_variant) if first_variant else None
+
+
+def _estimate_download_minutes(
+    size_bytes: int, speed_mib_s: float | None = None
+) -> float | None:
+    """Return a coarse download time estimate (minutes) given ``size_bytes``."""
+
+    if not size_bytes or size_bytes <= 0:
+        return None
+
+    speed = float(speed_mib_s or _DEFAULT_DOWNLOAD_SPEED_MIB_PER_S)
+    if speed <= 0:
+        return None
+
+    seconds = float(size_bytes) / (speed * 1024 * 1024)
+    minutes = seconds / 60.0
+    if minutes <= 0:
+        minutes = 0.1
+    return round(max(minutes, 0.1), 1)
+
+
+def get_model_variant_requirements(
+    model_id: str, *, quantization: str | None = None
+) -> dict[str, Any]:
+    """Return curated metadata for UI/telemetry about ``model_id``.
+
+    The returned payload always contains at least the following fields:
+
+    ``model_id``
+        Hugging Face identifier.
+    ``display_name``
+        Friendly name for UI rendering.
+    ``backend_label``
+        Normalized backend hint (ctranslate2, faster-whisper, transformers, ...).
+    ``ct2_quantization``
+        Quantization branch to persist when using the CTranslate2 backend.
+    ``quantization_label``
+        Human-friendly label describing the variant/quantization.
+    ``estimated_size_bytes``
+        Estimated payload size based on curated metadata or HF probing.
+    ``estimated_download_minutes``
+        Approximate download duration assuming a reference bandwidth.
+    """
+
+    entry = get_curated_entry(model_id)
+    entry_data: dict[str, Any] = entry or {}
+    display_name = entry_data.get(
+        "display_name", DISPLAY_NAMES.get(model_id, model_id)
+    )
+    backend_label = normalize_backend_label(entry_data.get("backend"))
+    variant_meta = _resolve_variant_metadata(entry_data, quantization)
+
+    entry_description = str(entry_data.get("description", "") or "")
+    variant_description = (
+        str(variant_meta.get("description", "") or "") if variant_meta else ""
+    )
+
+    priority = int(entry_data.get("priority", 100))
+    variant_priority = int(variant_meta.get("priority", 100)) if variant_meta else 100
+
+    min_vram = None
+    if variant_meta and variant_meta.get("min_vram_gb") is not None:
+        min_vram = variant_meta.get("min_vram_gb")
+    elif entry_data.get("min_vram_gb") is not None:
+        min_vram = entry_data.get("min_vram_gb")
+
+    assumed_speed = None
+    if variant_meta and variant_meta.get("assumed_speed_mib_s"):
+        assumed_speed = variant_meta.get("assumed_speed_mib_s")
+    elif entry_data.get("assumed_speed_mib_s"):
+        assumed_speed = entry_data.get("assumed_speed_mib_s")
+
+    is_recommended = bool(variant_meta.get("recommended")) if variant_meta else False
+
+    download_quant: str | None
+    ct2_quant: str | None = None
+    quantization_label = (
+        variant_meta.get("label") if variant_meta else ""
+    )
+
+    if backend_label == "ctranslate2":
+        quant_source = variant_meta.get("quantization") if variant_meta else None
+        if not quant_source:
+            quant_source = quantization or entry_data.get("default_quantization")
+        ct2_quant = _normalize_quant_label(quant_source)
+        download_quant = ct2_quant
+        quant_token = _normalize_variant_token(ct2_quant) or "default"
+    else:
+        quant_source = variant_meta.get("quantization") if variant_meta else quantization
+        download_quant = quant_source
+        quant_token = _normalize_variant_token(download_quant) or "default"
+
+    if not quantization_label:
+        quantization_label = "Padrão"
+
+    size_bytes, file_count = get_model_download_size(
+        model_id, quantization=download_quant
+    )
+    formatted_size = _format_bytes(size_bytes) if size_bytes else "?"
+    download_minutes = _estimate_download_minutes(size_bytes, assumed_speed)
+
+    notes_parts = [entry_description.strip(), variant_description.strip()]
+    notes = "\n".join(part for part in notes_parts if part)
+
+    min_vram_label = "-"
+    if isinstance(min_vram, (int, float)):
+        min_vram_label = f"{float(min_vram):.1f} GB"
+
+    profile = {
+        "model_id": model_id,
+        "display_name": display_name,
+        "backend": entry_data.get("backend", ""),
+        "backend_label": backend_label,
+        "ct2_quantization": ct2_quant if backend_label == "ctranslate2" else None,
+        "quantization": download_quant,
+        "quantization_label": quantization_label,
+        "quantization_token": quant_token,
+        "estimated_size_bytes": int(size_bytes),
+        "estimated_file_count": int(file_count),
+        "formatted_size": formatted_size,
+        "min_vram_gb": min_vram,
+        "min_vram_label": min_vram_label,
+        "description": entry_description,
+        "variant_description": variant_description,
+        "notes": notes,
+        "is_recommended": is_recommended,
+        "estimated_download_minutes": download_minutes,
+        "download_time_label": (
+            f"{download_minutes:.1f} min" if download_minutes is not None else "-"
+        ),
+        "assumed_download_speed_mib_s": float(
+            assumed_speed or _DEFAULT_DOWNLOAD_SPEED_MIB_PER_S
+        ),
+        "priority": priority,
+        "variant_priority": variant_priority,
+    }
+
+    return profile
+
+
+def get_ui_model_options() -> List[Dict[str, Any]]:
+    """Return curated model options enriched with UI-oriented metadata."""
+
+    options: list[dict[str, Any]] = []
+    for entry in list_catalog():
+        variants = entry.get("variants") or []
+        if not variants:
+            variants = [None]
+
+        for variant in variants:
+            variant_quant = None
+            if isinstance(variant, dict):
+                variant_quant = variant.get("quantization")
+            profile = get_model_variant_requirements(
+                entry["id"], quantization=variant_quant
+            )
+            option = dict(profile)
+            option_id = f"{profile['model_id']}::{profile['quantization_token']}"
+            option["option_id"] = option_id
+            option["variant_label"] = (
+                variant.get("label")
+                if isinstance(variant, dict) and variant.get("label")
+                else profile.get("quantization_label", "Padrão")
+            )
+            option["variant_description"] = (
+                variant.get("description")
+                if isinstance(variant, dict) and variant.get("description")
+                else profile.get("variant_description", "")
+            )
+            option["variant_recommended"] = bool(
+                variant.get("recommended")
+            ) if isinstance(variant, dict) else profile.get("is_recommended", False)
+            option["sort_key"] = (
+                profile.get("priority", 100),
+                profile.get("variant_priority", 100),
+                profile.get("display_name", profile["model_id"]),
+                option["variant_label"],
+            )
+            options.append(option)
+
+    options.sort(key=lambda payload: payload["sort_key"])
+    return options
 
 
 @lru_cache(maxsize=128)
@@ -344,7 +751,7 @@ def _resolve_ct2_quantization(
 
 _CACHE_TTL_SECONDS = 60.0
 
-_download_size_cache: dict[str, tuple[float, tuple[int, int]]] = {}
+_download_size_cache: dict[tuple[str, str], tuple[float, tuple[int, int]]] = {}
 _download_size_lock = RLock()
 
 _list_installed_cache: dict[str, tuple[float, List[Dict[str, str]]]] = {}
@@ -724,13 +1131,18 @@ def ensure_local_installation(
     return prepared.ready_path
 
 
-def list_catalog() -> List[Dict[str, str]]:
+def list_catalog() -> List[Dict[str, Any]]:
     """Return curated catalog entries with display names."""
     catalog = []
     for entry in CURATED:
-        normalized = {**entry}
+        normalized = copy.deepcopy(entry)
         normalized["backend"] = normalize_backend_label(entry.get("backend"))
-        normalized["display_name"] = DISPLAY_NAMES.get(entry["id"], entry["id"])
+        normalized["display_name"] = normalized.get(
+            "display_name", DISPLAY_NAMES.get(entry["id"], entry["id"])
+        )
+        variants = normalized.get("variants")
+        if isinstance(variants, list):
+            normalized["variants"] = [copy.deepcopy(v) for v in variants]
         catalog.append(normalized)
     return catalog
 
@@ -847,13 +1259,18 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     return installed
 
 
-def get_model_download_size(model_id: str) -> tuple[int, int]:
+def get_model_download_size(
+    model_id: str, *, quantization: str | None = None
+) -> tuple[int, int]:
     """Return the download size and file count for ``model_id``.
 
     Parameters
     ----------
     model_id: str
         Hugging Face model identifier.
+    quantization: str | None
+        Optional quantization branch (for CTranslate2 conversions). When not
+        provided the curated default is used.
 
     Returns
     -------
@@ -861,14 +1278,49 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
         Total size in bytes and number of files available for download.
     """
 
+    entry = get_curated_entry(model_id)
+    variant_meta = _resolve_variant_metadata(entry, quantization)
+
+    quant_token = _normalize_variant_token(
+        variant_meta.get("quantization") if variant_meta else quantization
+    )
+    if not quant_token:
+        quant_token = _normalize_variant_token(
+            entry.get("default_quantization") if entry else None
+        ) or "default"
+
+    if variant_meta:
+        estimated_bytes = variant_meta.get("estimated_size_bytes")
+        estimated_files = variant_meta.get("estimated_file_count")
+    elif entry:
+        estimated_bytes = entry.get("estimated_size_bytes")
+        estimated_files = entry.get("estimated_file_count")
+    else:
+        estimated_bytes = None
+        estimated_files = None
+
+    try:
+        curated_bytes = int(estimated_bytes) if estimated_bytes is not None else 0
+    except (TypeError, ValueError):
+        curated_bytes = 0
+
+    try:
+        curated_files = int(estimated_files) if estimated_files is not None else 0
+    except (TypeError, ValueError):
+        curated_files = 0
+
+    if curated_bytes > 0:
+        return curated_bytes, max(curated_files, 0)
+
     now = time.monotonic()
+    cache_key = (model_id, quant_token)
     with _download_size_lock:
-        cached_entry = _download_size_cache.get(model_id)
+        cached_entry = _download_size_cache.get(cache_key)
         if cached_entry:
             cached_at, cached_value = cached_entry
             if now - cached_at < _CACHE_TTL_SECONDS:
                 return cached_value
-            _download_size_cache.pop(model_id, None)
+            _download_size_cache.pop(cache_key, None)
 
     api = HfApi()
     info = api.model_info(model_id)
@@ -957,7 +1409,7 @@ def get_model_download_size(model_id: str) -> tuple[int, int]:
     )
 
     with _download_size_lock:
-        _download_size_cache[model_id] = (time.monotonic(), (total, total_files))
+        _download_size_cache[cache_key] = (time.monotonic(), (total, total_files))
 
     return total, total_files
 
@@ -1065,7 +1517,9 @@ def ensure_download(
     estimated_bytes = 0
     estimated_files = 0
     try:
-        estimated_bytes, estimated_files = get_model_download_size(model_id)
+        estimated_bytes, estimated_files = get_model_download_size(
+            model_id, quantization=quant_label
+        )
     except Exception:  # pragma: no cover - metadata retrieval best effort
         MODEL_LOGGER.debug(
             "Unable to compute download size metadata for model %s.",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -107,7 +108,7 @@ class AppConfig(BaseModel):
     asr_ct2_cpu_threads: int | None = None
     asr_cache_dir: str = str((_DEFAULT_STORAGE_ROOT / "asr").expanduser())
     asr_installed_models: list[str] = Field(default_factory=list)
-    asr_curated_catalog: list[str] = Field(default_factory=list)
+    asr_curated_catalog: list[dict[str, Any]] = Field(default_factory=list)
     asr_curated_catalog_url: str = ""
     asr_last_download_status: ASRDownloadStatus = Field(default_factory=ASRDownloadStatus)
     asr_last_prompt_decision: ASRPromptDecision = Field(default_factory=ASRPromptDecision)
@@ -246,7 +247,7 @@ class AppConfig(BaseModel):
             return str(value.expanduser())
         raise ValueError("Storage paths must be provided as strings or Path objects")
 
-    @field_validator("asr_installed_models", "asr_curated_catalog", mode="before")
+    @field_validator("asr_installed_models", mode="before")
     @classmethod
     def _coerce_string_list(cls, value: Any) -> list[str]:
         if value is None:
@@ -254,6 +255,36 @@ class AppConfig(BaseModel):
         if isinstance(value, (list, tuple, set)):
             return [str(item).strip() for item in value if item is not None]
         return [str(value)]
+
+    @field_validator("asr_curated_catalog", mode="before")
+    @classmethod
+    def _coerce_catalog(cls, value: Any) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            return [dict(value)]
+        if isinstance(value, (list, tuple, set)):
+            coerced: list[dict[str, Any]] = []
+            for item in value:
+                if isinstance(item, dict):
+                    coerced.append(dict(item))
+                    continue
+                if isinstance(item, str):
+                    try:
+                        parsed = json.loads(item)
+                    except Exception:
+                        continue
+                    if isinstance(parsed, dict):
+                        coerced.append(parsed)
+            return coerced
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                return []
+            if isinstance(parsed, dict):
+                return [parsed]
+        return []
 
     @field_validator("agent_auto_paste", mode="before")
     @classmethod
