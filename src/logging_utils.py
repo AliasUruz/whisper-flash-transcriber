@@ -162,6 +162,23 @@ def scoped_correlation_id(
 
 
 @contextmanager
+def operation_context(
+    operation_name: str | None = None,
+    *,
+    operation_id: str | None = None,
+) -> Iterator[str]:
+    """Bind ``operation_id`` to log records emitted within the context."""
+
+    resolved_id = operation_id or uuid.uuid4().hex[:8]
+    stack = _operation_stack_var.get()
+    token = _operation_stack_var.set(stack + ((resolved_id, operation_name),))
+    try:
+        yield resolved_id
+    finally:
+        _operation_stack_var.reset(token)
+
+
+@contextmanager
 def log_operation(
     logger: logging.Logger | logging.LoggerAdapter,
     headline: str,
@@ -177,33 +194,37 @@ def log_operation(
     success_details: Mapping[str, Any] | None = None,
     failure_details: Mapping[str, Any] | None = None,
     include_duration: bool = True,
+    operation_id: str | None = None,
+    operation_name: str | None = None,
 ) -> Iterator[str]:
     """Log the lifespan of a structured operation with automatic timing."""
 
-    operation_id = uuid.uuid4().hex[:8]
-    operation_name = event if event else headline
+    resolved_operation_id = operation_id or uuid.uuid4().hex[:8]
+    resolved_operation_name = (
+        operation_name if operation_name is not None else (event if event else headline)
+    )
     stack = _operation_stack_var.get()
-    token = _operation_stack_var.set(stack + ((operation_id, operation_name),))
+    token = _operation_stack_var.set(stack + ((resolved_operation_id, resolved_operation_name),))
 
     start_event = f"{event}.start" if event else None
     success_event = f"{event}.success" if event else None
     failure_event = f"{event}.error" if event else None
 
     start_payload = dict(details or {})
-    start_payload.setdefault("operation_id", operation_id)
+    start_payload.setdefault("operation_id", resolved_operation_id)
 
     logger.log(start_level, StructuredMessage(headline, event=start_event, details=start_payload))
 
     started_at = time.perf_counter()
 
     try:
-        yield operation_id
+        yield resolved_operation_id
     except Exception:
         duration_ms = (time.perf_counter() - started_at) * 1000.0
         detail_payload = dict(details or {})
         if failure_details:
             detail_payload.update(failure_details)
-        detail_payload.setdefault("operation_id", operation_id)
+        detail_payload.setdefault("operation_id", resolved_operation_id)
         if include_duration:
             detail_payload.setdefault("duration_ms", round(duration_ms, 2))
 
@@ -221,7 +242,7 @@ def log_operation(
         detail_payload = dict(details or {})
         if success_details:
             detail_payload.update(success_details)
-        detail_payload.setdefault("operation_id", operation_id)
+        detail_payload.setdefault("operation_id", resolved_operation_id)
         if include_duration:
             detail_payload.setdefault("duration_ms", round(duration_ms, 2))
 

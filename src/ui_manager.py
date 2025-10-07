@@ -176,6 +176,8 @@ class UIManager:
         self._download_snapshot: list[dict[str, Any]] = []
         self._download_history: list[dict[str, Any]] = []
 
+        self._last_operation_id: str | None = None
+
 
         # Assign methods to the instance
         self.show_live_transcription_window = self._show_live_transcription_window
@@ -2727,6 +2729,7 @@ class UIManager:
                 "details": getattr(notification, "details", None),
                 "source": getattr(notification, "source", None),
                 "previous_state": getattr(notification, "previous_state", None),
+                "operation_id": getattr(notification, "operation_id", None),
             }
             return context["state"], None, context
 
@@ -2758,6 +2761,10 @@ class UIManager:
                 event_name = str(event_obj)
         if event_name:
             parts.append(f"event={event_name}")
+
+        op_id = context.get("operation_id")
+        if op_id and not parts:
+            parts.append(f"op={op_id}")
 
         return f" — {' | '.join(parts)}" if parts else ""
 
@@ -2858,9 +2865,11 @@ class UIManager:
             self._handle_download_progress(context)
         if context:
             self._last_state_notification = context.get("notification")
+            self._last_operation_id = context.get("operation_id")
             self._state_context_suffix = self._build_state_context_suffix(state_str, context)
         else:
             self._last_state_notification = None
+            self._last_operation_id = None
             self._state_context_suffix = ""
 
         suffix = self._state_context_suffix

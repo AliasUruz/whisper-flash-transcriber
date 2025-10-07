@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 
 import numpy as np
 
@@ -50,7 +50,12 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
 )
 from . import model_manager as model_manager_module
-from .logging_utils import current_correlation_id, get_logger, scoped_correlation_id
+from .logging_utils import (
+    current_correlation_id,
+    get_logger,
+    operation_context,
+    scoped_correlation_id,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - hints only
     import torch as torch_type
@@ -977,6 +982,199 @@ class TranscriptionHandler:
             daemon=True,
             name="ModelLoadThread",
         ).start()
+
+    def transcribe_audio_segment(
+        self,
+        audio_source: str | np.ndarray,
+        agent_mode: bool,
+        *,
+        correlation_id: str | None = None,
+        operation_id: str | None = None,
+    ) -> bool:
+        """Submit a transcription job for ``audio_source``."""
+
+        if self.transcription_executor is None:
+            LOGGER.error(
+                "Transcription executor is not available.",
+                extra={"event": "transcription.enqueue", "status": "executor_missing", "operation_id": operation_id},
+            )
+            return False
+
+        if self.transcription_future is not None and not self.transcription_future.done():
+            LOGGER.warning(
+                "Transcription already running; rejecting new audio segment.",
+                extra={"event": "transcription.enqueue", "status": "busy", "operation_id": operation_id},
+            )
+            return False
+
+        backend = getattr(self, "_asr_backend", None) or getattr(self, "pipe", None)
+        if backend is None:
+            LOGGER.warning(
+                "ASR backend is not ready to receive audio.",
+                extra={"event": "transcription.enqueue", "status": "backend_unavailable", "operation_id": operation_id},
+            )
+            return False
+
+        core = getattr(self, "core_instance_ref", None)
+        state_mgr = getattr(core, "state_manager", None) if core is not None else None
+
+        formatted_source = self._format_audio_source(audio_source)
+        LOGGER.info(
+            "Submitting transcription task.",
+            extra={
+                "event": "transcription.enqueue",
+                "status": "submitted",
+                "source": formatted_source,
+                "agent_mode": agent_mode,
+                "operation_id": operation_id,
+            },
+        )
+
+        if state_mgr is not None:
+            try:
+                state_mgr.set_state(
+                    sm.StateEvent.TRANSCRIPTION_STARTED,
+                    details={
+                        "source": formatted_source,
+                        "agent_mode": agent_mode,
+                    },
+                    source="transcription_handler",
+                    operation_id=operation_id,
+                )
+            except Exception:
+                LOGGER.debug("Failed to emit TRANSCRIPTION_STARTED state.", exc_info=True)
+
+        self.transcription_cancel_event.clear()
+
+        def _segment_callback(segment_text: str, metadata: dict[str, Any] | None = None, is_final: bool | None = None):
+            if not segment_text:
+                return
+            callback = self.on_segment_transcribed_callback
+            if not callback:
+                return
+            payload = metadata or {}
+            if operation_id and (not isinstance(payload, dict) or "operation_id" not in payload):
+                try:
+                    payload = dict(payload)
+                except Exception:
+                    payload = {"data": metadata} if metadata is not None else {}
+                payload.setdefault("operation_id", operation_id)
+            try:
+                callback(
+                    segment_text,
+                    metadata=payload if isinstance(payload, dict) else None,
+                    is_final=bool(is_final),
+                    operation_id=operation_id,
+                )
+            except TypeError:
+                callback(segment_text)
+            except Exception:
+                LOGGER.debug("Segment callback raised an exception.", exc_info=True)
+
+        cancel_event = self.transcription_cancel_event
+
+        def _run_transcription() -> None:
+            with scoped_correlation_id(correlation_id, preserve_existing=True):
+                with operation_context("transcription", operation_id=operation_id) as active_operation_id:
+                    start_ts = time.perf_counter()
+                    raw_text: str = ""
+                    try:
+                        batch_size = self._get_dynamic_batch_size()
+                        chunk_length = self.chunk_length_sec
+                        transcription_kwargs = {
+                            "chunk_length_s": chunk_length,
+                            "batch_size": batch_size,
+                            "on_segment": _segment_callback,
+                            "cancel_event": cancel_event,
+                        }
+                        result: Any
+                        transcribe_fn = getattr(backend, "transcribe", None)
+                        if callable(transcribe_fn):
+                            result = transcribe_fn(audio_source, **transcription_kwargs)
+                        else:
+                            stream_fn = getattr(backend, "stream_transcribe", None)
+                            if not callable(stream_fn):
+                                raise RuntimeError("Backend does not expose a transcription method")
+                            text, _ = stream_fn(audio_source, **transcription_kwargs)
+                            result = {"text": text}
+
+                        if isinstance(result, Mapping):
+                            raw_text = str(result.get("text", "") or "")
+                        else:
+                            raw_text = str(result or "")
+
+                        processed_text = self._process_ai_pipeline(raw_text, agent_mode)
+                        duration_ms = (time.perf_counter() - start_ts) * 1000.0
+
+                        metrics_payload = {
+                            "operation_id": active_operation_id,
+                            "agent_mode": agent_mode,
+                            "duration_ms": round(duration_ms, 2),
+                            "raw_chars": len(raw_text),
+                            "processed_chars": len(processed_text or ""),
+                        }
+                        self._emit_transcription_metrics(metrics_payload)
+
+                        LOGGER.info(
+                            "Transcription task completed.",
+                            extra={
+                                "event": "transcription.complete",
+                                "duration_ms": round(duration_ms, 2),
+                                "agent_mode": agent_mode,
+                                "operation_id": active_operation_id,
+                                "chars": len(processed_text or raw_text),
+                            },
+                        )
+
+                        if agent_mode and self.on_agent_result_callback:
+                            try:
+                                self.on_agent_result_callback(
+                                    processed_text or raw_text,
+                                    operation_id=active_operation_id,
+                                )
+                            except TypeError:
+                                self.on_agent_result_callback(processed_text or raw_text)
+                        elif self.on_transcription_result_callback:
+                            try:
+                                self.on_transcription_result_callback(
+                                    processed_text,
+                                    raw_text,
+                                    operation_id=active_operation_id,
+                                )
+                            except TypeError:
+                                self.on_transcription_result_callback(processed_text, raw_text)
+                    except Exception as exc:
+                        LOGGER.error(
+                            "Transcription task failed: %s",
+                            exc,
+                            exc_info=True,
+                            extra={"event": "transcription.error", "operation_id": operation_id},
+                        )
+                        if state_mgr is not None:
+                            try:
+                                state_mgr.set_state(
+                                    sm.STATE_ERROR_TRANSCRIPTION,
+                                    details=str(exc),
+                                    source="transcription_handler",
+                                    operation_id=operation_id,
+                                )
+                            except Exception:
+                                LOGGER.debug("Failed to emit error state after transcription failure.", exc_info=True)
+                    finally:
+                        cancel_event.clear()
+
+        future = self.transcription_executor.submit(_run_transcription)
+
+        def _on_done(fut: concurrent.futures.Future[None]) -> None:
+            self.transcription_future = None
+            try:
+                fut.result()
+            except Exception:
+                LOGGER.debug("Transcription future completed with error.", exc_info=True)
+
+        future.add_done_callback(_on_done)
+        self.transcription_future = future
+        return True
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""

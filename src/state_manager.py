@@ -71,6 +71,7 @@ class StateNotification:
     previous_state: str | None = None
     details: object | None = None
     source: str | None = None
+    operation_id: str | None = None
 
 
 STATE_FOR_EVENT: dict[StateEvent, str] = {
@@ -178,6 +179,7 @@ class StateManager:
             details={
                 "state": notification.state,
                 "event_name": event_name,
+                "operation_id": notification.operation_id,
             },
         ) as log_details:
             log_details["subscriber_count"] = len(self._subscribers)
@@ -209,6 +211,7 @@ class StateManager:
         *,
         details: object | None = None,
         source: str | None = None,
+        operation_id: str | None = None,
     ):
         """Applies a state transition and notifies subscribers."""
         event_obj: StateEvent | None
@@ -262,6 +265,7 @@ class StateManager:
                 previous_state=previous_state,
                 details=detail_payload if detail_payload is not None else message,
                 source=source,
+                operation_id=operation_id,
             )
             self._current_state = mapped_state
             self._last_notification = notification
@@ -276,6 +280,7 @@ class StateManager:
                 origin=origin_label,
                 message=message,
                 source=source,
+                operation_id=operation_id,
             )
         )
 
