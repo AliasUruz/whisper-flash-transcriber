@@ -127,7 +127,13 @@ class AudioHandler:
 
         # Dedicated queue and thread for audio processing
         self.audio_queue = queue.Queue()
-        self._processing_thread = threading.Thread(target=self._process_audio_queue, daemon=True)
+        # Mantém o total de workers responsáveis por consumir a fila.
+        self._processing_workers = 1
+        self._processing_thread = threading.Thread(
+            target=self._process_audio_queue,
+            daemon=True,
+            name="AudioProcessThread",
+        )
         self._processing_thread.start()
 
         self._logger = LOGGER.bind(handler_id=f"audio-{id(self):x}")
@@ -268,10 +274,34 @@ class AudioHandler:
         return tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
 
     def _process_audio_queue(self):
+        """Consume audio chunks until a shutdown sentinel (``None``) is received.
+
+        Notes
+        -----
+        Atualmente apenas uma thread de processamento é criada para consumir a
+        fila. Caso novos workers sejam adicionados no futuro, certifique-se de
+        fornecer um sentinela por worker ao encerrar.
+        """
         while True:
             try:
                 indata = self.audio_queue.get()
                 if indata is None:  # Stop signal
+                    drained = 0
+                    while True:
+                        try:
+                            leftover = self.audio_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        else:
+                            drained += 1
+                    self._log.debug(
+                        log_context(
+                            "Shutdown sentinel received; audio queue drained.",
+                            event="audio.processing.queue_drained",
+                            stage="processing_shutdown",
+                            drained_items=drained,
+                        )
+                    )
                     break
 
                 if not self.in_memory_mode and self._sf_writer is None:
@@ -602,9 +632,11 @@ class AudioHandler:
                 ):
                     if not self._processing_thread or not self._processing_thread.is_alive():
                         self.audio_queue = queue.Queue()
+                        self._processing_workers = 1
                         self._processing_thread = threading.Thread(
                             target=self._process_audio_queue,
                             daemon=True,
+                            name="AudioProcessThread",
                         )
                         self._processing_thread.start()
 
@@ -737,10 +769,7 @@ class AudioHandler:
                 stream_was_started = self.stream_started
                 self._stop_event.set()
 
-                try:
-                    self.audio_queue.put(None)
-                except Exception:
-                    pass
+                sentinels_enqueued = self._signal_processing_shutdown()
                 if self._processing_thread:
                     processing_thread = self._processing_thread
                     if processing_thread is threading.current_thread():
@@ -749,6 +778,14 @@ class AudioHandler:
                         )
                     elif processing_thread.is_alive():
                         processing_thread.join()
+                        if sentinels_enqueued:
+                            self._log.debug(
+                                log_context(
+                                    "Audio processing thread joined after stop request.",
+                                    event="audio.processing.thread_joined",
+                                    stage="processing_shutdown",
+                                )
+                            )
                     self._processing_thread = None
 
                 if self.use_vad and self.vad_manager:
@@ -1357,11 +1394,9 @@ class AudioHandler:
         self._cleanup_temp_file()
 
         # Finaliza a thread de processamento, caso ainda esteja ativa
+        sentinels_enqueued = 0
         if self.audio_queue:
-            try:
-                self.audio_queue.put(None)
-            except Exception:
-                pass
+            sentinels_enqueued = self._signal_processing_shutdown()
         if self._processing_thread:
             processing_thread = self._processing_thread
             if processing_thread is threading.current_thread():
@@ -1370,7 +1405,77 @@ class AudioHandler:
                 )
             elif processing_thread.is_alive():
                 processing_thread.join(timeout=2)  # Timeout curto evita travamentos ao desligar threads no Windows
-            self._processing_thread = None
+                if sentinels_enqueued:
+                    self._log.debug(
+                        log_context(
+                            "Audio processing thread joined during cleanup.",
+                            event="audio.processing.thread_joined",
+                            stage="processing_shutdown",
+                        )
+                    )
+        self._processing_thread = None
+
+    def _signal_processing_shutdown(self, *, workers: int | None = None) -> int:
+        """Enviar sentinelas de desligamento para os workers de processamento.
+
+        Parameters
+        ----------
+        workers:
+            Permite especificar explicitamente quantos sentinelas devem ser
+            enfileirados. Por padrão utiliza ``self._processing_workers``, o que
+            garante compatibilidade futura com múltiplos consumidores.
+        """
+
+        thread = self._processing_thread
+        if not thread or not thread.is_alive():
+            self._log.debug(
+                log_context(
+                    "Processing thread inactive; skipping shutdown sentinel enqueue.",
+                    event="audio.processing.sentinel_skipped",
+                    stage="processing_shutdown",
+                )
+            )
+            return 0
+
+        target_workers = workers if workers is not None else self._processing_workers
+        if target_workers <= 0:
+            self._log.debug(
+                log_context(
+                    "No processing workers registered; no sentinels enqueued.",
+                    event="audio.processing.no_workers",
+                    stage="processing_shutdown",
+                )
+            )
+            return 0
+
+        sentinels = 0
+        for _ in range(target_workers):
+            try:
+                self.audio_queue.put(None)
+            except Exception:
+                self._log.debug(
+                    "Failed to enqueue shutdown sentinel for audio processing thread.",
+                    exc_info=True,
+                    extra={
+                        "event": "audio.processing.sentinel_failed",
+                        "stage": "processing_shutdown",
+                    },
+                )
+                break
+            else:
+                sentinels += 1
+
+        if sentinels:
+            self._log.debug(
+                log_context(
+                    "Shutdown sentinel enqueued for audio processing worker(s).",
+                    event="audio.processing.sentinel_enqueued",
+                    stage="processing_shutdown",
+                    workers=sentinels,
+                )
+            )
+
+        return sentinels
 
     # ------------------------------------------------------------------
     # Diagnostics
