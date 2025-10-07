@@ -28,15 +28,27 @@ This cycle works out of the box on any machine that can install the base require
    ```bash
    pip install -r requirements.txt -c constraints.txt
    ```
-   The optional `-c constraints.txt` flag keeps installations inside the validated compatibility window; omit it if you need to
-   prototype with newer packages temporarily. The base dependency set installs the faster-whisper/CTranslate2 runtime and all
-   core libraries needed for the default flow. PyTorch and the Transformers pipeline are no longer part of the mandatory stack.
+   The base dependency set installs the faster-whisper/CTranslate2 runtime, `huggingface_hub`, and all core libraries needed for
+   the default flow. Version specifiers now use bounded ranges (for example, `numpy>=1.26,<3` and `psutil>=5.9,<6.1`) so that
+   upgrades remain compatible with PyTorch 2.5.1 and other vendor wheels without forcing exact pins. PyTorch and the
+   Transformers pipeline are no longer part of the mandatory stack.
 
 4. **Optional legacy stack:**
    ```bash
    pip install -r requirements-legacy.txt -c constraints.txt
    ```
-   The first boot provisions `config.json`, `secrets.json`, and `hotkey_config.json` under `~/.cache/whisper_flash_transcriber/` (or the directory pointed to `WHISPER_FLASH_PROFILE_DIR`). The hardware probe then recommends a Whisper model and starts the background download if one is missing.
+   Install this file only if you plan to run the legacy Transformers + PyTorch workflow. The main application no longer ships
+   that backend, but the optional dependencies remain available for custom forks. The file now pins `torch==2.5.1` to maintain
+   parity with the production baseline; `huggingface_hub` ships with the core requirements, so no additional extras are pulled
+   in by this step. When installing PyTorch on Linux without CUDA, use the CPU index explicitly:
+
+   ```bash
+   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+   ```
+
+### Optional: Advanced GPU and quantization extras
+
+Install the optional requirements only when you need GPU-centric optimizations such as quantized models:
 
 ### GPU acceleration and quantization (optional)
 If you want CUDA-enabled PyTorch or advanced quantisation backends, install the base requirements first and then follow the [official PyTorch installation guide](https://pytorch.org/get-started/locally/) for your driver. Extra GPU-centric packages (such as `bitsandbytes`) remain in `requirements-optional.txt` and should only be installed when you actually need them:

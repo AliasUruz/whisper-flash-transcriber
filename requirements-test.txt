@@ -3,14 +3,15 @@ pytest
 flake8==7.2.0
 
 # Dependências da Aplicação usadas nos Testes
-sounddevice
-numpy>=2.3.0
+sounddevice>=0.4.6,<0.6
+numpy>=1.26,<3
 pyautogui
 pyperclip
-requests>=2.32.4
+requests>=2.28,<2.33
 google-generativeai
 keyboard
 soundfile>=0.13.1
-onnxruntime
-psutil
-faster-whisper
+onnxruntime>=1.17,<1.25
+psutil>=5.9,<6.1
+faster-whisper>=1.0
+huggingface_hub>=0.24,<0.27

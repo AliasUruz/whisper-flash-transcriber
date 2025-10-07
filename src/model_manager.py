@@ -1843,8 +1843,8 @@ def _make_cancellable_progress(check_abort, progress_callback: Callable[[int, in
 def _require_hf_api() -> "HfApi":
     if HfApi is None:
         message = (
-            "huggingface_hub is required for model downloads. Install optional dependencies via "
-            "requirements-legacy.txt or provide pre-downloaded models."
+            "huggingface_hub is required for model downloads. Reinstall the core requirements via "
+            "requirements.txt or provide pre-downloaded models."
         )
         MODEL_LOGGER.error(message)
         raise RuntimeError(message)
@@ -1854,8 +1854,8 @@ def _require_hf_api() -> "HfApi":
 def _snapshot_download(**kwargs):
     if snapshot_download is None:
         message = (
-            "huggingface_hub is required for model downloads. Install optional dependencies via "
-            "requirements-legacy.txt or provide pre-downloaded models."
+            "huggingface_hub is required for model downloads. Reinstall the core requirements via "
+            "requirements.txt or provide pre-downloaded models."
         )
         MODEL_LOGGER.error(message)
         raise RuntimeError(message)
