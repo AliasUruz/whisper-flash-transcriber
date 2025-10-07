@@ -258,18 +258,20 @@ class AudioHandler:
                 log_payload["device_lookup_error"] = lookup_error
             self._log.error(StructuredMessage("Audio input preflight failed.", **log_payload))
 
-            details_message = f"{message} Sugestão: {suggestion}"
-            try:
-                self.state_manager.set_state(
-                    sm.StateEvent.AUDIO_ERROR,
-                    details=details_message,
-                    source="audio_handler",
-                )
-            except Exception:  # pragma: no cover - defensive guard around state updates
-                self._log.error(
-                    "Failed to dispatch audio error state after preflight failure.",
-                    exc_info=True,
-                )
+            # Não promovemos o estado global para ``ERROR_AUDIO`` durante a
+            # pré-checagem: isso evitaria novos ciclos de tentativa quando o
+            # usuário corrigisse a configuração do dispositivo. Em vez disso,
+            # apenas registramos a falha e deixamos o estado permanecer em
+            # ``IDLE`` para que o AppCore permita uma nova tentativa.
+            self._log.debug(
+                "Skipping audio error state transition after preflight failure.",
+                extra={
+                    "event": "audio.preflight_no_state_change",
+                    "stage": "recording",
+                    "message": message,
+                    "suggestion": suggestion,
+                },
+            )
             return False
 
         self._last_start_failure = None
