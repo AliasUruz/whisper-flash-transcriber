@@ -58,7 +58,10 @@ from .config_manager import (
 from .audio_handler import AudioHandler
 from .action_orchestrator import ActionOrchestrator
 from .transcription_handler import TranscriptionHandler
-from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
+from .keyboard_hotkey_manager import (
+    AUXILIARY_JOIN_TIMEOUT,
+    KeyboardHotkeyManager,
+)  # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from .model_download_controller import ModelDownloadController
 from . import model_manager as model_manager_module
@@ -339,7 +342,18 @@ class AppCore:
         self.key_detection_callback = None # Callback para atualizar a UI com a tecla detectada
         self._key_detection_thread: threading.Thread | None = None
 
-        self._refresh_hotkey_driver_ui()
+        self.ahk_manager.set_auxiliary_thread(
+            "periodic_reregister",
+            stop_event=self.stop_reregister_event,
+            timeout=AUXILIARY_JOIN_TIMEOUT,
+            thread_label="PeriodicHotkeyReregister",
+        )
+        self.ahk_manager.set_auxiliary_thread(
+            "health_monitor",
+            stop_event=self.stop_health_check_event,
+            timeout=AUXILIARY_JOIN_TIMEOUT,
+            thread_label="HotkeyHealthThread",
+        )
 
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
@@ -1511,6 +1525,11 @@ class AppCore:
                     target=self._periodic_reregister_task, daemon=True, name="PeriodicHotkeyReregister"
                 )
                 self.reregister_timer_thread.start()
+                self.ahk_manager.set_auxiliary_thread(
+                    "periodic_reregister",
+                    thread=self.reregister_timer_thread,
+                    thread_label=self.reregister_timer_thread.name,
+                )
                 LOGGER.info(
                     log_context(
                         "Periodic hotkey re-registration thread started.",
@@ -1525,6 +1544,11 @@ class AppCore:
                     target=self._hotkey_health_check_task, daemon=True, name="HotkeyHealthThread"
                 )
                 self.health_check_thread.start()
+                self.ahk_manager.set_auxiliary_thread(
+                    "health_monitor",
+                    thread=self.health_check_thread,
+                    thread_label=self.health_check_thread.name,
+                )
                 LOGGER.info(
                     log_context(
                         "Hotkey health monitoring thread launched.",
@@ -2565,6 +2589,11 @@ class AppCore:
                         name="PeriodicHotkeyReregister",
                     )
                     self.reregister_timer_thread.start()
+                    self.ahk_manager.set_auxiliary_thread(
+                        "periodic_reregister",
+                        thread=self.reregister_timer_thread,
+                        thread_label=self.reregister_timer_thread.name,
+                    )
                     LOGGER.info("Periodic hotkey re-registration thread launched via settings update.")
 
                 if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
@@ -2575,6 +2604,11 @@ class AppCore:
                         name="HotkeyHealthThread",
                     )
                     self.health_check_thread.start()
+                    self.ahk_manager.set_auxiliary_thread(
+                        "health_monitor",
+                        thread=self.health_check_thread,
+                        thread_label=self.health_check_thread.name,
+                    )
                     LOGGER.info("Hotkey health monitoring thread launched via settings update.")
             else:
                 self.stop_reregister_event.set()
@@ -2704,12 +2738,22 @@ class AppCore:
                     self.stop_reregister_event.clear()
                     self.reregister_timer_thread = threading.Thread(target=self._periodic_reregister_task, daemon=True, name="PeriodicHotkeyReregister")
                     self.reregister_timer_thread.start()
+                    self.ahk_manager.set_auxiliary_thread(
+                        "periodic_reregister",
+                        thread=self.reregister_timer_thread,
+                        thread_label=self.reregister_timer_thread.name,
+                    )
                     LOGGER.info("Periodic hotkey re-registration thread launched via update_setting.")
 
                 if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
                     self.stop_health_check_event.clear()
                     self.health_check_thread = threading.Thread(target=self._hotkey_health_check_task, daemon=True, name="HotkeyHealthThread")
                     self.health_check_thread.start()
+                    self.ahk_manager.set_auxiliary_thread(
+                        "health_monitor",
+                        thread=self.health_check_thread,
+                        thread_label=self.health_check_thread.name,
+                    )
                     LOGGER.info("Hotkey health monitoring thread launched via update_setting.")
             else:
                 self.stop_reregister_event.set()

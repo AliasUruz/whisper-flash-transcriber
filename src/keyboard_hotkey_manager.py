@@ -9,13 +9,15 @@ from pathlib import Path
 from typing import Any
 
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
-from .logging_utils import get_logger, log_context
-from .hotkeys import BaseHotkeyDriver, build_available_drivers
+from .logging_utils import get_logger, join_thread_with_timeout, log_context
 
 LOGGER = get_logger(
     "whisper_flash_transcriber.hotkeys",
     component="KeyboardHotkeyManager",
 )
+
+
+AUXILIARY_JOIN_TIMEOUT = 2.0
 
 class KeyboardHotkeyManager:
     """Gerencia hotkeys usando drivers intercambiáveis."""
@@ -43,6 +45,9 @@ class KeyboardHotkeyManager:
         self._active_driver_index: int | None = None
         self._driver_lock = threading.Lock()
         self._driver_failures: list[dict[str, Any]] = []
+
+        self._auxiliary_threads: dict[str, dict[str, Any]] = {}
+        self._aux_threads_lock = threading.Lock()
 
         # Carregar configuração se existir
         self._load_config()
@@ -423,6 +428,7 @@ class KeyboardHotkeyManager:
 
     def stop(self):
         """Para o gerenciador de hotkeys."""
+        self._stop_auxiliary_threads()
         # Sempre tente remover as hotkeys, mesmo que o estado esteja incorreto
         driver_name = self.get_active_driver_name()
         self._unregister_hotkeys()
@@ -550,10 +556,95 @@ class KeyboardHotkeyManager:
             "driver_state": driver_state,
         }
 
-    def _unregister_hotkeys(self) -> None:
-        """Remove todas as hotkeys registradas pelos drivers."""
-        entries = self._driver_entries()
-        if not entries:
+    def set_auxiliary_thread(
+        self,
+        name: str,
+        *,
+        thread: threading.Thread | None = None,
+        stop_event: threading.Event | None = None,
+        timeout: float | None = None,
+        thread_label: str | None = None,
+    ) -> None:
+        """Register or update metadata for auxiliary hotkey service threads."""
+
+        if not name:
+            raise ValueError("Auxiliary thread name must be a non-empty string")
+
+        with self._aux_threads_lock:
+            entry = self._auxiliary_threads.setdefault(
+                name,
+                {
+                    "thread": None,
+                    "stop_event": None,
+                    "timeout": AUXILIARY_JOIN_TIMEOUT,
+                    "label": thread_label or name,
+                },
+            )
+
+            if thread is not None:
+                entry["thread"] = thread
+                entry["label"] = thread_label or getattr(thread, "name", entry.get("label") or name)
+            elif thread_label is not None:
+                entry["label"] = thread_label
+
+            if stop_event is not None:
+                entry["stop_event"] = stop_event
+
+            if timeout is not None:
+                entry["timeout"] = timeout
+
+            thread_alive = thread.is_alive() if isinstance(thread, threading.Thread) else None
+
+        self._log(
+            logging.DEBUG,
+            "Auxiliary hotkey thread metadata updated.",
+            event="hotkeys.aux_thread_updated",
+            name=name,
+            thread_alive=thread_alive,
+            timeout=timeout,
+        )
+
+    def _stop_auxiliary_threads(self) -> None:
+        """Signal and wait for auxiliary background threads to stop."""
+
+        with self._aux_threads_lock:
+            snapshot = [
+                (
+                    name,
+                    payload.get("thread"),
+                    payload.get("stop_event"),
+                    float(payload.get("timeout", AUXILIARY_JOIN_TIMEOUT)),
+                    payload.get("label") or name,
+                )
+                for name, payload in self._auxiliary_threads.items()
+            ]
+
+            for payload in self._auxiliary_threads.values():
+                payload["thread"] = None
+
+        for name, thread, stop_event, timeout, label in snapshot:
+            if isinstance(stop_event, threading.Event):
+                stop_event.set()
+
+            if isinstance(thread, threading.Thread):
+                join_thread_with_timeout(
+                    thread,
+                    timeout=timeout,
+                    logger=LOGGER,
+                    thread_name=label,
+                    event_prefix=f"hotkeys.{name}",
+                    details={"auxiliary": name},
+                )
+
+    def _store_hotkey_handle(self, handle_id, handle):
+        """Guarda o handle retornado pela biblioteca ``keyboard``."""
+        if handle is None:
+            self._log(
+                logging.WARNING,
+                "Keyboard library returned a null handle; hook may not be active.",
+                event="hotkeys.handle_missing",
+                handle_id=handle_id,
+            )
             return
         for _, driver in entries:
             try:
