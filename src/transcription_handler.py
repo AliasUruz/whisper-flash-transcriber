@@ -1287,3 +1287,72 @@ class TranscriptionHandler:
             self.device_in_use,
         )
         return self._asr_backend, None
+
+    def shutdown(self, *, wait: bool = True) -> None:
+        """Finaliza o executor e libera os recursos do backend de ASR."""
+        LOGGER.info(
+            "Shutting down transcription handler resources.",
+            extra={"event": "transcription_handler.shutdown.start"},
+        )
+
+        self.transcription_cancel_event.set()
+
+        future = self.transcription_future
+        if future is not None:
+            cancelled = future.cancel()
+            if wait and not cancelled:
+                try:
+                    future.result()
+                except concurrent.futures.CancelledError:
+                    pass
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    LOGGER.debug(
+                        "Transcription task raised during shutdown: %s",
+                        exc,
+                        exc_info=True,
+                    )
+            self.transcription_future = None
+
+        executor = getattr(self, "transcription_executor", None)
+        if executor is not None:
+            try:
+                executor.shutdown(wait=wait)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                LOGGER.warning(
+                    "Failed to shutdown transcription executor cleanly: %s",
+                    exc,
+                )
+            finally:
+                self.transcription_executor = None
+
+        backend = self._asr_backend
+        if backend is not None:
+            try:
+                unload = getattr(backend, "unload", None)
+                if callable(unload):
+                    unload()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                LOGGER.warning(
+                    "Failed to unload ASR backend during shutdown: %s",
+                    exc,
+                )
+            finally:
+                self._asr_backend = None
+
+        self.pipe = None
+
+        if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and _torch_cuda_available():
+            try:
+                assert torch is not None
+                torch.cuda.empty_cache()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                LOGGER.debug(
+                    "Failed to clear CUDA cache during shutdown: %s",
+                    exc,
+                    exc_info=True,
+                )
+
+        LOGGER.info(
+            "Transcription handler shutdown complete.",
+            extra={"event": "transcription_handler.shutdown.end"},
+        )
