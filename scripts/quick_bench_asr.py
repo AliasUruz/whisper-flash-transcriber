@@ -464,7 +464,6 @@ def test_apply_settings_payload_headless():
         "new_key": "f5",
         "new_mode": "press",
         "new_chunk_length_sec": 48.0,
-        "new_enable_torch_compile": True,
     }
 
     ui.apply_settings_payload(payload)

@@ -53,7 +53,6 @@ _DEFAULT_MODELS_STORAGE_DIR = str((_BASE_STORAGE_ROOT / "models").expanduser())
 _DEFAULT_ASR_CACHE_DIR = str((Path(_DEFAULT_MODELS_STORAGE_DIR) / "asr").expanduser())
 _DEFAULT_DEPS_INSTALL_DIR = str((_BASE_STORAGE_ROOT / "deps").expanduser())
 _DEFAULT_HF_HOME_DIR = str((Path(_DEFAULT_DEPS_INSTALL_DIR) / "huggingface").expanduser())
-_DEFAULT_TRANSFORMERS_CACHE_DIR = str((Path(_DEFAULT_DEPS_INSTALL_DIR) / "transformers").expanduser())
 _DEFAULT_RECORDINGS_DIR = str((_BASE_STORAGE_ROOT / "recordings").expanduser())
 _DEFAULT_PYTHON_PACKAGES_DIR = str((_BASE_STORAGE_ROOT / "python_packages").expanduser())
 _DEFAULT_VAD_MODELS_DIR = str((_BASE_STORAGE_ROOT / "vad").expanduser())
@@ -169,19 +168,16 @@ DEFAULT_CONFIG = {
     "min_transcription_duration": 1.0,  # Nova configuração
     "chunk_length_sec": 30,
     "chunk_length_mode": "manual",
-    "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
     "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
     "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
     "deps_install_dir": _DEFAULT_DEPS_INSTALL_DIR,
     "hf_home_dir": _DEFAULT_HF_HOME_DIR,
-    "transformers_cache_dir": _DEFAULT_TRANSFORMERS_CACHE_DIR,
     "recordings_dir": _DEFAULT_RECORDINGS_DIR,
     "asr_model_id": "distil-whisper/distil-large-v3",
     "asr_backend": "ctranslate2",
     "asr_compute_device": "auto",
-    "asr_dtype": "float16",
     "asr_ct2_compute_type": "int8_float16",
     "asr_cache_dir": _DEFAULT_ASR_CACHE_DIR,
     "asr_installed_models": [],
@@ -267,7 +263,6 @@ GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 GEMINI_TIMEOUT_CONFIG_KEY = "gemini_timeout"
 # Novas constantes para otimizações de desempenho
 CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
-ENABLE_TORCH_COMPILE_CONFIG_KEY = "enable_torch_compile"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
@@ -284,13 +279,11 @@ RECORDINGS_DIR_CONFIG_KEY = "recordings_dir"
 ASR_BACKEND_CONFIG_KEY = "asr_backend"
 ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
 ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
-ASR_DTYPE_CONFIG_KEY = "asr_dtype"
 ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
 ASR_CT2_CPU_THREADS_CONFIG_KEY = "asr_ct2_cpu_threads"
 MODELS_STORAGE_DIR_CONFIG_KEY = "models_storage_dir"
 DEPS_INSTALL_DIR_CONFIG_KEY = "deps_install_dir"
 HF_HOME_DIR_CONFIG_KEY = "hf_home_dir"
-TRANSFORMERS_CACHE_DIR_CONFIG_KEY = "transformers_cache_dir"
 ASR_CACHE_DIR_CONFIG_KEY = "asr_cache_dir"
 ASR_INSTALLED_MODELS_CONFIG_KEY = "asr_installed_models"
 ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
@@ -346,7 +339,6 @@ def _normalize_asr_backend(name: str | None) -> str | None:
         "faster whisper",
         "faster_whisper",
         "faster-whisper",
-        "transformers",
         "auto",
     }:
         return "ctranslate2"
@@ -1002,13 +994,6 @@ class ConfigManager:
         )
         cfg[HF_HOME_DIR_CONFIG_KEY] = str(hf_home_path)
 
-        transformers_cache_path = _ensure_directory(
-            hf_home_path / "transformers",
-            fallback=hf_home_path,
-            description="Transformers cache",
-        )
-        cfg[TRANSFORMERS_CACHE_DIR_CONFIG_KEY] = str(transformers_cache_path)
-
         derived_recordings_path = storage_root_path / "recordings"
         default_recordings_path = Path(
             self.default_config[RECORDINGS_DIR_CONFIG_KEY]
@@ -1209,11 +1194,6 @@ class ConfigManager:
             logging.warning(f"Invalid chunk_length_mode '{raw_chunk_mode}'. Falling back to 'manual'.")
             raw_chunk_mode = "manual"
         self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = raw_chunk_mode
-
-        # enable_torch_compile: bool
-        self.config[ENABLE_TORCH_COMPILE_CONFIG_KEY] = _parse_bool(
-            self.config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False))
-        )
 
         backend_value = _normalize_asr_backend(
             self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
@@ -1420,9 +1400,6 @@ class ConfigManager:
         )
         self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(
             self.config.get(ASR_COMPUTE_DEVICE_CONFIG_KEY, self.default_config[ASR_COMPUTE_DEVICE_CONFIG_KEY])
-        )
-        self.config[ASR_DTYPE_CONFIG_KEY] = str(
-            self.config.get(ASR_DTYPE_CONFIG_KEY, self.default_config[ASR_DTYPE_CONFIG_KEY])
         )
         self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(
             self.config.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY, self.default_config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY])
@@ -2230,15 +2207,6 @@ class ConfigManager:
     def set_asr_compute_device(self, value: str):
         self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(value)
 
-    def get_asr_dtype(self):
-        return self.config.get(
-            ASR_DTYPE_CONFIG_KEY,
-            self.default_config[ASR_DTYPE_CONFIG_KEY],
-        )
-
-    def set_asr_dtype(self, value: str):
-        self.config[ASR_DTYPE_CONFIG_KEY] = str(value)
-
     def get_asr_ct2_compute_type(self):
         return self.config.get(
             ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
@@ -2329,18 +2297,6 @@ class ConfigManager:
     def set_hf_home_dir(self, value: str):
         self.config[HF_HOME_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
-    def get_transformers_cache_dir(self) -> str:
-        return self.config.get(
-            TRANSFORMERS_CACHE_DIR_CONFIG_KEY,
-            self.default_config.get(
-                TRANSFORMERS_CACHE_DIR_CONFIG_KEY,
-                _DEFAULT_TRANSFORMERS_CACHE_DIR,
-            ),
-        )
-
-    def set_transformers_cache_dir(self, value: str):
-        self.config[TRANSFORMERS_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
-
     def get_recordings_dir(self) -> str:
         return self.config.get(
             RECORDINGS_DIR_CONFIG_KEY,
@@ -2355,11 +2311,6 @@ class ConfigManager:
         hf_home = self.get_hf_home_dir()
         if hf_home:
             overrides["HF_HOME"] = os.path.expanduser(str(hf_home))
-        transformers_cache = self.get_transformers_cache_dir()
-        if transformers_cache:
-            overrides["TRANSFORMERS_CACHE"] = os.path.expanduser(
-                str(transformers_cache)
-            )
         models_dir = self.get_models_storage_dir()
         if models_dir:
             overrides["WHISPER_FLASH_MODELS_DIR"] = os.path.expanduser(
@@ -2891,15 +2842,6 @@ class ConfigManager:
         if val not in ["auto", "manual"]:
             val = "manual"
         self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = val
-
-    def get_enable_torch_compile(self):
-        return self.config.get(
-            ENABLE_TORCH_COMPILE_CONFIG_KEY,
-            self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False),
-        )
-
-    def set_enable_torch_compile(self, value: bool):
-        self.config[ENABLE_TORCH_COMPILE_CONFIG_KEY] = bool(value)
 
     def set_chunk_length_sec(self, value: float | int):
         try:

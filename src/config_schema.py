@@ -26,9 +26,6 @@ _DEFAULT_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").e
 _DEFAULT_MODELS_STORAGE_DIR = str((_DEFAULT_STORAGE_ROOT / "models").expanduser())
 _DEFAULT_DEPS_INSTALL_DIR = str((_DEFAULT_STORAGE_ROOT / "deps").expanduser())
 _DEFAULT_HF_HOME_DIR = str((Path(_DEFAULT_DEPS_INSTALL_DIR) / "huggingface").expanduser())
-_DEFAULT_TRANSFORMERS_CACHE_DIR = str(
-    (Path(_DEFAULT_DEPS_INSTALL_DIR) / "transformers").expanduser()
-)
 _SUPPORTED_UI_LANGUAGE_MAP = {
     "en": "en-US",
     "en-us": "en-US",
@@ -134,19 +131,16 @@ class AppConfig(BaseModel):
     min_transcription_duration: float = Field(default=1.0, ge=0.0)
     chunk_length_sec: float = Field(default=30.0, ge=0.0)
     chunk_length_mode: str = "manual"
-    enable_torch_compile: bool = False
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
     models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
     deps_install_dir: str = _DEFAULT_DEPS_INSTALL_DIR
     hf_home_dir: str = _DEFAULT_HF_HOME_DIR
-    transformers_cache_dir: str = _DEFAULT_TRANSFORMERS_CACHE_DIR
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
     asr_model_id: str = "distil-whisper/distil-large-v3"
     asr_backend: str = "ctranslate2"
     asr_compute_device: str = "auto"
-    asr_dtype: str = "float16"
     asr_ct2_compute_type: str = "int8_float16"
     asr_ct2_cpu_threads: int | None = None
     asr_cache_dir: str = str((_DEFAULT_STORAGE_ROOT / "asr").expanduser())
@@ -295,7 +289,6 @@ class AppConfig(BaseModel):
         "models_storage_dir",
         "deps_install_dir",
         "hf_home_dir",
-        "transformers_cache_dir",
         "recordings_dir",
         "python_packages_dir",
         "vad_models_dir",

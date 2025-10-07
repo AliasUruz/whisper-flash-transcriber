@@ -2,6 +2,9 @@
 
 Este documento descreve o painel de auditoria de dependências introduzido no `UIManager` e o relatório estruturado produzido por `src/utils/dependency_audit.py`. O objetivo é acelerar a detecção de ambientes quebrados logo após o bootstrap, oferecendo comandos prontos para alinhar o ambiente aos manifestos oficiais (`requirements*.txt`).
 
+> **Nota:** Desde a migração para distribuição *CT2-only*, o arquivo `requirements.txt` contém apenas a pilha essencial do CTranslate2.
+> Para restaurar o fluxo legacy baseado em Transformers/PyTorch, instale também `requirements-legacy.txt` antes de rerodar a auditoria.
+
 ## Quando a auditoria é executada
 
 1. **Bootstrap do AppCore** – Logo após o carregamento da configuração, `AppCore` chama `audit_environment()` e registra o resultado em `ConfigManager.record_runtime_notice()`.

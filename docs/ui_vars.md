@@ -25,7 +25,6 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Correção de texto | `gemini_api_key_var` | `StringVar` | `CTkEntry` (`gemini_key_entry`) | `"gemini_api_key"` | Entrada mascarada para a chave Gemini (persistida em `secrets.json`). |
 | Correção de texto | `gemini_model_var` | `StringVar` | `CTkOptionMenu` (`gemini_model_menu`) | `"gemini_model"` | Seleciona o modelo padrão de correção do Gemini. |
 | Transcrição | `batch_size_var` | `StringVar` | `CTkEntry` (`batch_entry`) | `"batch_size"` | Valor numérico interpretado como inteiro antes de salvar. |
-| Transcrição | `enable_torch_compile_var` | `BooleanVar` | `CTkSwitch` (`torch_compile_switch`) | `"enable_torch_compile"` | Ativa/desativa o `torch.compile` experimental. |
 | Transcrição | `chunk_length_mode_var` | `StringVar` | `CTkOptionMenu` (`chunk_mode_menu`) | `"chunk_length_mode"` | Define se o tamanho de *chunk* é manual ou automático. |
 | Transcrição | `chunk_length_sec_var` | `DoubleVar` | `CTkEntry` (`chunk_len_entry`) | `"chunk_length_sec"` | Valor em segundos usado quando o modo é manual. |
 | Transcrição | `min_transcription_duration_var` | `DoubleVar` | `CTkEntry` (`min_transcription_duration_entry`) | `"min_transcription_duration"` | Limite mínimo para descartar segmentos muito curtos. |
@@ -44,7 +43,6 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | ASR | `asr_model_id_var` | `StringVar` | Alimentado por `CTkOptionMenu` (`asr_model_menu`) via `asr_model_display_var` | `"asr_model_id"` | Guarda o identificador interno do modelo escolhido. |
 | ASR | `asr_model_display_var` | `StringVar` | `CTkOptionMenu` (`asr_model_menu`) | `"asr_model_id"` (mapeado por `display_to_id`) | Variável de exibição; converte nomes amigáveis para `asr_model_id_var`. |
 | ASR | `asr_compute_device_var` | `StringVar` | `CTkOptionMenu` (`asr_device_menu`) | `"asr_compute_device"` + `"gpu_index"` | Representa a seleção textual (*Auto*, *Force CPU*, *GPU X*), traduzida para backend e índice ao aplicar. |
-| ASR | `asr_dtype_var` | `StringVar` | `CTkOptionMenu` (`asr_dtype_menu`) | `"asr_dtype"` | Define a precisão dos tensores do backend Torch. |
 | ASR | `asr_ct2_compute_type_var` | `StringVar` | `CTkOptionMenu` (`asr_ct2_menu`) | `"asr_ct2_compute_type"` | Ajusta o compute type quando o backend é CTranslate2. |
 | ASR | `models_storage_dir_var` | `StringVar` | `CTkEntry` (`models_dir_entry`) | `"models_storage_dir"` | Diretório raiz usado para armazenar modelos e demais artefatos pesados; também serve de destino padrão quando o `storage_root_dir` muda sem override explícito. |
 | ASR | `asr_cache_dir_var` | `StringVar` | `CTkEntry` (`asr_cache_entry`) | `"asr_cache_dir"` | Diretório raiz usado para armazenar modelos baixados. |
