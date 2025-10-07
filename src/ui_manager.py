@@ -820,7 +820,12 @@ class UIManager:
         key_to_apply = record_key_value.lower() if record_key_value != "PRESS KEY..." else self.config_manager.get("record_key")
         agent_key_value = agent_key_var.get() if agent_key_var else self.config_manager.get("agent_key")
         agent_key_to_apply = agent_key_value.lower() if agent_key_value != "PRESS KEY..." else self.config_manager.get("agent_key")
-        mode_to_apply = mode_var.get()
+        mode_to_apply_raw = mode_var.get() if mode_var else ""
+        mode_to_apply = (mode_to_apply_raw or "").strip().lower()
+        if mode_to_apply == "hold":
+            mode_to_apply = "press"
+        if mode_to_apply not in {"toggle", "press"}:
+            mode_to_apply = DEFAULT_CONFIG.get("record_mode", "toggle")
         auto_paste_to_apply = bool(auto_paste_var.get())
         agent_model_to_apply = agent_model_var.get() if agent_model_var else self.config_manager.get("gemini_agent_model")
         hotkey_stability_to_apply = bool(hotkey_stability_var.get()) if hotkey_stability_var else True
@@ -2145,11 +2150,9 @@ class UIManager:
                 mode_initial = self._resolve_initial_value(
                     "record_mode",
                     var_name="record_mode",
-                    coerce=lambda v: str(v).lower(),
-                    allowed={"toggle", "press", "hold"},
+                    coerce=lambda v: "press" if str(v).lower() == "hold" else str(v).lower(),
+                    allowed={"toggle", "press"},
                 )
-                if mode_initial == "press":
-                    mode_initial = "hold"
                 mode_var = ctk.StringVar(value=mode_initial)
 
                 record_key_value = self._resolve_initial_value(
@@ -2865,7 +2868,7 @@ class UIManager:
                 toggle_rb = ctk.CTkRadioButton(mode_frame, text="Alternar", variable=mode_var, value="toggle")
                 toggle_rb.pack(side="left", padx=5)
                 Tooltip(toggle_rb, "Pressione uma vez para iniciar ou parar.")
-                hold_rb = ctk.CTkRadioButton(mode_frame, text="Segurar", variable=mode_var, value="hold")
+                hold_rb = ctk.CTkRadioButton(mode_frame, text="Segurar", variable=mode_var, value="press")
                 hold_rb.pack(side="left", padx=5)
                 Tooltip(hold_rb, "Grava enquanto a tecla estiver pressionada.")
 
