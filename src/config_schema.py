@@ -71,6 +71,7 @@ class AppConfig(BaseModel):
     openrouter_prompt: str = ""
     prompt_agentico: str = ""
     gemini_prompt: str = ""
+    first_run_completed: bool = False
     batch_size: int = Field(default=16, ge=1)
     batch_size_mode: str = "auto"
     manual_batch_size: int = Field(default=8, ge=1)
