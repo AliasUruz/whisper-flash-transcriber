@@ -78,7 +78,12 @@ class ActionOrchestrator:
     # ------------------------------------------------------------------
     # Audio coordination
     # ------------------------------------------------------------------
-    def on_audio_segment_ready(self, audio_source: str | np.ndarray) -> None:
+    def on_audio_segment_ready(
+        self,
+        audio_source: str | np.ndarray,
+        *,
+        operation_id: str | None = None,
+    ) -> None:
         """Processa um segmento de áudio finalizado."""
 
         duration_seconds = self._compute_duration_seconds(audio_source)
@@ -92,6 +97,7 @@ class ActionOrchestrator:
                     event="audio.segment_discarded",
                     duration_seconds=round(duration_seconds, 2),
                     min_duration_seconds=round(min_duration, 2),
+                    operation_id=operation_id,
                 )
             )
             self._state_manager.set_state(
@@ -101,6 +107,7 @@ class ActionOrchestrator:
                     f"{min_duration:.2f}s)"
                 ),
                 source="audio_handler",
+                operation_id=operation_id,
             )
             return
 
@@ -114,6 +121,7 @@ class ActionOrchestrator:
                     event="audio.dispatch_failed",
                     stage="transcription",
                     agent_mode=agent_mode,
+                    operation_id=operation_id,
                 )
             )
             if agent_mode:
@@ -125,6 +133,7 @@ class ActionOrchestrator:
                 sm.StateEvent.AUDIO_ERROR,
                 details="Transcription handler unavailable",
                 source="action_orchestrator",
+                operation_id=operation_id,
             )
             return
 
@@ -135,6 +144,7 @@ class ActionOrchestrator:
                 audio_source,
                 agent_mode,
                 correlation_id=correlation_id,
+                operation_id=operation_id,
             )
         except Exception as exc:  # pragma: no cover - defensive guard around handler
             LOGGER.error(
@@ -163,6 +173,7 @@ class ActionOrchestrator:
                         "Agent mode request preserved: transcription handler rejected audio segment (model likely unavailable).",
                         event="agent_mode.wait",
                         stage="transcription",
+                        operation_id=operation_id,
                     )
                 )
                 self._log_status(
@@ -182,13 +193,20 @@ class ActionOrchestrator:
                 stage="transcription",
                 duration_seconds=round(duration_seconds, 2),
                 agent_mode=agent_mode,
+                operation_id=operation_id,
             )
         )
 
     # ------------------------------------------------------------------
     # Result handling
     # ------------------------------------------------------------------
-    def handle_transcription_result(self, corrected_text: str | None, raw_text: str | None) -> None:
+    def handle_transcription_result(
+        self,
+        corrected_text: str | None,
+        raw_text: str | None,
+        *,
+        operation_id: str | None = None,
+    ) -> None:
         """Trata o resultado final da transcrição."""
 
         final_text = (corrected_text or "").strip()
@@ -211,6 +229,7 @@ class ActionOrchestrator:
             sm.StateEvent.TRANSCRIPTION_COMPLETED,
             details=f"Transcription finalized ({len(final_text)} chars)",
             source="transcription",
+            operation_id=operation_id,
         )
         self._close_live_transcription_ui()
         if self._reset_transcription_buffer:
@@ -220,10 +239,19 @@ class ActionOrchestrator:
 
         LOGGER.info(
             "Transcription ready for consumption.",
-            extra={"event": "transcription_ready", "details": f"chars={len(final_text)}"},
+            extra={
+                "event": "transcription_ready",
+                "details": f"chars={len(final_text)}",
+                "operation_id": operation_id,
+            },
         )
 
-    def handle_agent_result(self, agent_response_text: str) -> None:
+    def handle_agent_result(
+        self,
+        agent_response_text: str,
+        *,
+        operation_id: str | None = None,
+    ) -> None:
         """Trata o resultado do modo agente."""
 
         response = (agent_response_text or "").strip()
@@ -231,7 +259,7 @@ class ActionOrchestrator:
             self._log_status("Agent command returned an empty response.", error=True)
             LOGGER.warning(
                 "Agent command returned an empty response.",
-                extra={"event": "agent_response_empty"},
+                extra={"event": "agent_response_empty", "operation_id": operation_id},
             )
             return
 
@@ -246,6 +274,7 @@ class ActionOrchestrator:
             sm.StateEvent.AGENT_COMMAND_COMPLETED,
             details=f"Agent response delivered ({len(response)} chars)",
             source="agent_mode",
+            operation_id=operation_id,
         )
         self._close_live_transcription_ui()
         if self._delete_temp_audio_callback:

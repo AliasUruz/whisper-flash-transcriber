@@ -246,6 +246,7 @@ class AppCore:
         self._active_recording_correlation_id: str | None = None
         self._recording_started_at: float | None = None
         self._onboarding_active = False
+        self._active_recording_operation_id: str | None = None
 
         # Inicializar atributos dependentes da configuração antes de acionar o fluxo de modelo
         self._apply_initial_config_to_core_attributes()
@@ -1543,6 +1544,7 @@ class AppCore:
         *,
         metadata: dict[str, Any] | None = None,
         is_final: bool = False,
+        operation_id: str | None = None,
     ):
         """Callback para enviar texto de segmento para a UI ao vivo."""
         if text:
@@ -1550,12 +1552,19 @@ class AppCore:
         if is_final:
             self._segment_stream_finalized = True
             self.full_transcription = self.full_transcription.strip()
+        normalized_metadata = metadata
+        if isinstance(metadata, dict) and operation_id and "operation_id" not in metadata:
+            normalized_metadata = dict(metadata)
+            normalized_metadata["operation_id"] = operation_id
+        elif metadata is None and operation_id:
+            normalized_metadata = {"operation_id": operation_id}
         if self.on_segment_transcribed:
             try:
                 self.on_segment_transcribed(
                     text,
-                    metadata=metadata,
+                    metadata=normalized_metadata,
                     is_final=is_final,
+                    operation_id=operation_id,
                 )
             except TypeError:
                 self.on_segment_transcribed(text)
@@ -1833,6 +1842,11 @@ class AppCore:
         correlation = self._active_recording_correlation_id
         if correlation:
             details["correlation_id"] = correlation
+        op_id = self._active_recording_operation_id or getattr(
+            self.audio_handler, "current_operation_id", None
+        )
+        if op_id:
+            details["operation_id"] = op_id
         return details
 
     # --- Hotkey Logic (movida de WhisperCore) ---
@@ -2079,6 +2093,10 @@ class AppCore:
             ) as collected:
                 start_success = self.audio_handler.start_recording()
                 collected["audio_session_id"] = getattr(self.audio_handler, "_session_id", None)
+                current_operation = getattr(self.audio_handler, "current_operation_id", None)
+                if current_operation:
+                    collected["operation_id"] = current_operation
+                    self._active_recording_operation_id = current_operation
                 collected["audio_handler_ack"] = bool(start_success)
                 if start_success:
                     self._reset_full_transcription()
@@ -2090,6 +2108,7 @@ class AppCore:
                     collected.setdefault("status", "noop")
             if not start_success:
                 self._active_recording_correlation_id = None
+                self._active_recording_operation_id = None
                 self._recording_started_at = None
                 self._log_status(
                     "Audio subsystem rejected the recording start request.",
@@ -2117,6 +2136,9 @@ class AppCore:
             if self._recording_started_at is not None:
                 elapsed = max(time.monotonic() - self._recording_started_at, 0.0)
                 base_details["elapsed_ms"] = int(elapsed * 1000)
+            op_id = self._active_recording_operation_id or getattr(
+                self.audio_handler, "current_operation_id", None
+            )
             with log_duration(
                 LOGGER,
                 "Recording session shutdown.",
@@ -2125,6 +2147,8 @@ class AppCore:
                 log_start=True,
                 start_level=logging.DEBUG,
             ) as collected:
+                if op_id:
+                    collected["operation_id"] = op_id
                 was_valid = self.audio_handler.stop_recording()
                 collected["recording_valid"] = bool(was_valid)
                 if was_valid is False:
@@ -2133,6 +2157,7 @@ class AppCore:
                     collected.setdefault("status", "completed")
         self._active_recording_correlation_id = None
         self._recording_started_at = None
+        self._active_recording_operation_id = None
 
         if was_valid is False:
             if hasattr(self.transcription_handler, "stop_transcription"):
@@ -2141,6 +2166,7 @@ class AppCore:
                 sm.StateEvent.AUDIO_RECORDING_DISCARDED,
                 details="Recording discarded after stop",
                 source="audio_handler",
+                operation_id=op_id,
             )
             self.action_orchestrator.deactivate_agent_mode()
 
