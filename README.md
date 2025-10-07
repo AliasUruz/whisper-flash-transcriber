@@ -117,6 +117,17 @@ can monitor issues from the console. Exit the process with <kbd>Ctrl</kbd> + <kb
 or by calling the shutdown hotkeys configured for your environment.
 On Windows you can achieve the same by invoking `Run Whisper.bat --headless`.
 
+### Simple vs. advanced configuration
+
+- The onboarding wizard opens in a simplified mode by default. Press **Ctrl + Shift + A** at any step to toggle the advanced
+  track and persist the preference in `config.json`. The status is also shown in the final summary page so you can confirm
+  whether additional settings will be available after the first launch.
+- Inside the settings window the **Show advanced** button controls the visibility of VAD fine-tuning, manual batch size,
+  chunk length overrides, RAM limits, and AI correction knobs. When the toggle is off the application automatically reverts to
+  safe defaults such as automatic batching, VAD disabled, and memory management in automatic mode.
+- Advanced changes made while the toggle is disabled are ignored during validation, guaranteeing that the simplified mode keeps
+  a safe configuration even if `config.json` was edited manually.
+
 ### Configuration
 
 ## Documentation map

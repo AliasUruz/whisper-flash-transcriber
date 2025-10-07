@@ -89,7 +89,7 @@ class AudioHandler:
         self.record_storage_mode = "auto"
         self.record_storage_limit = 0
         self.in_memory_mode = False
-        self.max_memory_seconds_mode = "manual"
+        self.max_memory_seconds_mode = "auto"
         self.max_memory_seconds = 30
         self.current_max_memory_seconds = 30
         self._memory_limit_samples = int(AUDIO_SAMPLE_RATE * self.current_max_memory_seconds)
@@ -1182,7 +1182,9 @@ class AudioHandler:
         """Load or refresh settings from the ConfigManager."""
         self.record_storage_mode = self.config_manager.get("record_storage_mode", "auto")
         self.record_storage_limit = self.config_manager.get("record_storage_limit", 0)
-        self.max_memory_seconds_mode = self.config_manager.get("max_memory_seconds_mode", "manual")
+        self.max_memory_seconds_mode = self.config_manager.get(
+            "max_memory_seconds_mode", "auto"
+        )
         self.max_memory_seconds = self.config_manager.get("max_memory_seconds", 30)
         self.min_free_ram_mb = self.config_manager.get("min_free_ram_mb", 1000)
 

@@ -252,6 +252,82 @@ class UIManager:
     def _get_settings_meta(self, name: str, default: Any = None) -> Any:
         return self._settings_meta.get(name, default)
 
+    def _get_advanced_registry(self) -> list[tuple[Any, dict[str, Any]]]:
+        registry = self._get_settings_meta("_advanced_blocks")
+        if registry is None:
+            registry = []
+            self._set_settings_meta("_advanced_blocks", registry)
+        return registry
+
+    def _register_advanced_block(self, widget: Any, **pack_kwargs: Any) -> None:
+        registry = self._get_advanced_registry()
+        registry.append((widget, pack_kwargs))
+        if self._get_settings_meta("show_advanced_active", False):
+            widget.pack(**pack_kwargs)
+
+    def _register_advanced_visibility_callback(
+        self, callback: Callable[[bool], None]
+    ) -> None:
+        callbacks = self._get_settings_meta("_advanced_callbacks")
+        if callbacks is None:
+            callbacks = []
+            self._set_settings_meta("_advanced_callbacks", callbacks)
+        callbacks.append(callback)
+
+    def _set_global_advanced_visibility(
+        self, show: bool, *, persist: bool = True
+    ) -> None:
+        show = bool(show)
+        current = bool(self._get_settings_meta("show_advanced_active", False))
+        if show == current and not persist:
+            return
+
+        self._set_settings_meta("show_advanced_active", show)
+
+        var = self._get_settings_var("show_advanced_var")
+        if var is not None:
+            try:
+                var.set(show)
+            except Exception:
+                logging.debug("Failed to update show_advanced_var state.", exc_info=True)
+
+        for widget, kwargs in list(self._get_advanced_registry()):
+            try:
+                widget.pack_forget()
+            except Exception:
+                pass
+            if show:
+                try:
+                    widget.pack(**kwargs)
+                except Exception:
+                    logging.debug(
+                        "Failed to pack advanced widget %s", widget, exc_info=True
+                    )
+
+        for callback in list(self._get_settings_meta("_advanced_callbacks", [])):
+            try:
+                callback(show)
+            except Exception:
+                logging.debug(
+                    "Advanced visibility callback failed.", exc_info=True
+                )
+
+        if not persist:
+            return
+
+        core = getattr(self, "core_instance_ref", None)
+        try:
+            if core is not None:
+                core.update_setting("show_advanced", show)
+            else:
+                self.config_manager.set("show_advanced", show)
+                self.config_manager.save_config()
+        except Exception:
+            logging.error(
+                "Failed to persist show_advanced state.",
+                exc_info=True,
+            )
+
     def _clear_settings_context(self) -> None:
         self._settings_vars.clear()
         self._settings_meta.clear()
@@ -1226,11 +1302,15 @@ class UIManager:
         save_temp_recordings_to_apply = bool(save_temp_recordings_var.get()) if save_temp_recordings_var else False
         display_transcripts_to_apply = bool(display_transcripts_var.get()) if display_transcripts_var else False
         record_storage_mode_to_apply = record_storage_mode_var.get() if record_storage_mode_var else "auto"
-        max_memory_seconds_mode_to_apply = max_memory_seconds_mode_var.get() if max_memory_seconds_mode_var else "manual"
+        max_memory_seconds_mode_to_apply = (
+            max_memory_seconds_mode_var.get() if max_memory_seconds_mode_var else "auto"
+        )
         max_memory_seconds_to_apply = self._safe_get_float(max_memory_seconds_var, "Max Memory Retention", settings_win)
         if max_memory_seconds_to_apply is None:
             return
-        chunk_length_mode_to_apply = chunk_length_mode_var.get() if chunk_length_mode_var else "manual"
+        chunk_length_mode_to_apply = (
+            chunk_length_mode_var.get() if chunk_length_mode_var else "auto"
+        )
         chunk_length_sec_to_apply = self._safe_get_float(chunk_length_sec_var, "Chunk Length", settings_win)
         if chunk_length_sec_to_apply is None:
             return
@@ -1951,7 +2031,9 @@ class UIManager:
         Returns a dictionary with UI references needed by the caller.
         """
 
-        advanced_state = {'visible': False}
+        advanced_state = {
+            'visible': bool(self._get_settings_meta("show_advanced_active", False))
+        }
         advanced_specs = []
         toggle_button_ref = {'widget': None}
 
@@ -1960,7 +2042,7 @@ class UIManager:
             if advanced_state['visible']:
                 widget.pack(**pack_kwargs)
 
-        def _set_advanced_visibility(show: bool) -> None:
+        def _apply_local_visibility(show: bool) -> None:
             advanced_state['visible'] = show
             for widget, pack_kwargs in advanced_specs:
                 try:
@@ -1974,15 +2056,18 @@ class UIManager:
                 button.configure(text='Ocultar avançado' if show else 'Mostrar avançado')
 
         def _toggle_advanced() -> None:
-            _set_advanced_visibility(not advanced_state['visible'])
+            desired = not bool(self._get_settings_meta("show_advanced_active", False))
+            self._set_global_advanced_visibility(desired)
 
         advanced_toggle = ctk.CTkButton(
             asr_frame,
-            text='Mostrar avançado',
+            text='Ocultar avançado' if advanced_state['visible'] else 'Mostrar avançado',
             command=_toggle_advanced,
         )
         advanced_toggle.pack(fill='x', pady=(0, 5))
         toggle_button_ref['widget'] = advanced_toggle
+
+        self._register_advanced_visibility_callback(_apply_local_visibility)
 
         previous_models_dir = {"value": models_storage_dir_var.get() if models_storage_dir_var else ""}
         previous_deps_dir = {"value": deps_install_dir_var.get() if deps_install_dir_var else ""}
@@ -2663,17 +2748,11 @@ class UIManager:
         _update_model_info(asr_model_id_var.get())
         _update_install_button_state()
         _on_backend_change(asr_backend_var.get())
-        should_show_advanced = any(
-            [
-                asr_backend_var.get() not in ("auto", ""),
-                asr_ct2_compute_type_var.get() not in ("auto", "float16"),
-            ]
-        )
-        _set_advanced_visibility(should_show_advanced)
+        _apply_local_visibility(advanced_state['visible'])
 
         return {
             "advanced_toggle": advanced_toggle,
-            "set_advanced_visibility": _set_advanced_visibility,
+            "set_advanced_visibility": _apply_local_visibility,
             "asr_backend_menu": asr_backend_menu,
             "asr_ct2_menu": asr_ct2_menu,
             "asr_model_menu": asr_model_menu,
@@ -3240,6 +3319,14 @@ class UIManager:
 
                 self._clear_settings_context()
                 self._set_settings_var("window", settings_win)
+                show_advanced_initial = bool(
+                    self.config_manager.get("show_advanced", False)
+                )
+                show_advanced_var = ctk.BooleanVar(value=show_advanced_initial)
+                self._set_settings_var("show_advanced_var", show_advanced_var)
+                self._set_settings_meta("show_advanced_active", show_advanced_initial)
+                self._set_settings_meta("_advanced_blocks", [])
+                self._set_settings_meta("_advanced_callbacks", [])
                 service_values_allowed = {SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI}
                 self._set_settings_meta("service_values_allowed", service_values_allowed)
 
@@ -3822,6 +3909,7 @@ class UIManager:
                             "new_vad_silence_duration": vad_silence_duration_to_apply,
                             "new_display_transcripts_in_terminal": display_transcripts_to_apply,
                             "new_launch_at_startup": launch_at_startup_var.get(),
+                            "new_show_advanced": bool(show_advanced_var.get()),
                             # New chunk settings
                             "new_chunk_length_mode": chunk_length_mode_var.get(),
                             "new_chunk_length_sec": float(chunk_length_sec_var.get()),
@@ -3848,6 +3936,10 @@ class UIManager:
                         return
 
                     self.core_instance_ref.apply_settings_from_external(**DEFAULT_CONFIG)
+
+                    self._set_global_advanced_visibility(
+                        DEFAULT_CONFIG.get("show_advanced", False), persist=False
+                    )
 
                     auto_paste_var.set(DEFAULT_CONFIG["auto_paste"])
                     mode_var.set(DEFAULT_CONFIG["record_mode"])
@@ -3958,6 +4050,7 @@ class UIManager:
                     record_storage_mode_var.set(DEFAULT_CONFIG["record_storage_mode"])
                     max_memory_seconds_var.set(DEFAULT_CONFIG["max_memory_seconds"])
                     max_memory_seconds_mode_var.set(DEFAULT_CONFIG["max_memory_seconds_mode"])
+                    show_advanced_var.set(DEFAULT_CONFIG.get("show_advanced", False))
                     launch_at_startup_var.set(DEFAULT_CONFIG["launch_at_startup"])
                     asr_backend_var.set(DEFAULT_CONFIG[ASR_BACKEND_CONFIG_KEY])
                     asr_compute_device_var.set(DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY])
@@ -4116,7 +4209,6 @@ class UIManager:
 
                 # --- Text Correction (AI Services) Section ---
                 ai_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
-                ai_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(ai_frame, text="Correção de Texto (Serviços de IA)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
 
                 text_correction_frame = ctk.CTkFrame(ai_frame)
@@ -4206,6 +4298,8 @@ class UIManager:
                 self._set_settings_var("gemini_models_textbox", gemini_models_textbox)
                 Tooltip(gemini_models_textbox, "Lista de modelos para tentativa, um por linha.")
 
+                self._register_advanced_block(ai_frame, fill="x", padx=10, pady=5)
+
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 transcription_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(
@@ -4241,10 +4335,15 @@ class UIManager:
             ui_elements={},
         )
 
-        # New: Chunk Length Mode
-        chunk_mode_frame = ctk.CTkFrame(transcription_frame)
+        advanced_transcription_frame = ctk.CTkFrame(
+            transcription_frame, fg_color="transparent"
+        )
+
+        chunk_mode_frame = ctk.CTkFrame(advanced_transcription_frame)
         chunk_mode_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(chunk_mode_frame, text="Modo do Tamanho do Bloco:").pack(side="left", padx=(5, 10))
+        ctk.CTkLabel(chunk_mode_frame, text="Modo do Tamanho do Bloco:").pack(
+            side="left", padx=(5, 10)
+        )
         chunk_mode_menu = ctk.CTkOptionMenu(
             chunk_mode_frame,
             variable=chunk_length_mode_var,
@@ -4254,17 +4353,19 @@ class UIManager:
         chunk_mode_menu.pack(side="left", padx=5)
         Tooltip(chunk_mode_menu, "Define como o tamanho do bloco é calculado.")
 
-        # New: Chunk Length (sec)
-        chunk_len_frame = ctk.CTkFrame(transcription_frame)
+        chunk_len_frame = ctk.CTkFrame(advanced_transcription_frame)
         chunk_len_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(chunk_len_frame, text="Duração do Bloco (s):").pack(side="left", padx=(5, 10))
-        chunk_len_entry = ctk.CTkEntry(chunk_len_frame, textvariable=chunk_length_sec_var, width=80)
+        ctk.CTkLabel(chunk_len_frame, text="Duração do Bloco (s):").pack(
+            side="left", padx=(5, 10)
+        )
+        chunk_len_entry = ctk.CTkEntry(
+            chunk_len_frame, textvariable=chunk_length_sec_var, width=80
+        )
         chunk_len_entry.pack(side="left", padx=5)
         self._set_settings_var("chunk_len_entry", chunk_len_entry)
         Tooltip(chunk_len_entry, "Duração fixa do bloco quando em modo manual.")
 
-        # New: Ignore Transcriptions Shorter Than
-        min_transcription_duration_frame = ctk.CTkFrame(transcription_frame)
+        min_transcription_duration_frame = ctk.CTkFrame(advanced_transcription_frame)
         min_transcription_duration_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(
             min_transcription_duration_frame,
@@ -4278,7 +4379,7 @@ class UIManager:
         min_transcription_duration_entry.pack(side="left", padx=5)
         Tooltip(min_transcription_duration_entry, "Descarta segmentos menores que isso.")
 
-        min_record_duration_frame = ctk.CTkFrame(transcription_frame)
+        min_record_duration_frame = ctk.CTkFrame(advanced_transcription_frame)
         min_record_duration_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(
             min_record_duration_frame,
@@ -4292,14 +4393,17 @@ class UIManager:
         min_record_duration_entry.pack(side="left", padx=5)
         Tooltip(min_record_duration_entry, "Descarta gravações menores que isso.")
 
+        vad_wrapper = ctk.CTkFrame(advanced_transcription_frame, fg_color="transparent")
         self._build_vad_section(
-            settings_win,
+            vad_wrapper,
             use_vad_var,
             vad_threshold_var,
             vad_silence_duration_var,
             vad_pre_speech_padding_ms_var,
             vad_post_speech_padding_ms_var,
         )
+
+        self._register_advanced_block(advanced_transcription_frame, fill="x", pady=5)
 
         self._update_text_correction_fields()
 

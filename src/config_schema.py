@@ -15,6 +15,7 @@ from pydantic import (
     ValidationError,
     ValidationInfo,
     field_validator,
+    model_validator,
 )
 
 from .logging_utils import get_logger, log_context
@@ -160,6 +161,17 @@ class AdvancedHotkeyConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
+    show_advanced: bool = False
+    record_key: str = "F3"
+    record_mode: str = "toggle"
+    auto_paste: bool = True
+    auto_paste_modifier: str = "auto"
+    agent_auto_paste: bool | None = None
+    min_record_duration: float = Field(default=0.5, ge=0.0)
+    sound_enabled: bool = True
+    sound_frequency: int = Field(default=400, ge=0)
+    sound_duration: float = Field(default=0.3, ge=0.0)
+    sound_volume: float = Field(default=0.5, ge=0.0)
     agent_key: str = "F4"
     agent_auto_paste: bool | None = True
     auto_paste_modifier: str = "auto"
@@ -270,12 +282,16 @@ class AdvancedPerformanceConfig(BaseModel):
     save_temp_recordings: bool = False
     record_storage_mode: str = "auto"
     record_storage_limit: int = Field(default=0, ge=0)
-    max_memory_seconds_mode: str = "manual"
+    max_memory_seconds_mode: str = "auto"
     max_memory_seconds: float = Field(default=30.0, ge=0.0)
     min_free_ram_mb: int = Field(default=1000, ge=0)
     auto_ram_threshold_percent: int = Field(default=10, ge=1, le=50)
-    save_temp_recordings: bool = False
-    storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
+    max_parallel_downloads: int = Field(default=1, ge=1, le=8)
+    min_transcription_duration: float = Field(default=1.0, ge=0.0)
+    chunk_length_sec: float = Field(default=30.0, ge=0.0)
+    chunk_length_mode: str = "auto"
+    launch_at_startup: bool = False
+    clear_gpu_cache: bool = True
     models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
     recordings_dir: str = _DEFAULT_RECORDINGS_DIR
     asr_cache_dir: str = _DEFAULT_ASR_CACHE_DIR
@@ -531,6 +547,61 @@ def flatten_config_tree(config_tree: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             flat[key] = copy.deepcopy(value)
     return flat
+
+    @model_validator(mode="after")
+    def _enforce_simple_mode_defaults(cls, values: "AppConfig") -> "AppConfig":
+        """Clamp advanced-only fields when the simple mode is active."""
+
+        defaults = cls.model_fields
+
+        def _default(name: str) -> Any:
+            field = defaults.get(name)
+            return field.default if field is not None else None
+
+        simple_targets: dict[str, Any] = {
+            "text_correction_enabled": False,
+            "text_correction_service": "none",
+            "batch_size_mode": _default("batch_size_mode"),
+            "manual_batch_size": _default("manual_batch_size"),
+            "use_vad": _default("use_vad"),
+            "vad_threshold": _default("vad_threshold"),
+            "vad_silence_duration": _default("vad_silence_duration"),
+            "vad_pre_speech_padding_ms": _default("vad_pre_speech_padding_ms"),
+            "vad_post_speech_padding_ms": _default("vad_post_speech_padding_ms"),
+            "save_temp_recordings": _default("save_temp_recordings"),
+            "record_storage_mode": _default("record_storage_mode"),
+            "record_storage_limit": _default("record_storage_limit"),
+            "max_memory_seconds_mode": "auto",
+            "max_memory_seconds": _default("max_memory_seconds"),
+            "chunk_length_mode": "auto",
+            "chunk_length_sec": _default("chunk_length_sec"),
+        }
+
+        advanced_signals = [
+            bool(values.text_correction_enabled),
+            str(values.text_correction_service or "none").lower() not in {"", "none"},
+            bool(values.use_vad),
+            str(values.batch_size_mode or "auto").lower()
+            != str(simple_targets["batch_size_mode"] or "auto").lower(),
+            values.manual_batch_size != simple_targets["manual_batch_size"],
+            str(values.record_storage_mode or "auto").lower()
+            != str(simple_targets["record_storage_mode"] or "auto").lower(),
+            values.record_storage_limit != simple_targets["record_storage_limit"],
+            str(values.max_memory_seconds_mode or "auto").lower() not in {"auto"},
+            values.max_memory_seconds != simple_targets["max_memory_seconds"],
+            str(values.chunk_length_mode or "auto").lower() not in {"auto"},
+            values.chunk_length_sec != simple_targets["chunk_length_sec"],
+            bool(values.save_temp_recordings),
+        ]
+
+        if not values.show_advanced and any(advanced_signals):
+            values.show_advanced = True
+            return values
+
+        if not values.show_advanced:
+            for field_name, default_value in simple_targets.items():
+                setattr(values, field_name, default_value)
+        return values
 
 
 def coerce_with_defaults(payload: dict[str, Any], defaults: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:

@@ -2303,6 +2303,7 @@ class AppCore:
             "new_chunk_length_mode": "chunk_length_mode",
             "new_chunk_length_sec": "chunk_length_sec",
             "new_max_parallel_downloads": "max_parallel_downloads",
+            "new_show_advanced": "show_advanced",
         }
 
         legacy_key_aliases = {
