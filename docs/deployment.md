@@ -43,3 +43,23 @@ pip install -r requirements-extras.txt
 - **Dataset/benchmark helpers** – use `accelerate` and `datasets[audio]`.
 
 If none of these workflows are active, skip the extras entirely to keep the footprint small.
+
+## Adaptive performance tuning
+
+The advanced performance profile now ships with self-adjusting heuristics for the CTranslate2 backend. When
+`advanced.performance.batch_size_mode` and `advanced.performance.chunk_length_mode` are left in **auto**, the
+runtime observes every inference run and keeps a short history of wall-clock duration and CUDA out-of-memory
+signals. The feedback loop applies the following rules:
+
+- **GPU workloads** start from the VRAM-aware baseline selected by `select_batch_size` and may grow towards the
+  configured chunk length (up to ~1.6× the configured window). If the median transcription time is higher than the
+  audio duration, both `batch_size` and `chunk_length_sec` are trimmed gradually until the system stabilises.
+- **CPU workloads** keep a narrower window (up to ~20% above the configured chunk size) and prioritise keeping
+  inference latency close to the recording length.
+- **OOM events** immediately halve the current batch size and reduce the chunk length by ~40%. The new values are
+  persisted in memory via `self.last_dynamic_batch_size` and reflected in the `[ASR] transcription_*` log entries.
+- **Fast streaks** (median duration < ~65% of the chunk length) allow the engine to recover towards the configured
+  targets, one gentle increment at a time, provided no OOM happened in the last three runs.
+
+Operators who prefer fixed values can flip either mode to **manual**. Doing so resets the adaptive history and
+forces the transcriber to honour the literal configuration on the next run.
