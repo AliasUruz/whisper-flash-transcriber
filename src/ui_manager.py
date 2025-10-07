@@ -56,6 +56,7 @@ from .utils.tooltip import Tooltip
 from .logging_utils import StructuredMessage, get_log_directory
 from .state_manager import StateEvent
 from .utils.dependency_audit import DependencyAuditResult, DependencyIssue
+from .app_identity import APP_DISPLAY_NAME, APP_ID
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -143,6 +144,9 @@ def _backend_display_value_global(value: str | None) -> str:
     if normalized in {"faster whisper", "faster_whisper", "faster-whisper"}:
         return "ctranslate2"
     return normalized
+
+SETTINGS_WINDOW_TITLE = f"{APP_DISPLAY_NAME} Settings"
+
 
 class UIManager:
     def __init__(self, main_tk_root, config_manager, core_instance_ref, model_manager=None):
@@ -2946,7 +2950,7 @@ class UIManager:
                 self.stop_recording_timer_event.set()
                 break
             elapsed = time.time() - start_time
-            tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
+            tooltip = f"{APP_DISPLAY_NAME} (RECORDING - {self._format_elapsed(elapsed)})"
             suffix = getattr(self, "_state_context_suffix", "")
             if suffix:
                 tooltip = f"{tooltip}{suffix}"
@@ -3045,7 +3049,7 @@ class UIManager:
                         f" [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
                     )
                 elapsed = time.time() - start_ts
-                tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)}){tech}"
+                tooltip = f"{APP_DISPLAY_NAME} (TRANSCRIBING - {self._format_elapsed(elapsed)}){tech}"
                 suffix = getattr(self, "_state_context_suffix", "")
                 if suffix:
                     tooltip = f"{tooltip}{suffix}"
@@ -3055,7 +3059,7 @@ class UIManager:
                 # Em caso de falha, mantém somente o tempo
                 elapsed = time.time() - start_ts
                 if self.tray_icon:
-                    tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
+                    tooltip = f"{APP_DISPLAY_NAME} (TRANSCRIBING - {self._format_elapsed(elapsed)})"
                     suffix = getattr(self, "_state_context_suffix", "")
                     if suffix:
                         tooltip = f"{tooltip}{suffix}"
@@ -3101,7 +3105,7 @@ class UIManager:
                 color1, color2 = self.ICON_COLORS.get(state_str, self.DEFAULT_ICON_COLOR)
                 icon_image = self.create_image(64, 64, color1, color2)
             self.tray_icon.icon = icon_image
-            tooltip = f"Whisper Recorder ({state_str})"
+            tooltip = f"{APP_DISPLAY_NAME} ({state_str})"
 
             # Controle de threads de tooltip por estado
             if state_str == "RECORDING":
@@ -3121,7 +3125,7 @@ class UIManager:
                 start_time = getattr(self.core_instance_ref.audio_handler, "start_time", None)
                 if start_time is not None:
                     elapsed = time.time() - start_time
-                    tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
+                    tooltip = f"{APP_DISPLAY_NAME} (RECORDING - {self._format_elapsed(elapsed)})"
 
             elif state_str == "TRANSCRIBING":
                 # Parar contador de RECORDING se estiver ativo
@@ -3166,15 +3170,15 @@ class UIManager:
                                 bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
                             bs_display = bs if bs not in (None, "") else "auto"
                             rich_tooltip = _apply_suffix(
-                                f"Whisper Recorder (TRANSCRIBING) [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
+                                f"{APP_DISPLAY_NAME} (TRANSCRIBING) [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
                             )
                             self._set_tray_tooltip(rich_tooltip)
                         else:
-                            fallback = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
-                            self._set_tray_tooltip(fallback)
+                            fallback = _apply_suffix(f"{APP_DISPLAY_NAME} (TRANSCRIBING - 00:00)")
+                            self.tray_icon.title = self._clamp_tray_tooltip(fallback)
                     except Exception:
-                        fallback = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
-                        self._set_tray_tooltip(fallback)
+                        fallback = _apply_suffix(f"{APP_DISPLAY_NAME} (TRANSCRIBING - 00:00)")
+                        self.tray_icon.title = self._clamp_tray_tooltip(fallback)
                     self.transcribing_timer_thread = threading.Thread(
                         target=self._transcribing_tooltip_updater,
                         daemon=True,
@@ -3199,11 +3203,11 @@ class UIManager:
             # Ajusta tooltip final conforme estado atual para evitar mensagens inconsistentes
             if state_str == "TRANSCRIBING":
                 # Garante que o texto base esteja correto mesmo antes do primeiro tick
-                tooltip = "Whisper Recorder (TRANSCRIBING)"
+                tooltip = f"{APP_DISPLAY_NAME} (TRANSCRIBING)"
             elif state_str == "RECORDING":
-                tooltip = "Whisper Recorder (RECORDING)"
+                tooltip = f"{APP_DISPLAY_NAME} (RECORDING)"
             elif state_str == "LOADING_MODEL":
-                tooltip = "Whisper Recorder (LOADING_MODEL)"
+                tooltip = f"{APP_DISPLAY_NAME} (LOADING_MODEL)"
 
             tooltip_with_context = _apply_suffix(tooltip)
             self._set_tray_tooltip(tooltip_with_context)
@@ -3267,7 +3271,7 @@ class UIManager:
                 ctk.set_default_color_theme("blue")
                 settings_win = ctk.CTkToplevel(self.main_tk_root)
                 self.settings_window_instance = settings_win
-                settings_win.title("Whisper Recorder Settings")
+                settings_win.title(SETTINGS_WINDOW_TITLE)
                 try:
                     settings_win.iconbitmap("icon.ico")
                 except Exception as e:
@@ -4422,31 +4426,14 @@ class UIManager:
             logging.warning("icon.png not found, using fallback image.")
             color1, color2 = self.ICON_COLORS.get(initial_state, self.DEFAULT_ICON_COLOR)
             initial_image = self.create_image(64, 64, color1, color2)
-        initial_tooltip = self._pending_tray_tooltip or f"Whisper Recorder ({initial_state})"
-        self._set_tray_tooltip(initial_tooltip)
+        initial_tooltip = self._pending_tray_tooltip or f"{APP_DISPLAY_NAME} ({initial_state})"
 
-        try:
-            self.core_instance_ref.set_state_update_callback(self.update_tray_icon)
-            self.core_instance_ref.set_segment_callback(self.update_live_transcription_threadsafe)
-        except Exception:
-            logging.error("UIManager: failed to register tray callbacks with core.", exc_info=True)
-
-        if pystray is None:
-            self._handle_tray_icon_failure(ImportError("pystray module is not available"), initial_tooltip)
-            return
-
-        try:
-            menu_factory = pystray.Menu(lambda: self.create_dynamic_menu())
-            self.tray_icon = pystray.Icon(
-                "whisper_recorder",
-                initial_image,
-                self._clamp_tray_tooltip(initial_tooltip),
-                menu=menu_factory,
-            )
-        except (OSError, ImportError) as exc:
-            self._handle_tray_icon_failure(exc, initial_tooltip)
-            return
-
+        self.tray_icon = pystray.Icon(
+            APP_ID,
+            initial_image,
+            initial_tooltip,
+            menu=pystray.Menu(lambda: self.create_dynamic_menu())
+        )
         if self._pending_tray_tooltip:
             self._set_tray_tooltip(self._pending_tray_tooltip)
 

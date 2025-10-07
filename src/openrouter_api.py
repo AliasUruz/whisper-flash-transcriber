@@ -8,9 +8,9 @@ from typing import Optional
 import requests
 
 from .logging_utils import get_logger, log_context
-from .retry_utils import RetryableOperationError, retry_with_backoff
+from .app_identity import APP_DISPLAY_NAME, APP_OFFICIAL_URL, APP_LOG_NAMESPACE
 
-LOGGER = get_logger('whisper_flash_transcriber.openrouter', component='OpenRouterAPI')
+LOGGER = get_logger(f"{APP_LOG_NAMESPACE}.openrouter", component='OpenRouterAPI')
 
 
 class OpenRouterAPI:
@@ -61,8 +61,8 @@ class OpenRouterAPI:
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://whisper-recorder.app",
-            "X-Title": "Whisper Recorder",
+            "HTTP-Referer": APP_OFFICIAL_URL,
+            "X-Title": APP_DISPLAY_NAME,
         }
 
     def _normalize_timeout(
@@ -149,6 +149,8 @@ class OpenRouterAPI:
             except (TypeError, ValueError):
                 pass
         self.headers["Authorization"] = f"Bearer {self.api_key}"
+        self.headers["HTTP-Referer"] = APP_OFFICIAL_URL
+        self.headers["X-Title"] = APP_DISPLAY_NAME
         LOGGER.info(
             "OpenRouter API client re/initialized with model '%s'",
             self.model_id,
