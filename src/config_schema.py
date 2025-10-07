@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,17 @@ LOGGER = get_logger(__name__, component='ConfigSchema')
 
 _DEFAULT_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
 _DEFAULT_MODELS_STORAGE_DIR = str((_DEFAULT_STORAGE_ROOT / "models").expanduser())
+_SUPPORTED_UI_LANGUAGE_MAP = {
+    "en": "en-US",
+    "en-us": "en-US",
+    "english": "en-US",
+    "pt": "pt-BR",
+    "pt-br": "pt-BR",
+    "pt_br": "pt-BR",
+    "portuguese": "pt-BR",
+    "português": "pt-BR",
+}
+_DEFAULT_UI_LANGUAGE = "en-US"
 
 
 class ASRDownloadStatus(BaseModel):
@@ -28,6 +40,17 @@ class ASRDownloadStatus(BaseModel):
     backend: str = ""
     message: str = ""
     details: str = ""
+    target_dir: str = ""
+    bytes_downloaded: int | None = None
+    throughput_bps: float | None = None
+    duration_seconds: float | None = None
+    task_id: str | None = None
+
+
+class ASRDownloadHistoryEntry(ASRDownloadStatus):
+    """Historical record capturing metadata of a download attempt."""
+
+    pass
 
 
 class ASRPromptDecision(BaseModel):
@@ -71,6 +94,7 @@ class AppConfig(BaseModel):
     openrouter_prompt: str = ""
     prompt_agentico: str = ""
     gemini_prompt: str = ""
+    ui_language: str = _DEFAULT_UI_LANGUAGE
     batch_size: int = Field(default=16, ge=1)
     batch_size_mode: str = "auto"
     manual_batch_size: int = Field(default=8, ge=1)
@@ -90,6 +114,7 @@ class AppConfig(BaseModel):
     max_memory_seconds: float = Field(default=30.0, ge=0.0)
     min_free_ram_mb: int = Field(default=1000, ge=0)
     auto_ram_threshold_percent: int = Field(default=10, ge=1, le=50)
+    max_parallel_downloads: int = Field(default=1, ge=1, le=8)
     min_transcription_duration: float = Field(default=1.0, ge=0.0)
     chunk_length_sec: float = Field(default=30.0, ge=0.0)
     chunk_length_mode: str = "manual"
@@ -97,8 +122,14 @@ class AppConfig(BaseModel):
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
     models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
+    deps_install_dir: str = _DEFAULT_DEPS_STORAGE_DIR
+    hf_home_dir: str = str((Path(_DEFAULT_DEPS_STORAGE_DIR) / "huggingface").expanduser())
+    transformers_cache_dir: str = str((Path(_DEFAULT_DEPS_STORAGE_DIR) / "transformers").expanduser())
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
+    python_packages_dir: str = _DEFAULT_PYTHON_PACKAGES_DIR
+    vad_models_dir: str = _DEFAULT_VAD_MODELS_DIR
+    hf_cache_dir: str = _DEFAULT_HF_CACHE_DIR
     asr_model_id: str = "openai/whisper-large-v3-turbo"
     asr_backend: str = "ctranslate2"
     asr_compute_device: str = "auto"
@@ -107,9 +138,10 @@ class AppConfig(BaseModel):
     asr_ct2_cpu_threads: int | None = None
     asr_cache_dir: str = str((_DEFAULT_STORAGE_ROOT / "asr").expanduser())
     asr_installed_models: list[str] = Field(default_factory=list)
-    asr_curated_catalog: list[str] = Field(default_factory=list)
+    asr_curated_catalog: list[dict[str, Any]] = Field(default_factory=list)
     asr_curated_catalog_url: str = ""
     asr_last_download_status: ASRDownloadStatus = Field(default_factory=ASRDownloadStatus)
+    asr_download_history: list[ASRDownloadHistoryEntry] = Field(default_factory=list)
     asr_last_prompt_decision: ASRPromptDecision = Field(default_factory=ASRPromptDecision)
 
     @staticmethod
@@ -146,6 +178,23 @@ class AppConfig(BaseModel):
                 return "auto"
             return "+".join(normalized_parts)
         return str(value)
+
+    @field_validator("ui_language", mode="before")
+    @classmethod
+    def _normalize_ui_language(cls, value: Any) -> str:
+        if value is None:
+            return _DEFAULT_UI_LANGUAGE
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return _DEFAULT_UI_LANGUAGE
+            mapped = _SUPPORTED_UI_LANGUAGE_MAP.get(normalized.lower())
+            if mapped:
+                return mapped
+            raise ValueError(
+                f"ui_language must be one of {sorted(set(_SUPPORTED_UI_LANGUAGE_MAP.values()))}"
+            )
+        raise ValueError("ui_language must be a string")
 
     @field_validator("record_mode", mode="before")
     @classmethod
@@ -231,7 +280,13 @@ class AppConfig(BaseModel):
     @field_validator(
         "storage_root_dir",
         "models_storage_dir",
+        "deps_install_dir",
+        "hf_home_dir",
+        "transformers_cache_dir",
         "recordings_dir",
+        "python_packages_dir",
+        "vad_models_dir",
+        "hf_cache_dir",
         "asr_cache_dir",
         mode="before",
     )
@@ -246,7 +301,7 @@ class AppConfig(BaseModel):
             return str(value.expanduser())
         raise ValueError("Storage paths must be provided as strings or Path objects")
 
-    @field_validator("asr_installed_models", "asr_curated_catalog", mode="before")
+    @field_validator("asr_installed_models", mode="before")
     @classmethod
     def _coerce_string_list(cls, value: Any) -> list[str]:
         if value is None:
@@ -254,6 +309,36 @@ class AppConfig(BaseModel):
         if isinstance(value, (list, tuple, set)):
             return [str(item).strip() for item in value if item is not None]
         return [str(value)]
+
+    @field_validator("asr_curated_catalog", mode="before")
+    @classmethod
+    def _coerce_catalog(cls, value: Any) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            return [dict(value)]
+        if isinstance(value, (list, tuple, set)):
+            coerced: list[dict[str, Any]] = []
+            for item in value:
+                if isinstance(item, dict):
+                    coerced.append(dict(item))
+                    continue
+                if isinstance(item, str):
+                    try:
+                        parsed = json.loads(item)
+                    except Exception:
+                        continue
+                    if isinstance(parsed, dict):
+                        coerced.append(parsed)
+            return coerced
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                return []
+            if isinstance(parsed, dict):
+                return [parsed]
+        return []
 
     @field_validator("agent_auto_paste", mode="before")
     @classmethod

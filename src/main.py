@@ -20,6 +20,7 @@ if PROJECT_ROOT not in sys.path:
 from typing import Mapping, cast
 
 import src.config_manager as config_module
+from src.model_manager import get_curated_entry, normalize_backend_label
 
 
 ICON_PATH = os.path.join(PROJECT_ROOT, "icon.ico")
@@ -527,6 +528,36 @@ def main(argv: list[str] | None = None) -> int:
         from src.ui_manager import UIManager  # noqa: E402
 
         config_manager = ConfigManager()
+        dependency_installer = DependencyInstaller(
+            config_manager.get_python_packages_dir()
+        )
+        dependency_installer.ensure_in_sys_path()
+        for note in dependency_installer.environment_notes:
+            LOGGER.info(
+                StructuredMessage(
+                    "Dependency environment advisory.",
+                    event="startup.dependency_env_note",
+                    note=note,
+                )
+            )
+
+        hf_cache_dir = config_manager.get_hf_cache_dir()
+        try:
+            if hf_cache_dir:
+                Path(hf_cache_dir).expanduser().mkdir(parents=True, exist_ok=True)
+                os.environ.setdefault("HF_HOME", hf_cache_dir)
+                os.environ.setdefault("HUGGINGFACE_HUB_CACHE", hf_cache_dir)
+        except Exception as exc:
+            LOGGER.warning(
+                StructuredMessage(
+                    "Failed to prepare Hugging Face cache directory.",
+                    event="startup.hf_cache.prepare_failed",
+                    path=hf_cache_dir,
+                    error=str(exc),
+                ),
+                exc_info=True,
+            )
+
         run_startup_preflight(config_manager, hotkey_config_path=HOTKEY_CONFIG_PATH)
         diagnostics_report = run_startup_diagnostics(
             config_manager,
@@ -570,8 +601,6 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-        main_tk_root = tk.Tk()
-        main_tk_root.withdraw()
         icon_path = ICON_PATH
         if not os.path.exists(icon_path):
             LOGGER.warning(
@@ -599,6 +628,7 @@ def main(argv: list[str] | None = None) -> int:
             hotkey_config_path=str(HOTKEY_CONFIG_PATH),
             startup_diagnostics=diagnostics_report,
         )
+        app_core_instance.dependency_installer = dependency_installer
         ui_manager_instance = UIManager(
             main_tk_root,
             app_core_instance.config_manager,

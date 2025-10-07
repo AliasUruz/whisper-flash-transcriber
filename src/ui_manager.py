@@ -1,13 +1,15 @@
 
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
-from tkinter import filedialog, simpledialog  # Adicionado para diálogos
+from tkinter import BooleanVar, filedialog, simpledialog  # Adicionado para diálogos
 import logging
 import threading
 import time
 import os
 import sys
 import subprocess
+import webbrowser
+from datetime import datetime
 import pystray
 from PIL import Image, ImageDraw
 from dataclasses import dataclass
@@ -39,15 +41,19 @@ from .config_manager import (
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
+    DEPS_INSTALL_DIR_CONFIG_KEY,
     GPU_INDEX_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     DEFAULT_CONFIG,
 )
+from . import state_manager as sm
 
 from .utils.form_validation import safe_get_float, safe_get_int
 from .utils.tooltip import Tooltip
 from .logging_utils import get_log_directory
+from .state_manager import StateEvent
+from .utils.dependency_audit import DependencyAuditResult, DependencyIssue
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -165,6 +171,12 @@ class UIManager:
 
         self._divergent_keys_logged: set[str] = set()
 
+        self._download_window = None
+        self._download_window_widgets: Dict[str, dict[str, Any]] = {}
+        self._download_window_lock = threading.Lock()
+        self._download_snapshot: list[dict[str, Any]] = []
+        self._download_history: list[dict[str, Any]] = []
+
 
         # Assign methods to the instance
         self.show_live_transcription_window = self._show_live_transcription_window
@@ -237,6 +249,309 @@ class UIManager:
     def _clear_settings_context(self) -> None:
         self._settings_vars.clear()
         self._settings_meta.clear()
+
+    def _open_model_downloads_window(self) -> None:
+        with self._download_window_lock:
+            if self._download_window and self._download_window.winfo_exists():
+                self._download_window.lift()
+                self._download_window.focus_force()
+                return
+            window = ctk.CTkToplevel(self.main_tk_root)
+            window.title("Model Downloads")
+            window.geometry("620x520")
+            window.protocol("WM_DELETE_WINDOW", self._close_model_downloads_window)
+            outer = ctk.CTkFrame(window)
+            outer.pack(fill="both", expand=True, padx=10, pady=10)
+            active_container = ctk.CTkScrollableFrame(outer, label_text="Active Downloads")
+            active_container.pack(fill="both", expand=True)
+            history_container = ctk.CTkScrollableFrame(
+                outer,
+                label_text="Recent Download History",
+                height=180,
+            )
+            history_container.pack(fill="both", expand=True, pady=(10, 0))
+            self._download_window = window
+            self._download_window_widgets.clear()
+            self._download_window_widgets["_container"] = active_container
+            self._download_window_widgets["_history_container"] = history_container
+
+        snapshot = {}
+        core = getattr(self, "core_instance_ref", None)
+        if core is not None and hasattr(core, "get_model_downloads_snapshot"):
+            try:
+                snapshot = core.get_model_downloads_snapshot()
+            except Exception:
+                logging.debug("Failed to obtain download snapshot from core.", exc_info=True)
+        tasks = snapshot.get("tasks", []) if isinstance(snapshot, dict) else []
+        if tasks:
+            self._download_snapshot = tasks
+        self._refresh_download_window(self._download_snapshot)
+        self._update_download_history_cache()
+        self._refresh_download_history()
+
+    def _close_model_downloads_window(self) -> None:
+        with self._download_window_lock:
+            if self._download_window and self._download_window.winfo_exists():
+                self._download_window.destroy()
+            self._download_window = None
+
+    def _refresh_download_window(self, tasks: list[dict[str, Any]]) -> None:
+        with self._download_window_lock:
+            window = self._download_window
+            container = self._download_window_widgets.get("_container")
+        if not window or not window.winfo_exists() or container is None:
+            return
+
+        existing_ids = {
+            key
+            for key in self._download_window_widgets.keys()
+            if key not in {"_container", "_history_container"}
+        }
+        new_ids: set[str] = set()
+
+        for task in tasks:
+            task_id = str(task.get("task_id") or "").strip()
+            if not task_id:
+                continue
+            new_ids.add(task_id)
+            self._ensure_download_row(container, task_id, task)
+
+        stale_ids = existing_ids - new_ids
+        for task_id in stale_ids:
+            widgets = self._download_window_widgets.pop(task_id, None)
+            if widgets:
+                frame = widgets.get("frame")
+                if frame is not None:
+                    frame.destroy()
+
+    def _update_download_history_cache(self) -> None:
+        try:
+            history = self.config_manager.get_model_download_history(limit=50)
+        except Exception:
+            logging.debug("Unable to obtain download history.", exc_info=True)
+            history = []
+        self._download_history = history
+
+    def _refresh_download_history(self) -> None:
+        with self._download_window_lock:
+            history_container = self._download_window_widgets.get("_history_container")
+            window = self._download_window
+        if history_container is None or window is None or not window.winfo_exists():
+            return
+
+        for child in list(history_container.winfo_children()):
+            child.destroy()
+
+        if not self._download_history:
+            empty_label = ctk.CTkLabel(history_container, text="No recent downloads recorded.")
+            empty_label.pack(anchor="w", padx=6, pady=4)
+            return
+
+        for entry in reversed(self._download_history):
+            status = str(entry.get("status", "unknown")).upper()
+            model_id = entry.get("model_id", "?")
+            backend = entry.get("backend", "?")
+            timestamp = entry.get("timestamp", "")
+            header = ctk.CTkLabel(
+                history_container,
+                text=f"{timestamp} — {model_id} [{backend}] — {status}",
+                anchor="w",
+            )
+            header.pack(fill="x", padx=6, pady=(4, 0))
+            details_parts: list[str] = []
+            message = entry.get("message") or ""
+            details = entry.get("details") or ""
+            target_dir = entry.get("target_dir") or details
+            bytes_downloaded = entry.get("bytes_downloaded")
+            throughput = entry.get("throughput_bps")
+            duration = entry.get("duration_seconds")
+            if bytes_downloaded:
+                details_parts.append(f"Size {self._format_bytes(int(bytes_downloaded))}")
+            if throughput:
+                details_parts.append(f"Throughput {self._format_throughput(float(throughput))}")
+            if duration:
+                details_parts.append(f"Duration {self._format_eta(float(duration))}")
+            if target_dir:
+                details_parts.append(f"Target {target_dir}")
+            if message:
+                details_parts.append(message)
+            info = " | ".join(details_parts) if details_parts else ""
+            if info:
+                info_label = ctk.CTkLabel(history_container, text=info, anchor="w")
+                info_label.pack(fill="x", padx=8, pady=(0, 4))
+
+    def _ensure_download_row(self, container, task_id: str, task: dict[str, Any]) -> None:
+        widgets = self._download_window_widgets.get(task_id)
+        if widgets is None:
+            row = ctk.CTkFrame(container)
+            row.pack(fill="x", pady=6)
+            title = ctk.CTkLabel(row, text="", anchor="w")
+            title.pack(fill="x")
+            progress = ctk.CTkProgressBar(row)
+            progress.pack(fill="x", pady=(2, 2))
+            info = ctk.CTkLabel(row, text="", anchor="w")
+            info.pack(fill="x")
+            target = ctk.CTkLabel(row, text="", anchor="w")
+            target.pack(fill="x")
+            btn_frame = ctk.CTkFrame(row)
+            btn_frame.pack(fill="x", pady=(6, 0))
+            pause_btn = ctk.CTkButton(
+                btn_frame,
+                text="Pause",
+                width=90,
+                command=lambda tid=task_id: self._on_download_action(tid, "pause"),
+            )
+            pause_btn.pack(side="left", padx=4)
+            resume_btn = ctk.CTkButton(
+                btn_frame,
+                text="Resume",
+                width=90,
+                command=lambda tid=task_id: self._on_download_action(tid, "resume"),
+            )
+            resume_btn.pack(side="left", padx=4)
+            cancel_btn = ctk.CTkButton(
+                btn_frame,
+                text="Cancel",
+                width=90,
+                command=lambda tid=task_id: self._on_download_action(tid, "cancel"),
+            )
+            cancel_btn.pack(side="left", padx=4)
+            widgets = {
+                "frame": row,
+                "title": title,
+                "progress": progress,
+                "info": info,
+                "target": target,
+                "pause": pause_btn,
+                "resume": resume_btn,
+                "cancel": cancel_btn,
+            }
+            self._download_window_widgets[task_id] = widgets
+
+        title_label: ctk.CTkLabel = widgets["title"]
+        progress_bar: ctk.CTkProgressBar = widgets["progress"]
+        info_label: ctk.CTkLabel = widgets["info"]
+        target_label: ctk.CTkLabel = widgets["target"]
+        pause_btn: ctk.CTkButton = widgets["pause"]
+        resume_btn: ctk.CTkButton = widgets["resume"]
+        cancel_btn: ctk.CTkButton = widgets["cancel"]
+
+        model_id = task.get("model_id", "?")
+        backend = task.get("backend", "?")
+        status = str(task.get("status", "queued"))
+        stage = task.get("stage", "")
+        message = task.get("message") or ""
+        bytes_done = int(task.get("bytes_done") or 0)
+        bytes_total = int(task.get("bytes_total") or 0)
+        percent = task.get("percent")
+        target_dir = task.get("target_dir") or ""
+        eta_seconds = task.get("eta_seconds")
+        throughput = task.get("throughput_bps")
+
+        title_label.configure(text=f"{model_id} [{backend}] — {status.upper()}")
+        if percent is None or percent <= 0:
+            progress_bar.set(0.0)
+        else:
+            progress_bar.set(min(100.0, float(percent)) / 100.0)
+
+        progress_parts = [f"{self._format_bytes(bytes_done)}"]
+        if bytes_total:
+            progress_parts.append(f"of {self._format_bytes(bytes_total)}")
+        if throughput:
+            progress_parts.append(f"@ {self._format_throughput(throughput)}")
+        if eta_seconds:
+            progress_parts.append(f"ETA {self._format_eta(float(eta_seconds))}")
+        if stage and stage not in status:
+            progress_parts.append(f"stage={stage}")
+        info_text = " | ".join(progress_parts)
+        if message:
+            info_text = f"{info_text} — {message}" if info_text else message
+        info_label.configure(text=info_text)
+
+        target_label.configure(text=f"Target: {target_dir}" if target_dir else "Target: <pending>")
+
+        if status in {"completed", "skipped"}:
+            pause_btn.configure(state="disabled")
+            resume_btn.configure(state="disabled")
+            cancel_btn.configure(state="disabled")
+        elif status == "running":
+            pause_btn.configure(state="normal")
+            resume_btn.configure(state="disabled")
+            cancel_btn.configure(state="normal")
+        elif status == "paused":
+            pause_btn.configure(state="disabled")
+            resume_btn.configure(state="normal")
+            cancel_btn.configure(state="normal")
+        elif status in {"cancelled", "timed_out", "error"}:
+            pause_btn.configure(state="disabled")
+            resume_btn.configure(state="disabled")
+            cancel_btn.configure(state="disabled")
+        else:
+            pause_btn.configure(state="normal")
+            resume_btn.configure(state="disabled")
+            cancel_btn.configure(state="normal")
+
+    def _on_download_action(self, task_id: str, action: str) -> None:
+        core = getattr(self, "core_instance_ref", None)
+        if core is None:
+            return
+        try:
+            if action == "pause":
+                core.pause_download_task(task_id)
+            elif action == "resume":
+                core.resume_download_task(task_id)
+            elif action == "cancel":
+                core.cancel_download_task(task_id)
+        except Exception as exc:
+            messagebox.showerror("Model Downloads", f"Unable to {action} task: {exc}")
+
+    def _handle_download_progress(self, context: dict[str, Any] | None) -> None:
+        if not context:
+            return
+        details = context.get("details") if isinstance(context, dict) else None
+        tasks = []
+        if isinstance(details, dict):
+            tasks = details.get("tasks") or []
+        if tasks:
+            self._download_snapshot = tasks
+        should_refresh_history = False
+        missing_history = not self._download_history and isinstance(details, dict)
+        if isinstance(details, dict):
+            status = str(details.get("status") or "").lower()
+            if status in {"completed", "skipped", "cancelled", "timed_out", "error", "success", "timeout"}:
+                should_refresh_history = True
+        refresh_history_view = should_refresh_history or missing_history
+        if refresh_history_view:
+            self._update_download_history_cache()
+        if self._download_window and self._download_window.winfo_exists():
+            self._refresh_download_window(self._download_snapshot)
+            if refresh_history_view:
+                self._refresh_download_history()
+
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        units = ["B", "KB", "MB", "GB", "TB"]
+        amount = float(max(0, int(value)))
+        for unit in units:
+            if amount < 1024 or unit == units[-1]:
+                return f"{amount:.2f} {unit}"
+            amount /= 1024
+        return f"{amount:.2f} PB"
+
+    @staticmethod
+    def _format_throughput(value: float) -> str:
+        if value <= 0:
+            return "0 B/s"
+        return f"{UIManager._format_bytes(int(value))}/s"
+
+    @staticmethod
+    def _format_eta(seconds: float) -> str:
+        if seconds <= 0:
+            return "0s"
+        minutes, secs = divmod(int(seconds), 60)
+        if minutes:
+            return f"{minutes}m {secs}s"
+        return f"{secs}s"
         self._pending_key_var_name = None
 
     def _handle_detected_key(self, key: str | None) -> None:
@@ -726,28 +1041,26 @@ class UIManager:
         try:
             compute_type_var = self._get_settings_var("asr_ct2_compute_type_var")
             quant = compute_type_var.get() if compute_type_var is not None else None
-            result = self.model_manager.ensure_download(
-                model_id,
-                backend,
-                cache_dir,
-                quant if backend == "ctranslate2" else None,
+            download_result = self.core_instance_ref.download_model_with_ui(
+                model_id=model_id,
+                backend=backend,
+                cache_dir=cache_dir,
+                quant=quant if backend == "ctranslate2" else None,
+                reason="settings",
             )
-            installed_models = self.model_manager.list_installed(cache_dir)
-            self.config_manager.set_asr_installed_models(installed_models)
-            self.config_manager.save_config()
-            self._update_model_info(model_id)
-            downloaded = bool(getattr(result, "downloaded", True))
-            message = "Download completed." if downloaded else "Model already installed."
-            messagebox.showinfo("Model", message)
-        except self._download_cancelled_error:
-            messagebox.showinfo("Model", "Download canceled.")
-        except OSError:
-            messagebox.showerror(
-                "Model",
-                "Unable to write to the ASR cache directory. Please check permissions.",
-            )
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - defensive guard
             messagebox.showerror("Model", f"Download failed: {exc}")
+            return
+
+        status = download_result.get("status")
+        if status == "success":
+            self._update_model_info(model_id)
+            messagebox.showinfo("Model", "Download completed.")
+        elif status == "cancelled":
+            messagebox.showinfo("Model", "Download canceled.")
+        elif status == "error":
+            message = download_result.get("error") or "Unknown error"
+            messagebox.showerror("Model", f"Download failed: {message}")
 
     def _reload_current_model(self) -> None:
         handler = getattr(self.core_instance_ref, "transcription_handler", None)
@@ -810,8 +1123,10 @@ class UIManager:
         asr_dtype_var = _var("asr_dtype_var")
         asr_ct2_compute_type_var = _var("asr_ct2_compute_type_var")
         models_storage_dir_var = _var("models_storage_dir_var")
+        deps_install_dir_var = _var("deps_install_dir_var")
         asr_cache_dir_var = _var("asr_cache_dir_var")
         recordings_dir_var = _var("recordings_dir_var")
+        max_parallel_downloads_var = _var("max_parallel_downloads_var")
 
         if detected_key_var is None or mode_var is None or auto_paste_var is None:
             return
@@ -946,6 +1261,29 @@ class UIManager:
             return
         models_storage_dir_to_apply = str(models_storage_path)
 
+        deps_install_dir_raw = deps_install_dir_var.get().strip() if deps_install_dir_var else ""
+        if not deps_install_dir_raw:
+            deps_install_dir_raw = self.config_manager.get_deps_install_dir()
+        try:
+            deps_install_path = Path(deps_install_dir_raw).expanduser()
+        except Exception as exc:
+            messagebox.showerror(
+                "Invalid Path",
+                f"Dependencies directory is invalid:\n{exc}",
+                parent=settings_win,
+            )
+            return
+        try:
+            deps_install_path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror(
+                "Invalid Path",
+                f"Dependencies directory is invalid:\n{exc}",
+                parent=settings_win,
+            )
+            return
+        deps_install_dir_to_apply = str(deps_install_path)
+
         recordings_dir_raw = recordings_dir_var.get().strip() if recordings_dir_var else ""
         if not recordings_dir_raw:
             recordings_path = storage_root_path / "recordings"
@@ -1019,6 +1357,29 @@ class UIManager:
             messagebox.showwarning("Invalid Value", "The model list cannot be empty. Please add at least one model.", parent=settings_win)
             return
 
+        max_parallel_downloads_to_apply = self.config_manager.get_max_parallel_downloads()
+        if max_parallel_downloads_var is not None:
+            try:
+                candidate = int(max_parallel_downloads_var.get())
+            except (TypeError, ValueError):
+                candidate = max_parallel_downloads_to_apply
+            else:
+                if candidate < 1:
+                    candidate = 1
+                elif candidate > 8:
+                    candidate = 8
+            max_parallel_downloads_to_apply = candidate
+        self.config_manager.set_max_parallel_downloads(max_parallel_downloads_to_apply)
+        core_ref = getattr(self, "core_instance_ref", None)
+        if core_ref is not None and hasattr(core_ref, "model_download_controller"):
+            try:
+                core_ref.model_download_controller.update_parallel_limit(max_parallel_downloads_to_apply)
+            except Exception:
+                logging.debug(
+                    "Unable to propagate max_parallel_downloads to controller.",
+                    exc_info=True,
+                )
+
         self.core_instance_ref.apply_settings_from_external(
             new_key=key_to_apply,
             new_mode=mode_to_apply,
@@ -1063,6 +1424,7 @@ class UIManager:
             new_asr_dtype=asr_dtype_to_apply,
             new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
             new_models_storage_dir=models_storage_dir_to_apply,
+            new_deps_install_dir=deps_install_dir_to_apply,
             new_asr_cache_dir=asr_cache_dir_to_apply,
             new_storage_root_dir=storage_root_dir_to_apply,
             new_recordings_dir=recordings_dir_to_apply,
@@ -1168,9 +1530,14 @@ class UIManager:
             except Exception:
                 pass
 
+        _set_var("max_parallel_downloads_var", str(DEFAULT_CONFIG.get("max_parallel_downloads", 1)))
+
         _set_var("asr_cache_dir_var", DEFAULT_CONFIG["asr_cache_dir"])
         _set_var("storage_root_dir_var", DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
         _set_var("recordings_dir_var", DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
+        _set_var("python_packages_dir_var", DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
+        _set_var("vad_models_dir_var", DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
+        _set_var("hf_cache_dir_var", DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
 
         self.config_manager.set_asr_model_id(default_model_id)
         self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
@@ -1179,6 +1546,9 @@ class UIManager:
         self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
         self.config_manager.set_storage_root_dir(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
         self.config_manager.set_recordings_dir(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
+        self.config_manager.set_python_packages_dir(DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
+        self.config_manager.set_vad_models_dir(DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
+        self.config_manager.set_hf_cache_dir(DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
         self.config_manager.save_config()
 
         backend_var = self._get_settings_var("asr_backend_var")
@@ -1232,6 +1602,299 @@ class UIManager:
             dc.rectangle((width // 4, height // 4, width * 3 // 4, height * 3 // 4), fill=color2)
         return image
 
+    # ------------------------------------------------------------------
+    # Painel de auditoria de dependências
+    # ------------------------------------------------------------------
+    def present_dependency_audit(
+        self,
+        result: DependencyAuditResult | None,
+        *,
+        error_message: str | None = None,
+    ) -> None:
+        """Exibe um painel não modal com o resultado da auditoria de dependências."""
+
+        self._dependency_audit_presented = True
+        window_exists = bool(
+            self._dependency_audit_window and self._dependency_audit_window.winfo_exists()
+        )
+
+        if not window_exists:
+            audit_window = ctk.CTkToplevel(self.main_tk_root)
+            audit_window.title("Dependency Audit")
+            audit_window.geometry("720x540")
+            audit_window.resizable(True, True)
+            try:
+                audit_window.iconbitmap("icon.ico")
+            except Exception:
+                logging.debug("Dependency audit window icon not applied.", exc_info=True)
+            audit_window.protocol("WM_DELETE_WINDOW", self._close_dependency_audit_window)
+
+            header = ctk.CTkFrame(audit_window)
+            header.pack(fill="x", padx=16, pady=(16, 12))
+            self._dependency_audit_summary_label = ctk.CTkLabel(
+                header,
+                text="",
+                font=("Segoe UI", 16, "bold"),
+                justify="left",
+                anchor="w",
+                wraplength=660,
+            )
+            self._dependency_audit_summary_label.pack(fill="x")
+            self._dependency_audit_timestamp_label = ctk.CTkLabel(
+                header,
+                text="",
+                font=("Segoe UI", 12),
+                justify="left",
+                anchor="w",
+            )
+            self._dependency_audit_timestamp_label.pack(fill="x", pady=(6, 0))
+
+            self._dependency_audit_content = ctk.CTkScrollableFrame(
+                audit_window,
+                height=360,
+            )
+            self._dependency_audit_content.pack(
+                fill="both",
+                expand=True,
+                padx=16,
+                pady=(0, 12),
+            )
+
+            button_frame = ctk.CTkFrame(audit_window)
+            button_frame.pack(fill="x", padx=16, pady=(0, 16))
+            self._dependency_audit_copy_all_btn = ctk.CTkButton(
+                button_frame,
+                text="Copiar todos os comandos",
+                command=self._copy_all_dependency_audit_commands,
+            )
+            self._dependency_audit_copy_all_btn.pack(side="left")
+            docs_button = ctk.CTkButton(
+                button_frame,
+                text="Abrir documentação",
+                command=self._open_dependency_audit_docs,
+            )
+            docs_button.pack(side="right")
+
+            self._dependency_audit_window = audit_window
+        else:
+            audit_window = self._dependency_audit_window
+            try:
+                audit_window.lift()
+            except Exception:
+                logging.debug("Failed to raise dependency audit window.", exc_info=True)
+
+        summary_label = self._dependency_audit_summary_label
+        timestamp_label = self._dependency_audit_timestamp_label
+        container = self._dependency_audit_content
+        if not container:
+            return
+
+        summary_text = ""
+        timestamp_text = ""
+        if result is not None:
+            summary_text = result.summary_message()
+            try:
+                localized = result.generated_at.astimezone()
+            except Exception:
+                localized = result.generated_at
+            timestamp_text = f"Gerado em {localized.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+        elif error_message:
+            summary_text = error_message
+            timestamp_text = "Resultado indisponível no momento."
+        else:
+            summary_text = "Dependency audit result unavailable."
+            timestamp_text = "Resultado indisponível no momento."
+
+        if summary_label is not None:
+            summary_label.configure(text=summary_text)
+        if timestamp_label is not None:
+            timestamp_label.configure(text=timestamp_text)
+
+        for child in container.winfo_children():
+            child.destroy()
+
+        self._dependency_audit_commands = []
+        has_issues = False
+
+        if result is None:
+            info = error_message or "Dependency audit result unavailable."
+            ctk.CTkLabel(
+                container,
+                text=info,
+                justify="left",
+                anchor="w",
+                wraplength=640,
+            ).pack(anchor="w", padx=12, pady=(0, 8))
+        else:
+            sections = [
+                (
+                    "Dependências ausentes",
+                    result.missing,
+                    "Instale os pacotes listados para alinhar o ambiente ao manifesto.",
+                ),
+                (
+                    "Versões fora da especificação",
+                    result.version_mismatches,
+                    "Atualize as bibliotecas abaixo para satisfazer os intervalos declarados.",
+                ),
+                (
+                    "Divergências de hash",
+                    result.hash_mismatches,
+                    "Reinstale os pacotes com hashes divergentes para garantir integridade.",
+                ),
+            ]
+
+            for title, issues, guidance in sections:
+                if issues:
+                    has_issues = True
+                self._render_dependency_issue_section(
+                    container,
+                    title,
+                    issues,
+                    guidance,
+                )
+
+        if self._dependency_audit_copy_all_btn is not None:
+            state = "normal" if (self._dependency_audit_commands and has_issues) else "disabled"
+            self._dependency_audit_copy_all_btn.configure(state=state)
+
+    def _render_dependency_issue_section(
+        self,
+        parent,
+        title: str,
+        issues: Iterable[DependencyIssue],
+        guidance: str,
+    ) -> None:
+        section = ctk.CTkFrame(parent)
+        section.pack(fill="x", padx=8, pady=(0, 12))
+
+        ctk.CTkLabel(
+            section,
+            text=title,
+            font=("Segoe UI", 15, "bold"),
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", pady=(8, 4), padx=8)
+
+        if guidance:
+            ctk.CTkLabel(
+                section,
+                text=guidance,
+                wraplength=640,
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=12, pady=(0, 8))
+
+        issues = list(issues)
+        if not issues:
+            ctk.CTkLabel(
+                section,
+                text="Nenhum item identificado.",
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=12, pady=(0, 8))
+            return
+
+        for issue in issues:
+            card = ctk.CTkFrame(section, corner_radius=8)
+            card.pack(fill="x", padx=12, pady=(0, 8))
+
+            metadata_lines = [
+                f"Requisito: {issue.requirement_string}",
+                f"Origem: {Path(issue.requirement_file).name}:{issue.line_number}",
+            ]
+            if issue.specifier:
+                metadata_lines.append(f"Política declarada: {issue.specifier}")
+            if issue.marker:
+                metadata_lines.append(f"Marker: {issue.marker}")
+            if issue.installed_version:
+                metadata_lines.append(f"Versão instalada: {issue.installed_version}")
+            elif issue.category == "missing":
+                metadata_lines.append("Versão instalada: <não localizada>")
+            if issue.hashes:
+                metadata_lines.append(f"Hashes esperados: {', '.join(issue.hashes)}")
+
+            details = issue.details or {}
+            expected = details.get("expected") if isinstance(details, dict) else None
+            detected = details.get("detected") if isinstance(details, dict) else None
+            if expected:
+                metadata_lines.append(f"Hashes declarados: {expected}")
+            if detected:
+                metadata_lines.append(f"Hashes detectados: {detected}")
+
+            ctk.CTkLabel(
+                card,
+                text="\n".join(metadata_lines),
+                justify="left",
+                anchor="w",
+                wraplength=620,
+            ).pack(fill="x", padx=12, pady=(8, 4))
+
+            suggestion_text = issue.suggestion
+            ctk.CTkLabel(
+                card,
+                text=suggestion_text,
+                justify="left",
+                anchor="w",
+                wraplength=620,
+                text_color=("#A0A0A0", "#A0A0A0"),
+            ).pack(fill="x", padx=12, pady=(0, 8))
+
+            action_row = ctk.CTkFrame(card, fg_color="transparent")
+            action_row.pack(fill="x", padx=12, pady=(0, 12))
+            ctk.CTkButton(
+                action_row,
+                text="Copiar comando",
+                command=lambda cmd=suggestion_text: self._copy_to_clipboard(cmd),
+            ).pack(side="left")
+
+            self._dependency_audit_commands.append(suggestion_text)
+
+    def _copy_all_dependency_audit_commands(self) -> None:
+        commands = [cmd for cmd in self._dependency_audit_commands if cmd]
+        if not commands:
+            return
+        unique_commands = list(dict.fromkeys(commands))
+        payload = "\n".join(unique_commands)
+        self._copy_to_clipboard(payload)
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        if not text:
+            return
+        try:
+            self.main_tk_root.clipboard_clear()
+            self.main_tk_root.clipboard_append(text)
+        except Exception as exc:
+            logging.error("Failed to copy text to clipboard: %s", exc, exc_info=True)
+            return
+        self.show_status_tooltip("Comando copiado para a área de transferência.")
+
+    def _open_dependency_audit_docs(self) -> None:
+        doc_path = self._dependency_audit_docs_path
+        try:
+            resolved = doc_path.resolve(strict=True)
+        except FileNotFoundError:
+            logging.warning("Dependency audit documentation not found at %s", doc_path)
+            self.show_status_tooltip("Arquivo de documentação não encontrado.")
+            return
+        webbrowser.open(resolved.as_uri())
+
+    def _close_dependency_audit_window(self) -> None:
+        window = self._dependency_audit_window
+        if not window:
+            return
+        try:
+            window.destroy()
+        except Exception:
+            logging.debug("Failed to destroy dependency audit window.", exc_info=True)
+        finally:
+            self._dependency_audit_window = None
+            self._dependency_audit_summary_label = None
+            self._dependency_audit_timestamp_label = None
+            self._dependency_audit_content = None
+            self._dependency_audit_copy_all_btn = None
+            self._dependency_audit_commands = []
+
     def _build_vad_section(self, parent, use_vad_var, vad_threshold_var, vad_silence_duration_var, vad_pre_speech_padding_ms_var, vad_post_speech_padding_ms_var):
         vad_frame = ctk.CTkFrame(parent)
         vad_frame.pack(fill="x", pady=5)
@@ -1267,6 +1930,7 @@ class UIManager:
         asr_dtype_var,
         asr_ct2_compute_type_var,
         models_storage_dir_var,
+        deps_install_dir_var,
         storage_root_dir_var,
         recordings_dir_var,
         asr_cache_dir_var,
@@ -1297,20 +1961,132 @@ class UIManager:
                     widget.pack(**pack_kwargs)
             button = toggle_button_ref['widget']
             if button is not None:
-                button.configure(text='Ocultar avancado' if show else 'Mostrar avancado')
+                button.configure(text='Ocultar avançado' if show else 'Mostrar avançado')
 
         def _toggle_advanced() -> None:
             _set_advanced_visibility(not advanced_state['visible'])
 
         advanced_toggle = ctk.CTkButton(
             asr_frame,
-            text='Mostrar avancado',
+            text='Mostrar avançado',
             command=_toggle_advanced,
         )
         advanced_toggle.pack(fill='x', pady=(0, 5))
         toggle_button_ref['widget'] = advanced_toggle
 
         previous_models_dir = {"value": models_storage_dir_var.get() if models_storage_dir_var else ""}
+        previous_deps_dir = {"value": deps_install_dir_var.get() if deps_install_dir_var else ""}
+
+        def _validate_directory(label: str, raw_value: str, *, show_dialog: bool = True) -> Path | None:
+            sanitized = (raw_value or "").strip()
+            if not sanitized:
+                return None
+            ok, message, resolved = self.config_manager.validate_directory_candidate(
+                sanitized,
+                label=label,
+            )
+            if show_dialog and message:
+                dialog = messagebox.showinfo if ok else messagebox.showerror
+                if settings_win is not None:
+                    dialog(label, message, parent=settings_win)
+                else:
+                    dialog(label, message)
+            if ok:
+                logging.info(message)
+                return resolved
+            logging.warning(message)
+            return None
+
+        def _on_deps_focus_out() -> None:
+            value = deps_install_dir_var.get().strip() if deps_install_dir_var else ""
+            if not value:
+                return
+            resolved = _validate_directory("Dependencies", value, show_dialog=False)
+            if resolved is None:
+                deps_install_dir_var.set(previous_deps_dir.get("value", ""))
+            else:
+                deps_install_dir_var.set(str(resolved))
+
+        def _browse_deps_dir() -> None:
+            initial = deps_install_dir_var.get() if deps_install_dir_var else ""
+            try:
+                initial_dir = Path(initial).expanduser()
+            except Exception:
+                initial_dir = Path.home()
+            selected = filedialog.askdirectory(initialdir=str(initial_dir))
+            if selected:
+                resolved = _validate_directory("Dependencies", selected)
+                if resolved is not None:
+                    deps_install_dir_var.set(str(resolved))
+                else:
+                    deps_install_dir_var.set(previous_deps_dir.get("value", ""))
+
+        def _check_deps_dir() -> None:
+            value = deps_install_dir_var.get().strip() if deps_install_dir_var else ""
+            if not value:
+                messagebox.showwarning(
+                    "Dependencies",
+                    "Selecione um diretório de dependências antes de validar.",
+                    parent=settings_win,
+                )
+                return
+            ok, message, _ = self.config_manager.validate_directory_candidate(
+                value,
+                label="Dependencies",
+            )
+            dialog = messagebox.showinfo if ok else messagebox.showerror
+            if ok:
+                logging.info(message)
+            else:
+                logging.warning(message)
+            dialog("Dependencies", message, parent=settings_win)
+
+        def _migrate_deps_dir() -> None:
+            source = previous_deps_dir.get("value") or ""
+            destination = deps_install_dir_var.get().strip() if deps_install_dir_var else ""
+            if not source or not destination:
+                messagebox.showwarning(
+                    "Dependencies",
+                    "Defina diretórios de origem e destino antes de migrar.",
+                    parent=settings_win,
+                )
+                return
+            if source == destination:
+                messagebox.showinfo(
+                    "Dependencies",
+                    "Os diretórios de origem e destino são idênticos.",
+                    parent=settings_win,
+                )
+                return
+            confirm = messagebox.askyesno(
+                "Dependencies",
+                (
+                    "Migrar os artefatos existentes de\n"
+                    f"{source}\npara\n{destination}?"
+                ),
+                parent=settings_win,
+            )
+            if not confirm:
+                return
+            success = self.config_manager.migrate_directory(
+                source,
+                destination,
+                label="Dependencies",
+            )
+            if success:
+                previous_deps_dir["value"] = destination
+                self.config_manager.apply_environment_overrides()
+                messagebox.showinfo(
+                    "Dependencies",
+                    "Migração concluída com sucesso.",
+                    parent=settings_win,
+                )
+            else:
+                messagebox.showerror(
+                    "Dependencies",
+                    "A migração falhou. Verifique os logs para mais detalhes.",
+                    parent=settings_win,
+                )
 
         def _update_cache_dir_for_new_base(new_base: str) -> None:
             old_base = previous_models_dir.get("value") or ""
@@ -1378,6 +2154,41 @@ class UIManager:
         sync_button = ctk.CTkButton(models_dir_frame, text="Sincronizar Cache ASR", command=_synchronize_cache_dir)
         sync_button.pack(side="left", padx=5)
         Tooltip(sync_button, "Atualiza o diretório de cache ASR para ficar dentro do diretório de modelos.")
+
+        deps_dir_frame = ctk.CTkFrame(asr_frame)
+        _register_advanced(deps_dir_frame, fill="x", pady=5)
+        ctk.CTkLabel(deps_dir_frame, text="Diretório de Dependências:").pack(side="left", padx=(5, 10))
+        deps_dir_entry = ctk.CTkEntry(deps_dir_frame, textvariable=deps_install_dir_var, width=240)
+        deps_dir_entry.pack(side="left", padx=5)
+        Tooltip(
+            deps_dir_entry,
+            "Local onde caches do Hugging Face e dependências auxiliares serão mantidos.",
+        )
+        deps_dir_entry.bind("<FocusOut>", lambda *_: _on_deps_focus_out())
+
+        deps_browse_button = ctk.CTkButton(
+            deps_dir_frame,
+            text="Selecionar...",
+            command=_browse_deps_dir,
+        )
+        deps_browse_button.pack(side="left", padx=5)
+        Tooltip(deps_browse_button, "Escolha o diretório para armazenar dependências compartilhadas.")
+
+        deps_validate_button = ctk.CTkButton(
+            deps_dir_frame,
+            text="Validar espaço",
+            command=_check_deps_dir,
+        )
+        deps_validate_button.pack(side="left", padx=5)
+        Tooltip(deps_validate_button, "Verifica permissões e espaço disponível no diretório selecionado.")
+
+        deps_migrate_button = ctk.CTkButton(
+            deps_dir_frame,
+            text="Migrar ativos",
+            command=_migrate_deps_dir,
+        )
+        deps_migrate_button.pack(side="left", padx=5)
+        Tooltip(deps_migrate_button, "Move dependências existentes para o novo diretório.")
 
         asr_backend_frame = ctk.CTkFrame(asr_frame)
         _register_advanced(asr_backend_frame, fill="x", pady=5)
@@ -1536,6 +2347,9 @@ class UIManager:
             asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
             storage_root_dir_var.set(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
             recordings_dir_var.set(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
+            python_packages_dir_var.set(DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
+            vad_models_dir_var.set(DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
+            hf_cache_dir_var.set(DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
             _on_backend_change(asr_backend_var.get())
             _update_model_info(default_model_id)
             self.config_manager.set_asr_model_id(default_model_id)
@@ -1544,6 +2358,9 @@ class UIManager:
             self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
             self.config_manager.set_storage_root_dir(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
             self.config_manager.set_recordings_dir(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
+            self.config_manager.set_python_packages_dir(DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
+            self.config_manager.set_vad_models_dir(DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
+            self.config_manager.set_hf_cache_dir(DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
             self.config_manager.save_config()
 
         reset_asr_button = ctk.CTkButton(
@@ -1643,8 +2460,6 @@ class UIManager:
                 )
                 return
 
-            download_cancelled_error = self._download_cancelled_error
-
             try:
                 size_bytes, file_count = model_manager.get_model_download_size(model_id)
                 size_gb = size_bytes / (1024 ** 3)
@@ -1659,28 +2474,26 @@ class UIManager:
                 return
 
             try:
-                result = model_manager.ensure_download(
-                    model_id,
-                    backend,
-                    cache_dir,
-                    asr_ct2_compute_type_var.get() if backend == "ctranslate2" else None,
+                download_result = self.core_instance_ref.download_model_with_ui(
+                    model_id=model_id,
+                    backend=backend,
+                    cache_dir=cache_dir,
+                    quant=asr_ct2_compute_type_var.get() if backend == "ctranslate2" else None,
+                    reason="settings",
                 )
-                installed_models = model_manager.list_installed(cache_dir)
-                self.config_manager.set_asr_installed_models(installed_models)
-                self.config_manager.save_config()
-                _update_model_info(model_id)
-                downloaded = bool(getattr(result, "downloaded", True))
-                message = "Download completed." if downloaded else "Model already installed."
-                messagebox.showinfo("Model", message)
-            except download_cancelled_error:
-                messagebox.showinfo("Model", "Download canceled.")
-            except OSError:
-                messagebox.showerror(
-                    "Model",
-                    "Unable to write to the ASR cache directory. Please check permissions.",
-                )
-            except Exception as e:
+            except Exception as e:  # pragma: no cover - defensive guard
                 messagebox.showerror("Model", f"Download failed: {e}")
+                return
+
+            status = download_result.get("status")
+            if status == "success":
+                _update_model_info(model_id)
+                messagebox.showinfo("Model", "Download completed.")
+            elif status == "cancelled":
+                messagebox.showinfo("Model", "Download canceled.")
+            elif status == "error":
+                message = download_result.get("error") or "Unknown error"
+                messagebox.showerror("Model", f"Download failed: {message}")
 
         def _reload_model():
             handler = getattr(self.core_instance_ref, "transcription_handler", None)
@@ -1700,6 +2513,163 @@ class UIManager:
             asr_frame, text="Reload Model", command=_reload_model
         )
         reload_button.pack(pady=5)
+
+        download_vars: dict[str, BooleanVar] = {}
+
+        def _schedule_selected_models() -> None:
+            core = getattr(self, "core_instance_ref", None)
+            if core is None or not hasattr(core, "schedule_model_download"):
+                messagebox.showerror(
+                    "Model Downloads",
+                    "Core instance is not available to schedule downloads.",
+                )
+                return
+            cache_dir_value = asr_cache_dir_var.get()
+            if not cache_dir_value:
+                messagebox.showerror(
+                    "Model Downloads",
+                    "Configure the ASR cache directory before scheduling downloads.",
+                )
+                return
+            try:
+                Path(cache_dir_value).mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                messagebox.showerror(
+                    "Model Downloads",
+                    f"Invalid cache directory: {exc}",
+                )
+                return
+
+            active_pairs: set[tuple[str, str]] = set()
+            snapshot = {}
+            if hasattr(core, "get_model_downloads_snapshot"):
+                try:
+                    snapshot = core.get_model_downloads_snapshot()
+                except Exception:
+                    logging.debug("Unable to fetch download snapshot before scheduling.", exc_info=True)
+            if isinstance(snapshot, dict):
+                for existing in snapshot.get("tasks", []) or []:
+                    if not isinstance(existing, dict):
+                        continue
+                    status_value = str(existing.get("status") or "").lower()
+                    if status_value in {
+                        "completed",
+                        "skipped",
+                        "cancelled",
+                        "timed_out",
+                        "error",
+                    }:
+                        continue
+                    model_key = str(existing.get("model_id") or "").strip()
+                    backend_key = str(existing.get("backend") or "").strip()
+                    if model_key:
+                        active_pairs.add((model_key, backend_key))
+
+            scheduled = 0
+            skipped_duplicates: list[str] = []
+            for model_id, var in download_vars.items():
+                if not bool(var.get()):
+                    continue
+                backend_for_model = _derive_backend_from_model(model_id) or asr_backend_var.get()
+                if not backend_for_model:
+                    messagebox.showerror(
+                        "Model Downloads",
+                        f"Unable to determine backend for {model_id}.",
+                    )
+                    continue
+                quant_value = (
+                    asr_ct2_compute_type_var.get() if backend_for_model == "ctranslate2" else None
+                )
+                normalized_backend_key = str(backend_for_model).strip()
+                dedup_key = (model_id, normalized_backend_key)
+                if dedup_key in active_pairs:
+                    skipped_duplicates.append(model_id)
+                    continue
+                try:
+                    core.schedule_model_download(
+                        model_id,
+                        backend_for_model,
+                        cache_dir_value,
+                        quant_value,
+                        auto_reload=False,
+                    )
+                    scheduled += 1
+                    active_pairs.add(dedup_key)
+                except Exception as exc:
+                    messagebox.showerror(
+                        "Model Downloads",
+                        f"Failed to schedule download for {model_id}: {exc}",
+                    )
+            if scheduled:
+                for var in download_vars.values():
+                    var.set(False)
+                messagebox.showinfo(
+                    "Model Downloads",
+                    f"Scheduled {scheduled} model download(s).",
+                )
+                self._open_model_downloads_window()
+            if skipped_duplicates:
+                skipped_list = "\n".join(sorted(set(skipped_duplicates)))
+                messagebox.showinfo(
+                    "Model Downloads",
+                    "The following models already have an active task and were not scheduled:\n"
+                    f"{skipped_list}",
+                )
+            elif not scheduled:
+                messagebox.showinfo(
+                    "Model Downloads",
+                    "No downloads were scheduled. Select at least one model that is not already queued.",
+                )
+
+        multi_frame = ctk.CTkFrame(asr_frame)
+        multi_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(multi_frame, text="Curated downloads queue:").pack(
+            anchor="w", padx=5
+        )
+        selection_frame = ctk.CTkScrollableFrame(multi_frame, height=150)
+        selection_frame.pack(fill="x", pady=(2, 6))
+        for entry in catalog:
+            model_id = entry.get("id")
+            display_label = id_to_display.get(model_id, model_id)
+            var = BooleanVar(value=False)
+            checkbox = ctk.CTkCheckBox(
+                selection_frame,
+                text=display_label,
+                variable=var,
+            )
+            checkbox.pack(anchor="w", padx=4, pady=2)
+            download_vars[model_id] = var
+
+        self._set_settings_meta("download_check_vars", download_vars)
+
+        button_frame = ctk.CTkFrame(multi_frame)
+        button_frame.pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(
+            button_frame,
+            text="Download Selected",
+            command=_schedule_selected_models,
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            button_frame,
+            text="Open Downloads Window",
+            command=self._open_model_downloads_window,
+        ).pack(side="left", padx=4)
+
+        max_parallel_downloads_var = ctk.StringVar(
+            value=str(self.config_manager.get_max_parallel_downloads())
+        )
+        self._set_settings_var("max_parallel_downloads_var", max_parallel_downloads_var)
+        parallel_frame = ctk.CTkFrame(multi_frame)
+        parallel_frame.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(parallel_frame, text="Max parallel downloads:").pack(
+            side="left", padx=5
+        )
+        parallel_menu = ctk.CTkOptionMenu(
+            parallel_frame,
+            variable=max_parallel_downloads_var,
+            values=[str(i) for i in range(1, 9)],
+        )
+        parallel_menu.pack(side="left", padx=5)
 
         _on_model_change(asr_model_display_var.get())
         _update_model_info(asr_model_id_var.get())
@@ -1898,6 +2868,8 @@ class UIManager:
         state_str = str(resolved_state)
 
         event_obj = context.get("event") if context else None
+        if event_obj == sm.StateEvent.MODEL_DOWNLOAD_PROGRESS:
+            self._handle_download_progress(context)
         if context:
             self._last_state_notification = context.get("notification")
             self._state_context_suffix = self._build_state_context_suffix(state_str, context)
@@ -2450,7 +3422,11 @@ class UIManager:
                 asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
                 models_storage_dir_var = ctk.StringVar(value=self.config_manager.get_models_storage_dir())
+                deps_install_dir_var = ctk.StringVar(value=self.config_manager.get_deps_install_dir())
                 asr_cache_dir_var = ctk.StringVar(value=self.config_manager.get_asr_cache_dir())
+                python_packages_dir_var = ctk.StringVar(value=self.config_manager.get_python_packages_dir())
+                vad_models_dir_var = ctk.StringVar(value=self.config_manager.get_vad_models_dir())
+                hf_cache_dir_var = ctk.StringVar(value=self.config_manager.get_hf_cache_dir())
 
                 for name, var in [
                     ("auto_paste_var", auto_paste_var),
@@ -2492,7 +3468,11 @@ class UIManager:
                     ("asr_dtype_var", asr_dtype_var),
                     ("asr_ct2_compute_type_var", asr_ct2_compute_type_var),
                     ("models_storage_dir_var", models_storage_dir_var),
+                    ("deps_install_dir_var", deps_install_dir_var),
                     ("asr_cache_dir_var", asr_cache_dir_var),
+                    ("python_packages_dir_var", python_packages_dir_var),
+                    ("vad_models_dir_var", vad_models_dir_var),
+                    ("hf_cache_dir_var", hf_cache_dir_var),
                     ("recordings_dir_var", recordings_dir_var),
                 ]:
                     self._set_settings_var(name, var)
@@ -2617,6 +3597,39 @@ class UIManager:
                         )
                         return
 
+                    python_packages_dir_to_apply = python_packages_dir_var.get()
+                    try:
+                        Path(python_packages_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Invalid Path",
+                            f"Python packages directory is invalid:\n{exc}",
+                            parent=settings_win,
+                        )
+                        return
+
+                    vad_models_dir_to_apply = vad_models_dir_var.get()
+                    try:
+                        Path(vad_models_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Invalid Path",
+                            f"VAD models directory is invalid:\n{exc}",
+                            parent=settings_win,
+                        )
+                        return
+
+                    hf_cache_dir_to_apply = hf_cache_dir_var.get()
+                    try:
+                        Path(hf_cache_dir_to_apply).mkdir(parents=True, exist_ok=True)
+                    except Exception as exc:
+                        messagebox.showerror(
+                            "Invalid Path",
+                            f"Hugging Face cache directory is invalid:\n{exc}",
+                            parent=settings_win,
+                        )
+                        return
+
                     # Logic for converting UI to GPU index
                     selected_device_str = asr_compute_device_var.get()
                     gpu_index_to_apply = -1 # Default to "Auto-select"
@@ -2687,6 +3700,9 @@ class UIManager:
                             "new_asr_cache_dir": asr_cache_dir_to_apply,
                             "new_storage_root_dir": storage_root_dir_var.get(),
                             "new_recordings_dir": recordings_dir_var.get(),
+                            "new_python_packages_dir": python_packages_dir_to_apply,
+                            "new_vad_models_dir": vad_models_dir_to_apply,
+                            "new_hf_cache_dir": hf_cache_dir_to_apply,
                         }
                     )
                     self._close_settings_window() # Call class method
@@ -3076,6 +4092,7 @@ class UIManager:
             asr_dtype_var=asr_dtype_var,
             asr_ct2_compute_type_var=asr_ct2_compute_type_var,
             models_storage_dir_var=models_storage_dir_var,
+            deps_install_dir_var=deps_install_dir_var,
             storage_root_dir_var=storage_root_dir_var,
             recordings_dir_var=recordings_dir_var,
             asr_cache_dir_var=asr_cache_dir_var,
@@ -3215,6 +4232,13 @@ class UIManager:
             pystray.MenuItem(
                 '\u2699\ufe0f Configurações',
                 lambda icon, item: self.main_tk_root.after(0, self.run_settings_gui),
+                enabled=lambda item: self._get_core_state() not in ['LOADING_MODEL', 'RECORDING']
+            ),
+            pystray.MenuItem(
+                '\U0001f9ed Assistente Inicial',
+                lambda icon, item: self.main_tk_root.after(
+                    0, lambda: self.core_instance_ref.launch_first_run_wizard(force=True)
+                ),
                 enabled=lambda item: self._get_core_state() not in ['LOADING_MODEL', 'RECORDING']
             ),
             pystray.MenuItem(

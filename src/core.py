@@ -1,4 +1,5 @@
 import atexit
+import json
 import logging
 import os
 import sys
@@ -43,9 +44,13 @@ from .config_manager import (
     ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     MODELS_STORAGE_DIR_CONFIG_KEY,
+    DEPS_INSTALL_DIR_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     STORAGE_ROOT_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
+    PYTHON_PACKAGES_DIR_CONFIG_KEY,
+    VAD_MODELS_DIR_CONFIG_KEY,
+    HF_CACHE_DIR_CONFIG_KEY,
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
@@ -61,6 +66,11 @@ from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from . import model_manager as model_manager_module
+from .onboarding.first_run_wizard import (
+    DownloadProgressPanel,
+    FirstRunWizard,
+    WizardResult,
+)
 from .logging_utils import (
     StructuredMessage,
     get_logger,
@@ -68,6 +78,7 @@ from .logging_utils import (
     log_duration,
     scoped_correlation_id,
 )
+from .utils.dependency_audit import DependencyAuditResult, audit_environment
 
 if TYPE_CHECKING:
     from .startup_diagnostics import StartupDiagnosticsReport
@@ -111,13 +122,38 @@ class AppCore:
 
         # --- Módulos ---
         self.config_manager = config_manager or ConfigManager()
+        self.dependency_audit_result: DependencyAuditResult | None = None
+        self._dependency_audit_failure_message: str | None = None
+        self._dependency_audit_event_sent = False
+        self._dependency_audit_presented_to_ui = False
+
+        try:
+            audit_result = audit_environment()
+        except Exception as exc:  # pragma: no cover - diagnóstico defensivo
+            failure_message = f"Dependency audit failed: {exc}"
+            LOGGER.exception("Failed to complete dependency audit during bootstrap.")
+            self._dependency_audit_failure_message = failure_message
+            self.config_manager.record_runtime_notice(
+                failure_message,
+                category="dependency_audit",
+            )
+        else:
+            self.dependency_audit_result = audit_result
+            self.config_manager.record_runtime_notice(
+                audit_result.summary_message(),
+                category="dependency_audit",
+                details=audit_result.to_serializable(),
+            )
+
         self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
         self._ui_manager = None  # Será setado externamente pelo main.py
         self._pending_tray_tooltips: list[str] = []
 
-        self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
-
         self.full_transcription = ""
+
+        # Track the latest onboarding outcome so diagnostics and the UI can
+        # inspect what happened without parsing log files.
+        self._last_onboarding_outcome: dict[str, Any] | None = None
 
         self.action_orchestrator = ActionOrchestrator(
             state_manager=self.state_manager,
@@ -138,6 +174,15 @@ class AppCore:
             "DownloadCancelledError",
             Exception,
         )
+        max_parallel_downloads = self.config_manager.get_max_parallel_downloads()
+        self.model_download_controller = ModelDownloadController(
+            state_manager=self.state_manager,
+            config_manager=self.config_manager,
+            max_parallel_downloads=max_parallel_downloads,
+            on_task_finished=self._on_download_task_finished,
+        )
+        self._tracked_download_tasks: set[str] = set()
+        self._auto_reload_tasks: set[str] = set()
 
         self.startup_diagnostics: "StartupDiagnosticsReport | None" = startup_diagnostics
         if self.startup_diagnostics is not None:
@@ -194,6 +239,11 @@ class AppCore:
         self.model_prompt_active = False
         self._active_recording_correlation_id: str | None = None
         self._recording_started_at: float | None = None
+        self._onboarding_active = False
+
+    @property
+    def dependency_audit_failure_message(self) -> str | None:
+        return self._dependency_audit_failure_message
 
     @property
     def ui_manager(self):
@@ -204,6 +254,8 @@ class AppCore:
         self._ui_manager = ui_manager_instance
         if ui_manager_instance:
             self.state_manager.subscribe(ui_manager_instance.update_tray_icon)
+            self._publish_dependency_audit_state_event()
+            self._present_dependency_audit_to_ui()
 
         # --- Hotkey Manager ---
         config_path = getattr(self, "hotkey_config_path", HOTKEY_CONFIG_FILE)
@@ -220,8 +272,246 @@ class AppCore:
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
 
-        self._active_model_download_event: threading.Event | None = None
         self.model_download_timeout = self._resolve_model_download_timeout()
+        self._maybe_run_initial_onboarding()
+
+    def _maybe_run_initial_onboarding(self) -> None:
+        try:
+            snapshot = self.config_manager.describe_persistence_state()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "Unable to inspect persistence state for onboarding: %s",
+                exc,
+                exc_info=True,
+            )
+            return
+
+        if not snapshot.get("first_run"):
+            LOGGER.debug("Onboarding wizard skipped: profile already initialized.")
+            return
+
+        LOGGER.info("Launching onboarding wizard for first run.")
+        outcome = self._launch_onboarding(snapshot=snapshot, force=True, reason="startup")
+        if outcome is not None:
+            self._last_onboarding_outcome = outcome
+
+    def _launch_onboarding(
+        self,
+        *,
+        snapshot: Mapping[str, Any],
+        force: bool,
+        reason: str,
+    ) -> dict[str, Any] | None:
+        if self._onboarding_active:
+            LOGGER.info(
+                "Onboarding wizard already active; ignoring launch request (%s).",
+                reason,
+            )
+            return None
+
+        if not force and not snapshot.get("first_run"):
+            LOGGER.debug(
+                "Onboarding launch ignored for reason '%s': not a first-run profile.",
+                reason,
+            )
+            return None
+
+        self._onboarding_active = True
+        try:
+            wizard_result = self._run_onboarding_wizard(snapshot=snapshot, force=force)
+        finally:
+            self._onboarding_active = False
+
+        if wizard_result is None:
+            LOGGER.info("Onboarding wizard dismissed without changes (%s).", reason)
+            return None
+
+        outcome = self._apply_onboarding_result(wizard_result, source=reason)
+        self._last_onboarding_outcome = outcome
+        return outcome
+
+    def _run_onboarding_wizard(
+        self,
+        *,
+        snapshot: Mapping[str, Any],
+        force: bool,
+    ) -> WizardResult | None:
+        try:
+            catalog = self.model_manager.list_catalog()
+        except Exception as exc:  # pragma: no cover - catalog retrieval best effort
+            MODEL_LOGGER.debug(
+                "Unable to retrieve curated catalog for onboarding: %s",
+                exc,
+                exc_info=True,
+            )
+            catalog = []
+
+        config_snapshot = dict(self.config_manager.config)
+        hotkey_defaults = {
+            "record_key": self.config_manager.get("record_key"),
+            "agent_key": self.config_manager.get("agent_key"),
+            "record_mode": self.config_manager.get("record_mode"),
+        }
+
+        profile_dir = snapshot.get("profile_dir") or snapshot.get("config", {}).get("path")
+        wizard = FirstRunWizard(
+            self.main_tk_root,
+            first_run=force or bool(snapshot.get("first_run")),
+            config_snapshot=config_snapshot,
+            hotkey_defaults=hotkey_defaults,
+            profile_dir=str(profile_dir) if profile_dir else None,
+            recommended_models=catalog,
+        )
+        return wizard.run()
+
+    def _apply_onboarding_result(
+        self,
+        result: WizardResult,
+        *,
+        source: str,
+    ) -> dict[str, Any]:
+        updates = dict(result.config_updates or {})
+        hotkeys = dict(result.hotkey_preferences or {})
+        changed_keys: set[str] = set()
+        warnings: list[str] = []
+
+        if updates:
+            LOGGER.info(
+                "Applying onboarding configuration updates (%s): %s",
+                source,
+                ", ".join(sorted(updates.keys())),
+            )
+            changed_keys, warnings = self.config_manager.apply_updates(updates)
+
+        for warning in warnings:
+            LOGGER.warning(warning)
+
+        if updates:
+            LOGGER.debug(
+                "Onboarding persisted %d configuration keys (%s).",
+                len(changed_keys),
+                source,
+            )
+
+        self._reconcile_after_config_update(changed_keys)
+
+        if hotkeys:
+            if getattr(self, "ahk_manager", None) is not None:
+                self.ahk_manager.update_config(
+                    record_key=hotkeys.get("record_key"),
+                    agent_key=hotkeys.get("agent_key"),
+                    record_mode=hotkeys.get("record_mode"),
+                )
+                self.register_hotkeys()
+            else:
+                self._persist_hotkey_preferences(hotkeys)
+
+        download_result = None
+        if result.download_request is not None:
+            request = result.download_request
+            download_result = self.download_model_with_ui(
+                model_id=request.model_id,
+                backend=request.backend,
+                cache_dir=request.cache_dir,
+                quant=request.quant,
+                reason=source,
+            )
+
+        return {"source": source, "download": download_result}
+
+    def _reconcile_after_config_update(self, changed_keys: set[str]) -> None:
+        self._apply_initial_config_to_core_attributes()
+        self.audio_handler.config_manager = self.config_manager
+        self.transcription_handler.config_manager = self.config_manager
+
+        audio_related_keys = {
+            USE_VAD_CONFIG_KEY,
+            VAD_THRESHOLD_CONFIG_KEY,
+            VAD_SILENCE_DURATION_CONFIG_KEY,
+            VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+            VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+            RECORD_STORAGE_MODE_CONFIG_KEY,
+            RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            STORAGE_ROOT_DIR_CONFIG_KEY,
+            RECORDINGS_DIR_CONFIG_KEY,
+            MIN_RECORDING_DURATION_CONFIG_KEY,
+        }
+
+        if audio_related_keys & changed_keys:
+            self.audio_handler.update_config()
+
+        transcription_related = {
+            ASR_MODEL_ID_CONFIG_KEY,
+            ASR_BACKEND_CONFIG_KEY,
+            ASR_COMPUTE_DEVICE_CONFIG_KEY,
+            ASR_DTYPE_CONFIG_KEY,
+            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            ASR_CT2_CPU_THREADS_CONFIG_KEY,
+            ASR_CACHE_DIR_CONFIG_KEY,
+            MODELS_STORAGE_DIR_CONFIG_KEY,
+        }
+
+        reload_required = bool(transcription_related & changed_keys)
+
+        try:
+            reload_needed = self.transcription_handler.update_config(trigger_reload=False)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.error(
+                "Failed to update transcription handler after onboarding: %s",
+                exc,
+                exc_info=True,
+            )
+            self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+            self._log_status(
+                "Error: unable to apply onboarding configuration to the transcription handler.",
+                error=True,
+            )
+            return
+
+        reload_required = reload_required or reload_needed
+
+        if reload_required:
+            self.state_manager.set_state(sm.STATE_LOADING_MODEL)
+            try:
+                self.transcription_handler.start_model_loading()
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.error(
+                    "Failed to trigger ASR model loading after onboarding: %s",
+                    exc,
+                    exc_info=True,
+                )
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+                self._log_status(
+                    "Error: unable to start ASR model loading after onboarding.",
+                    error=True,
+                )
+        else:
+            self.state_manager.set_state(
+                sm.StateEvent.SETTINGS_RECOVERED,
+                details="Onboarding configuration applied.",
+                source="onboarding",
+            )
+
+        if {ASR_CACHE_DIR_CONFIG_KEY, MODELS_STORAGE_DIR_CONFIG_KEY} & changed_keys:
+            self._refresh_installed_models("onboarding", raise_errors=False)
+
+    def _persist_hotkey_preferences(self, hotkeys: Mapping[str, str]) -> None:
+        target = Path(getattr(self, "hotkey_config_path", HOTKEY_CONFIG_FILE))
+        payload = {
+            "record_key": hotkeys.get("record_key", self.config_manager.get("record_key")),
+            "agent_key": hotkeys.get("agent_key", self.config_manager.get("agent_key")),
+            "record_mode": hotkeys.get("record_mode", self.config_manager.get("record_mode")),
+        }
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+            LOGGER.info("Hotkey configuration persisted to %s via onboarding.", target)
+        except Exception as exc:  # pragma: no cover - persistence best effort
+            LOGGER.warning(
+                "Failed to persist hotkey configuration at %s: %s",
+                target,
+                exc,
+            )
 
     def build_bootstrap_report(self) -> dict[str, Any]:
         """Retorna um relatório consolidado do bootstrap inicial."""
@@ -282,6 +572,13 @@ class AppCore:
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
 
+    def get_last_onboarding_outcome(self) -> dict[str, Any] | None:
+        """Return a shallow copy of the most recent onboarding outcome."""
+
+        if self._last_onboarding_outcome is None:
+            return None
+        return dict(self._last_onboarding_outcome)
+
     def _resolve_model_download_timeout(self) -> float | None:
         """Return configured timeout (seconds) for ASR downloads."""
         raw_timeout = self.config_manager.get("asr_download_timeout_seconds", 0)
@@ -317,18 +614,207 @@ class AppCore:
                 self.model_prompt_active = True
 
             try:
+                options: list[dict[str, Any]] = []
                 try:
-                    size_bytes, file_count = self.model_manager.get_model_download_size(model_id)
-                    size_gb = size_bytes / (1024 ** 3)
-                    download_msg = f"Download of approximately {size_gb:.2f} GB ({file_count} files)."
-                except Exception as size_error:
-                    MODEL_LOGGER.debug(f"Could not fetch download size for {model_id}: {size_error}")
-                    download_msg = "Download size unavailable."
-                prompt_text = (
-                    f"Model '{model_id}' is not installed.\n{download_msg}\nDownload now?"
+                    options = self.model_manager.get_ui_model_options()
+                except Exception as catalog_error:  # pragma: no cover - UI fallback
+                    MODEL_LOGGER.error(
+                        "Failed to build curated model catalog for install prompt: %s",
+                        catalog_error,
+                        exc_info=True,
+                    )
+
+                normalized_backend = self.model_manager.normalize_backend_label(backend)
+                initial_option_id: str | None = None
+                current_profile: dict[str, Any] | None = None
+                try:
+                    current_profile = self.model_manager.get_model_variant_requirements(
+                        model_id, quantization=ct2_type
+                    )
+                except Exception:  # pragma: no cover - metadata best effort
+                    MODEL_LOGGER.debug(
+                        "Unable to compute current curated profile for %s.",
+                        model_id,
+                        exc_info=True,
+                    )
+
+                if options and current_profile:
+                    preferred_token = current_profile.get("quantization_token", "default")
+                    for option in options:
+                        if option.get("model_id") != model_id:
+                            continue
+                        option_backend = self.model_manager.normalize_backend_label(
+                            option.get("backend_label") or option.get("backend")
+                        )
+                        if (
+                            normalized_backend
+                            and option_backend
+                            and option_backend != normalized_backend
+                        ):
+                            continue
+                        if option.get("quantization_token") == preferred_token:
+                            initial_option_id = option.get("option_id")
+                            break
+
+                    if not initial_option_id:
+                        candidate = next(
+                            (
+                                opt
+                                for opt in options
+                                if opt.get("model_id") == model_id
+                                and opt.get("variant_recommended")
+                            ),
+                            None,
+                        )
+                        if candidate:
+                            initial_option_id = candidate.get("option_id")
+
+                if options and not initial_option_id:
+                    initial_option_id = options[0].get("option_id")
+
+                if options:
+                    help_text = (
+                        "Escolha o modelo Whisper que será instalado agora. Modelos maiores oferecem "
+                        "melhor fidelidade, porém exigem mais VRAM e tempo de download. Variantes int8 "
+                        "reduzem o uso de memória com impacto mínimo na qualidade. Você poderá alterar "
+                        "essa decisão posteriormente nas configurações."
+                    )
+
+                    selection = prompt_model_installation(
+                        self.main_tk_root,
+                        options,
+                        initial_option_id=initial_option_id,
+                        focus_model_id=model_id,
+                        help_text=help_text,
+                    )
+
+                    if not selection:
+                        self.config_manager.record_model_prompt_decision(
+                            "defer", model_id, backend
+                        )
+                        MODEL_LOGGER.info(
+                            log_context(
+                                "Usuário adiou a instalação do modelo curado.",
+                                event="model.install_prompt.deferred",
+                                model=model_id,
+                                backend=backend,
+                            )
+                        )
+                        self.state_manager.set_state(
+                            sm.StateEvent.MODEL_DOWNLOAD_DECLINED,
+                            details=f"User deferred download for '{model_id}'",
+                            source="model_prompt",
+                        )
+                        self.main_tk_root.after(
+                            0,
+                            lambda: messagebox.showinfo(
+                                "Modelos",
+                                "Nenhum modelo instalado. Você pode concluir a instalação mais tarde nas configurações.",
+                            ),
+                        )
+                        return
+
+                    selected_model_id = selection.get("model_id", model_id)
+                    selected_backend = selection.get("backend_label") or selection.get("backend") or backend
+                    selected_backend = self.model_manager.normalize_backend_label(selected_backend)
+                    selected_quant = (
+                        selection.get("ct2_quantization")
+                        or selection.get("quantization")
+                        or ct2_type
+                    )
+
+                    updates = {
+                        ASR_MODEL_ID_CONFIG_KEY: selected_model_id,
+                        ASR_BACKEND_CONFIG_KEY: selected_backend,
+                    }
+                    if selected_backend == "ctranslate2":
+                        updates[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = selected_quant or "default"
+                    else:
+                        updates[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = "default"
+
+                    try:
+                        _, warnings = self.config_manager.apply_updates(updates)
+                        for warning in warnings:
+                            LOGGER.warning("Model selection warning: %s", warning)
+                    except Exception as apply_error:
+                        MODEL_LOGGER.error(
+                            "Falha ao aplicar atualização de modelo curado: %s",
+                            apply_error,
+                            exc_info=True,
+                        )
+                        messagebox.showerror(
+                            "Modelos",
+                            "Não foi possível salvar a escolha do modelo. Consulte os logs para mais detalhes.",
+                        )
+                        self.state_manager.set_state(sm.STATE_ERROR_SETTINGS)
+                        return
+
+                    self._apply_initial_config_to_core_attributes()
+
+                    cache_dir_value = (
+                        self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY) or cache_dir
+                    )
+                    ct2_quant = (
+                        self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+                        if selected_backend == "ctranslate2"
+                        else None
+                    )
+
+                    self.config_manager.record_model_prompt_decision(
+                        "accept", selected_model_id, selected_backend
+                    )
+                    MODEL_LOGGER.info(
+                        log_context(
+                            "Usuário confirmou a instalação do modelo curado.",
+                            event="model.install_prompt.accepted",
+                            model=selected_model_id,
+                            backend=selected_backend,
+                            quantization=ct2_quant or "default",
+                            estimated_bytes=selection.get("estimated_size_bytes", 0),
+                            min_vram_gb=selection.get("min_vram_gb"),
+                        )
+                    )
+
+                    cancel_event = threading.Event()
+                    self._active_model_download_event = cancel_event
+                    self._start_model_download(
+                        selected_model_id,
+                        selected_backend,
+                        cache_dir_value,
+                        ct2_quant,
+                        timeout=self.model_download_timeout,
+                        cancel_event=cancel_event,
+                    )
+                    return
+
+                MODEL_LOGGER.warning(
+                    "Model selection UI unavailable; falling back to legacy confirmation dialog."
                 )
-                if messagebox.askyesno("Model Download", prompt_text):
-                    self.config_manager.record_model_prompt_decision("accept", model_id, backend)
+
+                try:
+                    size_bytes, file_count = self.model_manager.get_model_download_size(
+                        model_id, quantization=ct2_type
+                    )
+                    size_gb = size_bytes / (1024 ** 3)
+                    download_msg = (
+                        f"Download de aproximadamente {size_gb:.2f} GB ({file_count} arquivos)."
+                    )
+                except Exception as size_error:  # pragma: no cover - fallback
+                    MODEL_LOGGER.debug(
+                        "Could not fetch download size for %s: %s",
+                        model_id,
+                        size_error,
+                        exc_info=True,
+                    )
+                    download_msg = "Tamanho do download indisponível."
+
+                prompt_text = (
+                    f"Modelo '{model_id}' não está instalado.\n{download_msg}\nDeseja iniciar o download agora?"
+                )
+                if messagebox.askyesno("Modelos", prompt_text):
+                    self.config_manager.record_model_prompt_decision(
+                        "accept", model_id, backend
+                    )
                     cancel_event = threading.Event()
                     self._active_model_download_event = cancel_event
                     self._start_model_download(
@@ -337,14 +823,22 @@ class AppCore:
                         cache_dir,
                         ct2_type,
                         timeout=self.model_download_timeout,
-                        cancel_event=cancel_event,
                     )
                 else:
-                    self.config_manager.record_model_prompt_decision("defer", model_id, backend)
-                    MODEL_LOGGER.info("User declined model download prompt.")
+                    self.config_manager.record_model_prompt_decision(
+                        "defer", model_id, backend
+                    )
+                    MODEL_LOGGER.info(
+                        log_context(
+                            "Usuário recusou o download do modelo no fluxo de contingência.",
+                            event="model.install_prompt.deferred_legacy",
+                            model=model_id,
+                            backend=backend,
+                        )
+                    )
                     messagebox.showinfo(
-                        "Model",
-                        "No model installed. You can install one later in the settings.",
+                        "Modelos",
+                        "Nenhum modelo instalado. Você pode concluir a instalação mais tarde nas configurações.",
                     )
                     self.state_manager.set_state(
                         sm.StateEvent.MODEL_DOWNLOAD_DECLINED,
@@ -352,52 +846,139 @@ class AppCore:
                         source="model_prompt",
                     )
             except Exception as prompt_error:
-                MODEL_LOGGER.error(f"Failed to display model download prompt: {prompt_error}", exc_info=True)
+                MODEL_LOGGER.error(
+                    "Failed to display model download prompt: %s",
+                    prompt_error,
+                    exc_info=True,
+                )
                 self.state_manager.set_state(sm.STATE_ERROR_MODEL)
             finally:
                 self.model_prompt_active = False
 
         self.main_tk_root.after(0, _ask_user)
 
-    def _record_download_status(
+    def schedule_model_download(
         self,
-        status: str,
         model_id: str,
         backend: str,
+        cache_dir: str,
+        quant: str | None,
         *,
-        message: str = "",
-        details: str = "",
-    ) -> None:
-        """Persist structured information about download attempts."""
+        auto_reload: bool = False,
+        timeout: float | None = None,
+    ) -> DownloadTask:
+        normalized_backend = model_manager_module.normalize_backend_label(backend)
+        task = self.model_download_controller.schedule_download(
+            model_id,
+            normalized_backend or backend,
+            cache_dir,
+            quant,
+            timeout=timeout if timeout is not None else self.model_download_timeout,
+        )
+        self._tracked_download_tasks.add(task.task_id)
+        if auto_reload:
+            self._auto_reload_tasks.add(task.task_id)
+        self.state_manager.set_state(
+            sm.StateEvent.MODEL_DOWNLOAD_STARTED,
+            details={
+                "message": f"Download scheduled for {model_id}",
+                "task_id": task.task_id,
+                "model_id": model_id,
+                "backend": normalized_backend,
+            },
+            source="model_download",
+        )
+        return task
 
-        config_manager = getattr(self, "config_manager", None)
-        if not config_manager:
-            return
-        try:
-            config_manager.record_model_download_status(
-                status=status,
-                model_id=model_id,
-                backend=backend,
-                message=message,
-                details=details,
-            )
-        except Exception:  # pragma: no cover - persistence best effort
-            LOGGER.debug(
-                "Failed to persist download status for model %s (status=%s).",
-                model_id,
-                status,
-                exc_info=True,
-            )
+    def get_model_downloads_snapshot(self) -> dict:
+        return self.model_download_controller.snapshot()
 
-    def download_model_and_reload(self, model_id, backend, cache_dir, quant):
+    def cancel_download_task(self, task_id: str) -> bool:
+        return self.model_download_controller.cancel(task_id)
+
+    def pause_download_task(self, task_id: str) -> bool:
+        return self.model_download_controller.pause(task_id)
+
+    def resume_download_task(self, task_id: str) -> DownloadTask | None:
+        task = self.model_download_controller.resume(task_id)
+        if task is not None:
+            self._tracked_download_tasks.add(task.task_id)
+        return task
+
+    def _on_download_task_finished(self, task: DownloadTask) -> None:
+        task_id = getattr(task, "task_id", None)
+        if task_id in self._tracked_download_tasks and task.status not in {"queued", "running"}:
+            self._tracked_download_tasks.discard(task_id)
+
+        if task_id in self._auto_reload_tasks:
+            should_reload = task.status in {"completed", "skipped"}
+            should_remove = task.status not in {"paused"}
+            if should_reload:
+                def _do_reload() -> None:
+                    try:
+                        self._refresh_installed_models("post_download", raise_errors=False)
+                    except Exception:
+                        LOGGER.warning("Failed to refresh models after download.", exc_info=True)
+                    try:
+                        self.transcription_handler.reload_asr()
+                    except Exception:
+                        LOGGER.error("Failed to reload ASR after download.", exc_info=True)
+
+                if self.main_tk_root is not None:
+                    self.main_tk_root.after(0, _do_reload)
+                else:
+                    _do_reload()
+            if should_remove:
+                self._auto_reload_tasks.discard(task_id)
+
+        message_details = {
+            "message": task.message,
+            "task_id": task.task_id,
+            "model_id": task.model_id,
+            "backend": task.backend,
+            "status": task.status,
+        }
+
+        if task.status == "error":
+            self.state_manager.set_state(
+                sm.StateEvent.MODEL_DOWNLOAD_FAILED,
+                details=message_details,
+                source="model_download",
+            )
+            if self.main_tk_root is not None:
+                self.main_tk_root.after(
+                    0,
+                    lambda msg=task.message: messagebox.showerror("Model", msg or "Model download failed."),
+                )
+        elif task.status in {"cancelled", "timed_out"}:
+            self.state_manager.set_state(
+                sm.StateEvent.MODEL_DOWNLOAD_CANCELLED,
+                details=message_details,
+                source="model_download",
+            )
+            if self.main_tk_root is not None:
+                self.main_tk_root.after(
+                    0,
+                    lambda msg=task.message: messagebox.showinfo("Model", msg or "Model download cancelled."),
+                )
+
+    def download_model_and_reload(
+        self,
+        model_id,
+        backend,
+        cache_dir,
+        quant,
+        *,
+        cancel_event: threading.Event | None = None,
+    ):
         """
         Handles the full model download and subsequent reload process.
         This method is designed to be called from a background thread started by the UI.
         It raises exceptions back to the caller thread.
         """
-        cancel_event = threading.Event()
-        self._active_model_download_event = cancel_event
-        
+        event = cancel_event or threading.Event()
+        self._active_model_download_event = event
+
         try:
             self.state_manager.set_state(sm.STATE_LOADING_MODEL)
             self._record_download_status(
@@ -410,8 +991,11 @@ class AppCore:
             ensure_kwargs = {
                 "quant": quant,
                 "timeout": self.model_download_timeout,
-                "cancel_event": cancel_event,
+                "cancel_event": event,
             }
+            environment_overrides = self.config_manager.get_environment_overrides()
+            if environment_overrides:
+                ensure_kwargs["environment"] = environment_overrides
 
             result = self.model_manager.ensure_download(
                 model_id,
@@ -448,7 +1032,7 @@ class AppCore:
                 backend,
                 message=str(e) or "Model download cancelled.",
             )
-            raise # Re-raise for the UI thread to handle
+            raise  # Re-raise for the UI thread to handle
         except Exception as e:
             LOGGER.error(f"An error occurred during model download/reload for {model_id}: {e}", exc_info=True)
             self.state_manager.set_state(sm.STATE_ERROR_MODEL)
@@ -459,9 +1043,98 @@ class AppCore:
                 message="Model download failed.",
                 details=str(e),
             )
-            raise # Re-raise for the UI thread to handle
+            raise  # Re-raise for the UI thread to handle
         finally:
             self._active_model_download_event = None
+
+    def download_model_with_ui(
+        self,
+        *,
+        model_id: str,
+        backend: str,
+        cache_dir: str,
+        quant: str | None = None,
+        reason: str = "manual",
+    ) -> dict[str, Any]:
+        cancel_event = threading.Event()
+        panel = DownloadProgressPanel(
+            self.main_tk_root,
+            title="Download de Modelo",
+            message=f"Preparando download do modelo '{model_id}'.",
+            on_cancel=cancel_event.set,
+        )
+
+        result: dict[str, Any] = {"status": "pending", "error": None}
+
+        def _worker() -> None:
+            self.main_tk_root.after(
+                0, lambda: panel.update_status("Iniciando download do modelo...")
+            )
+            try:
+                self.download_model_and_reload(
+                    model_id,
+                    backend,
+                    cache_dir,
+                    quant,
+                    cancel_event=cancel_event,
+                )
+            except self._download_cancelled_error as exc:
+                result["status"] = "cancelled"
+                result["error"] = exc
+
+                def _mark_cancelled() -> None:
+                    message = str(exc).strip() or "Download cancelado."
+                    panel.mark_cancelled(message)
+
+                self.main_tk_root.after(0, _mark_cancelled)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                result["status"] = "error"
+                result["error"] = exc
+
+                def _mark_error() -> None:
+                    panel.mark_error(f"Erro durante o download: {exc}")
+
+                self.main_tk_root.after(0, _mark_error)
+            else:
+                result["status"] = "success"
+
+                def _mark_success() -> None:
+                    panel.mark_success("Download concluído com sucesso.")
+                    panel.close_after(1200)
+
+                self.main_tk_root.after(0, _mark_success)
+            finally:
+                self.main_tk_root.after(0, panel.disable_cancel)
+
+        thread = threading.Thread(target=_worker, daemon=True, name="ModelDownloadWizard")
+        panel.open()
+        thread.start()
+        panel.wait_until_closed()
+
+        if result["status"] == "success":
+            LOGGER.info(
+                "Model download completed via onboarding/menu (%s): %s (%s)",
+                reason,
+                model_id,
+                backend,
+            )
+        elif result["status"] == "cancelled":
+            LOGGER.info(
+                "Model download cancelled via onboarding/menu (%s): %s (%s)",
+                reason,
+                model_id,
+                backend,
+            )
+        elif result["status"] == "error":
+            LOGGER.error(
+                "Model download failed via onboarding/menu (%s): %s (%s) -> %s",
+                reason,
+                model_id,
+                backend,
+                result["error"],
+            )
+
+        return result
 
     def _start_model_download(
         self,
@@ -473,9 +1146,18 @@ class AppCore:
         timeout: float | None = None,
         cancel_event: threading.Event | None = None,
     ):
-        """Inicia o download do modelo em uma thread separada."""
+        """Agenda o download do modelo respeitando o controlador unificado."""
 
+        task = self.schedule_model_download(
+            model_id,
+            backend,
+            cache_dir,
+            ct2_type,
+            auto_reload=True,
+            timeout=timeout,
+        )
         if cancel_event is not None:
+            # Mantém compatibilidade com fluxos que esperam um Event.
             cancel_event.clear()
 
         def _download():
@@ -492,6 +1174,9 @@ class AppCore:
                     "timeout": timeout,
                     "cancel_event": cancel_event,
                 }
+                environment_overrides = self.config_manager.get_environment_overrides()
+                if environment_overrides:
+                    ensure_kwargs["environment"] = environment_overrides
                 result = self.model_manager.ensure_download(
                     model_id,
                     backend,
@@ -616,10 +1301,9 @@ class AppCore:
         handler.start_model_loading()
 
     def cancel_model_download(self) -> None:
-        """Solicita o cancelamento do download de modelo em andamento."""
-        event = getattr(self, "_active_model_download_event", None)
-        if event is not None:
-            event.set()
+        """Solicita o cancelamento de todos os downloads de modelo ativos."""
+        for task_id in list(self._tracked_download_tasks):
+            self.model_download_controller.cancel(task_id)
 
     def _apply_initial_config_to_core_attributes(self):
         # Mover a atribuição de self.record_key, self.record_mode, etc.
@@ -735,6 +1419,55 @@ class AppCore:
             if message not in self._pending_tray_tooltips:
                 self._pending_tray_tooltips.append(message)
                 LOGGER.debug("AppCore: tooltip pendente armazenada: %s", message)
+
+    def _publish_dependency_audit_state_event(self) -> None:
+        if self._dependency_audit_event_sent:
+            return
+        message: str | None = None
+        if self.dependency_audit_result is not None:
+            message = self.dependency_audit_result.summary_message()
+        elif self._dependency_audit_failure_message:
+            message = self._dependency_audit_failure_message
+        if not message:
+            return
+        try:
+            self.state_manager.set_state(
+                sm.StateEvent.DEPENDENCY_AUDIT_READY,
+                details=message,
+                source="dependency_audit",
+            )
+        except Exception:  # pragma: no cover - caminho defensivo
+            LOGGER.exception("Failed to dispatch dependency audit state event.")
+            return
+        self._dependency_audit_event_sent = True
+
+    def _present_dependency_audit_to_ui(self) -> None:
+        if self._dependency_audit_presented_to_ui:
+            return
+        ui_manager = getattr(self, "_ui_manager", None)
+        if ui_manager is None or not hasattr(ui_manager, "present_dependency_audit"):
+            return
+        if self.dependency_audit_result is None and not self._dependency_audit_failure_message:
+            return
+
+        def _invoke() -> None:
+            try:
+                ui_manager.present_dependency_audit(
+                    self.dependency_audit_result,
+                    error_message=self._dependency_audit_failure_message,
+                )
+            except Exception:  # pragma: no cover - defensivo
+                LOGGER.exception("UI manager failed to present dependency audit result.")
+
+        self._dependency_audit_presented_to_ui = True
+        try:
+            self.main_tk_root.after(0, _invoke)
+        except Exception:  # pragma: no cover - fallback síncrono
+            LOGGER.debug(
+                "Failed to schedule dependency audit UI callback; invoking inline.",
+                exc_info=True,
+            )
+            _invoke()
 
     def report_runtime_notice(self, message: str, *, level: int = logging.WARNING) -> None:
         """Publica um aviso em log e encaminha mensagem para a UI."""
@@ -1542,10 +2275,15 @@ class AppCore:
             "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
             "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
             "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            "new_ui_language": UI_LANGUAGE_CONFIG_KEY,
             "new_models_storage_dir": MODELS_STORAGE_DIR_CONFIG_KEY,
+            "new_deps_install_dir": DEPS_INSTALL_DIR_CONFIG_KEY,
             "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
             "new_storage_root_dir": STORAGE_ROOT_DIR_CONFIG_KEY,
             "new_recordings_dir": RECORDINGS_DIR_CONFIG_KEY,
+            "new_python_packages_dir": PYTHON_PACKAGES_DIR_CONFIG_KEY,
+            "new_vad_models_dir": VAD_MODELS_DIR_CONFIG_KEY,
+            "new_hf_cache_dir": HF_CACHE_DIR_CONFIG_KEY,
             "new_ct2_cpu_threads": ASR_CT2_CPU_THREADS_CONFIG_KEY,
             "new_clear_gpu_cache": CLEAR_GPU_CACHE_CONFIG_KEY,
             "new_use_vad": USE_VAD_CONFIG_KEY,
@@ -1561,6 +2299,7 @@ class AppCore:
             "new_chunk_length_mode": "chunk_length_mode",
             "new_chunk_length_sec": "chunk_length_sec",
             "new_enable_torch_compile": "enable_torch_compile",
+            "new_max_parallel_downloads": "max_parallel_downloads",
         }
 
         legacy_key_aliases = {
@@ -1641,6 +2380,17 @@ class AppCore:
         }
         reload_required = bool(changed_mapped_keys & reload_keys)
         launch_changed = LAUNCH_AT_STARTUP_CONFIG_KEY in changed_mapped_keys
+
+        if "max_parallel_downloads" in changed_mapped_keys:
+            try:
+                new_limit = self.config_manager.get_max_parallel_downloads()
+                self.model_download_controller.update_parallel_limit(new_limit)
+                LOGGER.info("Updated model download concurrency to %d", new_limit)
+            except Exception:
+                LOGGER.warning(
+                    "Failed to propagate max_parallel_downloads change to controller.",
+                    exc_info=True,
+                )
 
         self._apply_initial_config_to_core_attributes()
 
@@ -1770,6 +2520,17 @@ class AppCore:
 
         # Re-aplicar configurações aos atributos do AppCore
         self._apply_initial_config_to_core_attributes()
+
+        if key == "max_parallel_downloads":
+            try:
+                new_limit = self.config_manager.get_max_parallel_downloads()
+                self.model_download_controller.update_parallel_limit(new_limit)
+                LOGGER.info("Updated model download concurrency to %d", new_limit)
+            except Exception:
+                LOGGER.warning(
+                    "Failed to propagate max_parallel_downloads update via update_setting.",
+                    exc_info=True,
+                )
 
         if key == "launch_at_startup":
             from .utils.autostart import set_launch_at_startup
