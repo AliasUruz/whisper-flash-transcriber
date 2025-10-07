@@ -267,6 +267,36 @@ class AppCore:
     def _prompt_model_install(self, model_id, backend, cache_dir, ct2_type):
         """Agenda um prompt para download do modelo na thread principal."""
 
+        def _format_size(value):
+            try:
+                amount = float(int(value))
+            except (TypeError, ValueError):
+                return "?"
+            if amount <= 0:
+                return "?"
+            units = ["B", "KB", "MB", "GB", "TB"]
+            for unit in units:
+                if amount < 1024 or unit == units[-1]:
+                    return f"{amount:.1f} {unit}"
+                amount /= 1024
+            return f"{amount:.1f} PB"
+
+        def _format_duration(seconds):
+            try:
+                total_seconds = float(seconds)
+            except (TypeError, ValueError):
+                return ""
+            if total_seconds <= 0:
+                return ""
+            minutes = int(total_seconds // 60)
+            secs = int(round(total_seconds % 60))
+            if secs == 60:
+                minutes += 1
+                secs = 0
+            if minutes:
+                return f"~{minutes} min {secs:02d} s"
+            return f"~{secs} s"
+
         def _ask_user():
             with self.model_prompt_lock:
                 if self.model_prompt_active:
@@ -296,9 +326,54 @@ class AppCore:
                 except Exception as size_error:
                     MODEL_LOGGER.debug(f"Could not fetch download size for {model_id}: {size_error}")
                     download_msg = "Download size unavailable."
-                prompt_text = (
-                    f"Model '{model_id}' is not installed.\n{download_msg}\nDownload now?"
-                )
+                runtime_catalog = self.config_manager.get_runtime_model_catalog()
+                runtime_entry = next((item for item in runtime_catalog if item.get("id") == model_id), None)
+                recommendation_entry = self.config_manager.get_runtime_recommendation() or {}
+                display_name = runtime_entry.get("display_name", model_id) if runtime_entry else model_id
+                backend_label = backend or (runtime_entry.get("backend") if runtime_entry else "")
+                if backend_label:
+                    intro_line = f"Modelo '{display_name}' ({backend_label}) não está instalado."
+                else:
+                    intro_line = f"Modelo '{display_name}' não está instalado."
+
+                detail_lines = [intro_line, download_msg]
+
+                if runtime_entry:
+                    disk_text = _format_size(runtime_entry.get("estimated_disk_bytes"))
+                    if disk_text != "?":
+                        detail_lines.append(f"Uso em disco após instalação: {disk_text}.")
+                    duration_text = _format_duration(runtime_entry.get("estimated_download_seconds"))
+                    if duration_text:
+                        bandwidth = runtime_entry.get("estimated_download_reference_mbps")
+                        if isinstance(bandwidth, (int, float)) and bandwidth:
+                            detail_lines.append(
+                                f"Tempo estimado de download: {duration_text} em {float(bandwidth):.0f} Mbps."
+                            )
+                        else:
+                            detail_lines.append(f"Tempo estimado de download: {duration_text}.")
+                    status = runtime_entry.get("hardware_status") or "ok"
+                    messages = runtime_entry.get("hardware_messages") or []
+                    if status == "blocked":
+                        note = "; ".join(messages) if messages else "requisitos não atendidos."
+                        detail_lines.append(f"⚠️ Incompatível: {note}")
+                    elif status == "warn":
+                        note = "; ".join(messages) if messages else "desempenho pode ser limitado."
+                        detail_lines.append(f"⚠️ Aviso: {note}")
+                    else:
+                        if messages:
+                            detail_lines.append("Compatível: " + "; ".join(messages))
+                        else:
+                            detail_lines.append("Compatível com o hardware detectado.")
+
+                recommendation_id = recommendation_entry.get("id")
+                recommendation_name = recommendation_entry.get("display_name", recommendation_id)
+                if recommendation_id:
+                    if recommendation_id == model_id:
+                        detail_lines.append("✅ Este é o modelo recomendado automaticamente para o seu hardware.")
+                    elif recommendation_name:
+                        detail_lines.append(f"Recomendado para o seu hardware: {recommendation_name}.")
+
+                prompt_text = "\n".join(detail_lines + ["", "Deseja iniciar o download agora?"])
                 if messagebox.askyesno("Model Download", prompt_text):
                     self.config_manager.record_model_prompt_decision("accept", model_id, backend)
                     cancel_event = threading.Event()

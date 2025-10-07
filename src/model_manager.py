@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from threading import Event, RLock
-from typing import Dict, List, NamedTuple
+from typing import Any, Dict, List, NamedTuple
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
@@ -56,6 +56,24 @@ class ModelDownloadResult:
     downloaded: bool
 
 
+@dataclass(frozen=True)
+class HardwareProfile:
+    """Snapshot of the detected hardware relevant to ASR model selection."""
+
+    system_ram_mb: int | None = None
+    has_cuda: bool = False
+    gpu_count: int = 0
+    max_vram_mb: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "system_ram_mb": self.system_ram_mb,
+            "has_cuda": self.has_cuda,
+            "gpu_count": self.gpu_count,
+            "max_vram_mb": self.max_vram_mb,
+        }
+
+
 class DownloadCancelledError(Exception):
     """Raised when a model download is cancelled or aborted."""
 
@@ -80,13 +98,61 @@ class InsufficientSpaceError(RuntimeError):
         self.free_bytes = int(free_bytes)
 
 
-# Curated catalog of officially supported ASR models.
-# Each entry maps a Hugging Face model id to the backend that powers it.
-CURATED: List[Dict[str, str]] = [
-    {"id": "openai/whisper-large-v3-turbo", "backend": "ctranslate2"},
+# Curated catalog of officially supported ASR models with lightweight options.
+CURATED: List[Dict[str, Any]] = [
+    {
+        "id": "distil-whisper/distil-large-v3",
+        "backend": "ctranslate2",
+        "ui_group": "recommended",
+        "recommended_priority": 100,
+        "preferred_device": "cpu",
+        "requires_gpu": False,
+        "min_system_ram_mb": 6000,
+        "min_vram_mb": 0,
+        "estimated_download_bytes": 1_550_000_000,
+        "estimated_disk_bytes": 3_100_000_000,
+        "estimated_download_reference_mbps": 50.0,
+        "estimated_cpu_rtf": 0.9,
+        "estimated_gpu_rtf": 0.35,
+        "description": "Distilled multilingual weights tuned for fast CPU inference.",
+    },
+    {
+        "id": "faster-whisper/medium.en",
+        "backend": "faster-whisper",
+        "ui_group": "recommended",
+        "recommended_priority": 90,
+        "preferred_device": "gpu",
+        "requires_gpu": False,
+        "min_system_ram_mb": 8000,
+        "min_vram_mb": 6144,
+        "estimated_download_bytes": 1_650_000_000,
+        "estimated_disk_bytes": 3_200_000_000,
+        "estimated_download_reference_mbps": 50.0,
+        "estimated_cpu_rtf": 1.5,
+        "estimated_gpu_rtf": 0.4,
+        "description": "English-only medium model optimized for the faster-whisper runtime.",
+    },
+    {
+        "id": "openai/whisper-large-v3-turbo",
+        "backend": "ctranslate2",
+        "ui_group": "advanced",
+        "recommended_priority": 70,
+        "preferred_device": "gpu",
+        "requires_gpu": True,
+        "min_system_ram_mb": 12000,
+        "min_vram_mb": 12288,
+        "estimated_download_bytes": 3_600_000_000,
+        "estimated_disk_bytes": 7_200_000_000,
+        "estimated_download_reference_mbps": 50.0,
+        "estimated_cpu_rtf": 3.8,
+        "estimated_gpu_rtf": 0.25,
+        "description": "High-fidelity multilingual Turbo weights for high-end GPUs.",
+    },
 ]
 
 DISPLAY_NAMES: Dict[str, str] = {
+    "distil-whisper/distil-large-v3": "Distil Whisper Large v3 (CT2)",
+    "faster-whisper/medium.en": "Faster-Whisper Medium.en",
     "openai/whisper-large-v3-turbo": "Whisper Large v3 Turbo",
 }
 
@@ -95,6 +161,8 @@ DISPLAY_NAMES: Dict[str, str] = {
 
 
 _INSTALL_METADATA_FILENAME = "install.json"
+
+_DEFAULT_DOWNLOAD_BANDWIDTH_MBPS = 50.0
 
 
 def _write_install_metadata(
@@ -266,7 +334,7 @@ def _normalize_quant_label(label: str | None) -> str:
     return normalized
 
 
-def get_curated_entry(model_id: str | None) -> Dict[str, str] | None:
+def get_curated_entry(model_id: str | None) -> Dict[str, Any] | None:
     """Return the curated catalog entry for ``model_id`` if available."""
 
     if not model_id:
@@ -724,7 +792,7 @@ def ensure_local_installation(
     return prepared.ready_path
 
 
-def list_catalog() -> List[Dict[str, str]]:
+def list_catalog() -> List[Dict[str, Any]]:
     """Return curated catalog entries with display names."""
     catalog = []
     for entry in CURATED:
@@ -733,6 +801,149 @@ def list_catalog() -> List[Dict[str, str]]:
         normalized["display_name"] = DISPLAY_NAMES.get(entry["id"], entry["id"])
         catalog.append(normalized)
     return catalog
+
+
+def _format_gib(mb_value: int) -> str:
+    if mb_value <= 0:
+        return "0.0 GB"
+    return f"{mb_value / 1024:.1f} GB"
+
+
+def _estimate_download_seconds(
+    bytes_value: Any, bandwidth_mbps: float | None
+) -> float | None:
+    if not bandwidth_mbps:
+        return None
+    try:
+        normalized = int(bytes_value)
+    except (TypeError, ValueError):
+        return None
+    if normalized <= 0:
+        return None
+    bits = float(normalized) * 8.0
+    try:
+        return bits / (float(bandwidth_mbps) * 1_000_000.0)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def build_runtime_catalog(
+    hardware: HardwareProfile,
+    *,
+    bandwidth_mbps: float | None = _DEFAULT_DOWNLOAD_BANDWIDTH_MBPS,
+) -> List[Dict[str, Any]]:
+    """Return curated entries enriched with runtime heuristics for ``hardware``."""
+
+    catalog: List[Dict[str, Any]] = []
+    base_catalog = list_catalog()
+    available_ram = hardware.system_ram_mb or 0
+    available_vram = hardware.max_vram_mb or 0
+
+    for entry in base_catalog:
+        enriched = copy.deepcopy(entry)
+        enriched["ui_group"] = str(entry.get("ui_group", "advanced") or "advanced").lower()
+        preferred_device = str(entry.get("preferred_device", "cpu") or "cpu").lower()
+        requires_gpu = bool(entry.get("requires_gpu", False))
+        min_vram_mb = int(entry.get("min_vram_mb") or 0)
+        min_system_ram_mb = int(entry.get("min_system_ram_mb") or 0)
+        recommended_priority = int(entry.get("recommended_priority") or 0)
+
+        enriched["preferred_device"] = preferred_device
+        enriched["requires_gpu"] = requires_gpu
+        enriched["min_vram_mb"] = min_vram_mb
+        enriched["min_system_ram_mb"] = min_system_ram_mb
+        enriched["recommended_priority"] = recommended_priority
+
+        download_bytes = entry.get("estimated_download_bytes")
+        disk_bytes = entry.get("estimated_disk_bytes")
+        enriched["estimated_download_bytes"] = (
+            int(download_bytes)
+            if isinstance(download_bytes, (int, float))
+            else None
+        )
+        enriched["estimated_disk_bytes"] = (
+            int(disk_bytes)
+            if isinstance(disk_bytes, (int, float))
+            else None
+        )
+        enriched["estimated_download_seconds"] = _estimate_download_seconds(
+            download_bytes,
+            bandwidth_mbps,
+        )
+        enriched["estimated_download_reference_mbps"] = bandwidth_mbps
+
+        warnings: list[str] = []
+        blockers: list[str] = []
+
+        if requires_gpu and not hardware.has_cuda:
+            blockers.append("GPU necessária não detectada.")
+
+        if min_vram_mb > 0:
+            if not hardware.has_cuda:
+                message = (
+                    f"GPU com >= {_format_gib(min_vram_mb)} de VRAM recomendada."
+                    if not requires_gpu
+                    else f"Requer GPU com >= {_format_gib(min_vram_mb)} de VRAM."
+                )
+                (blockers if requires_gpu else warnings).append(message)
+            elif available_vram and available_vram < min_vram_mb:
+                message = (
+                    f"Requer >= {_format_gib(min_vram_mb)} de VRAM (detectado {_format_gib(available_vram)})."
+                )
+                (blockers if requires_gpu else warnings).append(message)
+
+        if min_system_ram_mb > 0 and available_ram and available_ram < min_system_ram_mb:
+            warnings.append(
+                f"Requer >= {_format_gib(min_system_ram_mb)} de RAM (detectado {_format_gib(available_ram)})."
+            )
+
+        if preferred_device == "gpu" and not hardware.has_cuda and not requires_gpu:
+            warnings.append("GPU recomendada para melhor desempenho.")
+
+        status = "blocked" if blockers else ("warn" if warnings else "ok")
+        enriched["hardware_status"] = status
+        enriched["hardware_blockers"] = blockers
+        enriched["hardware_warnings"] = warnings
+        enriched["hardware_messages"] = blockers + warnings
+        enriched["hardware_profile"] = hardware.to_dict()
+
+        catalog.append(enriched)
+
+    return catalog
+
+
+def select_recommended_model(
+    runtime_catalog: List[Dict[str, Any]]
+) -> Dict[str, Any] | None:
+    """Return the best-fit curated entry for the current hardware."""
+
+    candidates: list[tuple[int, int, int, Dict[str, Any]]] = []
+    for entry in runtime_catalog:
+        priority = int(entry.get("recommended_priority") or 0)
+        if priority <= 0:
+            continue
+        if entry.get("hardware_status") == "blocked":
+            continue
+        group_bonus = 1 if entry.get("ui_group") == "recommended" else 0
+        min_vram = int(entry.get("min_vram_mb") or 0)
+        candidates.append((priority, group_bonus, -min_vram, copy.deepcopy(entry)))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    return candidates[0][3]
+
+
+def find_runtime_entry(
+    model_id: str, runtime_catalog: List[Dict[str, Any]]
+) -> Dict[str, Any] | None:
+    """Return the enriched runtime catalog entry for ``model_id`` when available."""
+
+    for entry in runtime_catalog:
+        if entry.get("id") == model_id:
+            return copy.deepcopy(entry)
+    return None
 
 
 def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:

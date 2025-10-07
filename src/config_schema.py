@@ -9,12 +9,19 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .logging_utils import get_logger, log_context
+from .model_manager import CURATED, normalize_backend_label
 
 LOGGER = get_logger(__name__, component='ConfigSchema')
 
 
 _DEFAULT_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
 _DEFAULT_MODELS_STORAGE_DIR = str((_DEFAULT_STORAGE_ROOT / "models").expanduser())
+
+_CURATED_MODEL_IDS = {entry["id"] for entry in CURATED}
+_ALLOWED_ASR_BACKENDS = {
+    normalize_backend_label(entry.get("backend"))
+    for entry in CURATED
+} | {"transformers"}
 
 
 class ASRDownloadStatus(BaseModel):
@@ -99,7 +106,7 @@ class AppConfig(BaseModel):
     models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
-    asr_model_id: str = "openai/whisper-large-v3-turbo"
+    asr_model_id: str = "distil-whisper/distil-large-v3"
     asr_backend: str = "ctranslate2"
     asr_compute_device: str = "auto"
     asr_dtype: str = "float16"
@@ -254,6 +261,32 @@ class AppConfig(BaseModel):
         if isinstance(value, (list, tuple, set)):
             return [str(item).strip() for item in value if item is not None]
         return [str(value)]
+
+    @field_validator("asr_model_id", mode="before")
+    @classmethod
+    def _validate_asr_model_id(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("asr_model_id must be a string")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("asr_model_id must not be empty")
+        if normalized not in _CURATED_MODEL_IDS:
+            raise ValueError(
+                f"asr_model_id must be one of {sorted(_CURATED_MODEL_IDS)}"
+            )
+        return normalized
+
+    @field_validator("asr_backend", mode="before")
+    @classmethod
+    def _validate_asr_backend(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("asr_backend must be a string")
+        normalized = normalize_backend_label(value)
+        if normalized not in _ALLOWED_ASR_BACKENDS:
+            raise ValueError(
+                f"asr_backend must be one of {sorted(_ALLOWED_ASR_BACKENDS)}"
+            )
+        return normalized
 
     @field_validator("agent_auto_paste", mode="before")
     @classmethod

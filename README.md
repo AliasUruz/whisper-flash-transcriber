@@ -82,6 +82,14 @@ During the initial startup the application will create the persistent profile un
 folder before continuing, so the bootstrap completes successfully even when the
 installation directory is read-only.
 
+At the same time the application inspects the available CPU and GPU resources and
+automatically selects a curated Whisper model that matches the detected hardware.
+This decision takes into account estimated download sizes, disk usage and memory
+requirements so that first-time users land on a viable configuration without extra
+tuning. You can later review and change the model from the **Settings → Transcription →
+ASR** section, where recommended and advanced options are grouped with download and
+installation estimates.
+
 ### Configuration
 
 - The application icon appears in the system tray.

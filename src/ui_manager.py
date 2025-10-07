@@ -1423,56 +1423,229 @@ class UIManager:
         ).pack(side="left", padx=(0, 10))
 
         model_manager = self.model_manager
-        catalog = model_manager.list_catalog()
-        ui_elements["catalog"] = catalog
-        catalog_display_map = {entry["id"]: entry.get("display_name", entry["id"]) for entry in catalog}
+        runtime_catalog = self.config_manager.get_runtime_model_catalog() or []
+        if not runtime_catalog:
+            fallback_catalog = model_manager.list_catalog()
+            runtime_catalog = []
+            for entry in fallback_catalog:
+                baseline = dict(entry)
+                baseline.setdefault("hardware_status", "ok")
+                baseline.setdefault("hardware_messages", [])
+                baseline.setdefault("hardware_warnings", [])
+                baseline.setdefault("hardware_blockers", [])
+                runtime_catalog.append(baseline)
+        runtime_by_id = {entry["id"]: entry for entry in runtime_catalog}
+        ui_elements["catalog"] = runtime_catalog
+
         try:
-            installed_ids = {
-                m["id"] for m in model_manager.list_installed(asr_cache_dir_var.get())
-            }
+            installed_models = model_manager.list_installed(asr_cache_dir_var.get())
         except OSError:
             messagebox.showerror(
                 "Configuration",
                 "Unable to access the model cache directory. Please review the path in Settings.",
             )
-            installed_ids = set()
-        all_ids = sorted({m["id"] for m in catalog} | installed_ids)
-        id_to_display = {model_id: catalog_display_map.get(model_id, model_id) for model_id in all_ids}
+            installed_models = []
+        except Exception as exc:  # pragma: no cover - defensive path
+            logging.warning("Failed to list installed models: %s", exc)
+            installed_models = []
+        installed_by_id = {item.get("id"): item for item in installed_models if item.get("id")}
+
+        id_to_display = {
+            entry["id"]: entry.get("display_name", entry["id"])
+            for entry in runtime_catalog
+        }
         display_to_id = {display: model_id for model_id, display in id_to_display.items()}
         ui_elements["id_to_display"] = id_to_display
         ui_elements["display_to_id"] = display_to_id
+        self._set_settings_meta("id_to_display", id_to_display)
+        self._set_settings_meta("display_to_id", display_to_id)
+
         asr_model_display_var = ctk.StringVar(
             value=id_to_display.get(asr_model_id_var.get(), asr_model_id_var.get())
         )
         ui_elements["asr_model_display_var"] = asr_model_display_var
-        asr_model_frame = ctk.CTkFrame(asr_frame)
-        asr_model_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(asr_model_frame, text="ASR Model:").pack(side="left", padx=(5, 10))
-        asr_model_menu = ctk.CTkOptionMenu(
-            asr_model_frame,
-            variable=asr_model_display_var,
-            values=[id_to_display[mid] for mid in all_ids],
-        )
-        ui_elements["asr_model_menu"] = asr_model_menu
+        self._set_settings_var("asr_model_display_var", asr_model_display_var)
+        self._set_settings_var("asr_model_menu", None)
 
-        model_size_label = ctk.CTkLabel(asr_model_frame, text="Download: calculating... | Installed: -")
-        model_size_label.pack(side="left", padx=5)
+        recommendation_info = self.config_manager.get_runtime_recommendation() or {}
+        recommended_model_id = recommendation_info.get("id")
+
+        def _format_size(value: Any) -> str:
+            try:
+                amount = float(int(value))
+            except (TypeError, ValueError):
+                return "?"
+            if amount <= 0:
+                return "?"
+            units = ["B", "KB", "MB", "GB", "TB"]
+            for unit in units:
+                if amount < 1024 or unit == units[-1]:
+                    return f"{amount:.1f} {unit}"
+                amount /= 1024
+            return f"{amount:.1f} PB"
+
+        def _format_duration(seconds: Any) -> str:
+            try:
+                total_seconds = float(seconds)
+            except (TypeError, ValueError):
+                return ""
+            if total_seconds <= 0:
+                return ""
+            minutes = int(total_seconds // 60)
+            secs = int(round(total_seconds % 60))
+            if secs == 60:
+                minutes += 1
+                secs = 0
+            if minutes:
+                return f"~{minutes} min {secs:02d} s"
+            return f"~{secs} s"
+
+        def _compose_summary(entry: dict[str, Any]) -> str:
+            parts: list[str] = []
+            download_text = _format_size(entry.get("estimated_download_bytes"))
+            duration_text = _format_duration(entry.get("estimated_download_seconds"))
+            bandwidth = entry.get("estimated_download_reference_mbps")
+            if download_text != "?":
+                if duration_text:
+                    if isinstance(bandwidth, (int, float)) and bandwidth:
+                        parts.append(
+                            f"Download {download_text} ({duration_text} @ {float(bandwidth):.0f} Mbps)"
+                        )
+                    else:
+                        parts.append(f"Download {download_text} ({duration_text})")
+                else:
+                    parts.append(f"Download {download_text}")
+            disk_text = _format_size(entry.get("estimated_disk_bytes"))
+            if disk_text != "?":
+                parts.append(f"Disco ~{disk_text}")
+            cpu_rtf = entry.get("estimated_cpu_rtf")
+            if isinstance(cpu_rtf, (int, float)) and cpu_rtf > 0:
+                parts.append(f"CPU ≈ {cpu_rtf:.1f}× tempo real")
+            gpu_rtf = entry.get("estimated_gpu_rtf")
+            if isinstance(gpu_rtf, (int, float)) and gpu_rtf > 0:
+                parts.append(f"GPU ≈ {gpu_rtf:.2f}× tempo real")
+            backend_label = entry.get("backend")
+            if backend_label:
+                parts.append(f"Backend: {backend_label}")
+            if entry.get("requires_gpu"):
+                parts.append("Requer GPU")
+            elif entry.get("preferred_device") == "gpu":
+                parts.append("Melhor em GPU")
+            parts.append("Instalado" if entry["id"] in installed_by_id else "Não instalado")
+            summary = " • ".join(parts) if parts else ""
+            description = entry.get("description")
+            if description:
+                summary = f"{summary}\n{description}" if summary else description
+            return summary or " "
+
+        def _hardware_status_text(entry: dict[str, Any]) -> tuple[str, str]:
+            status = entry.get("hardware_status") or "ok"
+            messages = entry.get("hardware_messages") or []
+            if status == "blocked":
+                text = "Incompatível: " + ("; ".join(messages) if messages else "requisitos não atendidos.")
+                return text, "#d61f1f"
+            if status == "warn":
+                text = "Aviso: " + ("; ".join(messages) if messages else "desempenho pode ser limitado.")
+                return text, "#d7a500"
+            text = "Compatível com seu hardware atual."
+            if messages:
+                text += " " + " ".join(messages)
+            return text, "#2a7f39"
+
+        def _handle_model_choice(model_id: str) -> None:
+            display_value = id_to_display.get(model_id, model_id)
+            try:
+                asr_model_display_var.set(display_value)
+            except Exception:
+                pass
+            self._on_model_change(display_value)
+
+        recommended_entries = [
+            entry for entry in runtime_catalog if entry.get("ui_group") == "recommended"
+        ]
+        advanced_entries = [
+            entry for entry in runtime_catalog if entry.get("ui_group") != "recommended"
+        ]
+        if not recommended_entries:
+            recommended_entries = runtime_catalog
+            advanced_entries = []
+
+        recommended_section = ctk.CTkFrame(asr_frame, fg_color="transparent")
+        recommended_section.pack(fill="x", pady=5)
+        ctk.CTkLabel(
+            recommended_section,
+            text="Recomendados",
+            font=ctk.CTkFont(weight="bold"),
+        ).pack(anchor="w", padx=5, pady=(0, 4))
+
+        def _create_model_option(entry: dict[str, Any], parent) -> None:
+            container = ctk.CTkFrame(parent, fg_color="transparent")
+            container.pack(fill="x", pady=2)
+            header = ctk.CTkFrame(container, fg_color="transparent")
+            header.pack(fill="x")
+            radio = ctk.CTkRadioButton(
+                header,
+                text=id_to_display.get(entry["id"], entry["id"]),
+                variable=asr_model_id_var,
+                value=entry["id"],
+                command=lambda eid=entry["id"]: _handle_model_choice(eid),
+            )
+            radio.pack(side="left", padx=(5, 0))
+            if entry["id"] == recommended_model_id and entry.get("hardware_status") != "blocked":
+                badge = ctk.CTkLabel(
+                    header,
+                    text="Sugerido",
+                    text_color="#1f6aa5",
+                )
+                badge.pack(side="left", padx=(8, 0))
+            summary_label = ctk.CTkLabel(
+                container,
+                text=_compose_summary(entry),
+                justify="left",
+                wraplength=520,
+            )
+            summary_label.pack(fill="x", padx=32, pady=(0, 2))
+            status_text, status_color = _hardware_status_text(entry)
+            status_label = ctk.CTkLabel(
+                container,
+                text=status_text,
+                text_color=status_color,
+                justify="left",
+                wraplength=520,
+            )
+            status_label.pack(fill="x", padx=32, pady=(0, 4))
+
+        for entry in recommended_entries:
+            _create_model_option(entry, recommended_section)
+
+        if advanced_entries:
+            advanced_section = ctk.CTkFrame(asr_frame, fg_color="transparent")
+            _register_advanced(advanced_section, fill="x", pady=5)
+            ctk.CTkLabel(
+                advanced_section,
+                text="Avançados",
+                font=ctk.CTkFont(weight="bold"),
+            ).pack(anchor="w", padx=5, pady=(0, 4))
+            for entry in advanced_entries:
+                _create_model_option(entry, advanced_section)
+
+        model_size_label = ctk.CTkLabel(
+            asr_frame, text="Download: calculating... | Installed: -"
+        )
+        model_size_label.pack(fill="x", padx=5, pady=(2, 5))
         ui_elements["model_size_label"] = model_size_label
 
-        def _derive_backend_from_model(model_ref: str) -> str | None:
-            model_id = ui_elements["display_to_id"].get(model_ref, model_ref)
-            entry = next((m for m in ui_elements["catalog"] if m["id"] == model_id), None)
-            if not entry:
-                installed = model_manager.list_installed(asr_cache_dir_var.get())
-                entry = next((m for m in installed if m["id"] == model_id), None)
+        def _derive_backend_from_model(model_id: str) -> str | None:
+            entry = runtime_by_id.get(model_id)
+            if entry is None:
+                entry = installed_by_id.get(model_id)
             backend = _backend_display_value_global(entry.get("backend") if entry else None)
             if backend not in ("transformers", "ctranslate2", "faster-whisper"):
                 return None
             return backend
 
-        def _update_model_info(model_ref: str) -> None:
+        def _update_model_info(model_id: str) -> None:
             ui_elements["model_size_label"].configure(text="Download: calculating... | Installed: -")
-            model_id = ui_elements["display_to_id"].get(model_ref, model_ref)
             try:
                 d_bytes, d_files = model_manager.get_model_download_size(model_id)
                 d_mb = d_bytes / (1024 * 1024)
@@ -1481,16 +1654,16 @@ class UIManager:
                 download_text = "?"
 
             try:
-                installed_models = model_manager.list_installed(asr_cache_dir_var.get())
+                refreshed_installed = model_manager.list_installed(asr_cache_dir_var.get())
             except OSError:
                 messagebox.showerror(
                     "Configuration",
                     "Unable to access the model cache directory. Please review the path in Settings.",
                 )
-                installed_models = []
-            entry = next((m for m in installed_models if m["id"] == model_id), None)
+                refreshed_installed = []
+            entry = next((m for m in refreshed_installed if m.get("id") == model_id), None)
             if entry:
-                i_bytes, i_files = model_manager.get_installed_size(entry["path"])
+                i_bytes, i_files = model_manager.get_installed_size(entry.get("path"))
                 i_mb = i_bytes / (1024 * 1024)
                 installed_text = f"{i_mb:.1f} MB ({i_files} files)"
             else:
@@ -1504,31 +1677,17 @@ class UIManager:
             recommended_backend = _derive_backend_from_model(asr_model_id_var.get())
             install_button.configure(state="normal" if recommended_backend else "disabled")
             effective_backend = _backend_display_value_global(asr_backend_var.get()) or recommended_backend
-            ui_elements["quant_menu"].configure(state="normal" if effective_backend == "ctranslate2" else "disabled")
+            ui_elements["quant_menu"].configure(
+                state="normal" if effective_backend == "ctranslate2" else "disabled"
+            )
 
-        def _on_model_change(choice_display: str) -> None:
-            model_id = ui_elements["display_to_id"].get(choice_display, choice_display)
-            asr_model_id_var.set(model_id)
-            ui_elements["asr_model_display_var"].set(ui_elements["id_to_display"].get(model_id, model_id))
-            backend = _derive_backend_from_model(model_id)
-            if backend:
-                asr_backend_var.set(_backend_display_value_global(backend))
-            asr_backend_menu.configure(state="normal")
-            self.config_manager.set_asr_model_id(model_id)
-            self.config_manager.set_asr_backend(asr_backend_var.get())
-            self.config_manager.save_config()
-            _on_backend_change(asr_backend_var.get())
-            _update_model_info(model_id)
-
-        asr_model_menu.configure(command=_on_model_change)
-        _update_model_info(asr_model_display_var.get())
+        _update_model_info(asr_model_id_var.get())
 
         def _reset_asr() -> None:
             default_model_id = DEFAULT_CONFIG["asr_model_id"]
-            default_display = id_to_display.get(default_model_id, default_model_id)
+            display_value = id_to_display.get(default_model_id, default_model_id)
             asr_model_id_var.set(default_model_id)
-            asr_model_display_var.set(default_display)
-            asr_model_menu.set(default_display)
+            asr_model_display_var.set(display_value)
             asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
             asr_backend_menu.set(DEFAULT_CONFIG["asr_backend"])
             asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
@@ -1536,10 +1695,7 @@ class UIManager:
             asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
             storage_root_dir_var.set(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
             recordings_dir_var.set(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
-            _on_backend_change(asr_backend_var.get())
-            _update_model_info(default_model_id)
-            self.config_manager.set_asr_model_id(default_model_id)
-            self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
+            _handle_model_choice(default_model_id)
             self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
             self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
             self.config_manager.set_storage_root_dir(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
@@ -1547,9 +1703,9 @@ class UIManager:
             self.config_manager.save_config()
 
         reset_asr_button = ctk.CTkButton(
-            asr_model_frame, text="Reset ASR", command=_reset_asr
+            asr_frame, text="Reset ASR", command=_reset_asr
         )
-        reset_asr_button.pack(side="left", padx=5)
+        reset_asr_button.pack(fill="x", padx=5, pady=(0, 5))
         Tooltip(reset_asr_button, "Restore default ASR settings.")
 
         asr_device_frame = ctk.CTkFrame(asr_frame)
@@ -1701,7 +1857,7 @@ class UIManager:
         )
         reload_button.pack(pady=5)
 
-        _on_model_change(asr_model_display_var.get())
+        asr_model_menu = None
         _update_model_info(asr_model_id_var.get())
         _update_install_button_state()
         _on_backend_change(asr_backend_var.get())
