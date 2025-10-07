@@ -330,19 +330,31 @@ CONFIG_LOGGER = get_logger("whisper_flash_transcriber.config", component="Config
 
 def _normalize_asr_backend(name: str | None) -> str | None:
     """Return canonical backend name for persistence and UI consistency."""
-    if not isinstance(name, str):
+    if name is None or not isinstance(name, str):
         return name
+
     normalized = name.strip().lower()
-    if normalized in {
+    if not normalized:
+        return ""
+
+    allowed_aliases = {
         "ct2",
         "ctranslate2",
         "faster whisper",
         "faster_whisper",
         "faster-whisper",
         "auto",
-    }:
-        return "ctranslate2"
-    return normalized
+    }
+    if normalized not in allowed_aliases:
+        CONFIG_LOGGER.debug(
+            log_context(
+                "Mapping unsupported ASR backend to 'ctranslate2'.",
+                event="config.unsupported_backend_normalized",
+                backend=name,
+            )
+        )
+
+    return "ctranslate2"
 
 
 class ConfigManager:

@@ -311,12 +311,31 @@ def find_existing_installation(
 
 def normalize_backend_label(backend: str | None) -> str:
     """Return a normalized backend label for UI/configuration."""
-    if not backend:
+    if backend is None:
         return ""
-    normalized = backend.strip().lower()
-    if normalized in {"ct2", "ctranslate2", "faster whisper", "faster_whisper", "faster-whisper"}:
-        return "ctranslate2"
-    return normalized
+
+    normalized = str(backend).strip().lower()
+    if not normalized:
+        return ""
+
+    allowed_aliases = {
+        "ct2",
+        "ctranslate2",
+        "faster whisper",
+        "faster_whisper",
+        "faster-whisper",
+        "auto",
+    }
+    if normalized not in allowed_aliases:
+        MODEL_LOGGER.debug(
+            log_context(
+                "Mapping unsupported backend label to 'ctranslate2'.",
+                event="model_manager.unsupported_backend_normalized",
+                backend=str(backend),
+            )
+        )
+
+    return "ctranslate2"
 
 
 def backend_storage_name(backend: str | None) -> str:
