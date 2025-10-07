@@ -7,7 +7,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
 from .logging_utils import get_logger, log_context
 from .model_manager import CURATED, normalize_backend_label
@@ -316,16 +323,47 @@ class AppConfig(BaseModel):
 
     @field_validator("asr_model_id", mode="before")
     @classmethod
-    def _validate_asr_model_id(cls, value: Any) -> str:
+    def _validate_asr_model_id(cls, value: Any, info: ValidationInfo) -> str:
         if not isinstance(value, str):
             raise ValueError("asr_model_id must be a string")
         normalized = value.strip()
         if not normalized:
             raise ValueError("asr_model_id must not be empty")
-        if normalized not in _CURATED_MODEL_IDS:
-            raise ValueError(
-                f"asr_model_id must be one of {sorted(_CURATED_MODEL_IDS)}"
-            )
+
+        allowed_ids = set(_CURATED_MODEL_IDS)
+        runtime_ids: set[str] = set()
+
+        def _extract_ids(source: Any) -> None:
+            if isinstance(source, list):
+                for entry in source:
+                    if isinstance(entry, dict):
+                        candidate = entry.get("model_id") or entry.get("id")
+                        if isinstance(candidate, str):
+                            candidate = candidate.strip()
+                            if candidate:
+                                runtime_ids.add(candidate)
+                    elif isinstance(entry, str):
+                        candidate = entry.strip()
+                        if candidate:
+                            runtime_ids.add(candidate)
+
+        if info is not None:
+            data = info.data or {}
+            _extract_ids(data.get("asr_curated_catalog"))
+            _extract_ids(data.get("asr_installed_models"))
+
+            context = getattr(info, "context", None) or {}
+            if isinstance(context, dict):
+                _extract_ids(context.get("asr_curated_catalog"))
+                _extract_ids(context.get("asr_installed_models"))
+
+        if normalized in allowed_ids or normalized in runtime_ids:
+            return normalized
+
+        LOGGER.debug(
+            "Accepting non-curated ASR model id '%s' during config validation.",
+            normalized,
+        )
         return normalized
 
     @field_validator("asr_backend", mode="before")
