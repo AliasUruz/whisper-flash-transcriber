@@ -216,6 +216,8 @@ DEFAULT_CONFIG = {
     "first_run_completed": False,
 }
 
+DEFAULT_CONFIG_TREE = normalize_payload_tree(DEFAULT_CONFIG)
+
 
 LOGGER = get_logger("whisper_flash_transcriber.config", component="ConfigManager")
 BOOTSTRAP_LOGGER = get_logger(

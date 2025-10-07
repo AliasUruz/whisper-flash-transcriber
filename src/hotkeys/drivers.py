@@ -11,7 +11,10 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any, Mapping
 
-import keyboard  # type: ignore[import]
+try:  # pragma: no cover - optional dependency
+    import keyboard  # type: ignore[import]
+except ModuleNotFoundError:  # pragma: no cover - handled gracefully
+    keyboard = None  # type: ignore[assignment]
 
 LOGGER = logging.getLogger("whisper_flash_transcriber.hotkeys.drivers")
 
@@ -59,6 +62,8 @@ class KeyboardLibHotkeyDriver(BaseHotkeyDriver):
     name = "keyboard"
 
     def __init__(self, *, log: Callable[[int, str], None] | None = None) -> None:
+        if keyboard is None:
+            raise RuntimeError("keyboard library is not available")
         super().__init__(log=log)
         self._handles: list[tuple[str, Any]] = []
         self._lock = threading.Lock()
@@ -144,9 +149,16 @@ class KeyboardLibHotkeyDriver(BaseHotkeyDriver):
             keyboard.unhook(hook)
 
 
-_PYNPUT_SPEC = importlib.util.find_spec("pynput.keyboard")
+try:  # pragma: no cover - optional dependency
+    _PYNPUT_SPEC = importlib.util.find_spec("pynput.keyboard")
+except ModuleNotFoundError:  # pragma: no cover - absent dependency
+    _PYNPUT_SPEC = None
+
 if _PYNPUT_SPEC is not None:
-    pynput_keyboard = importlib.import_module("pynput.keyboard")
+    try:  # pragma: no cover - optional dependency
+        pynput_keyboard = importlib.import_module("pynput.keyboard")
+    except ModuleNotFoundError:  # pragma: no cover - absent dependency
+        pynput_keyboard = None
 else:
     pynput_keyboard = None
 

@@ -7,6 +7,7 @@ import statistics
 import threading
 import time
 import os
+from collections import deque
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 import numpy as np
@@ -60,6 +61,7 @@ from . import model_manager as model_manager_module
 from .logging_utils import (
     current_correlation_id,
     get_logger,
+    log_context,
     operation_context,
     scoped_correlation_id,
 )
