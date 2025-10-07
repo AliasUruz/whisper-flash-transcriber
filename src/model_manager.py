@@ -147,7 +147,7 @@ CURATED: List[Dict[str, Any]] = [
     },
     {
         "id": "faster-whisper/medium.en",
-        "backend": "faster-whisper",
+        "backend": "ctranslate2",
         "ui_group": "recommended",
         "recommended_priority": 90,
         "preferred_device": "gpu",
@@ -309,10 +309,10 @@ def normalize_backend_label(backend: str | None) -> str:
     if not backend:
         return ""
     normalized = backend.strip().lower()
-    if normalized in {"ct2", "ctranslate2"}:
+    if normalized in {"ct2", "ctranslate2", "faster whisper", "faster_whisper", "faster-whisper"}:
         return "ctranslate2"
-    if normalized in {"faster whisper", "faster_whisper"}:
-        return "faster-whisper"
+    if normalized == "transformers":
+        return "ctranslate2"
     return normalized
 
 
@@ -324,8 +324,6 @@ def backend_storage_name(backend: str | None) -> str:
         return "ct2"
     if normalized == "ctranslate2":
         return "ct2"
-    if normalized == "faster-whisper":
-        return "faster-whisper"
     return normalized
 
 
@@ -340,8 +338,7 @@ def backend_storage_candidates(backend: str | None) -> list[str]:
         candidates.append(primary)
 
     legacy_map = {
-        "ctranslate2": ["ctranslate2"],
-        "faster-whisper": ["ct2", "ctranslate2"],
+        "ctranslate2": ["ctranslate2", "faster-whisper", "ct2"],
         "transformers": ["transformers"],
     }
 
@@ -469,7 +466,7 @@ def get_model_variant_requirements(
     ``display_name``
         Friendly name for UI rendering.
     ``backend_label``
-        Normalized backend hint (ctranslate2, faster-whisper, transformers, ...).
+        Normalized backend hint (ctranslate2 and compatible aliases).
     ``ct2_quantization``
         Quantization branch to persist when using the CTranslate2 backend.
     ``quantization_label``
@@ -977,8 +974,9 @@ def get_installation_dir(
     """Return the canonical on-disk directory for ``model_id``.
 
     This helper mirrors the logic used when preparing local installations and
-    is relied upon by the faster-whisper/ctranslate2 backend loader to locate
-    previously downloaded models.  Prior to this implementation the
+    is relied upon by the CTranslate2 backend loader (including legacy
+    faster-whisper installs) to locate previously downloaded models.  Prior to
+    this implementation the
     application attempted to call ``model_manager.get_installation_dir`` but
     the function was never defined, resulting in an ``AttributeError`` during
     backend initialization and preventing the faster-whisper and CTranslate2
@@ -990,7 +988,7 @@ def get_installation_dir(
         Base directory where models are stored. It is typically configured via
         the application settings.
     backend:
-        Backend identifier (``"ctranslate2"``, ``"faster-whisper"``, etc.).
+        Backend identifier (``"ctranslate2"`` or compatible legacy aliases).
         When ``None`` the curated/default backend is used.
     model_id:
         Hugging Face model identifier.
@@ -1526,7 +1524,7 @@ def ensure_download(
     model_id: str
         Full model identifier as in the curated catalog.
     backend: str
-        Backend selected by the user (e.g., ``"ctranslate2"``, ``"faster-whisper"``, ``"transformers"``).
+        Backend selected by the user (e.g., ``"ctranslate2"`` or compatible aliases).
     cache_dir: str | Path
         Root directory where models are cached.
     quant: str | None

@@ -340,12 +340,16 @@ def _normalize_asr_backend(name: str | None) -> str | None:
     if not isinstance(name, str):
         return name
     normalized = name.strip().lower()
-    if normalized in {"faster whisper", "faster_whisper"}:
-        normalized = "faster-whisper"
-    if normalized in {"ct2", "ctranslate2"}:
+    if normalized in {
+        "ct2",
+        "ctranslate2",
+        "faster whisper",
+        "faster_whisper",
+        "faster-whisper",
+        "transformers",
+        "auto",
+    }:
         return "ctranslate2"
-    if normalized == "faster-whisper":
-        return "faster-whisper"
     return normalized
 
 

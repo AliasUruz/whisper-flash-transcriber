@@ -74,18 +74,14 @@ class _AdapterBackend:
         cache = cfg.get("asr_cache_dir") or None
         ct2_type = cfg.get("asr_ct2_compute_type") or "default"
 
-        backend = _make_asr_backend(self._name)
+        backend_name = "ctranslate2" if self._name in {"faster-whisper", "ct2"} else self._name
+        backend = _make_asr_backend(backend_name)
         if hasattr(backend, "model_id"):
             backend.model_id = model_id
         if hasattr(backend, "device"):
             backend.device = device
 
-        if self._name == "transformers":
-            backend.load(device=device, dtype=dtype, cache_dir=cache)
-        elif self._name == "faster-whisper":
-            backend.load(cache_dir=cache, ct2_compute_type=ct2_type)
-        else:
-            backend.load()
+        backend.load(cache_dir=cache, ct2_compute_type=ct2_type)
         self._backend = backend
 
     def unload(self) -> None:
@@ -103,9 +99,8 @@ class _AdapterBackend:
 
 backend_registry.update(
     {
-        "transformers": lambda h: _AdapterBackend(h, "transformers"),
-        "ct2": lambda h: _AdapterBackend(h, "faster-whisper"),
-        "ctranslate2": lambda h: _AdapterBackend(h, "faster-whisper"),
-        "faster-whisper": lambda h: _AdapterBackend(h, "faster-whisper"),
+        "ct2": lambda h: _AdapterBackend(h, "ct2"),
+        "ctranslate2": lambda h: _AdapterBackend(h, "ctranslate2"),
+        "faster-whisper": lambda h: _AdapterBackend(h, "ctranslate2"),
     }
 )

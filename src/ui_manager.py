@@ -138,8 +138,8 @@ def _backend_display_value_global(value: str | None) -> str:
     normalized = (value or "").strip().lower()
     if normalized in {"ct2", "ctranslate2"}:
         return "ctranslate2"
-    if normalized in {"faster whisper", "faster_whisper"}:
-        return "faster-whisper"
+    if normalized in {"faster whisper", "faster_whisper", "faster-whisper"}:
+        return "ctranslate2"
     return normalized
 
 class UIManager:
@@ -883,9 +883,10 @@ class UIManager:
                 installed = []
             entry = next((m for m in installed if m.get("id") == model_id), None)
         backend = entry.get("backend") if entry else None
-        if backend not in ("transformers", "ctranslate2", "faster-whisper"):
+        if not backend:
             return None
-        return backend
+        normalized = _backend_display_value_global(backend)
+        return normalized or None
 
     def _update_install_button_state(self) -> None:
         model_var = self._get_settings_var("asr_model_id_var")
@@ -2211,13 +2212,13 @@ class UIManager:
         asr_backend_menu = ctk.CTkOptionMenu(
             asr_backend_frame,
             variable=asr_backend_var,
-            values=["ctranslate2", "faster-whisper", "transformers"],
+            values=["ctranslate2"],
             command=_on_backend_change,
         )
         asr_backend_menu.pack(side="left", padx=5)
         Tooltip(
             asr_backend_menu,
-            "Inference backend for speech recognition.\nDerived from selected model; override in advanced mode.",
+            "CTranslate2 runtime used for all curated models.",
         )
 
         quant_frame = ctk.CTkFrame(asr_frame)
@@ -2453,9 +2454,7 @@ class UIManager:
             if entry is None:
                 entry = installed_by_id.get(model_id)
             backend = _backend_display_value_global(entry.get("backend") if entry else None)
-            if backend not in ("transformers", "ctranslate2", "faster-whisper"):
-                return None
-            return backend
+            return backend or None
 
         def _update_model_info(model_id: str) -> None:
             ui_elements["model_size_label"].configure(text="Download: calculating... | Installed: -")

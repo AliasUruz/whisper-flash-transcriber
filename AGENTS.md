@@ -25,7 +25,7 @@ This section outlines the fundamental rules and user-mandated instructions that 
 - **Primary Language**: Python 3.11+ (tested up to 3.13.2).
 - **UI Framework**: `tkinter` (for the settings window) + `pystray` (for the system tray icon).
 - **Input/Output**: Audio capture via `sounddevice`; automatic text pasting using `pyautogui` and `pyperclip`.
-- **Primary ASR Engine**: Hugging Face Whisper models, accessed through `transformers`, `faster-whisper`, or `ctranslate2` backends.
+- **Primary ASR Engine**: Hugging Face Whisper models executed exclusively via the CTranslate2 runtime (faster-whisper backend).
 - **Optional External Services**: Google Gemini (for text correction/agent mode) and OpenRouter (for text correction).
 - **Execution Model**: System tray application driven by global hotkeys, managed by the `keyboard` library.
 
@@ -33,7 +33,7 @@ This section outlines the fundamental rules and user-mandated instructions that 
 | Path | Contents | Notes |
 | --- | --- | --- |
 | `src/` | Main application source code. | See component map in the architecture section. |
-| `src/asr/` | Specific ASR backend adapters (e.g., faster-whisper, transformers). | Contains the pipeline adapters for different ASR libraries. |
+| `src/asr/` | CTranslate2 backend adapter (faster-whisper runtime). | Contains the unified runtime adapter for ASR. |
 | `src/utils/` | Shared utilities for memory, autostart, UI helpers, etc. | Reused by core components and the UI. |
 | `plans/` | Tactical plans and agent-generated artifacts. | Any agent must register new plans and strategies here. |
 | `docs/` | Supplementary documentation (workflows, UI variables, changelog). | Use as a reference for deeper understanding. |

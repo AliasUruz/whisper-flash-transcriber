@@ -106,6 +106,13 @@ installation estimates.
   - Configure AI services, audio feedback sounds, and additional quality-of-life options.
   - Calibrate VAD behaviour with pre/post speech padding, minimum durations, and silence thresholds.
 
+### ASR backend policy
+
+Whisper Flash Transcriber now distributes only the faster-whisper/CTranslate2 backend. The legacy Transformers
+pipeline has been removed from the packaged application. If you depend on the Transformers stack (for example,
+to experiment with custom attention implementations or torch-native quantization), fork the project and re-enable
+`src/asr/backend_transformers.py` together with the required dependencies.
+
 ### Custom installation directories
 
 The application allows you to relocate heavyweight assets so that ephemeral or slow system drives do not become bottlenecks. The
@@ -117,7 +124,7 @@ virtual environment, ensure that `PYTHONPATH` includes the path before launching
 directory to `sys.path`, but external scripts or shells may require explicit exports.
 - **`vad_models_dir`** — Dedicated folder for the Silero VAD model. If empty, the packaged copy is copied into the directory on
   first use. Keep this path on a fast local drive to avoid I/O stalls during VAD activation.
-- **`hf_cache_dir`** — Shared Hugging Face cache that backs `snapshot_download` calls and any Transformers pipelines. The
+- **`hf_cache_dir`** — Shared Hugging Face cache that backs `snapshot_download` calls used by the CTranslate2 runtime. The
   bootstrap sequence creates the directory and sets `HF_HOME`/`HUGGINGFACE_HUB_CACHE` accordingly.
 
 Because all these directories default to the storage root, you can move the entire cache tree by changing `storage_root_dir` or
