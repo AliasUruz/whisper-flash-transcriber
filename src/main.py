@@ -1,4 +1,5 @@
 import atexit
+import argparse
 import importlib.util
 import json
 import os
@@ -6,6 +7,7 @@ import shutil
 import sys
 import threading
 import tkinter as tk
+import tkinter.messagebox as messagebox
 from pathlib import Path
 
 # Add project root to path
@@ -39,7 +41,7 @@ from src.logging_utils import (
     install_exception_hooks,
     setup_logging,
 )
-from src.installers import DependencyInstaller
+from src.startup_diagnostics import format_report_for_console, run_startup_diagnostics
 
 
 LOGGER = get_logger("whisper_flash_transcriber.bootstrap", component="Bootstrap")
@@ -51,6 +53,18 @@ ENV_DEFAULTS = {
     "TRANSFORMERS_NO_ADVISORY_WARNINGS": "1",
     "BITSANDBYTES_NOWELCOME": "1",
 }
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Whisper Flash Transcriber bootstrap entry point.",
+    )
+    parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Run startup diagnostics and exit without launching the UI.",
+    )
+    return parser.parse_args(argv)
 
 
 def ensure_display_available() -> None:
@@ -476,7 +490,8 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
     )
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     setup_logging()
     install_exception_hooks(logger=LOGGER)
     LOGGER.debug(
@@ -497,12 +512,14 @@ def main() -> None:
             event="bootstrap.start",
             python_version=sys.version.split()[0],
             working_directory=PROJECT_ROOT,
+            diagnostics_only=bool(args.diagnostics),
         )
     )
 
     try:
         configure_environment()
-        ensure_display_available()
+        if not args.diagnostics:
+            ensure_display_available()
         configure_cuda_logging()
         patch_tk_variable_cleanup()
 
@@ -542,69 +559,22 @@ def main() -> None:
             )
 
         run_startup_preflight(config_manager, hotkey_config_path=HOTKEY_CONFIG_PATH)
-        persistence_state = config_manager.describe_persistence_state()
-        LOGGER.info(
-            StructuredMessage(
-                "Persistence state evaluated.",
-                event="startup.persistence_state",
-                first_run=bool(persistence_state.get("first_run")),
-                config_path=persistence_state.get("config_path"),
-                secrets_path=persistence_state.get("secrets_path"),
-            )
+        diagnostics_report = run_startup_diagnostics(
+            config_manager,
+            hotkey_config_path=HOTKEY_CONFIG_PATH,
         )
 
-        main_tk_root = tk.Tk()
-        main_tk_root.withdraw()
-
-        initial_model_queue: list[str] = []
-        initial_package_queue: list[str] = []
-        wizard_plan_path: Path | None = None
-
-        if config_manager.is_first_run():
-            from src.ui.first_run_wizard import FirstRunWizard  # noqa: E402
-
-            wizard_result = FirstRunWizard.launch(main_tk_root, config_manager)
-            if wizard_result is None:
-                LOGGER.info(
-                    StructuredMessage(
-                        "First run wizard dismissed by the operator.",
-                        event="first_run.aborted",
-                    )
-                )
-                main_tk_root.destroy()
-                return
-
-            changed_keys, wizard_warnings = config_manager.apply_updates(
-                wizard_result.config_updates
-            )
-            for warning in wizard_warnings:
-                LOGGER.warning(warning)
-
-            initial_model_queue = list(dict.fromkeys(wizard_result.selected_models))
-            initial_package_queue = list(dict.fromkeys(wizard_result.selected_packages))
-            wizard_plan_path = wizard_result.plan_path
-
-            if wizard_plan_path:
-                LOGGER.info(
-                    StructuredMessage(
-                        "First run snapshot exported.",
-                        event="first_run.plan_exported",
-                        path=str(wizard_plan_path),
-                    )
-                )
-
+        if args.diagnostics:
+            print(format_report_for_console(diagnostics_report))
+            exit_code = 1 if diagnostics_report.has_errors else 0
             LOGGER.info(
                 StructuredMessage(
-                    "First run configuration captured.",
-                    event="first_run.applied",
-                    changed_keys=sorted(changed_keys),
-                    models=initial_model_queue,
-                    packages=initial_package_queue,
+                    "Diagnostics-only execution completed.",
+                    event="bootstrap.diagnostics_only_complete",
+                    exit_code=exit_code,
                 )
             )
-
-            main_tk_root.update_idletasks()
-            main_tk_root.withdraw()
+            return exit_code
 
         app_core_instance = None
         ui_manager_instance = None
@@ -656,6 +626,7 @@ def main() -> None:
             main_tk_root,
             config_manager=config_manager,
             hotkey_config_path=str(HOTKEY_CONFIG_PATH),
+            startup_diagnostics=diagnostics_report,
         )
         app_core_instance.dependency_installer = dependency_installer
         ui_manager_instance = UIManager(
@@ -669,69 +640,18 @@ def main() -> None:
         app_core_instance.flush_pending_ui_notifications()
         ui_manager_instance.on_exit_app = on_exit_app_enhanced
 
-        if initial_model_queue or initial_package_queue:
+        if diagnostics_report.has_fatal_errors:
+            fatal_summary = "\n\n".join(
+                diagnostics_report.user_friendly_summary(include_success=False)
+            )
 
-            def _bootstrap_initial_assets() -> None:
-                cache_dir = config_manager.config.get(
-                    config_module.ASR_CACHE_DIR_CONFIG_KEY,
-                    config_manager.default_config[
-                        config_module.ASR_CACHE_DIR_CONFIG_KEY
-                    ],
+            def _show_diagnostics_failure() -> None:
+                messagebox.showerror(
+                    "Startup diagnostics",
+                    fatal_summary,
                 )
 
-                if initial_model_queue:
-                    for model_id in initial_model_queue:
-                        curated_entry = get_curated_entry(model_id) or {}
-                        backend = normalize_backend_label(
-                            curated_entry.get("backend")
-                        ) or normalize_backend_label(
-                            config_manager.config.get(
-                                config_module.ASR_BACKEND_CONFIG_KEY
-                            )
-                        )
-                        try:
-                            result = app_core_instance.model_manager.ensure_download(
-                                model_id,
-                                backend,
-                                cache_dir,
-                            )
-                        except Exception as exc:
-                            LOGGER.error(
-                                StructuredMessage(
-                                    "Failed to pre-install ASR model selected during onboarding.",
-                                    event="first_run.model_download_failed",
-                                    model=model_id,
-                                    backend=backend,
-                                    error=str(exc),
-                                ),
-                                exc_info=True,
-                            )
-                        else:
-                            LOGGER.info(
-                                StructuredMessage(
-                                    "Initial ASR model ensured.",
-                                    event="first_run.model_download",
-                                    model=model_id,
-                                    backend=backend,
-                                    downloaded=result.downloaded,
-                                    path=result.path,
-                                )
-                            )
-
-                if initial_package_queue:
-                    LOGGER.info(
-                        StructuredMessage(
-                            "Optional Python packages flagged during onboarding.",
-                            event="first_run.packages_selected",
-                            packages=initial_package_queue,
-                        )
-                    )
-
-            threading.Thread(
-                target=_bootstrap_initial_assets,
-                name="FirstRunBootstrapThread",
-                daemon=True,
-            ).start()
+            main_tk_root.after(0, _show_diagnostics_failure)
 
         LOGGER.info(
             StructuredMessage(
@@ -760,4 +680,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

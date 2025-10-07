@@ -1371,3 +1371,163 @@ class AudioHandler:
             elif processing_thread.is_alive():
                 processing_thread.join(timeout=2)  # Timeout curto evita travamentos ao desligar threads no Windows
             self._processing_thread = None
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+    @classmethod
+    def probe_default_device(
+        cls,
+        *,
+        sample_rate: int = AUDIO_SAMPLE_RATE,
+        channels: int = AUDIO_CHANNELS,
+    ) -> dict[str, Any]:
+        """Perform a non-destructive probe of the default audio input device."""
+
+        try:
+            devices = sd.query_devices()
+        except Exception as exc:
+            LOGGER.error(
+                StructuredMessage(
+                    "Unable to enumerate audio devices.",
+                    event="audio.diagnostics.enumeration_failed",
+                    error=str(exc),
+                ),
+                exc_info=True,
+            )
+            return {
+                "ok": False,
+                "message": "Failed to enumerate audio interfaces via sounddevice.",
+                "details": {"error": str(exc)},
+                "suggestion": (
+                    "Verify that audio drivers are installed and that the sounddevice "
+                    "library can access the operating system's audio stack."
+                ),
+                "fatal": True,
+            }
+
+        input_devices = [
+            device
+            for device in devices
+            if isinstance(device, Mapping)
+            and device.get("max_input_channels", 0) > 0
+        ]
+        if not input_devices:
+            LOGGER.warning(
+                StructuredMessage(
+                    "No input-capable audio devices found during diagnostics.",
+                    event="audio.diagnostics.no_input_devices",
+                )
+            )
+            return {
+                "ok": False,
+                "message": "No input-capable audio devices were detected.",
+                "details": {
+                    "device_count": len(devices),
+                    "input_device_count": 0,
+                },
+                "suggestion": "Connect a microphone or enable it in the operating system settings.",
+                "fatal": True,
+            }
+
+        try:
+            default_input = sd.query_devices(None, "input")
+        except Exception as exc:
+            LOGGER.error(
+                StructuredMessage(
+                    "Failed to resolve default audio input device.",
+                    event="audio.diagnostics.default_lookup_failed",
+                    error=str(exc),
+                ),
+                exc_info=True,
+            )
+            return {
+                "ok": False,
+                "message": "Default input device could not be resolved.",
+                "details": {
+                    "input_device_count": len(input_devices),
+                    "error": str(exc),
+                },
+                "suggestion": (
+                    "Select a default recording device in the operating system or "
+                    "choose a specific device in the application settings."
+                ),
+                "fatal": True,
+            }
+
+        default_name = default_input.get("name", "Unknown") if isinstance(default_input, Mapping) else str(default_input)
+        default_index = default_input.get("index") if isinstance(default_input, Mapping) else None
+
+        samplerate_check_passed = True
+        samplerate_error: str | None = None
+        try:
+            sd.check_input_settings(
+                device=default_index if default_index is not None else None,
+                channels=channels,
+                samplerate=sample_rate,
+            )
+        except Exception as exc:
+            samplerate_check_passed = False
+            samplerate_error = str(exc)
+            LOGGER.warning(
+                StructuredMessage(
+                    "Default audio device rejected requested format.",
+                    event="audio.diagnostics.format_incompatible",
+                    device_name=default_name,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    error=str(exc),
+                ),
+                exc_info=True,
+            )
+
+        message: str
+        status_ok = samplerate_check_passed
+        suggestion: str | None = None
+        fatal = False
+        if samplerate_check_passed:
+            message = (
+                f"Default input '{default_name}' is available for {sample_rate} Hz / {channels} channel capture."
+            )
+            LOGGER.info(
+                StructuredMessage(
+                    "Audio diagnostics succeeded.",
+                    event="audio.diagnostics.success",
+                    device_name=default_name,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    input_device_count=len(input_devices),
+                )
+            )
+        else:
+            message = (
+                f"Default input '{default_name}' is not compatible with {sample_rate} Hz / {channels} channel capture."
+            )
+            suggestion = (
+                "Pick another microphone in the application settings or reduce the sample rate/channels in advanced options."
+            )
+            LOGGER.warning(
+                StructuredMessage(
+                    "Audio diagnostics detected incompatible format.",
+                    event="audio.diagnostics.incompatible_format",
+                    device_name=default_name,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    error=samplerate_error,
+                )
+            )
+
+        return {
+            "ok": status_ok,
+            "message": message,
+            "details": {
+                "device_name": default_name,
+                "device_index": default_index,
+                "input_device_count": len(input_devices),
+                "sample_rate": sample_rate,
+                "channels": channels,
+                "format_error": samplerate_error,
+            },
+            "suggestion": suggestion,
+            "fatal": fatal,
+        }

@@ -196,6 +196,95 @@ class KeyboardHotkeyManager:
                 f"Unable to persist hotkey configuration '{self.config_file}': {e}"
             ) from e
 
+    def dry_run_register(
+        self,
+        hotkey: str | None = None,
+        *,
+        suppress: bool = False,
+    ) -> dict[str, Any]:
+        """Attempt to register a hotkey to validate permissions without keeping it active."""
+
+        candidate = (hotkey or self.record_key or "f3").strip()
+        registration_id = None
+        start_time = time.perf_counter()
+        try:
+            registration_id = keyboard.add_hotkey(
+                candidate,
+                lambda: None,
+                suppress=suppress,
+                trigger_on_release=False,
+            )
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self._log(
+                logging.INFO,
+                "Dry-run hotkey registration succeeded.",
+                event="hotkeys.diagnostics.success",
+                hotkey=candidate,
+                duration_ms=round(duration_ms, 3),
+            )
+            return {
+                "ok": True,
+                "message": f"Hotkey '{candidate}' can be registered.",
+                "details": {
+                    "hotkey": candidate,
+                    "duration_ms": duration_ms,
+                    "suppress": suppress,
+                },
+                "suggestion": None,
+                "fatal": False,
+            }
+        except PermissionError as exc:
+            self._log(
+                logging.ERROR,
+                "Dry-run hotkey registration failed due to missing privileges.",
+                event="hotkeys.diagnostics.permission_denied",
+                hotkey=candidate,
+                error=str(exc),
+                exc_info=True,
+            )
+            return {
+                "ok": False,
+                "message": "The operating system denied permission to register global hotkeys.",
+                "details": {
+                    "hotkey": candidate,
+                    "error": str(exc),
+                },
+                "suggestion": "Run the application with administrator privileges or allow keyboard hooks.",
+                "fatal": True,
+            }
+        except Exception as exc:
+            self._log(
+                logging.ERROR,
+                "Dry-run hotkey registration failed with an unexpected error.",
+                event="hotkeys.diagnostics.failure",
+                hotkey=candidate,
+                error=str(exc),
+                exc_info=True,
+            )
+            return {
+                "ok": False,
+                "message": "Global hotkey registration failed due to an unexpected error.",
+                "details": {
+                    "hotkey": candidate,
+                    "error": str(exc),
+                },
+                "suggestion": "Ensure no other software blocks keyboard hooks and retry.",
+                "fatal": True,
+            }
+        finally:
+            if registration_id is not None:
+                try:
+                    keyboard.remove_hotkey(registration_id)
+                except Exception as cleanup_exc:
+                    self._log(
+                        logging.WARNING,
+                        "Failed to clean up dry-run hotkey registration.",
+                        event="hotkeys.diagnostics.cleanup_failed",
+                        hotkey=candidate,
+                        error=str(cleanup_exc),
+                        exc_info=True,
+                    )
+
     def start(self):
         """Inicia o gerenciador de hotkeys."""
         if self.is_running:

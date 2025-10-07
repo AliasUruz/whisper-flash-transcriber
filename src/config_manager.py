@@ -9,13 +9,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox
-from typing import Any, List, Mapping
+from typing import Any, List, TYPE_CHECKING
 
 import requests
 
 from .config_schema import coerce_with_defaults
 from .model_manager import get_curated_entry, list_catalog, list_installed, normalize_backend_label
 from .logging_utils import StructuredMessage, get_logger, log_context
+
+if TYPE_CHECKING:
+    from .startup_diagnostics import StartupDiagnosticsReport
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -1757,33 +1760,27 @@ class ConfigManager:
             }
         return report
 
-    def describe_persistence_state(self) -> dict[str, Any]:
-        """Describe persistence health and detect first-run scenarios."""
+    def register_startup_diagnostics(self, report: "StartupDiagnosticsReport") -> None:
+        """Attach startup diagnostics to the bootstrap state and persist the report reference."""
 
-        snapshot = self.get_bootstrap_report()
-        config_state = snapshot.get("config", {}).copy()
-        secrets_state = snapshot.get("secrets", {}).copy()
-
-        config_existed = bool(config_state.get("existed"))
-        secrets_existed = bool(secrets_state.get("existed"))
-        config_created = bool(config_state.get("created"))
-        secrets_created = bool(secrets_state.get("created"))
-
-        first_run_detected = (
-            not (config_existed and secrets_existed)
-            or config_created
-            or secrets_created
+        summary = report.to_dict()
+        summary["user_messages"] = report.user_friendly_summary(include_success=False)
+        self._bootstrap_state["diagnostics"] = summary
+        self._startup_diagnostics_report = report
+        BOOTSTRAP_LOGGER.info(
+            StructuredMessage(
+                "Startup diagnostics registered.",
+                event="config.bootstrap.diagnostics_registered",
+                has_errors=report.has_errors,
+                has_warnings=report.has_warnings,
+                has_fatal_errors=report.has_fatal_errors,
+            )
         )
 
-        payload: dict[str, Any] = {
-            "first_run": bool(first_run_detected),
-            "config": config_state,
-            "secrets": secrets_state,
-            "profile_dir": str(self.profile_dir),
-            "config_path": str(self.config_path),
-            "secrets_path": str(self.secrets_path),
-        }
-        return payload
+    def get_startup_diagnostics(self) -> "StartupDiagnosticsReport | None":
+        """Return the latest startup diagnostics report when available."""
+
+        return getattr(self, "_startup_diagnostics_report", None)
 
     def save_config(self) -> PersistenceOutcome:
         """Salva as configurações não sensíveis no config.json e as sensíveis no secrets.json."""

@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
-from typing import Any, Mapping
+from typing import Any, Mapping, TYPE_CHECKING
 from pathlib import Path
 from threading import RLock
 try:
@@ -80,6 +80,9 @@ from .logging_utils import (
 )
 from .utils.dependency_audit import DependencyAuditResult, audit_environment
 
+if TYPE_CHECKING:
+    from .startup_diagnostics import StartupDiagnosticsReport
+
 
 LOGGER = get_logger('whisper_flash_transcriber.core', component='Core')
 MODEL_LOGGER = get_logger('whisper_recorder.model', component='ModelManager')
@@ -96,6 +99,7 @@ class AppCore:
         *,
         config_manager: ConfigManager | None = None,
         hotkey_config_path: str = HOTKEY_CONFIG_FILE,
+        startup_diagnostics: "StartupDiagnosticsReport | None" = None,
     ):
         self.main_tk_root = main_tk_root # Referência para a raiz Tkinter
         self.hotkey_config_path = hotkey_config_path
@@ -179,6 +183,19 @@ class AppCore:
         )
         self._tracked_download_tasks: set[str] = set()
         self._auto_reload_tasks: set[str] = set()
+
+        self.startup_diagnostics: "StartupDiagnosticsReport | None" = startup_diagnostics
+        if self.startup_diagnostics is not None:
+            diagnostics = self.startup_diagnostics
+            LOGGER.info(
+                StructuredMessage(
+                    "Startup diagnostics attached to core instance.",
+                    event="core.diagnostics.attached",
+                    has_errors=diagnostics.has_errors,
+                    has_warnings=diagnostics.has_warnings,
+                    has_fatal_errors=diagnostics.has_fatal_errors,
+                )
+            )
 
         # Sincronizar modelos ASR já presentes no disco no início da aplicação
         try:
@@ -505,30 +522,18 @@ class AppCore:
         ahk_manager = getattr(self, "ahk_manager", None)
         if ahk_manager is not None:
             report["hotkeys"] = ahk_manager.describe_persistence_state()
+        if self.startup_diagnostics is not None:
+            diagnostics_payload = self.startup_diagnostics.to_dict()
+            diagnostics_payload["user_messages"] = self.startup_diagnostics.user_friendly_summary(
+                include_success=False
+            )
+            report["diagnostics"] = diagnostics_payload
         return report
 
-    def launch_first_run_wizard(self, force: bool = False) -> None:
-        try:
-            snapshot = self.config_manager.describe_persistence_state()
-        except Exception as exc:  # pragma: no cover - defensive guard
-            LOGGER.warning(
-                "Unable to obtain persistence snapshot before launching onboarding: %s",
-                exc,
-                exc_info=True,
-            )
-            snapshot = {}
+    def get_startup_diagnostics(self) -> "StartupDiagnosticsReport | None":
+        """Expose the startup diagnostics report to interested UI components."""
 
-        should_force = force or bool(snapshot.get("first_run"))
-
-        def _invoke() -> None:
-            outcome = self._launch_onboarding(snapshot=snapshot, force=should_force, reason="manual")
-            if outcome is not None:
-                self._last_onboarding_outcome = outcome
-
-        if threading.current_thread() is threading.main_thread():
-            _invoke()
-        else:
-            self.main_tk_root.after(0, _invoke)
+        return self.startup_diagnostics
 
         try:
             cache_dir = self.config_manager.get("asr_cache_dir")
