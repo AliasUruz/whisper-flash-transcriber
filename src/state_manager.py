@@ -60,6 +60,8 @@ class StateEvent(Enum):
     SETTINGS_REREGISTER_FAILED = auto()
     SETTINGS_RECOVERED = auto()  # Hotkeys se recuperaram e voltaram a operar
     DEPENDENCY_AUDIT_READY = auto()
+    TEXT_CORRECTION_BREAKER_TRIPPED = auto()
+    TEXT_CORRECTION_BREAKER_RESET = auto()
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,8 @@ STATE_FOR_EVENT: dict[StateEvent, str] = {
     StateEvent.SETTINGS_REREGISTER_FAILED: STATE_ERROR_SETTINGS,
     StateEvent.SETTINGS_RECOVERED: STATE_IDLE,
     StateEvent.DEPENDENCY_AUDIT_READY: STATE_LOADING_MODEL,
+    StateEvent.TEXT_CORRECTION_BREAKER_TRIPPED: STATE_IDLE,
+    StateEvent.TEXT_CORRECTION_BREAKER_RESET: STATE_IDLE,
 }
 
 
@@ -128,6 +132,8 @@ EVENT_DEFAULT_DETAILS: dict[StateEvent, str] = {
     StateEvent.SETTINGS_REREGISTER_FAILED: "Hotkey re-registration failed",
     StateEvent.SETTINGS_RECOVERED: "Recovered stable hotkey registration",
     StateEvent.DEPENDENCY_AUDIT_READY: "Dependency audit completed",
+    StateEvent.TEXT_CORRECTION_BREAKER_TRIPPED: "Text correction provider temporarily disabled",
+    StateEvent.TEXT_CORRECTION_BREAKER_RESET: "Text correction provider restored",
 }
 
 

@@ -2142,6 +2142,22 @@ class AppCore:
     def is_correction_running(self) -> bool:
         return self.transcription_handler.is_text_correction_running()
 
+    def reset_text_correction_breaker(
+        self,
+        provider: str | None = None,
+        *,
+        reason: str | None = None,
+        notify: bool = True,
+    ) -> None:
+        handler = getattr(self, "transcription_handler", None)
+        if handler is None:
+            LOGGER.debug("reset_text_correction_breaker called before handler initialization.")
+            return
+        try:
+            handler.reset_text_correction_breaker(provider, reason=reason, notify=notify)
+        except Exception:
+            LOGGER.exception("Failed to reset text correction breaker.")
+
     def is_any_operation_running(self) -> bool:
         """Indica se h\u00e1 alguma grava\u00e7\u00e3o, transcri\u00e7\u00e3o ou corre\u00e7\u00e3o em andamento."""
         return (
@@ -2413,6 +2429,7 @@ class AppCore:
         }
         if text_correction_keys & changed_mapped_keys:
             self._refresh_text_correction_clients()
+            self.reset_text_correction_breaker(reason="config_saved")
 
         self._log_status("Settings updated.")
 
@@ -2512,6 +2529,7 @@ class AppCore:
         # Re-inicializar clientes de correção de texto quando necessário
         if key in text_correction_keys:
             self._refresh_text_correction_clients()
+            self.reset_text_correction_breaker(reason="config_saved")
 
         # Re-registrar hotkeys se as chaves ou modo mudaram
         if key in ["record_key", "agent_key", "record_mode"]:

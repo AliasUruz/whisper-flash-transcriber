@@ -94,6 +94,8 @@ LOGGER = get_logger('whisper_flash_transcriber.transcription', component='Transc
 
 
 class TranscriptionHandler:
+    CORRECTION_FAILURE_LIMIT = 3
+    CORRECTION_DISABLE_SECONDS = 60.0
 
     def __init__(
         self,
@@ -179,6 +181,12 @@ class TranscriptionHandler:
         # self.gemini_client é injetado
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
         self.last_dynamic_batch_size = None
+
+        self._correction_failures: dict[str, int] = {
+            SERVICE_GEMINI: 0,
+            SERVICE_OPENROUTER: 0,
+        }
+        self._correction_disabled_until: dict[str, float] = {}
 
         self._init_api_clients()
 
@@ -540,6 +548,7 @@ class TranscriptionHandler:
 
         if correction_changed:
             self._init_api_clients()
+            self.reset_text_correction_breaker(reason="config_change")
 
         LOGGER.info(
             log_context(
@@ -792,6 +801,168 @@ class TranscriptionHandler:
             return SERVICE_GEMINI
         return SERVICE_NONE
 
+    def _provider_label(self, provider: str | None) -> str:
+        mapping = {
+            SERVICE_GEMINI: "gemini",
+            SERVICE_OPENROUTER: "openrouter",
+            SERVICE_NONE: "none",
+        }
+        if not provider:
+            return "unknown"
+        return mapping.get(provider, str(provider))
+
+    def _notify_correction_breaker_state(
+        self,
+        provider: str,
+        status: str,
+        *,
+        cooldown: float | None = None,
+        failures: int | None = None,
+        reason: str | None = None,
+    ) -> None:
+        core = getattr(self, "core_instance_ref", None)
+        state_mgr = getattr(core, "state_manager", None) if core is not None else None
+        provider_label = self._provider_label(provider)
+
+        if status == "tripped":
+            if cooldown is not None:
+                message = (
+                    f"Text correction provider '{provider_label}' disabled for {int(round(cooldown))}s "
+                    f"after {failures or 0} consecutive failure(s)."
+                )
+            else:
+                message = (
+                    f"Text correction provider '{provider_label}' disabled after {failures or 0} consecutive failure(s)."
+                )
+        else:
+            message = f"Text correction provider '{provider_label}' restored."
+
+        details: dict[str, object] = {
+            "message": message,
+            "provider": provider_label,
+            "status": status,
+        }
+        if failures is not None:
+            details["failures"] = failures
+        details["limit"] = self.CORRECTION_FAILURE_LIMIT
+        if cooldown is not None:
+            details["cooldown_seconds"] = float(max(0.0, cooldown))
+        if reason:
+            details["reason"] = reason
+
+        if state_mgr is None:
+            return
+
+        try:
+            event = (
+                sm.StateEvent.TEXT_CORRECTION_BREAKER_TRIPPED
+                if status == "tripped"
+                else sm.StateEvent.TEXT_CORRECTION_BREAKER_RESET
+            )
+            state_mgr.set_state(event, details=details, source="text_correction_breaker")
+        except Exception:
+            logging.debug("Failed to dispatch text correction breaker state event.", exc_info=True)
+
+    def _clear_correction_breaker(self, provider: str, *, notify: bool, reason: str | None = None) -> None:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return
+        previous_failures = self._correction_failures.get(provider, 0)
+        self._correction_failures[provider] = 0
+        disabled_was_active = self._correction_disabled_until.pop(provider, None) is not None
+        if notify and (disabled_was_active or previous_failures):
+            self._notify_correction_breaker_state(provider, "reset", reason=reason)
+
+    def _is_correction_breaker_active(self, provider: str) -> bool:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return False
+        disabled_until = self._correction_disabled_until.get(provider)
+        if disabled_until is None:
+            return False
+        now = time.monotonic()
+        if now >= disabled_until:
+            self._clear_correction_breaker(provider, notify=True, reason="cooldown_elapsed")
+            LOGGER.info(
+                "Text correction provider '%s' cooldown elapsed; breaker reset.",
+                self._provider_label(provider),
+            )
+            return False
+        return True
+
+    def _record_correction_failure(self, provider: str, exc: Exception) -> None:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return
+        failures = self._correction_failures.get(provider, 0) + 1
+        self._correction_failures[provider] = failures
+        provider_label = self._provider_label(provider)
+        LOGGER.warning(
+            "Text correction provider '%s' failure (%d/%d): %s",
+            provider_label,
+            failures,
+            self.CORRECTION_FAILURE_LIMIT,
+            exc,
+        )
+        if failures >= self.CORRECTION_FAILURE_LIMIT:
+            cooldown = self.CORRECTION_DISABLE_SECONDS
+            self._correction_disabled_until[provider] = time.monotonic() + cooldown
+            LOGGER.warning(
+                "Disabling text correction provider '%s' for %.0fs after %d consecutive failure(s).",
+                provider_label,
+                cooldown,
+                failures,
+            )
+            self._notify_correction_breaker_state(
+                provider,
+                "tripped",
+                cooldown=cooldown,
+                failures=failures,
+                reason=repr(exc),
+            )
+
+    def _record_correction_success(self, provider: str) -> None:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return
+        previous_failures = self._correction_failures.get(provider, 0)
+        was_disabled = provider in self._correction_disabled_until
+        if previous_failures or was_disabled:
+            LOGGER.info(
+                "Text correction provider '%s' recovered after %d failure(s).",
+                self._provider_label(provider),
+                previous_failures,
+            )
+        self._clear_correction_breaker(
+            provider,
+            notify=was_disabled,
+            reason="successful_call",
+        )
+        self._correction_failures[provider] = 0
+
+    def reset_text_correction_breaker(
+        self,
+        provider: str | None = None,
+        *,
+        reason: str | None = None,
+        notify: bool = True,
+    ) -> None:
+        """Permite reinicializar manualmente o circuito de correção de texto."""
+        providers = (
+            [provider]
+            if provider
+            else [SERVICE_GEMINI, SERVICE_OPENROUTER]
+        )
+        for entry in providers:
+            if entry not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+                continue
+            had_failures = self._correction_failures.get(entry, 0)
+            was_disabled = entry in self._correction_disabled_until
+            self._clear_correction_breaker(entry, notify=notify and was_disabled, reason=reason)
+            self._correction_failures[entry] = 0
+            if had_failures or was_disabled:
+                LOGGER.info(
+                    "Text correction provider '%s' breaker manually reset (reason=%s).",
+                    self._provider_label(entry),
+                    reason or "manual_reset",
+                )
+
     def _correct_text_with_openrouter(self, text):
         if not self.openrouter_client or not text:
             return text
@@ -862,11 +1033,27 @@ class TranscriptionHandler:
             )
             return transcribed_text
 
+        if self._is_correction_breaker_active(active_provider):
+            remaining = max(
+                0.0,
+                self._correction_disabled_until.get(active_provider, 0.0) - time.monotonic(),
+            )
+            logging.warning(
+                "Skipping text correction for provider '%s' while breaker cooldown active (%.0fs remaining).",
+                self._provider_label(active_provider),
+                remaining,
+            )
+            return transcribed_text
+
         processed_text = transcribed_text
         self.correction_in_progress = True
+        correction_attempted = False
+        correction_succeeded = False
         try:
             if active_provider == SERVICE_GEMINI:
+                correction_attempted = True
                 processed_text = self.gemini_api.get_correction(transcribed_text) or transcribed_text
+                correction_succeeded = True
             elif active_provider == SERVICE_OPENROUTER:
                 api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
                 if not api_key:
@@ -888,14 +1075,18 @@ class TranscriptionHandler:
                         extra={"event": "text_correction", "provider": "openrouter", "status": "reconfigure_failed"},
                     )
                 if prompt:
+                    correction_attempted = True
                     processed_text = self.openrouter_api.correct_text_async(
                         transcribed_text,
                         prompt,
                         api_key,
                         model,
                     )
+                    correction_succeeded = True
                 else:
+                    correction_attempted = True
                     processed_text = self.openrouter_api.correct_text(transcribed_text)
+                    correction_succeeded = True
             else:
                 logging.error(f"Unknown AI provider: {active_provider}")
                 return transcribed_text
@@ -907,8 +1098,13 @@ class TranscriptionHandler:
                 exc_info=True,
             )
             processed_text = transcribed_text
+            if correction_attempted:
+                self._record_correction_failure(active_provider, exc)
         finally:
             self.correction_in_progress = False
+
+        if correction_attempted and correction_succeeded:
+            self._record_correction_success(active_provider)
 
         if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
             logging.info(
