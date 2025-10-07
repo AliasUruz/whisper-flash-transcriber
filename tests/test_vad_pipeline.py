@@ -1,15 +1,49 @@
+import importlib
+import json
+import os
+import sys
+import tempfile
 import unittest
+from contextlib import contextmanager
+from pathlib import Path
 
 import numpy as np
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 try:
     from src.vad_manager import VADManager
 except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
     from src.vad_manager import VADManager
+
+try:
+    import src.config_manager as config_manager_module
+except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+    import src.config_manager as config_manager_module
+
+
+@contextmanager
+def isolated_config_environment(profile_dir: str, *, working_dir: str | None = None):
+    env_var = "WHISPER_FLASH_PROFILE_DIR"
+    previous_env = os.environ.get(env_var)
+    previous_cwd = os.getcwd()
+    try:
+        if working_dir is not None:
+            os.chdir(working_dir)
+        os.environ[env_var] = profile_dir
+        module = importlib.reload(config_manager_module)
+        yield module
+    finally:
+        if previous_env is None:
+            os.environ.pop(env_var, None)
+        else:
+            os.environ[env_var] = previous_env
+        os.chdir(previous_cwd)
+        importlib.reload(config_manager_module)
 
 
 class DummyConfigManager:
@@ -108,6 +142,95 @@ class TestVADPipeline(unittest.TestCase):
         is_speech_silence, frames_silence = manager.process_chunk(silence)
         self.assertFalse(is_speech_silence)
         self.assertEqual(frames_silence, [])
+
+
+class TestConfigMigration(unittest.TestCase):
+    def test_legacy_record_to_memory_key_is_migrated(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.json"
+            config_path.write_text(json.dumps({"record_to_memory": True}), encoding="utf-8")
+
+            with isolated_config_environment(tmp_dir) as config_module:
+                manager = config_module.ConfigManager(config_file=str(config_path))
+
+                self.assertEqual(manager.config.get("record_storage_mode"), "memory")
+                self.assertNotIn("record_to_memory", manager.config)
+
+                persisted_text = config_path.read_text(encoding="utf-8")
+                self.assertNotIn("record_to_memory", persisted_text)
+
+                persisted = json.loads(persisted_text)
+                storage_settings = (
+                    persisted.get("advanced", {})
+                    .get("storage", {})
+                    .get("record_storage_mode")
+                )
+                self.assertEqual(storage_settings, "memory")
+
+    def test_directory_paths_are_materialized_during_load(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            profile_dir = Path(tmp_dir) / "profile"
+            profile_dir.mkdir()
+            config_path = profile_dir / "config.json"
+
+            storage_root = Path(tmp_dir) / "legacy_storage"
+            payload = {
+                "record_to_memory": False,
+                "storage_root_dir": str(storage_root / "root"),
+                "models_storage_dir": str(storage_root / "root" / "models"),
+                "recordings_dir": str(storage_root / "recordings"),
+                "deps_install_dir": str(storage_root / "deps"),
+            }
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with isolated_config_environment(str(profile_dir)) as config_module:
+                manager = config_module.ConfigManager(config_file=str(config_path))
+
+                storage_root_path = Path(manager.config["storage_root_dir"])
+                models_path = Path(manager.config["models_storage_dir"])
+                recordings_path = Path(manager.config["recordings_dir"])
+                deps_path = Path(manager.config["deps_install_dir"])
+
+                for path in (storage_root_path, models_path, recordings_path, deps_path):
+                    resolved = path.resolve()
+                    self.assertTrue(resolved.exists())
+                    self.assertTrue(resolved.is_dir())
+
+                self.assertEqual(
+                    storage_root_path,
+                    (storage_root / "root").resolve(),
+                )
+
+                self.assertEqual(manager.config.get("record_storage_mode"), "disk")
+                self.assertNotIn("record_to_memory", manager.config)
+
+    def test_legacy_config_file_is_migrated_to_profile_directory(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            legacy_dir = Path(tmp_dir) / "legacy"
+            profile_dir = Path(tmp_dir) / "profile"
+            legacy_dir.mkdir()
+            profile_dir.mkdir()
+
+            legacy_config = legacy_dir / "config.json"
+            legacy_config.write_text(json.dumps({"record_to_memory": True}), encoding="utf-8")
+
+            with isolated_config_environment(
+                str(profile_dir), working_dir=str(legacy_dir)
+            ) as config_module:
+                manager = config_module.ConfigManager()
+                expected_profile_config = profile_dir / "config.json"
+
+                self.assertTrue(expected_profile_config.exists())
+                self.assertFalse(legacy_config.exists())
+                self.assertEqual(
+                    Path(manager.config_file).resolve(), expected_profile_config.resolve()
+                )
+                self.assertEqual(manager.config.get("record_storage_mode"), "memory")
+                self.assertNotIn("record_to_memory", manager.config)
+                self.assertNotIn(
+                    "record_to_memory",
+                    expected_profile_config.read_text(encoding="utf-8"),
+                )
 
 
 if __name__ == "__main__":

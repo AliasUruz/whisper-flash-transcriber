@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -398,13 +399,19 @@ class ConfigManager:
         if "vad_enabled" in loaded_config_from_file:
             logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
             raw_cfg["use_vad"] = _parse_bool(loaded_config_from_file.get("vad_enabled"))
+        legacy_record_to_memory = loaded_config_from_file.get("record_to_memory")
         if (
             "record_storage_mode" not in loaded_config_from_file
             and "record_to_memory" in loaded_config_from_file
         ):
             logging.info("Migrating legacy 'record_to_memory' key to 'record_storage_mode'.")
-            record_to_memory = _parse_bool(loaded_config_from_file.get("record_to_memory"))
+            record_to_memory = _parse_bool(legacy_record_to_memory)
             raw_cfg["record_storage_mode"] = "memory" if record_to_memory else "disk"
+
+        if "record_to_memory" in raw_cfg:
+            raw_cfg.pop("record_to_memory", None)
+        if "record_to_memory" in loaded_config_from_file:
+            loaded_config_from_file.pop("record_to_memory", None)
 
         old_agent_prompt = (
             "Você é um assistente de IA que integra um sistema operacional. "
