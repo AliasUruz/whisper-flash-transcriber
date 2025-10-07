@@ -41,6 +41,9 @@ _DEFAULT_STORAGE_ROOT_DIR = str(_BASE_STORAGE_ROOT)
 _DEFAULT_MODELS_STORAGE_DIR = _DEFAULT_STORAGE_ROOT_DIR
 _DEFAULT_ASR_CACHE_DIR = str((_BASE_STORAGE_ROOT / "asr").expanduser())
 _DEFAULT_RECORDINGS_DIR = str((_BASE_STORAGE_ROOT / "recordings").expanduser())
+_DEFAULT_PYTHON_PACKAGES_DIR = str((_BASE_STORAGE_ROOT / "python_packages").expanduser())
+_DEFAULT_VAD_MODELS_DIR = str((_BASE_STORAGE_ROOT / "vad").expanduser())
+_DEFAULT_HF_CACHE_DIR = str((_BASE_STORAGE_ROOT / "hf_cache").expanduser())
 
 
 _PROFILE_ENV_VAR = "WHISPER_FLASH_PROFILE_DIR"
@@ -157,6 +160,9 @@ DEFAULT_CONFIG = {
     "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
     "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
     "recordings_dir": _DEFAULT_RECORDINGS_DIR,
+    "python_packages_dir": _DEFAULT_PYTHON_PACKAGES_DIR,
+    "vad_models_dir": _DEFAULT_VAD_MODELS_DIR,
+    "hf_cache_dir": _DEFAULT_HF_CACHE_DIR,
     "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "ctranslate2",
     "asr_compute_device": "auto",
@@ -207,6 +213,9 @@ SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
 RECORD_STORAGE_MODE_CONFIG_KEY = "record_storage_mode"
 RECORD_STORAGE_LIMIT_CONFIG_KEY = "record_storage_limit"
 RECORDINGS_DIR_CONFIG_KEY = "recordings_dir"
+PYTHON_PACKAGES_DIR_CONFIG_KEY = "python_packages_dir"
+VAD_MODELS_DIR_CONFIG_KEY = "vad_models_dir"
+HF_CACHE_DIR_CONFIG_KEY = "hf_cache_dir"
 MAX_MEMORY_SECONDS_MODE_CONFIG_KEY = "max_memory_seconds_mode"
 DISPLAY_TRANSCRIPTS_KEY = "display_transcripts_in_terminal"
 USE_VAD_CONFIG_KEY = "use_vad"
@@ -1948,7 +1957,43 @@ class ConfigManager:
         )
 
     def set_storage_root_dir(self, value: str):
-        self.config[STORAGE_ROOT_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+        old_root = self.config.get(STORAGE_ROOT_DIR_CONFIG_KEY)
+        new_root = os.path.expanduser(str(value))
+        self.config[STORAGE_ROOT_DIR_CONFIG_KEY] = new_root
+
+        try:
+            new_root_path = Path(new_root).expanduser()
+        except Exception:
+            return
+
+        try:
+            old_root_path = Path(old_root).expanduser() if old_root else None
+        except Exception:
+            old_root_path = None
+
+        derived_dirs = (
+            (MODELS_STORAGE_DIR_CONFIG_KEY, Path()),
+            (ASR_CACHE_DIR_CONFIG_KEY, Path("asr")),
+            (RECORDINGS_DIR_CONFIG_KEY, Path("recordings")),
+            (PYTHON_PACKAGES_DIR_CONFIG_KEY, Path("python_packages")),
+            (VAD_MODELS_DIR_CONFIG_KEY, Path("vad")),
+            (HF_CACHE_DIR_CONFIG_KEY, Path("hf_cache")),
+        )
+
+        for key, suffix in derived_dirs:
+            current = self.config.get(key)
+            if not current:
+                continue
+            try:
+                current_path = Path(str(current)).expanduser()
+            except Exception:
+                continue
+            if old_root_path is not None:
+                expected_old = (old_root_path / suffix).resolve() if suffix else old_root_path.resolve()
+                if current_path.resolve() != expected_old:
+                    continue
+            updated_path = (new_root_path / suffix) if suffix else new_root_path
+            self.config[key] = str(updated_path)
 
     def get_models_storage_dir(self) -> str:
         return self.config.get(
@@ -1970,6 +2015,33 @@ class ConfigManager:
 
     def set_recordings_dir(self, value: str):
         self.config[RECORDINGS_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_python_packages_dir(self) -> str:
+        return self.config.get(
+            PYTHON_PACKAGES_DIR_CONFIG_KEY,
+            self.default_config[PYTHON_PACKAGES_DIR_CONFIG_KEY],
+        )
+
+    def set_python_packages_dir(self, value: str):
+        self.config[PYTHON_PACKAGES_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_vad_models_dir(self) -> str:
+        return self.config.get(
+            VAD_MODELS_DIR_CONFIG_KEY,
+            self.default_config[VAD_MODELS_DIR_CONFIG_KEY],
+        )
+
+    def set_vad_models_dir(self, value: str):
+        self.config[VAD_MODELS_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_hf_cache_dir(self) -> str:
+        return self.config.get(
+            HF_CACHE_DIR_CONFIG_KEY,
+            self.default_config[HF_CACHE_DIR_CONFIG_KEY],
+        )
+
+    def set_hf_cache_dir(self, value: str):
+        self.config[HF_CACHE_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
     def get_asr_cache_dir(self):
         return self.config.get(

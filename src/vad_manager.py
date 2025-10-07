@@ -135,21 +135,37 @@ class VADManager:
     def _resolve_model_path(self) -> Path:
         base_dir: Path | None = None
         if self.config_manager is not None:
-            try:
-                raw_dir = self.config_manager.get("models_storage_dir")
-            except Exception:
-                logging.debug("Failed to read models storage directory from config manager.", exc_info=True)
-            else:
+            for key in ("vad_models_dir", "models_storage_dir"):
+                try:
+                    raw_dir = self.config_manager.get(key)
+                except Exception:
+                    logging.debug(
+                        "Failed to read '%s' from config manager.",
+                        key,
+                        exc_info=True,
+                    )
+                    continue
                 if raw_dir:
                     try:
-                        base_dir = Path(str(raw_dir)).expanduser()
+                        resolved = Path(str(raw_dir)).expanduser()
+                        if key == "models_storage_dir":
+                            resolved = resolved / "vad"
+                        base_dir = resolved
                     except Exception:
-                        logging.debug("Failed to expand models storage directory '%s'.", raw_dir, exc_info=True)
+                        logging.debug(
+                            "Failed to expand directory '%s' from key '%s'.",
+                            raw_dir,
+                            key,
+                            exc_info=True,
+                        )
+                        continue
+                    else:
+                        break
 
         if base_dir is None:
             return _PACKAGE_MODEL_PATH
 
-        target_path = base_dir / "vad" / _PACKAGE_MODEL_PATH.name
+        target_path = base_dir / _PACKAGE_MODEL_PATH.name
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
