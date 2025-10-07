@@ -1626,15 +1626,21 @@ class TranscriptionHandler:
         effective_timeout = float(timeout or self.text_correction_timeout or DEFAULT_TEXT_CORRECTION_TIMEOUT)
         if effective_timeout <= 0:
             effective_timeout = float(DEFAULT_TEXT_CORRECTION_TIMEOUT)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(func, *args, **kwargs)
-            try:
-                return future.result(timeout=effective_timeout)
-            except concurrent.futures.TimeoutError as exc:
-                future.cancel()
-                raise TimeoutError(
-                    f"{description} timed out after {effective_timeout:.2f} seconds"
-                ) from exc
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(func, *args, **kwargs)
+        shutdown_wait = True
+        try:
+            return future.result(timeout=effective_timeout)
+        except concurrent.futures.TimeoutError as exc:
+            shutdown_wait = False
+            future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise TimeoutError(
+                f"{description} timed out after {effective_timeout:.2f} seconds"
+            ) from exc
+        finally:
+            if shutdown_wait:
+                executor.shutdown(wait=True, cancel_futures=True)
 
     def _process_ai_pipeline(self, transcribed_text: str, is_agent_mode: bool) -> str:
         """Centraliza o fluxo de pós-processamento baseado em IA."""
