@@ -459,7 +459,7 @@ class AudioHandler:
         with scoped_correlation_id(session_id, preserve_existing=True):
             self.audio_stream = None
             try:
-                self._audio_log.info(
+                self._log.info(
                     StructuredMessage(
                         "Audio recording thread started.",
                         event="audio.thread.start",
@@ -480,7 +480,7 @@ class AudioHandler:
                 )
                 self.audio_stream.start()
                 self.stream_started = True
-                self._audio_log.info(
+                self._log.info(
                     StructuredMessage(
                         "Audio stream opened.",
                         event="audio.stream.opened",
@@ -490,18 +490,18 @@ class AudioHandler:
 
                 while not self._stop_event.is_set() and self.is_recording:
                     sd.sleep(100)
-                self._audio_log.info(
+                self._log.info(
                     StructuredMessage(
                         "Recording flag lowered; stopping audio stream.",
                         event="audio.stream.stop_requested",
                     )
                 )
             except sd.PortAudioError as e:
-                self._audio_log.error(f"PortAudio error during recording: {e}", exc_info=True)
+                self._log.error(f"PortAudio error during recording: {e}", exc_info=True)
                 self.is_recording = False
                 self.state_manager.set_state("ERROR_AUDIO")
             except Exception as e:
-                self._audio_log.error(f"Error in audio recording thread: {e}", exc_info=True)
+                self._log.error(f"Error in audio recording thread: {e}", exc_info=True)
                 self.is_recording = False
                 self.state_manager.set_state("ERROR_AUDIO")
             finally:
@@ -511,14 +511,14 @@ class AudioHandler:
                 self.stream_started = False
                 self._stop_event.clear()
                 self._record_thread = None
-                self._audio_log.info(
+                self._log.info(
                     StructuredMessage(
                         "Audio recording thread finished.",
                         event="audio.thread.stop",
                     )
                 )
                 try:
-                    self._audio_log.info(
+                    self._log.info(
                         "Recording thread cleanup completed.",
                         extra={
                             "stage": "recording",
@@ -592,7 +592,7 @@ class AudioHandler:
         try:
             with scoped_correlation_id(session_id):
                 with log_operation(
-                    self._audio_log,
+                    self._log,
                     "Initializing audio recording session.",
                     event="audio.recording.session",
                     details={
@@ -609,7 +609,7 @@ class AudioHandler:
                         self._processing_thread.start()
 
                     if self._record_thread and self._record_thread.is_alive():
-                        self._audio_log.debug(
+                        self._log.debug(
                             "Waiting for the previous recording thread to finish.",
                             extra={"event": "record_thread_join", "stage": "recording"},
                         )
@@ -645,7 +645,7 @@ class AudioHandler:
                         self.current_max_memory_seconds = self.max_memory_seconds
                     self._memory_limit_samples = int(self.current_max_memory_seconds * AUDIO_SAMPLE_RATE)
 
-                    self._audio_log.info(
+                    self._log.info(
                         StructuredMessage(
                             "Recording storage mode decided.",
                             event="audio.storage_selected",
@@ -680,12 +680,12 @@ class AudioHandler:
                         try:
                             self.vad_manager.reset_states()
                         except Exception:
-                            self._audio_log.debug(
+                            self._log.debug(
                                 "Failed to reset VAD states for new recording.",
                                 exc_info=True,
                                 extra={"event": "vad_reset_failed", "stage": "recording"},
                             )
-                    self._audio_log.debug(
+                    self._log.debug(
                         "VAD reset for new recording.",
                         extra={"event": "vad_reset", "stage": "recording"},
                     )
@@ -724,7 +724,7 @@ class AudioHandler:
                     return False
 
                 storage_mode = "memory" if self.in_memory_mode else "disk"
-                self._audio_log.info(
+                self._log.info(
                     log_context(
                         "Stop recording requested.",
                         event="audio.recording.stop_request",
@@ -744,7 +744,7 @@ class AudioHandler:
                 if self._processing_thread:
                     processing_thread = self._processing_thread
                     if processing_thread is threading.current_thread():
-                        self._audio_log.debug(
+                        self._log.debug(
                             "Stop recording invoked from processing thread; skipping self-join.",
                         )
                     elif processing_thread.is_alive():
@@ -755,11 +755,11 @@ class AudioHandler:
                     try:
                         self.vad_manager.reset_states()
                     except Exception:
-                        self._audio_log.debug(
+                        self._log.debug(
                             "Failed to reset VAD states when stopping recording.",
                             exc_info=True,
                         )
-                self._audio_log.debug("VAD reset when stopping recording.")
+                self._log.debug("VAD reset when stopping recording.")
 
                 threading.Thread(
                     target=self._play_generated_tone_stream,
@@ -777,7 +777,7 @@ class AudioHandler:
                         try:
                             self._sf_writer.close()
                         except Exception as e:
-                            self._audio_log.error("Failed to close temporary file %s: %s", writer_path, e)
+                            self._log.error("Failed to close temporary file %s: %s", writer_path, e)
                         self._sf_writer = None
 
                 if not stream_was_started:
@@ -794,7 +794,7 @@ class AudioHandler:
                 recording_duration = time.time() - self.start_time
                 if self._sample_count == 0 or recording_duration < self.min_record_duration:
                     rounded = round(recording_duration, 2)
-                    self._audio_log.info(
+                    self._log.info(
                         StructuredMessage(
                             "Recording discarded because it is shorter than the configured minimum.",
                             event="audio.segment_too_short",
@@ -837,7 +837,7 @@ class AudioHandler:
                             try:
                                 recordings_base.mkdir(parents=True, exist_ok=True)
                             except Exception as exc:
-                                self._audio_log.error(
+                                self._log.error(
                                     "Failed to ensure recordings directory '%s': %s; using working directory.",
                                     recordings_base,
                                     exc,
@@ -846,7 +846,7 @@ class AudioHandler:
                             target_path = (recordings_base / filename).resolve()
                             shutil.move(str(source_path), target_path)
                             self.temp_file_path = str(target_path)
-                            self._audio_log.info(
+                            self._log.info(
                                 StructuredMessage(
                                     "Temporary recording persisted to disk.",
                                     event="audio.segment_saved",
@@ -858,7 +858,7 @@ class AudioHandler:
                             )
                             self._enforce_record_storage_limit(exclude_paths=[target_path])
                         except Exception as e:
-                            self._audio_log.error(f"Failed to save temporary recording: {e}")
+                            self._log.error(f"Failed to save temporary recording: {e}")
                             try:
                                 if "target_path" in locals() and target_path.exists():
                                     target_path.unlink()
@@ -878,7 +878,7 @@ class AudioHandler:
                 self._memory_samples = 0
                 self.start_time = None
 
-                self._audio_log.info(
+                self._log.info(
                     log_context(
                         "Recording session finalized and dispatched for processing.",
                         event="audio.recording.session",
