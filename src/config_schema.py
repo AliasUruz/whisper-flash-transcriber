@@ -258,32 +258,16 @@ class AdvancedPerformanceConfig(BaseModel):
     batch_size_mode: str = "auto"
     manual_batch_size: int = Field(default=8, ge=1)
     gpu_index: int = Field(default=0, ge=-1)
-    chunk_length_sec: float = Field(default=30.0, ge=0.0)
-    chunk_length_mode: str = "manual"
-    enable_torch_compile: bool = False
-    clear_gpu_cache: bool = True
-    asr_compute_device: str = "auto"
-    asr_dtype: str = "float16"
-    asr_ct2_compute_type: str = "int8_float16"
-    asr_ct2_cpu_threads: int | None = None
-    max_parallel_downloads: int = Field(default=1, ge=1, le=8)
-
-    @field_validator("batch_size_mode", "chunk_length_mode", mode="before")
-    @classmethod
-    def _normalize_mode(cls, value: Any, info: ValidationInfo) -> str:
-        field_name = "batch_size_mode"
-        if info is not None and info.field_name is not None:
-            field_name = info.field_name
-        if isinstance(value, str):
-            return _normalize_lower(value, allowed={"auto", "manual"}, field_name=field_name)
-        raise ValueError(f"{field_name} must be a string")
-
-
-class AdvancedStorageConfig(BaseModel):
-    """Extended storage policies and cache placement overrides."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
+    hotkey_stability_service_enabled: bool = True
+    hotkey_debounce_ms: int = Field(default=200, ge=0)
+    use_vad: bool = False
+    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    vad_silence_duration: float = Field(default=1.0, ge=0.0)
+    vad_pre_speech_padding_ms: int = Field(default=150, ge=0)
+    vad_post_speech_padding_ms: int = Field(default=300, ge=0)
+    display_transcripts_in_terminal: bool = False
+    gemini_model_options: list[str] = Field(default_factory=list)
+    save_temp_recordings: bool = False
     record_storage_mode: str = "auto"
     record_storage_limit: int = Field(default=0, ge=0)
     max_memory_seconds_mode: str = "manual"
@@ -297,122 +281,11 @@ class AdvancedStorageConfig(BaseModel):
     asr_cache_dir: str = _DEFAULT_ASR_CACHE_DIR
     deps_install_dir: str = _DEFAULT_DEPS_INSTALL_DIR
     hf_home_dir: str = _DEFAULT_HF_HOME_DIR
-    transformers_cache_dir: str = _DEFAULT_TRANSFORMERS_CACHE_DIR
-    python_packages_dir: str = _DEFAULT_PYTHON_PACKAGES_DIR
-    vad_models_dir: str = _DEFAULT_VAD_MODELS_DIR
-    hf_cache_dir: str = _DEFAULT_HF_CACHE_DIR
-
-    @field_validator("record_storage_mode", mode="before")
-    @classmethod
-    def _validate_storage_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered == "hybrid":
-                LOGGER.info(
-                    log_context(
-                        "Mapping legacy record_storage_mode 'hybrid' to 'auto'.",
-                        event="config.legacy_storage_mode_mapped",
-                    )
-                )
-                lowered = "auto"
-            return _normalize_lower(
-                lowered,
-                allowed={"disk", "memory", "auto"},
-                field_name="record_storage_mode",
-            )
-        raise ValueError("record_storage_mode must be a string")
-
-    @field_validator("max_memory_seconds_mode", mode="before")
-    @classmethod
-    def _validate_memory_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed={"manual", "auto"},
-                field_name="max_memory_seconds_mode",
-            )
-        raise ValueError("max_memory_seconds_mode must be a string")
-
-    @field_validator(
-        "storage_root_dir",
-        "models_storage_dir",
-        "recordings_dir",
-        "asr_cache_dir",
-        "deps_install_dir",
-        "hf_home_dir",
-        "transformers_cache_dir",
-        "python_packages_dir",
-        "vad_models_dir",
-        "hf_cache_dir",
-        mode="before",
-    )
-    @classmethod
-    def _expand_dirs(cls, value: Any) -> str:
-        return _expand_path(value)
-
-
-class AdvancedVADConfig(BaseModel):
-    """Voice activity detection parameters exposed to power users."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    use_vad: bool = False
-    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
-    vad_silence_duration: float = Field(default=1.0, ge=0.0)
-    vad_pre_speech_padding_ms: int = Field(default=150, ge=0)
-    vad_post_speech_padding_ms: int = Field(default=300, ge=0)
-
-    @field_validator("vad_pre_speech_padding_ms", "vad_post_speech_padding_ms", mode="before")
-    @classmethod
-    def _coerce_padding(cls, value: Any) -> int:
-        if isinstance(value, (int, float)):
-            return int(value)
-        if isinstance(value, str) and value.strip():
-            return int(float(value))
-        raise ValueError("Padding value must be numeric")
-
-
-class AdvancedWorkflowConfig(BaseModel):
-    """UI-level toggles that are not required for the minimal workflow."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    display_transcripts_in_terminal: bool = False
-
-
-class AdvancedSystemConfig(BaseModel):
-    """System integration flags that remain opt-in."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    launch_at_startup: bool = False
-
-
-class AdvancedConfig(BaseModel):
-    """Namespace that groups every optional/advanced configuration knob."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    hotkeys: AdvancedHotkeyConfig = Field(default_factory=AdvancedHotkeyConfig)
-    ai: AdvancedAIConfig = Field(default_factory=AdvancedAIConfig)
-    performance: AdvancedPerformanceConfig = Field(default_factory=AdvancedPerformanceConfig)
-    storage: AdvancedStorageConfig = Field(default_factory=AdvancedStorageConfig)
-    vad: AdvancedVADConfig = Field(default_factory=AdvancedVADConfig)
-    workflow: AdvancedWorkflowConfig = Field(default_factory=AdvancedWorkflowConfig)
-    system: AdvancedSystemConfig = Field(default_factory=AdvancedSystemConfig)
-
-
-class AppConfig(BaseModel):
-    """Application configuration validated via Pydantic."""
-
-    model_config = ConfigDict(extra="allow", str_strip_whitespace=True)
-
-    record_key: str = "F3"
-    record_mode: str = "toggle"
-    auto_paste: bool = True
-    min_record_duration: float = Field(default=0.5, ge=0.0)
-    min_transcription_duration: float = Field(default=1.0, ge=0.0)
-    sound: SoundSettings = Field(default_factory=SoundSettings)
+    python_packages_dir: str = str((_DEFAULT_STORAGE_ROOT / "python_packages").expanduser())
+    vad_models_dir: str = str((_DEFAULT_STORAGE_ROOT / "vad").expanduser())
+    hf_cache_dir: str = str((_DEFAULT_STORAGE_ROOT / "hf_cache").expanduser())
+    storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
+    recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
     asr_model_id: str = "distil-whisper/distil-large-v3"
     asr_backend: str = "ctranslate2"
     ui_language: str = _DEFAULT_UI_LANGUAGE

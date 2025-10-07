@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox
-from typing import Any, List, TYPE_CHECKING
+from typing import Any, List, Mapping, TYPE_CHECKING
 
 import requests
 
@@ -105,6 +105,7 @@ LEGACY_HOTKEY_LOCATIONS: tuple[Path, ...] = (
 DEFAULT_CONFIG = {
     "record_key": "F3",
     "record_mode": "toggle",
+    "hotkey_debounce_ms": 200,
     "auto_paste": True,
     "agent_auto_paste": True,
     "auto_paste_modifier": "auto",
@@ -229,6 +230,7 @@ SOUND_FREQUENCY_CONFIG_KEY = "sound_frequency"
 SOUND_DURATION_CONFIG_KEY = "sound_duration"
 SOUND_VOLUME_CONFIG_KEY = "sound_volume"
 HOTKEY_STABILITY_SERVICE_ENABLED_CONFIG_KEY = "hotkey_stability_service_enabled" # Nova constante unificada
+HOTKEY_DEBOUNCE_MS_CONFIG_KEY = "hotkey_debounce_ms"
 BATCH_SIZE_CONFIG_KEY = "batch_size" # Agora é o batch size padrão para o modo auto
 BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
@@ -707,6 +709,27 @@ class ConfigManager:
             or default_record_key
         )
         cfg["record_mode"] = str(cfg.get("record_mode", self.default_config["record_mode"])).lower()
+        debounce_source = cfg.get(
+            HOTKEY_DEBOUNCE_MS_CONFIG_KEY,
+            self.default_config[HOTKEY_DEBOUNCE_MS_CONFIG_KEY],
+        )
+        try:
+            debounce_value = float(debounce_source)
+        except (TypeError, ValueError):
+            logging.warning(
+                "Invalid hotkey_debounce_ms value '%s'; falling back to default %.2f ms.",
+                debounce_source,
+                float(self.default_config[HOTKEY_DEBOUNCE_MS_CONFIG_KEY]),
+            )
+            debounce_value = float(self.default_config[HOTKEY_DEBOUNCE_MS_CONFIG_KEY])
+        else:
+            if debounce_value < 0:
+                logging.warning(
+                    "hotkey_debounce_ms cannot be negative (value=%s); coercing to 0.",
+                    debounce_source,
+                )
+                debounce_value = 0.0
+        cfg[HOTKEY_DEBOUNCE_MS_CONFIG_KEY] = int(round(debounce_value))
 
         # Agent auto paste mirrors auto paste unless explicitly overridden
         auto_paste_value = bool(cfg.get("auto_paste", self.default_config["auto_paste"]))
