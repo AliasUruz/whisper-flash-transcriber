@@ -37,7 +37,6 @@ from .config_manager import (
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
     ASR_BACKEND_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
-    ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
@@ -1121,7 +1120,6 @@ class UIManager:
         asr_backend_var = _var("asr_backend_var")
         asr_model_id_var = _var("asr_model_id_var")
         asr_compute_device_var = _var("asr_compute_device_var")
-        asr_dtype_var = _var("asr_dtype_var")
         asr_ct2_compute_type_var = _var("asr_ct2_compute_type_var")
         models_storage_dir_var = _var("models_storage_dir_var")
         deps_install_dir_var = _var("deps_install_dir_var")
@@ -1233,7 +1231,6 @@ class UIManager:
         asr_backend_to_apply = asr_backend_var.get() if asr_backend_var else self.config_manager.get_asr_backend()
         asr_model_id_to_apply = asr_model_id_var.get() if asr_model_id_var else self.config_manager.get_asr_model_id()
         asr_compute_device_to_apply = "auto"
-        asr_dtype_to_apply = asr_dtype_var.get() if asr_dtype_var else self.config_manager.get_asr_dtype()
         asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get() if asr_ct2_compute_type_var else self.config_manager.get_asr_ct2_compute_type()
         storage_root_dir_to_apply_raw = storage_root_dir_var.get().strip() if storage_root_dir_var else self.config_manager.get_storage_root_dir()
         if not storage_root_dir_to_apply_raw:
@@ -1418,11 +1415,9 @@ class UIManager:
             new_launch_at_startup=launch_at_startup_to_apply,
             new_chunk_length_mode=chunk_length_mode_to_apply,
             new_chunk_length_sec=float(chunk_length_sec_to_apply),
-            new_enable_torch_compile=bool(self._get_settings_var("enable_torch_compile_var").get()) if self._get_settings_var("enable_torch_compile_var") else False,
             new_asr_backend=asr_backend_to_apply,
             new_asr_model_id=asr_model_id_to_apply,
             new_asr_compute_device=asr_compute_device_to_apply,
-            new_asr_dtype=asr_dtype_to_apply,
             new_asr_ct2_compute_type=asr_ct2_compute_type_to_apply,
             new_models_storage_dir=models_storage_dir_to_apply,
             new_deps_install_dir=deps_install_dir_to_apply,
@@ -1936,7 +1931,6 @@ class UIManager:
         asr_backend_var,
         asr_model_id_var,
         asr_compute_device_var,
-        asr_dtype_var,
         asr_ct2_compute_type_var,
         models_storage_dir_var,
         deps_install_dir_var,
@@ -2538,24 +2532,6 @@ class UIManager:
         asr_device_menu.pack(side="left", padx=5)
         Tooltip(asr_device_menu, "Select compute device for ASR model.")
 
-        asr_dtype_frame = ctk.CTkFrame(asr_frame)
-        _register_advanced(asr_dtype_frame, fill="x", pady=5)
-        ctk.CTkLabel(asr_dtype_frame, text="ASR DType:").pack(side="left", padx=(5, 0))
-        ctk.CTkButton(
-            asr_dtype_frame,
-            text="?",
-            width=20,
-            command=lambda: messagebox.showinfo(
-                "ASR DType",
-                "Torch tensor precision for ASR weights and activations.",
-            ),
-        ).pack(side="left", padx=(0, 10))
-        asr_dtype_menu = ctk.CTkOptionMenu(
-            asr_dtype_frame, variable=asr_dtype_var, values=["auto", "float16", "float32"]
-        )
-        asr_dtype_menu.pack(side="left", padx=5)
-        Tooltip(asr_dtype_menu, "Torch dtype for ASR model.")
-
         asr_ct2_frame = ctk.CTkFrame(asr_frame)
         _register_advanced(asr_ct2_frame, fill="x", pady=5)
         ctk.CTkLabel(asr_ct2_frame, text="CT2 Compute Type:").pack(side="left", padx=(5, 0))
@@ -2683,7 +2659,6 @@ class UIManager:
         should_show_advanced = any(
             [
                 asr_backend_var.get() not in ("auto", ""),
-                asr_dtype_var.get() not in ("auto", ""),
                 asr_ct2_compute_type_var.get() not in ("auto", "float16"),
             ]
         )
@@ -2827,26 +2802,32 @@ class UIManager:
                 tech = ""
                 th = getattr(self.core_instance_ref, "transcription_handler", None)
                 if th is not None:
-                    import torch
                     device_in_use = getattr(th, "device_in_use", None)
                     if device_in_use:
                         device = str(device_in_use)
                     else:
-                        device = (
-                            f"cuda:{getattr(th, 'gpu_index', -1)}"
-                            if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0
-                            else "cpu"
-                        )
-                    dtype = "fp16" if str(device).startswith("cuda") else "fp32"
+                        gpu_index = getattr(th, "gpu_index", -1)
+                        device = f"cuda:{gpu_index}" if isinstance(gpu_index, int) and gpu_index >= 0 else "cpu"
+                    compute_type = (
+                        getattr(th, "compute_type_in_use", None)
+                        or getattr(th, "asr_ct2_compute_type", None)
+                        or "default"
+                    )
                     try:
                         import importlib.util as _spec_util
                         attn_impl = "FA2" if _spec_util.find_spec("flash_attn") is not None else "SDPA"
                     except Exception:
                         attn_impl = "SDPA"
                     chunk = getattr(th, "chunk_length_sec", None)
+                    chunk_display = chunk if chunk not in (None, "") else "auto"
                     # Se disponível no handler, podemos expor last_dynamic_batch_size; fallback em None
                     bs = getattr(th, "last_dynamic_batch_size", None) if hasattr(th, "last_dynamic_batch_size") else None
-                    tech = f" [{device} {dtype} | {attn_impl} | chunk={chunk}s | batch={bs}]"
+                    if bs in (None, ""):
+                        bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
+                    bs_display = bs if bs not in (None, "") else "auto"
+                    tech = (
+                        f" [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
+                    )
                 elapsed = time.time() - start_ts
                 tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)}){tech}"
                 suffix = getattr(self, "_state_context_suffix", "")
@@ -2932,29 +2913,35 @@ class UIManager:
                         # Esses atributos são expostos via core_instance_ref.transcription_handler
                         th = getattr(self.core_instance_ref, "transcription_handler", None)
                         if th is not None:
-                            import torch
                             device_in_use = getattr(th, "device_in_use", None)
                             if device_in_use:
                                 device = str(device_in_use)
                             else:
+                                gpu_index = getattr(th, "gpu_index", -1)
                                 device = (
-                                    f"cuda:{getattr(th, 'gpu_index', -1)}"
-                                    if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0
+                                    f"cuda:{gpu_index}"
+                                    if isinstance(gpu_index, int) and gpu_index >= 0
                                     else "cpu"
                                 )
-                            dtype = "fp16" if str(device).startswith("cuda") else "fp32"
                             # Determinar attn_impl conforme detecção feita no handler
                             try:
                                 import importlib.util as _spec_util
                                 attn_impl = "FA2" if _spec_util.find_spec("flash_attn") is not None else "SDPA"
                             except Exception:
                                 attn_impl = "SDPA"
+                            compute_type = (
+                                getattr(th, "compute_type_in_use", None)
+                                or getattr(th, "asr_ct2_compute_type", None)
+                                or "default"
+                            )
                             chunk = getattr(th, "chunk_length_sec", None)
+                            chunk_display = chunk if chunk not in (None, "") else "auto"
                             bs = getattr(th, "last_dynamic_batch_size", None)
-                            if bs is None:
+                            if bs in (None, ""):
                                 bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
+                            bs_display = bs if bs not in (None, "") else "auto"
                             rich_tooltip = _apply_suffix(
-                                f"Whisper Recorder (TRANSCRIBING) [{device} {dtype} | {attn_impl} | chunk={chunk}s | batch={bs}]"
+                                f"Whisper Recorder (TRANSCRIBING) [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
                             )
                             self.tray_icon.title = self._clamp_tray_tooltip(rich_tooltip)
                         else:
@@ -3406,15 +3393,6 @@ class UIManager:
                     )
                 )
 
-                enable_torch_compile_var = ctk.BooleanVar(
-                    value=self._resolve_initial_value(
-                        "enable_torch_compile",
-                        var_name="enable_torch_compile",
-                        getter=self.config_manager.get_enable_torch_compile,
-                        coerce=bool,
-                    )
-                )
-
                 backend_initial = self.config_manager.get_asr_backend()
                 backend_display = _backend_display_value_global(backend_initial) or DEFAULT_CONFIG.get("asr_backend", "ctranslate2")
                 asr_backend_var = ctk.StringVar(value=backend_display)
@@ -3423,8 +3401,6 @@ class UIManager:
                 chunk_length_mode_var = ctk.StringVar(value=self.config_manager.get_chunk_length_mode())
                 chunk_length_sec_var = ctk.DoubleVar(value=self.config_manager.get_chunk_length_sec())
                 # New: Torch compile switch variable
-                enable_torch_compile_var = ctk.BooleanVar(value=self.config_manager.get_enable_torch_compile())
-                asr_dtype_var = ctk.StringVar(value=self.config_manager.get_asr_dtype())
                 asr_ct2_compute_type_var = ctk.StringVar(value=self.config_manager.get_asr_ct2_compute_type())
                 models_storage_dir_var = ctk.StringVar(value=self.config_manager.get_models_storage_dir())
                 deps_install_dir_var = ctk.StringVar(value=self.config_manager.get_deps_install_dir())
@@ -3467,10 +3443,8 @@ class UIManager:
                     ("max_memory_seconds_var", max_memory_seconds_var),
                     ("chunk_length_mode_var", chunk_length_mode_var),
                     ("chunk_length_sec_var", chunk_length_sec_var),
-                    ("enable_torch_compile_var", enable_torch_compile_var),
                     ("asr_backend_var", asr_backend_var),
                     ("asr_model_id_var", asr_model_id_var),
-                    ("asr_dtype_var", asr_dtype_var),
                     ("asr_ct2_compute_type_var", asr_ct2_compute_type_var),
                     ("models_storage_dir_var", models_storage_dir_var),
                     ("deps_install_dir_var", deps_install_dir_var),
@@ -3582,7 +3556,6 @@ class UIManager:
                     asr_backend_to_apply = asr_backend_var.get()
                     asr_model_id_to_apply = asr_model_id_var.get()
                     asr_compute_device_to_apply = "auto"
-                    asr_dtype_to_apply = asr_dtype_var.get()
                     asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
                     asr_cache_dir_to_apply = asr_cache_dir_var.get()
                     try:
@@ -3647,7 +3620,6 @@ class UIManager:
                         except (ValueError, IndexError):
                             messagebox.showerror("Invalid Value", "Invalid GPU index.", parent=settings_win)
                             return
-                    asr_dtype_to_apply = asr_dtype_var.get()
                     asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
                     asr_cache_dir_to_apply = asr_cache_dir_var.get()
 
@@ -3695,12 +3667,9 @@ class UIManager:
                             # New chunk settings
                             "new_chunk_length_mode": chunk_length_mode_var.get(),
                             "new_chunk_length_sec": float(chunk_length_sec_var.get()),
-                            # New: torch compile setting
-                            "new_enable_torch_compile": bool(enable_torch_compile_var.get()),
                             "new_asr_backend": asr_backend_to_apply,
                             "new_asr_model_id": asr_model_id_to_apply,
                             "new_asr_compute_device": asr_compute_device_to_apply,
-                            "new_asr_dtype": asr_dtype_to_apply,
                             "new_asr_ct2_compute_type": asr_ct2_compute_type_to_apply,
                             "new_asr_cache_dir": asr_cache_dir_to_apply,
                             "new_storage_root_dir": storage_root_dir_var.get(),
@@ -3834,7 +3803,6 @@ class UIManager:
                     launch_at_startup_var.set(DEFAULT_CONFIG["launch_at_startup"])
                     asr_backend_var.set(DEFAULT_CONFIG[ASR_BACKEND_CONFIG_KEY])
                     asr_compute_device_var.set(DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY])
-                    asr_dtype_var.set(DEFAULT_CONFIG[ASR_DTYPE_CONFIG_KEY])
                     asr_ct2_compute_type_var.set(DEFAULT_CONFIG[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY])
                     asr_cache_dir_var.set(DEFAULT_CONFIG[ASR_CACHE_DIR_CONFIG_KEY])
 
@@ -4094,7 +4062,6 @@ class UIManager:
             asr_backend_var=asr_backend_var,
             asr_model_id_var=asr_model_id_var,
             asr_compute_device_var=asr_compute_device_var,
-            asr_dtype_var=asr_dtype_var,
             asr_ct2_compute_type_var=asr_ct2_compute_type_var,
             models_storage_dir_var=models_storage_dir_var,
             deps_install_dir_var=deps_install_dir_var,

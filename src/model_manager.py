@@ -16,7 +16,11 @@ from pathlib import Path, PurePosixPath
 from threading import Event, RLock
 from typing import Any, Dict, List, NamedTuple, Optional
 
-from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
+try:  # pragma: no cover - optional dependency
+    from huggingface_hub import HfApi, snapshot_download
+except Exception:  # pragma: no cover - allow runtime fallback
+    HfApi = None  # type: ignore[assignment]
+    snapshot_download = None  # type: ignore[assignment]
 
 from .logging_utils import get_logger, log_context
 
@@ -312,8 +316,6 @@ def normalize_backend_label(backend: str | None) -> str:
     normalized = backend.strip().lower()
     if normalized in {"ct2", "ctranslate2", "faster whisper", "faster_whisper", "faster-whisper"}:
         return "ctranslate2"
-    if normalized == "transformers":
-        return "ctranslate2"
     return normalized
 
 
@@ -340,7 +342,6 @@ def backend_storage_candidates(backend: str | None) -> list[str]:
 
     legacy_map = {
         "ctranslate2": ["ctranslate2", "faster-whisper", "ct2"],
-        "transformers": ["transformers"],
     }
 
     for legacy_name in legacy_map.get(normalized, []):
@@ -622,7 +623,7 @@ def get_ui_model_options() -> List[Dict[str, Any]]:
 def _ct2_quant_revision_exists(model_id: str, revision: str) -> bool:
     """Return ``True`` if the given CTranslate2 revision exists for ``model_id``."""
 
-    api = HfApi()
+    api = _require_hf_api()
     try:
         api.model_info(model_id, revision=revision)
     except Exception as exc:  # pragma: no cover - defensive network handling
@@ -1309,25 +1310,6 @@ def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:
     except FileNotFoundError:
         pass
 
-    try:
-        cache_info = scan_cache_dir()
-        for repo in cache_info.repos:
-            if repo.repo_id in seen or repo.repo_id not in curated_entries:
-                continue
-            repo_path = Path(repo.repo_path)
-            if not _model_dir_is_complete(repo_path):
-                continue
-            installed.append(
-                {
-                    "id": repo.repo_id,
-                    "backend": "transformers",
-                    "path": str(repo_path),
-                }
-            )
-            seen.add(repo.repo_id)
-    except Exception:  # pragma: no cover - best effort
-        pass
-
     with _list_installed_lock:
         _list_installed_cache[cache_key] = (time.monotonic(), copy.deepcopy(installed))
 
@@ -1397,7 +1379,7 @@ def get_model_download_size(
                 return cached_value
             _download_size_cache.pop(cache_key, None)
 
-    api = HfApi()
+    api = _require_hf_api()
     info = api.model_info(model_id)
     siblings = list(getattr(info, "siblings", []) or [])
 
@@ -1745,10 +1727,8 @@ def ensure_download(
 
         try:
             _check_abort()
-            if storage_backend == "transformers":
-                snapshot_download(**download_kwargs)
-            elif storage_backend in {"ct2", "faster-whisper"}:
-                snapshot_download(**download_kwargs)
+            if storage_backend in {"ct2", "faster-whisper"}:
+                _snapshot_download(**download_kwargs)
             else:
                 raise ValueError(f"Unknown backend: {backend_label}")
             _check_abort()
@@ -1839,3 +1819,26 @@ def _make_cancellable_progress(check_abort, progress_callback: Callable[[int, in
             return super().refresh(*args, **kwargs)
 
     return _Progress
+
+
+def _require_hf_api() -> "HfApi":
+    if HfApi is None:
+        message = (
+            "huggingface_hub is required for model downloads. Install optional dependencies via "
+            "requirements-legacy.txt or provide pre-downloaded models."
+        )
+        MODEL_LOGGER.error(message)
+        raise RuntimeError(message)
+    return HfApi()
+
+
+def _snapshot_download(**kwargs):
+    if snapshot_download is None:
+        message = (
+            "huggingface_hub is required for model downloads. Install optional dependencies via "
+            "requirements-legacy.txt or provide pre-downloaded models."
+        )
+        MODEL_LOGGER.error(message)
+        raise RuntimeError(message)
+    return snapshot_download(**kwargs)
+

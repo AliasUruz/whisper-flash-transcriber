@@ -8,34 +8,11 @@ from .asr import make_backend as _make_asr_backend
 class ASRBackend(Protocol):
     """Interface mínima que os backends de ASR devem implementar."""
 
-    def load(self) -> None: ...
+    def load(self, *args, **kwargs) -> None: ...
 
     def unload(self) -> None: ...
 
     def transcribe(self, audio_source, *, chunk_length_s: float, batch_size: int): ...
-
-
-class WhisperBackend:
-    """Backend padrão utilizando pipeline Hugging Face."""
-
-    def __init__(self, handler):
-        self.handler = handler
-
-    def load(self) -> None:
-        self.handler._initialize_model_and_processor()
-
-    def unload(self) -> None:
-        self.handler.unload()
-
-    def transcribe(self, audio_source, *, chunk_length_s: float, batch_size: int):
-        generate_kwargs = {"task": "transcribe", "language": None}
-        return self.handler.pipe(
-            audio_source,
-            chunk_length_s=chunk_length_s,
-            batch_size=batch_size,
-            return_timestamps=False,
-            generate_kwargs=generate_kwargs,
-        )
 
 
 class DummyBackend:
@@ -44,7 +21,7 @@ class DummyBackend:
     def __init__(self, handler):
         self.handler = handler
 
-    def load(self) -> None: ...
+    def load(self, *args, **kwargs) -> None: ...
 
     def unload(self) -> None: ...
 
@@ -53,35 +30,41 @@ class DummyBackend:
 
 
 backend_registry: dict[str, Callable[[Any], ASRBackend]] = {
-    "whisper": WhisperBackend,
     "dummy": DummyBackend,
 }
 
 
 class _AdapterBackend:
-    """Adaptador que integra os novos backends definidos em ``src/asr``."""
+    """Adaptador para o backend CTranslate2 nativo do aplicativo."""
 
-    def __init__(self, handler, name: str):
+    def __init__(self, handler):
         self._handler = handler
-        self._name = name
         self._backend: ASRBackend | None = None
 
     def load(self) -> None:
         cfg = self._handler.config_manager
-        model_id = cfg.get("asr_model_id")
-        device = cfg.get("asr_compute_device") or "auto"
-        dtype = cfg.get("asr_dtype") or "auto"
-        cache = cfg.get("asr_cache_dir") or None
-        ct2_type = cfg.get("asr_ct2_compute_type") or "default"
+        cache_dir = cfg.get("asr_cache_dir") or None
+        cpu_threads = cfg.get("asr_ct2_cpu_threads")
+        _, model_id, device, compute_type = self._handler._resolve_asr_settings()
 
-        backend_name = "ctranslate2" if self._name in {"faster-whisper", "ct2"} else self._name
-        backend = _make_asr_backend(backend_name)
+        backend = _make_asr_backend("ctranslate2")
         if hasattr(backend, "model_id"):
             backend.model_id = model_id
         if hasattr(backend, "device"):
             backend.device = device
 
-        backend.load(cache_dir=cache, ct2_compute_type=ct2_type)
+        kwargs: dict[str, Any] = {
+            "cache_dir": cache_dir,
+            "ct2_compute_type": compute_type,
+        }
+        if cpu_threads:
+            kwargs["cpu_threads"] = cpu_threads
+
+        device_index = getattr(self._handler, "gpu_index", None)
+        if isinstance(device_index, int) and device_index >= 0:
+            kwargs["device_index"] = device_index
+
+        backend.load(**{k: v for k, v in kwargs.items() if v not in (None, "")})
         self._backend = backend
 
     def unload(self) -> None:
@@ -97,10 +80,14 @@ class _AdapterBackend:
         )
 
 
-backend_registry.update(
-    {
-        "ct2": lambda h: _AdapterBackend(h, "ct2"),
-        "ctranslate2": lambda h: _AdapterBackend(h, "ctranslate2"),
-        "faster-whisper": lambda h: _AdapterBackend(h, "ctranslate2"),
-    }
-)
+def register_default_backends():
+    backend_registry.update(
+        {
+            "ct2": _AdapterBackend,
+            "ctranslate2": _AdapterBackend,
+            "faster-whisper": _AdapterBackend,
+        }
+    )
+
+
+register_default_backends()

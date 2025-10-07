@@ -1,0 +1,6 @@
+# Optional dependencies for the legacy Transformers-based workflow
+# Install these packages only if you plan to run the PyTorch/Transformers stack.
+torch==2.5.1
+accelerate>=0.33
+datasets[audio]>=3.0
+huggingface_hub>=0.24

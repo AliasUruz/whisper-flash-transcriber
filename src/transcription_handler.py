@@ -4,7 +4,6 @@ import importlib.util
 import logging
 import threading
 import time
-from contextlib import contextmanager
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -26,7 +25,6 @@ from .config_manager import (
     ASR_BACKEND_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
-    ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
@@ -65,10 +63,6 @@ else:  # pragma: no cover - optional dependency missing
     torch = None
 
 
-def _torch_available() -> bool:
-    return torch is not None
-
-
 def _torch_cuda_available() -> bool:
     if torch is None:
         return False
@@ -92,22 +86,6 @@ def _torch_cuda_device_count() -> int:
     except Exception:
         return 0
 
-
-@contextmanager
-def _torch_no_grad():
-    if torch is not None and hasattr(torch, "no_grad"):
-        with torch.no_grad():
-            yield
-    else:
-        yield
-
-
-def _require_torch() -> "torch_type":
-    if torch is None:
-        raise RuntimeError(
-            "PyTorch is required for the selected ASR backend but is not installed."
-        )
-    return torch
 
 LOGGER = get_logger('whisper_flash_transcriber.transcription', component='TranscriptionHandler')
 
@@ -173,7 +151,6 @@ class TranscriptionHandler:
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
-        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
         # Configurações de ASR
         # Inicializar atributos internos sem acionar recarga imediata do backend
         self._asr_backend_name = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
@@ -181,13 +158,12 @@ class TranscriptionHandler:
         self._asr_backend = None
 
         self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
-        self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
         self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         self.asr_ct2_cpu_threads = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
         self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+        self.compute_type_in_use = self.asr_ct2_compute_type
         self.deps_install_dir = self.config_manager.get_deps_install_dir()
         self.hf_home_dir = self.config_manager.get_hf_home_dir()
-        self.transformers_cache_dir = self.config_manager.get_transformers_cache_dir()
 
         self._apply_environment_overrides()
 
@@ -225,7 +201,6 @@ class TranscriptionHandler:
         self,
         backend_name: str,
         *,
-        asr_dtype,
         asr_ct2_compute_type,
         asr_cache_dir,
         backend_device,
@@ -466,12 +441,10 @@ class TranscriptionHandler:
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
-        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
 
         previous_backend = self._asr_backend_name
         previous_model_id = self._asr_model_id
         previous_device = getattr(self, "asr_compute_device", None)
-        previous_dtype = getattr(self, "asr_dtype", None)
         previous_ct2_type = getattr(self, "asr_ct2_compute_type", None)
         previous_ct2_threads = getattr(self, "asr_ct2_cpu_threads", None)
         previous_cache_dir = getattr(self, "asr_cache_dir", None)
@@ -479,7 +452,6 @@ class TranscriptionHandler:
         backend_value = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
         model_value = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
         device_value = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
-        dtype_value = self.config_manager.get(ASR_DTYPE_CONFIG_KEY)
         ct2_type_value = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         ct2_threads_value = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
         cache_dir_value = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
@@ -487,32 +459,25 @@ class TranscriptionHandler:
         backend_changed = backend_value != previous_backend
         model_changed = model_value != previous_model_id
         device_changed = device_value != previous_device
-        dtype_changed = dtype_value != previous_dtype
         ct2_type_changed = ct2_type_value != previous_ct2_type
         ct2_threads_changed = ct2_threads_value != previous_ct2_threads
         cache_dir_changed = cache_dir_value != previous_cache_dir
 
         new_deps_dir = self.config_manager.get_deps_install_dir()
         new_hf_home = self.config_manager.get_hf_home_dir()
-        new_transformers_cache = self.config_manager.get_transformers_cache_dir()
 
         deps_changed = new_deps_dir != getattr(self, "deps_install_dir", None)
         hf_home_changed = new_hf_home != getattr(self, "hf_home_dir", None)
-        transformers_cache_changed = new_transformers_cache != getattr(
-            self, "transformers_cache_dir", None
-        )
 
         reload_needed = (
             backend_changed
             or model_changed
             or device_changed
-            or dtype_changed
             or ct2_type_changed
             or ct2_threads_changed
             or cache_dir_changed
             or deps_changed
             or hf_home_changed
-            or transformers_cache_changed
         )
 
         correction_changed = (
@@ -527,15 +492,14 @@ class TranscriptionHandler:
         self._asr_backend_name = backend_value
         self._asr_model_id = model_value
         self.asr_compute_device = device_value
-        self.asr_dtype = dtype_value
         self.asr_ct2_compute_type = ct2_type_value
         self.asr_ct2_cpu_threads = ct2_threads_value
         self.asr_cache_dir = cache_dir_value
+        self.compute_type_in_use = ct2_type_value
         self.deps_install_dir = new_deps_dir
         self.hf_home_dir = new_hf_home
-        self.transformers_cache_dir = new_transformers_cache
 
-        if deps_changed or hf_home_changed or transformers_cache_changed:
+        if deps_changed or hf_home_changed:
             self._apply_environment_overrides()
 
         if reload_needed and trigger_reload:
@@ -554,24 +518,26 @@ class TranscriptionHandler:
         return reload_needed
 
     def _resolve_asr_settings(self):
-        """Determina backend, modelo e parâmetros de ASR conforme hardware."""
+        """Determina backend, modelo e parâmetros específicos do runtime CT2."""
         backend = model_manager_module.normalize_backend_label(self.asr_backend) or "ctranslate2"
         compute_device = (self.asr_compute_device or "auto").lower()
         model_id = self.asr_model_id or "auto"
-        dtype = (self.asr_dtype or "auto").lower()
+        compute_type_raw = (self.asr_ct2_compute_type or "default").lower()
 
         if compute_device == "auto":
             compute_device = "cuda" if _torch_cuda_available() else "cpu"
 
-        if dtype == "auto":
-            dtype = "float16" if compute_device.startswith("cuda") else "float32"
+        if compute_type_raw in {"auto", "default"}:
+            compute_type = "int8_float16" if compute_device.startswith("cuda") else "int8"
+        else:
+            compute_type = compute_type_raw
 
         default_gpu_model = "openai/whisper-large-v3-turbo"
         default_cpu_model = "openai/whisper-large-v3-turbo"
         if model_id in ("auto", default_gpu_model, default_cpu_model):
             model_id = default_gpu_model if compute_device.startswith("cuda") else default_cpu_model
 
-        return backend, model_id, compute_device, dtype
+        return backend, model_id, compute_device, compute_type
 
     def _update_model_log_context(self, **entries: object) -> None:
         filtered = {k: v for k, v in entries.items() if v not in (None, "")}
@@ -612,7 +578,6 @@ class TranscriptionHandler:
             "backend",
             "model",
             "device",
-            "dtype",
             "compute_type",
             "chunk_length_s",
             "batch_size",
@@ -971,26 +936,6 @@ class TranscriptionHandler:
                     exc_info=True,
                 )
 
-    def _resolve_effective_dtype(self, configured_dtype: str | None) -> str | None:
-        """Determina o dtype efetivo considerando o dispositivo em uso."""
-        dtype = (configured_dtype or "auto")
-        dtype_lower = dtype.lower() if isinstance(dtype, str) else "auto"
-        device_lower = str(self.device_in_use or "").lower()
-
-        if device_lower.startswith("cuda"):
-            if dtype_lower == "fp16":
-                return "float16"
-            return dtype_lower
-
-        # CPU ou dispositivo desconhecido: garantir float32 para evitar falhas.
-        if dtype_lower not in {"float32", "auto"}:
-            logging.info(
-                "Forcing dtype to float32 because active device is %s (configured=%s).",
-                device_lower or "cpu",
-                dtype_lower,
-            )
-        return "float32"
-
     def start_model_loading(self):
         core = getattr(self, "core_instance_ref", None)
         state_mgr = getattr(core, "state_manager", None) if core is not None else None
@@ -1060,6 +1005,7 @@ class TranscriptionHandler:
     def _load_model_task(self):
         self._apply_environment_overrides()
         self.device_in_use = "cpu"
+        self.compute_type_in_use = None
         core_ref = getattr(self, "core_instance_ref", None)
         state_mgr = getattr(core_ref, "state_manager", None) if core_ref is not None else None
         if make_backend is None:
@@ -1104,13 +1050,13 @@ class TranscriptionHandler:
 
         self.backend_resolved = backend_candidate
 
-        req_backend, req_model_id, req_device, req_dtype = self._resolve_asr_settings()
+        req_backend, req_model_id, req_device, req_compute_type = self._resolve_asr_settings()
         logging.info(
-            "Resolved ASR settings: backend=%s, model=%s, device=%s, dtype=%s",
+            "Resolved ASR settings: backend=%s, model=%s, device=%s, ct2_compute_type=%s",
             req_backend,
             req_model_id,
             req_device,
-            req_dtype,
+            req_compute_type,
         )
 
         available_cuda = _torch_cuda_available()
@@ -1188,7 +1134,6 @@ class TranscriptionHandler:
             self.gpu_index,
         )
 
-        effective_dtype = self._resolve_effective_dtype(req_dtype)
         backend_device = effective_device
         backend_device_index = selected_gpu_index if selected_gpu_index is not None else None
         if not backend_device.startswith("cuda"):
@@ -1196,8 +1141,7 @@ class TranscriptionHandler:
 
         load_kwargs = self._build_backend_load_kwargs(
             backend_name=backend_candidate,
-            asr_dtype=effective_dtype,
-            asr_ct2_compute_type=self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
+            asr_ct2_compute_type=req_compute_type,
             asr_cache_dir=self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY),
             backend_device=backend_device,
             backend_device_index=backend_device_index,
@@ -1227,7 +1171,6 @@ class TranscriptionHandler:
             backend=backend_candidate,
             model=req_model_id,
             device=effective_device,
-            dtype=load_kwargs.get("dtype", req_dtype),
             compute_type=load_kwargs.get(
                 "ct2_compute_type",
                 self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
@@ -1242,7 +1185,6 @@ class TranscriptionHandler:
             backend=backend_candidate,
             model_id=req_model_id,
             device=effective_device,
-            dtype=load_kwargs.get("dtype", req_dtype),
             compute_type=load_kwargs.get(
                 "ct2_compute_type",
                 self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
@@ -1261,7 +1203,6 @@ class TranscriptionHandler:
                 backend=backend_candidate,
                 model_id=req_model_id,
                 device=effective_device,
-                dtype=load_kwargs.get("dtype", req_dtype),
                 compute_type=load_kwargs.get(
                     "ct2_compute_type",
                     self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
@@ -1284,16 +1225,15 @@ class TranscriptionHandler:
         duration_ms = (time.perf_counter() - load_started_at) * 1000.0
         resolved_device = getattr(self._asr_backend, "device", effective_device)
         resolved_model = getattr(self._asr_backend, "model_id", req_model_id)
-        resolved_dtype = load_kwargs.get("dtype", req_dtype)
         resolved_compute = load_kwargs.get(
             "ct2_compute_type",
             self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
         )
+        self.compute_type_in_use = resolved_compute
         self._update_model_log_context(
             backend=backend_candidate,
             model=resolved_model,
             device=resolved_device,
-            dtype=resolved_dtype,
             compute_type=resolved_compute,
             chunk_length_s=float(self.chunk_length_sec),
             batch_size=self.batch_size,
@@ -1302,7 +1242,6 @@ class TranscriptionHandler:
             "load_success",
             backend=backend_candidate,
             device=resolved_device,
-            dtype=resolved_dtype,
             compute_type=resolved_compute,
             duration_ms=duration_ms,
             status="warmup_failed" if warmup_failed else "ready",

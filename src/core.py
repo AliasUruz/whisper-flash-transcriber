@@ -41,7 +41,6 @@ from .config_manager import (
     ASR_MODEL_ID_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
-    ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     MODELS_STORAGE_DIR_CONFIG_KEY,
     DEPS_INSTALL_DIR_CONFIG_KEY,
@@ -490,7 +489,6 @@ class AppCore:
             ASR_MODEL_ID_CONFIG_KEY,
             ASR_BACKEND_CONFIG_KEY,
             ASR_COMPUTE_DEVICE_CONFIG_KEY,
-            ASR_DTYPE_CONFIG_KEY,
             ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             ASR_CT2_CPU_THREADS_CONFIG_KEY,
             ASR_CACHE_DIR_CONFIG_KEY,
@@ -2192,7 +2190,6 @@ class AppCore:
             "new_asr_backend": ASR_BACKEND_CONFIG_KEY,
             "new_asr_model_id": ASR_MODEL_ID_CONFIG_KEY,
             "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
-            "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
             "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             "new_ui_language": UI_LANGUAGE_CONFIG_KEY,
             "new_models_storage_dir": MODELS_STORAGE_DIR_CONFIG_KEY,
@@ -2217,7 +2214,6 @@ class AppCore:
             "new_launch_at_startup": LAUNCH_AT_STARTUP_CONFIG_KEY,
             "new_chunk_length_mode": "chunk_length_mode",
             "new_chunk_length_sec": "chunk_length_sec",
-            "new_enable_torch_compile": "enable_torch_compile",
             "new_max_parallel_downloads": "max_parallel_downloads",
         }
 
@@ -2292,7 +2288,6 @@ class AppCore:
             ASR_MODEL_ID_CONFIG_KEY,
             ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             ASR_COMPUTE_DEVICE_CONFIG_KEY,
-            ASR_DTYPE_CONFIG_KEY,
             ASR_CT2_CPU_THREADS_CONFIG_KEY,
             ASR_CACHE_DIR_CONFIG_KEY,
             MODELS_STORAGE_DIR_CONFIG_KEY,
@@ -2466,7 +2461,6 @@ class AppCore:
             ASR_MODEL_ID_CONFIG_KEY,
             ASR_BACKEND_CONFIG_KEY,
             ASR_COMPUTE_DEVICE_CONFIG_KEY,
-            ASR_DTYPE_CONFIG_KEY,
             ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
             ASR_CACHE_DIR_CONFIG_KEY,
         }

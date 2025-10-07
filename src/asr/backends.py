@@ -24,13 +24,9 @@ class ASRBackend(Protocol):
 def make_backend(name: str) -> ASRBackend:
     """Factory that returns an ASR backend by name."""
     normalized = name.strip().lower()
-    if normalized == "transformers":
-        raise ValueError(
-            "The legacy Transformers backend is no longer bundled. Configure the "
-            "application to use the CTranslate2 runtime or reinstall a fork that "
-            "ships the Transformers pipeline."
-        )
     if normalized in {"faster-whisper", "faster_whisper", "ct2", "ctranslate2"}:
         from .backend_faster_whisper import FasterWhisperBackend
         return FasterWhisperBackend()
-    raise ValueError(f"Unknown ASR backend: {name}")
+    raise ValueError(
+        f"Unsupported ASR backend '{name}'. Only the CTranslate2 runtime is available."
+    )
