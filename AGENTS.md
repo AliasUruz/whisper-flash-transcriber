@@ -172,6 +172,7 @@ UI Thread -> UIManager (manages tray icon + settings window)
 | --- | --- | --- |
 | `requirements.txt` | Core application dependencies (CPU execution). | Version adjustments should follow the plan in `plans/2025-09-24-dependency-remediation.md`. |
 | `requirements-optional.txt` | Optional features (GPU acceleration, optimizations). | Place specific libraries like `bitsandbytes` or CUDA-enabled torch here. |
+| `requirements-extras.txt` | Opt-in automation and AI helpers. | Contains `google-generativeai`, `onnxruntime`, `playwright`, and dataset tooling. Install only when the workflow requires them. |
 | `requirements-test.txt` | Development and testing. | Includes `pytest`, `flake8`, and other developer tools. |
 
 ### 7.2 General Rules

@@ -7,14 +7,9 @@ pillow==11.2.1
 pyperclip==1.9.0
 requests==2.32.4
 psutil==7.0.0
-google-generativeai==0.8.5
 customtkinter==5.2.2
 keyboard==0.13.5
 soundfile==0.13.1
-onnxruntime==1.22.0
-playwright==1.44.0
-accelerate>=0.33
-datasets[audio]>=3.0
 huggingface_hub>=0.24
 faster-whisper>=1.0
 ctranslate2>=4.6

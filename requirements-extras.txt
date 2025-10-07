@@ -1,0 +1,7 @@
+# Optional add-ons for advanced workflows
+# Install only if you need AI-assisted corrections, browser automation, or VAD accelerators.
+google-generativeai==0.8.5
+onnxruntime==1.22.0
+playwright==1.44.0
+accelerate>=0.33
+datasets[audio]>=3.0

@@ -31,6 +31,7 @@ LOGGER = logging.getLogger(__name__)
 REQUIREMENT_FILES: tuple[Path, ...] = (
     Path("requirements.txt"),
     Path("requirements-optional.txt"),
+    Path("requirements-extras.txt"),
     Path("requirements-test.txt"),
 )
 

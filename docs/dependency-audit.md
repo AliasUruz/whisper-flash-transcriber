@@ -1,49 +1,47 @@
-# Dependency Audit Workflow
+# Dependency audit workflow
 
-Este documento descreve o painel de auditoria de dependências introduzido no `UIManager` e o relatório estruturado produzido por `src/utils/dependency_audit.py`. O objetivo é acelerar a detecção de ambientes quebrados logo após o bootstrap, oferecendo comandos prontos para alinhar o ambiente aos manifestos oficiais (`requirements*.txt`).
+The dependency audit panel compares the active Python environment with the manifests shipped with the project. It is designed to flag missing or outdated packages minutes after bootstrap, before the minimal workflow is affected.
 
-## Quando a auditoria é executada
+## When the audit runs
+1. **AppCore bootstrap** – Right after loading the configuration, `AppCore` calls `audit_environment()` and records the result via `ConfigManager.record_runtime_notice()`.
+2. **State event** – The core emits `StateEvent.DEPENDENCY_AUDIT_READY` with a textual summary as soon as `StateManager` is ready.
+3. **UI delivery** – Once `UIManager` subscribes, the non-modal panel opens automatically and remains accessible until the operator closes it.
 
-1. **Bootstrap do AppCore** – Logo após o carregamento da configuração, `AppCore` chama `audit_environment()` e registra o resultado em `ConfigManager.record_runtime_notice()`.
-2. **Publicação de evento** – Assim que o `StateManager` é instanciado, o núcleo dispara `StateEvent.DEPENDENCY_AUDIT_READY` com um resumo textual.
-3. **Entrega à UI** – Quando o `UIManager` se registra como assinante, o painel não modal é aberto automaticamente exibindo o relatório completo. O painel permanece acessível até ser fechado manualmente.
+## Manifest coverage
+`src/utils/dependency_audit.py` scans the following files:
 
-## Categorias de diagnóstico
+- `requirements.txt` – mandatory dependencies for the hotkey → capture → CTranslate2 → paste loop.
+- `requirements-extras.txt` – opt-in packages (Gemini/OpenRouter, Playwright, ONNX Runtime, accelerate/datasets).
+- `requirements-optional.txt` – GPU-centric add-ons such as `bitsandbytes`.
+- `requirements-test.txt` – development tooling.
 
-| Categoria | Descrição | Ação sugerida |
+The panel shows which manifest introduced each requirement so you can decide whether the missing package is truly required for your deployment.
+
+## Diagnostic categories
+| Category | Meaning | Suggested action |
 | --- | --- | --- |
-| **Dependências ausentes** | Pacote não encontrado no ambiente atual. | Execute o comando de instalação/copiar todos e reinstale conforme indicado. |
-| **Versão fora da especificação** | Versão instalada não atende ao specifier definido no requirements. | Utilize o botão "Copiar comando" para aplicar `pip install --upgrade ...`. |
-| **Divergência de hash** | Hash registrado em `requirements*.txt` não coincide com o hash do artefato instalado (quando disponível via `direct_url.json`). | Reinstale o pacote com `pip install --force-reinstall --no-cache-dir ...` ou execute o comando sugerido. |
+| Missing dependency | Package not found in the current environment. | Copy the generated `pip install ...` command and run it. |
+| Version mismatch | Installed version falls outside the specifier listed in the manifest. | Use the copy button to upgrade/downgrade with `pip install --upgrade ...`. |
+| Hash mismatch | The installed wheel hash diverges from the recorded hash (when available). | Reinstall with `pip install --force-reinstall --no-cache-dir ...` or align the manifest hash. |
 
-> **Observação:** Se os manifestos não contiverem hashes (`--hash=sha256:...`), a seção de divergências permanecerá vazia.
+> **Note:** When the manifest does not include hashes the last column remains empty.
 
-## Uso do painel
+## Using the panel
+1. **Summary** – The header displays the global status (for example `Dependency audit completed — 1 missing`) and the UTC timestamp converted to the local timezone.
+2. **Per-category lists** – Each card enumerates the requirement, the origin file/line, the installed version (if any), and available hashes.
+3. **Individual commands** – “Copy command” produces a `python -m pip install ...` command that already includes extras and specifiers.
+4. **Copy all** – Aggregates deduplicated commands so they can be pasted into a shell and executed sequentially.
+5. **Open documentation** – Opens this file in the default browser for quick reference.
 
-1. **Resumo** – O topo do painel exibe o status geral (ex.: `Dependency audit completed — 1 missing`) e o carimbo de data/hora UTC convertidos para o timezone local.
-2. **Listas por categoria** – Cada card apresenta o requisito, o arquivo/linha de origem, detalhes de versão e hashes detectados.
-3. **Comandos individuais** – O botão "Copiar comando" copia um `python -m pip install ...` já normalizado (inclui extras e specifiers relevantes). Cola diretamente no terminal/PowerShell.
-4. **Copiar todos os comandos** – Gera uma lista deduplicada (ordenada pela primeira ocorrência) contendo um comando por item em conflito.
-5. **Abrir documentação** – Abre este arquivo usando o navegador padrão para consulta rápida.
-
-## Troubleshooting comum
-
-| Sintoma | Possível causa | Mitigação |
+## Common issues
+| Symptom | Likely cause | Mitigation |
 | --- | --- | --- |
-| Painel informa "Dependency audit failed" | `packaging` ou `importlib.metadata` indisponíveis, ou arquivo `requirements*.txt` inacessível. | Verifique se o ambiente virtual está ativo e se os arquivos existem. Execute `python -m pip install -r requirements.txt`. |
-| Seções vazias mas ambiente quebrado | Manifesto não lista a dependência problemática ou marker `; ...` filtrou o pacote para o sistema atual. | Revise o arquivo `requirements*.txt` correspondente e ajuste a política de markers se necessário. |
-| Divergências de hash recorrentes | Instalação manual via wheel local ou mirror privado que gera `direct_url.json` com hash diferente. | Reavalie o hash no manifesto ou use `pip install --no-deps --force-reinstall <wheel>` com hash atualizado. |
-| Botão de cópia não faz nada | Clipboard bloqueado pelo SO ou sessão Tk sem foco. | Dê foco à janela principal ou execute o aplicativo com privilégios adequados. |
+| Panel reports “Dependency audit failed” | `packaging` / `importlib.metadata` missing or a manifest is unreadable. | Activate the virtual environment and reinstall with `pip install -r requirements.txt`. |
+| Panel is empty but the environment is still broken | The dependency in question lives outside the manifests or is filtered by a platform marker. | Review the manifests, add the missing dependency, and rerun the audit. |
+| Hash mismatches keep returning | Wheels come from a private mirror and expose different hashes in `direct_url.json`. | Update the manifest hash or reinstall with `pip install --no-deps --force-reinstall <wheel>`. |
+| Copy buttons do nothing | Clipboard blocked by the OS or the Tk window lacks focus. | Give the main window focus or run the application with the required privileges. |
 
-## Referência programática
-
-- **API principal:** `DependencyAuditResult` expõe `missing`, `version_mismatches` e `hash_mismatches` (listas de `DependencyIssue`).
-- **Reaproveitamento em scripts:** chame `audit_environment()` diretamente (retorna objeto serializável via `to_serializable()`).
-- **Registro em runtime:** consulte `ConfigManager.get_runtime_notices()` para capturar o último resumo gerado durante o bootstrap.
-
-## Próximos passos sugeridos
-
-1. Automatizar a execução de `audit_environment()` em jobs CI para validar pull requests que alterem requirements.
-2. Persistir o último relatório em disco (`logs/`) para inspeção histórica.
-3. Expandir o parser para suportar diretórios extras (`-r path/to/requirements.txt`) caso o projeto passe a organizar manifestos em subpastas.
-
+## Suggested follow-ups
+1. Run the audit inside CI to validate pull requests that touch any `requirements*.txt` file.
+2. Persist the latest report under `logs/` for historical analysis.
+3. Expand the parser to support nested manifests (`-r path/to/requirements.txt`) if the repository grows additional components.
