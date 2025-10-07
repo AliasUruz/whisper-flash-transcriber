@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - runtime fallback when pystray is missi
 from PIL import Image, ImageDraw
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
 # Importar constantes de configuração
 from .config_manager import (
@@ -209,6 +209,7 @@ class UIManager:
 
         # Controle interno para atualizar a tooltip durante a gravação
         self.recording_timer_thread = None
+        self._hotkey_driver_status_text: str = self._format_hotkey_driver_status_text(None)
         self.stop_recording_timer_event = threading.Event()
 
         # Controle interno para atualizar a tooltip durante a transcrição
@@ -246,6 +247,50 @@ class UIManager:
 
     def _set_settings_var(self, name: str, value: Any) -> None:
         self._settings_vars[name] = value
+
+    def _format_hotkey_driver_status_text(self, driver_info: Mapping[str, Any] | None) -> str:
+        if not driver_info:
+            return "Driver de atalhos inativo."
+
+        active = driver_info.get("active")
+        fallback = bool(driver_info.get("fallback_active"))
+        available = [str(item) for item in driver_info.get("available", []) if item]
+
+        if active:
+            if fallback:
+                status = f"Driver de atalhos ativo (fallback): {active}."
+            else:
+                status = f"Driver de atalhos ativo: {active}."
+        else:
+            status = "Driver de atalhos inativo."
+
+        if available:
+            status += f" Disponíveis: {', '.join(available)}."
+
+        failures = driver_info.get("failures") or []
+        if failures:
+            last = failures[-1]
+            reason = last.get("reason")
+            error = last.get("error")
+            details: list[str] = []
+            if reason:
+                details.append(str(reason))
+            if error:
+                details.append(str(error))
+            if details:
+                status += f" Último erro: {' - '.join(details)}."
+
+        return status
+
+    def update_hotkey_driver_status(self, driver_info: Mapping[str, Any] | None) -> None:
+        text = self._format_hotkey_driver_status_text(driver_info)
+        self._hotkey_driver_status_text = text
+        var = self._get_settings_var("hotkey_driver_status_var")
+        if var is not None:
+            try:
+                var.set(text)
+            except Exception:  # pragma: no cover - defensive UI guard
+                logging.debug("Failed to update hotkey driver status label.", exc_info=True)
 
     def _get_settings_var(self, name: str) -> Any:
         return self._settings_vars.get(name)
@@ -3390,6 +3435,20 @@ class UIManager:
                     )
                 )
 
+                current_driver_info = None
+                manager = getattr(self.core_instance_ref, "ahk_manager", None)
+                if manager is not None:
+                    try:
+                        current_driver_info = manager.describe_driver_state()
+                    except Exception:
+                        logging.debug("Failed to describe hotkey driver state for UI.", exc_info=True)
+                if current_driver_info is not None:
+                    driver_status_initial = self._format_hotkey_driver_status_text(current_driver_info)
+                else:
+                    driver_status_initial = self._hotkey_driver_status_text
+                self._hotkey_driver_status_text = driver_status_initial
+                hotkey_driver_status_var = ctk.StringVar(value=driver_status_initial)
+
                 hotkey_stability_service_enabled_var = ctk.BooleanVar(
                     value=self._resolve_initial_value(
                         "hotkey_stability_service_enabled",
@@ -3663,6 +3722,7 @@ class UIManager:
                     ("mode_var", mode_var),
                     ("detected_key_var", detected_key_var),
                     ("agent_key_var", agent_key_var),
+                    ("hotkey_driver_status_var", hotkey_driver_status_var),
                     ("agent_model_var", agent_model_var),
                     ("hotkey_stability_service_enabled_var", hotkey_stability_service_enabled_var),
                     ("min_transcription_duration_var", min_transcription_duration_var),
@@ -4105,17 +4165,16 @@ class UIManager:
                 detect_agent_key_button.pack(side="left", padx=5)
                 Tooltip(detect_agent_key_button, "Captura um novo atalho do agente.")
 
-                layout_help = ctk.CTkLabel(
-                    general_frame,
-                    text=(
-                        "Compatibilidade: atalhos reconhecem layouts ABNT2, US International "
-                        "e variam automaticamente teclas especiais (ex.: ç, ´, ~)."
-                    ),
-                    wraplength=500,
+                driver_status_frame = ctk.CTkFrame(general_frame)
+                driver_status_frame.pack(fill="x", pady=5)
+                driver_status_label = ctk.CTkLabel(
+                    driver_status_frame,
+                    textvariable=hotkey_driver_status_var,
                     justify="left",
-                    text_color="gray70",
+                    wraplength=360,
                 )
-                layout_help.pack(fill="x", padx=5, pady=(2, 8))
+                driver_status_label.pack(side="left", padx=5)
+                Tooltip(driver_status_label, "Indica qual driver de atalho está ativo.")
 
                 # Recording Mode
                 mode_frame = ctk.CTkFrame(general_frame)

@@ -4,14 +4,13 @@ import shutil
 import time
 import threading
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import keyboard
-
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
 from .logging_utils import get_logger, log_context
-from .hotkey_normalization import _normalize_key_name
+from .hotkeys import BaseHotkeyDriver, build_available_drivers
 
 LOGGER = get_logger(
     "whisper_flash_transcriber.hotkeys",
@@ -19,10 +18,7 @@ LOGGER = get_logger(
 )
 
 class KeyboardHotkeyManager:
-    """
-    Gerencia hotkeys usando a biblioteca keyboard.
-    Esta classe oferece uma solução mais simples para o gerenciamento de hotkeys.
-    """
+    """Gerencia hotkeys usando drivers intercambiáveis."""
 
     def __init__(self, config_file: str | Path = HOTKEY_CONFIG_FILE):
         """
@@ -42,12 +38,15 @@ class KeyboardHotkeyManager:
         self.record_key = "f3"  # Tecla padrão
         self.agent_key = "f4"  # Tecla padrão para comando agêntico
         self.record_mode = "toggle"  # Modo padrão
-        self.hotkey_handlers = {}
-        self.debounce_window_ms: float = 200.0
-        self._last_trigger_ts: dict[str, float] = {}
+        self._drivers: list[BaseHotkeyDriver] = []
+        self._active_driver: BaseHotkeyDriver | None = None
+        self._active_driver_index: int | None = None
+        self._driver_lock = threading.Lock()
+        self._driver_failures: list[dict[str, Any]] = []
 
         # Carregar configuração se existir
         self._load_config()
+        self._initialize_drivers()
 
     def _log(
         self,
@@ -64,6 +63,54 @@ class KeyboardHotkeyManager:
             log_context(message, event=event, details=payload or None),
             exc_info=exc_info,
         )
+
+    def _driver_log(self, level: int, message: str, **details: Any) -> None:
+        self._log(level, message, event="hotkeys.driver", **details)
+
+    def _initialize_drivers(self) -> None:
+        with self._driver_lock:
+            self._drivers = build_available_drivers(log=self._driver_log)
+            self._active_driver = None
+            self._active_driver_index = None
+            self._driver_failures = []
+        names = ", ".join(driver.name for driver in self._drivers) or "<none>"
+        self._log(
+            logging.INFO,
+            "Hotkey drivers initialized.",
+            event="hotkeys.drivers_initialized",
+            drivers=names,
+        )
+        if not self._drivers:
+            self._log(
+                logging.ERROR,
+                "No hotkey drivers available; registration will fail.",
+                event="hotkeys.drivers_missing",
+            )
+
+    def _driver_entries(self) -> list[tuple[int, BaseHotkeyDriver]]:
+        with self._driver_lock:
+            return list(enumerate(self._drivers))
+
+    def get_active_driver_name(self) -> str | None:
+        with self._driver_lock:
+            return self._active_driver.name if self._active_driver else None
+
+    def is_using_fallback(self) -> bool:
+        with self._driver_lock:
+            return bool(self._active_driver_index and self._active_driver_index > 0)
+
+    def describe_driver_state(self) -> dict[str, Any]:
+        with self._driver_lock:
+            active = self._active_driver.name if self._active_driver else None
+            index = self._active_driver_index
+            failures = list(self._driver_failures)
+            available = [driver.name for driver in self._drivers]
+        return {
+            "active": active,
+            "fallback_active": bool(index and index > 0),
+            "available": available,
+            "failures": failures,
+        }
 
     def _load_config(self):
         """Load configuration from disk, creating the file with defaults when it is missing."""
@@ -224,15 +271,33 @@ class KeyboardHotkeyManager:
     ) -> dict[str, Any]:
         """Attempt to register a hotkey to validate permissions without keeping it active."""
 
-        candidate = _normalize_key_name(hotkey or self.record_key or "f3") or "f3"
-        registration_id = None
+        candidate = (hotkey or self.record_key or "f3").strip()
+        entries = self._driver_entries()
+        if not entries:
+            self._log(
+                logging.ERROR,
+                "Dry-run aborted because no drivers are available.",
+                event="hotkeys.diagnostics.no_driver",
+                hotkey=candidate,
+            )
+            return {
+                "ok": False,
+                "message": "No hotkey driver is available for diagnostics.",
+                "details": {"hotkey": candidate},
+                "suggestion": "Reinstall the application dependencies and try again.",
+                "fatal": True,
+            }
+
+        driver = entries[0][1]
+        callbacks: dict[str, Callable[[], None] | None] = {"toggle": lambda: None}
         start_time = time.perf_counter()
         try:
-            registration_id = keyboard.add_hotkey(
-                candidate,
-                lambda: None,
+            driver.register(
+                record_key=candidate,
+                agent_key=None,
+                record_mode="toggle",
+                callbacks=callbacks,
                 suppress=suppress,
-                trigger_on_release=False,
             )
             duration_ms = (time.perf_counter() - start_time) * 1000
             self._log(
@@ -240,14 +305,16 @@ class KeyboardHotkeyManager:
                 "Dry-run hotkey registration succeeded.",
                 event="hotkeys.diagnostics.success",
                 hotkey=candidate,
+                driver=driver.name,
                 duration_ms=round(duration_ms, 3),
             )
             return {
                 "ok": True,
-                "message": f"Hotkey '{candidate}' can be registered.",
+                "message": f"Hotkey '{candidate}' can be registered via {driver.name}.",
                 "details": {
                     "hotkey": candidate,
                     "duration_ms": duration_ms,
+                    "driver": driver.name,
                     "suppress": suppress,
                 },
                 "suggestion": None,
@@ -259,6 +326,7 @@ class KeyboardHotkeyManager:
                 "Dry-run hotkey registration failed due to missing privileges.",
                 event="hotkeys.diagnostics.permission_denied",
                 hotkey=candidate,
+                driver=driver.name,
                 error=str(exc),
                 exc_info=True,
             )
@@ -267,6 +335,7 @@ class KeyboardHotkeyManager:
                 "message": "The operating system denied permission to register global hotkeys.",
                 "details": {
                     "hotkey": candidate,
+                    "driver": driver.name,
                     "error": str(exc),
                 },
                 "suggestion": "Run the application with administrator privileges or allow keyboard hooks.",
@@ -278,6 +347,7 @@ class KeyboardHotkeyManager:
                 "Dry-run hotkey registration failed with an unexpected error.",
                 event="hotkeys.diagnostics.failure",
                 hotkey=candidate,
+                driver=driver.name,
                 error=str(exc),
                 exc_info=True,
             )
@@ -286,24 +356,25 @@ class KeyboardHotkeyManager:
                 "message": "Global hotkey registration failed due to an unexpected error.",
                 "details": {
                     "hotkey": candidate,
+                    "driver": driver.name,
                     "error": str(exc),
                 },
                 "suggestion": "Ensure no other software blocks keyboard hooks and retry.",
                 "fatal": True,
             }
         finally:
-            if registration_id is not None:
-                try:
-                    keyboard.remove_hotkey(registration_id)
-                except Exception as cleanup_exc:
-                    self._log(
-                        logging.WARNING,
-                        "Failed to clean up dry-run hotkey registration.",
-                        event="hotkeys.diagnostics.cleanup_failed",
-                        hotkey=candidate,
-                        error=str(cleanup_exc),
-                        exc_info=True,
-                    )
+            try:
+                driver.unregister()
+            except Exception as cleanup_exc:
+                self._log(
+                    logging.WARNING,
+                    "Failed to clean up dry-run hotkey registration.",
+                    event="hotkeys.diagnostics.cleanup_failed",
+                    hotkey=candidate,
+                    driver=driver.name,
+                    error=str(cleanup_exc),
+                    exc_info=True,
+                )
 
     def start(self):
         """Inicia o gerenciador de hotkeys."""
@@ -335,6 +406,8 @@ class KeyboardHotkeyManager:
                 record_key=self.record_key,
                 agent_key=self.agent_key,
                 record_mode=self.record_mode,
+                driver=self.get_active_driver_name(),
+                fallback=self.is_using_fallback(),
             )
             return True
         except Exception as e:
@@ -351,12 +424,14 @@ class KeyboardHotkeyManager:
     def stop(self):
         """Para o gerenciador de hotkeys."""
         # Sempre tente remover as hotkeys, mesmo que o estado esteja incorreto
+        driver_name = self.get_active_driver_name()
         self._unregister_hotkeys()
         self.is_running = False
         self._log(
             logging.INFO,
             "KeyboardHotkeyManager stopped.",
             event="hotkeys.stop",
+            driver=driver_name,
         )
 
     def update_config(self, record_key=None, agent_key=None, record_mode=None):
@@ -416,6 +491,8 @@ class KeyboardHotkeyManager:
                 record_key=self.record_key,
                 agent_key=self.agent_key,
                 record_mode=self.record_mode,
+                driver=self.get_active_driver_name(),
+                fallback=self.is_using_fallback(),
             )
             return True
 
@@ -461,6 +538,8 @@ class KeyboardHotkeyManager:
         except OSError:
             size = 0
 
+        driver_state = self.describe_driver_state()
+
         return {
             "path": str(path),
             "exists": exists,
@@ -468,313 +547,157 @@ class KeyboardHotkeyManager:
             "record_key": self.record_key,
             "agent_key": self.agent_key,
             "record_mode": self.record_mode,
+            "driver_state": driver_state,
         }
 
-    def _store_hotkey_handle(self, handle_id, handle):
-        """Guarda o handle retornado pela biblioteca ``keyboard``."""
-        if handle is None:
-            self._log(
-                logging.WARNING,
-                "Keyboard library returned a null handle; hook may not be active.",
-                event="hotkeys.handle_missing",
-                handle_id=handle_id,
-            )
+    def _unregister_hotkeys(self) -> None:
+        """Remove todas as hotkeys registradas pelos drivers."""
+        entries = self._driver_entries()
+        if not entries:
             return
-        normalized_id = handle_id
-        if isinstance(handle_id, str):
-            key_part, separator, suffix = handle_id.partition(":")
-            normalized_key = _normalize_key_name(key_part)
-            if normalized_key:
-                normalized_id = normalized_key + (separator + suffix if separator else "")
-        self.hotkey_handlers.setdefault(normalized_id, []).append(handle)
-
-    def set_debounce_window(self, debounce_ms: float | int | None) -> None:
-        """Configure a janela de debounce em milissegundos."""
-
-        previous = self.debounce_window_ms
-        try:
-            if debounce_ms is None:
-                candidate = 0.0
-            else:
-                candidate = float(debounce_ms)
-        except (TypeError, ValueError):
-            self._log(
-                logging.WARNING,
-                "Invalid debounce value provided; keeping previous window.",
-                event="hotkeys.debounce_invalid",
-                supplied=str(debounce_ms),
-                previous_ms=previous,
-            )
-            return
-
-        candidate = max(candidate, 0.0)
-        if candidate == previous:
-            return
-
-        self.debounce_window_ms = candidate
-        self._last_trigger_ts.clear()
-        self._log(
-            logging.INFO,
-            "Hotkey debounce window updated.",
-            event="hotkeys.debounce_updated",
-            debounce_ms=candidate,
-        )
-
-    def _should_process_event(self, handle_id: str) -> bool:
-        """Return ``True`` when the callback tied to ``handle_id`` must run."""
-
-        window_ms = max(self.debounce_window_ms, 0.0)
-        now = time.perf_counter()
-        if window_ms <= 0.0:
-            self._last_trigger_ts[handle_id] = now
-            return True
-
-        last_seen = self._last_trigger_ts.get(handle_id)
-        if last_seen is not None:
-            elapsed_ms = (now - last_seen) * 1000.0
-            if elapsed_ms < window_ms:
+        for _, driver in entries:
+            try:
+                driver.unregister()
+            except Exception as exc:
                 self._log(
                     logging.DEBUG,
-                    "Hotkey callback ignored due to debounce window.",
-                    event="hotkeys.debounce_skipped",
-                    handle_id=handle_id,
-                    elapsed_ms=round(elapsed_ms, 3),
-                    debounce_ms=window_ms,
+                    "Driver failed to unregister hotkeys.",
+                    event="hotkeys.unregister_error",
+                    driver=driver.name,
+                    error=str(exc),
                 )
-                return False
-
-        self._last_trigger_ts[handle_id] = now
-        return True
+        with self._driver_lock:
+            self._active_driver = None
+            self._active_driver_index = None
 
     def _register_hotkeys(self):
         """Registra as hotkeys no sistema."""
-        try:
-            record_mode = str(self.record_mode or "toggle").lower()
-            if record_mode not in {"toggle", "press"}:
-                record_mode = "toggle"
-            record_key = _normalize_key_name(self.record_key) or "f3"
-            agent_key = _normalize_key_name(self.agent_key) or "f4"
-            self.record_mode = record_mode
-            self.record_key = record_key
-            self.agent_key = agent_key
+        self._log(
+            logging.INFO,
+            "Starting hotkey registration.",
+            event="hotkeys.register_start",
+            record_key=self.record_key,
+            agent_key=self.agent_key,
+            record_mode=self.record_mode,
+        )
 
-            self._log(
-                logging.INFO,
-                "Starting hotkey registration.",
-                event="hotkeys.register_start",
-                record_key=record_key,
-                agent_key=agent_key,
-                record_mode=record_mode,
-            )
+        self._unregister_hotkeys()
+        callbacks: dict[str, Callable[[], None] | None] = {
+            "toggle": self._on_toggle_key if self.record_mode == "toggle" else None,
+            "start": self._on_press_key if self.record_mode != "toggle" else None,
+            "stop": self._on_release_key if self.record_mode != "toggle" else None,
+            "agent": self._on_agent_key if self.callback_agent else None,
+        }
 
-            # Desregistrar hotkeys existentes para evitar duplicação
-            self._unregister_hotkeys()
-            self._last_trigger_ts.clear()
-
-            # Registrar a tecla de gravação
-            self._log(
-                logging.INFO,
-                "Registering recording hotkey.",
-                event="hotkeys.register_record",
-                record_key=record_key,
-                mode=record_mode,
-            )
-
-            # Definir o handler para a tecla de gravação
-            if self.record_mode == "toggle":
-                handler = self._on_toggle_key
-            else:
-                # Para o modo press, registramos dois handlers: um para pressionar e outro para soltar
-                handler = self._on_press_key
-                # Registrar handler para soltar a tecla no modo press
-                if record_mode == "press":
-                    try:
-                        release_handle = keyboard.on_release_key(
-                            record_key,
-                            lambda _: self._on_release_key(),
-                            suppress=False,
-                        )
-                        self._store_hotkey_handle(
-                            f"{record_key}:release",
-                            release_handle,
-                        )
-                    except OSError as e:
-                        self._log(
-                            logging.ERROR,
-                            "OS error while registering release hotkey.",
-                            event="hotkeys.register_release_os_error",
-                            record_key=record_key,
-                            error=str(e),
-                        )
-                        return False
-                    except Exception as e:
-                        self._log(
-                            logging.ERROR,
-                            "Unexpected error while registering release hotkey.",
-                            event="hotkeys.register_release_error",
-                            record_key=record_key,
-                            error=str(e),
-                            exc_info=True,
-                        )
-                        return False
-                    self._log(
-                        logging.INFO,
-                        "Release handler registered for record hotkey.",
-                        event="hotkeys.register_release_success",
-                        record_key=record_key,
-                    )
-
-            # Usar on_press_key em vez de add_hotkey para maior confiabilidade
-            try:
-                press_handle = keyboard.on_press_key(
-                    record_key,
-                    lambda _: handler(),
-                    suppress=True,
-                )
-                self._store_hotkey_handle(
-                    f"{record_key}:press",
-                    press_handle,
-                )
-            except OSError as e:
-                self._log(
-                    logging.ERROR,
-                    "OS error while registering record hotkey.",
-                    event="hotkeys.register_press_os_error",
-                    record_key=record_key,
-                    error=str(e),
-                )
-                return False
-            except Exception as e:
-                self._log(
-                    logging.ERROR,
-                    "Error while registering record hotkey.",
-                    event="hotkeys.register_press_error",
-                    record_key=record_key,
-                    error=str(e),
-                    exc_info=True,
-                )
-                return False
-            self._log(
-                logging.INFO,
-                "Recording hotkey registered.",
-                event="hotkeys.register_press_success",
-                record_key=record_key,
-            )
-
-            # Registrar a tecla de recarga
-            self._log(
-                logging.INFO,
-                "Registering agent hotkey.",
-                event="hotkeys.register_agent",
-                agent_key=agent_key,
-            )
-            try:
-                agent_handle = keyboard.on_press_key(
-                    agent_key,
-                    lambda _: self._on_agent_key(),
-                    suppress=False,
-                )
-                self._store_hotkey_handle(
-                    f"{agent_key}:press",
-                    agent_handle,
-                )
-            except OSError as e:
-                self._log(
-                    logging.ERROR,
-                    "OS error while registering agent hotkey.",
-                    event="hotkeys.register_agent_os_error",
-                    agent_key=agent_key,
-                    error=str(e),
-                )
-                return False
-            except Exception as e:
-                self._log(
-                    logging.ERROR,
-                    "Unexpected error while registering agent hotkey.",
-                    event="hotkeys.register_agent_error",
-                    agent_key=agent_key,
-                    error=str(e),
-                    exc_info=True,
-                )
-                return False
-            self._log(
-                logging.INFO,
-                "Agent hotkey registered.",
-                event="hotkeys.register_agent_success",
-                agent_key=agent_key,
-            )
-
-            self._log(
-                logging.INFO,
-                "Hotkeys registered successfully.",
-                event="hotkeys.register_complete",
-                record_key=record_key,
-                agent_key=agent_key,
-            )
-            return True
-
-        except Exception as e:
+        entries = self._driver_entries()
+        if not entries:
             self._log(
                 logging.ERROR,
-                "Unexpected error while registering hotkeys.",
-                event="hotkeys.register_unexpected_error",
-                error=str(e),
-                exc_info=True,
+                "No drivers available to register hotkeys.",
+                event="hotkeys.register_no_driver",
             )
             return False
 
-    def _unregister_hotkeys(self):
-        """Desregistra as hotkeys do sistema."""
-        try:
-            for handle_id, handles in list(self.hotkey_handlers.items()):
-                for handle in handles:
-                    try:
-                        keyboard.unhook(handle)
-                        self._log(
-                            logging.DEBUG,
-                            "Hotkey handle removed.",
-                            event="hotkeys.unregister_handle_removed",
-                            handle_id=handle_id,
-                        )
-                    except (KeyError, ValueError):
-                        self._log(
-                            logging.WARNING,
-                            "Hotkey handle already removed or invalid; skipping.",
-                            event="hotkeys.unregister_handle_missing",
-                            handle_id=handle_id,
-                        )
-                    except Exception as e:
-                        self._log(
-                            logging.ERROR,
-                            "Error while removing hotkey hook.",
-                            event="hotkeys.unregister_handle_error",
-                            handle_id=handle_id,
-                            error=str(e),
-                            exc_info=True,
-                        )
-                # Após processar cada entrada, garantir que não haja handles residuais
-                self.hotkey_handlers[handle_id] = []
+        last_error: Exception | None = None
+        driver_failures: list[dict[str, Any]] = []
 
-            # Limpar qualquer chave vazia restante
-            self.hotkey_handlers.clear()
+        for index, driver in entries:
+            try:
+                driver.register(
+                    record_key=self.record_key,
+                    agent_key=self.agent_key,
+                    record_mode=self.record_mode,
+                    callbacks=callbacks,
+                    suppress=False,
+                )
+            except PermissionError as exc:
+                last_error = exc
+                driver_failures.append(
+                    {
+                        "driver": driver.name,
+                        "error": str(exc),
+                        "reason": "permission_denied",
+                    }
+                )
+                self._log(
+                    logging.ERROR,
+                    "Driver failed to register hotkeys due to permission error.",
+                    event="hotkeys.driver_permission_error",
+                    driver=driver.name,
+                    error=str(exc),
+                )
+                try:
+                    driver.unregister()
+                except Exception:
+                    self._log(
+                        logging.DEBUG,
+                        "Driver cleanup after failure raised an exception.",
+                        event="hotkeys.driver_cleanup_error",
+                        driver=driver.name,
+                    )
+                continue
+            except Exception as exc:
+                last_error = exc
+                driver_failures.append(
+                    {
+                        "driver": driver.name,
+                        "error": str(exc),
+                        "reason": "exception",
+                    }
+                )
+                self._log(
+                    logging.ERROR,
+                    "Driver raised an unexpected error during registration.",
+                    event="hotkeys.driver_register_error",
+                    driver=driver.name,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                try:
+                    driver.unregister()
+                except Exception:
+                    self._log(
+                        logging.DEBUG,
+                        "Driver cleanup after failure raised an exception.",
+                        event="hotkeys.driver_cleanup_error",
+                        driver=driver.name,
+                    )
+                continue
+
+            with self._driver_lock:
+                self._active_driver = driver
+                self._active_driver_index = index
+                self._driver_failures = driver_failures
 
             self._log(
                 logging.INFO,
-                "Hotkeys unregistered successfully.",
-                event="hotkeys.unregister_success",
+                "Hotkeys registered using driver.",
+                event="hotkeys.register_success",
+                driver=driver.name,
+                fallback=index > 0,
             )
-            # Garantir que o estado reflita a ausência de hotkeys registradas
-            self.is_running = False
-            self._last_trigger_ts.clear()
 
-        except Exception as e:
-            self._log(
-                logging.ERROR,
-                "Error while unregistering hotkeys.",
-                event="hotkeys.unregister_error",
-                error=str(e),
-                exc_info=True,
-            )
+            if index > 0:
+                self._log(
+                    logging.WARNING,
+                    "Fallback hotkey driver activated.",
+                    event="hotkeys.driver_fallback",
+                    driver=driver.name,
+                )
+            return True
+
+        with self._driver_lock:
+            self._active_driver = None
+            self._active_driver_index = None
+            self._driver_failures = driver_failures
+
+        self._log(
+            logging.ERROR,
+            "All hotkey drivers failed to register.",
+            event="hotkeys.register_failure",
+            last_error=str(last_error) if last_error else None,
+        )
+        return False
 
     def _on_toggle_key(self):
         """Handler para a tecla de toggle."""
@@ -882,85 +805,66 @@ class KeyboardHotkeyManager:
         return result
 
     def detect_key(self, timeout=5.0):
-        """
-        Detecta uma tecla pressionada.
+        """Detecta uma tecla pressionada."""
 
-        Args:
-            timeout (float): Tempo máximo de espera em segundos
+        self._log(
+            logging.INFO,
+            "Starting key detection.",
+            event="hotkeys.detect_start",
+            timeout_seconds=timeout,
+        )
 
-        Returns:
-            str: A tecla detectada ou None se nenhuma tecla for detectada
-        """
-        try:
+        driver: BaseHotkeyDriver | None = None
+        with self._driver_lock:
+            if self._active_driver is not None:
+                driver = self._active_driver
+        if driver is None:
+            entries = self._driver_entries()
+            if entries:
+                driver = entries[0][1]
+
+        if driver is None:
             self._log(
-                logging.INFO,
-                "Starting key detection.",
-                event="hotkeys.detect_start",
+                logging.ERROR,
+                "No hotkey driver available for detection.",
+                event="hotkeys.detect_no_driver",
                 timeout_seconds=timeout,
             )
+            return None
 
-            # Variáveis para armazenar a tecla detectada
-            detected_key = [None]
-            key_detected = threading.Event()
-
-            # Função para capturar a tecla
-            def on_key_event(e):
-                # Ignorar eventos que não sejam do teclado (ex.: cliques do mouse)
-                if getattr(e, 'device', 'keyboard') != 'keyboard':
-                    return
-                # Ignorar teclas especiais como shift, ctrl, alt
-                if e.name in ['shift', 'ctrl', 'alt', 'left shift', 'right shift', 'left ctrl', 'right ctrl', 'left alt', 'right alt']:
-                    return
-
-                self._log(
-                    logging.INFO,
-                    "Key detected during capture.",
-                    event="hotkeys.detect_key_seen",
-                    key=e.name,
-                )
-                detected_key[0] = e.name
-                key_detected.set()
-                return False  # Parar de escutar
-
-            # Registrar o hook
-            hook = keyboard.hook(on_key_event)
-
-            try:
-                # Aguardar até que uma tecla seja detectada ou o timeout expire
-                key_detected.wait(timeout)
-
-                # Retornar a tecla detectada
-                if detected_key[0]:
-                    self._log(
-                        logging.INFO,
-                        "Key detection completed with value.",
-                        event="hotkeys.detect_success",
-                        key=detected_key[0],
-                        timeout_seconds=timeout,
-                    )
-                    return detected_key[0]
-                else:
-                    self._log(
-                        logging.INFO,
-                        "Key detection completed without input.",
-                        event="hotkeys.detect_timeout",
-                        timeout_seconds=timeout,
-                    )
-                    return None
-            finally:
-                # Remover o hook
-                keyboard.unhook(hook)
-
-        except Exception as e:
+        try:
+            detected_key = driver.detect(timeout=float(timeout))
+        except Exception as exc:
             self._log(
                 logging.ERROR,
                 "Error while detecting key.",
                 event="hotkeys.detect_error",
-                error=str(e),
+                error=str(exc),
                 timeout_seconds=timeout,
+                driver=driver.name,
                 exc_info=True,
             )
             return None
+
+        if detected_key:
+            self._log(
+                logging.INFO,
+                "Key detection completed with value.",
+                event="hotkeys.detect_success",
+                key=detected_key,
+                timeout_seconds=timeout,
+                driver=driver.name,
+            )
+            return detected_key
+
+        self._log(
+            logging.INFO,
+            "Key detection completed without input.",
+            event="hotkeys.detect_timeout",
+            timeout_seconds=timeout,
+            driver=driver.name,
+        )
+        return None
 
     def detect_single_key(self, timeout=5.0):
         """Mantida para compatibilidade: delega para ``detect_key``."""

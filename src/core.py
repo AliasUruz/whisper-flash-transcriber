@@ -320,6 +320,8 @@ class AppCore:
         self.key_detection_callback = None # Callback para atualizar a UI com a tecla detectada
         self._key_detection_thread: threading.Thread | None = None
 
+        self._refresh_hotkey_driver_ui()
+
         # Carregar configurações iniciais
         self._apply_initial_config_to_core_attributes()
 
@@ -1830,6 +1832,27 @@ class AppCore:
         else:
             LOGGER.info(payload)
 
+    def _refresh_hotkey_driver_ui(self) -> None:
+        manager = getattr(self, "ahk_manager", None)
+        ui = getattr(self, "ui_manager", None)
+        if ui is None or not hasattr(ui, "update_hotkey_driver_status"):
+            return
+        driver_state = manager.describe_driver_state() if manager else None
+
+        def _invoke() -> None:
+            try:
+                ui.update_hotkey_driver_status(driver_state)
+            except Exception:  # pragma: no cover - defensive UI guard
+                LOGGER.debug("Failed to push hotkey driver status to UI.", exc_info=True)
+
+        if self.main_tk_root:
+            try:
+                self.main_tk_root.after(0, _invoke)
+                return
+            except Exception:  # pragma: no cover - Tk fallback
+                LOGGER.debug("Tk.after failed while updating hotkey driver UI.", exc_info=True)
+        _invoke()
+
     def _recording_log_details(self) -> dict[str, Any]:
         """Collect contextual information about the current recording session."""
 
@@ -1866,9 +1889,25 @@ class AppCore:
                 stop=self.stop_recording_if_needed, agent=self.start_agent_command
             )
             success = self.ahk_manager.start()
+            driver_name = self.ahk_manager.get_active_driver_name()
+            fallback_active = self.ahk_manager.is_using_fallback()
+            self._refresh_hotkey_driver_ui()
             if success:
                 self.ahk_running = True
-                self._log_status(f"Hotkey registered: {self.record_key.upper()} (mode: {self.record_mode})")
+                driver_label = driver_name or "desconhecido"
+                self._log_status(
+                    f"Hotkey registered via {driver_label}: {self.record_key.upper()} (mode: {self.record_mode})",
+                    event="core.hotkeys.registered",
+                    driver=driver_label,
+                    fallback=fallback_active,
+                )
+                if fallback_active:
+                    self._log_status(
+                        f"Driver de fallback para atalhos ativado ({driver_label}).",
+                        event="core.hotkeys.driver_fallback",
+                        driver=driver_label,
+                        fallback=True,
+                    )
             else:
                 self.state_manager.set_state(
                     sm.StateEvent.SETTINGS_HOTKEY_START_FAILED,
@@ -1891,7 +1930,14 @@ class AppCore:
             return False
         success = self._start_autohotkey()
         if success:
-            self._log_status(f"Global hotkey registered: {self.record_key.upper()} (mode: {self.record_mode})")
+            driver_name = self.ahk_manager.get_active_driver_name()
+            driver_label = driver_name or "desconhecido"
+            self._log_status(
+                f"Global hotkey registered via {driver_label}: {self.record_key.upper()} (mode: {self.record_mode})",
+                event="core.hotkeys.registered.global",
+                driver=driver_label,
+                fallback=self.ahk_manager.is_using_fallback(),
+            )
             if self.state_manager.get_current_state() not in [sm.STATE_RECORDING, sm.STATE_LOADING_MODEL]:
                 self.state_manager.set_state(
                     sm.StateEvent.SETTINGS_RECOVERED,
@@ -1914,6 +1960,7 @@ class AppCore:
                     self.ahk_manager.stop()
                     self.ahk_running = False
                     time.sleep(0.2)
+                    self._refresh_hotkey_driver_ui()
             except Exception as e:
                 LOGGER.error(f"Error stopping KeyboardHotkeyManager: {e}")
 
@@ -1990,6 +2037,9 @@ class AppCore:
                     self.ahk_manager.update_config(record_key=self.record_key, agent_key=self.agent_key, record_mode=self.record_mode)
                     self.ahk_manager.set_callbacks(toggle=self.toggle_recording, start=self.start_recording, stop=self.stop_recording_if_needed, agent=self.start_agent_command)
                     success = self.ahk_manager.start()
+                    driver_name = self.ahk_manager.get_active_driver_name()
+                    fallback_active = self.ahk_manager.is_using_fallback()
+                    self._refresh_hotkey_driver_ui()
                     if success:
                         self.ahk_running = True
                         if current_state.startswith("ERROR"):
@@ -1998,7 +2048,21 @@ class AppCore:
                                 details="Manual hotkey re-registration succeeded",
                                 source="hotkeys",
                             )
-                        self._log_status("KeyboardHotkeyManager reload completed.", error=False)
+                        driver_label = driver_name or "desconhecido"
+                        self._log_status(
+                            f"KeyboardHotkeyManager reload completed via {driver_label}.",
+                            event="core.hotkeys.reload_success",
+                            error=False,
+                            driver=driver_label,
+                            fallback=fallback_active,
+                        )
+                        if fallback_active:
+                            self._log_status(
+                                f"Driver de fallback para atalhos ativado ({driver_label}).",
+                                event="core.hotkeys.driver_fallback",
+                                driver=driver_label,
+                                fallback=True,
+                            )
                         return True
                     else:
                         self._log_status("KeyboardHotkeyManager reload failed.", error=True)
@@ -2007,6 +2071,7 @@ class AppCore:
                             details="Manual hotkey re-registration failed",
                             source="hotkeys",
                         )
+                        self._refresh_hotkey_driver_ui()
                         return False
                 except Exception as e:
                     self.ahk_running = False
@@ -2017,6 +2082,7 @@ class AppCore:
                         details=f"Exception during manual hotkey re-registration: {e}",
                         source="hotkeys",
                     )
+                    self._refresh_hotkey_driver_ui()
                     return False
         else:
             LOGGER.warning(f"Manual trigger: Cannot re-register hotkeys. Current state is {current_state}.")
