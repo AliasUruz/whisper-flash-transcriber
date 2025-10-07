@@ -326,6 +326,12 @@ def normalize_backend_label(backend: str | None) -> str:
     if not normalized:
         return ""
 
+    if normalized == "auto":
+        # O restante do pipeline não reconhece "auto" como backend válido.
+        # Normalizamos explicitamente para o identificador CT2 até que exista
+        # um modo automático real.
+        return "ctranslate2"
+
     alias_map = {
         "ct2": "ctranslate2",
         "ctranslate2": "ctranslate2",
@@ -334,7 +340,6 @@ def normalize_backend_label(backend: str | None) -> str:
         "faster-whisper": "ctranslate2",
         "transformer": "ctranslate2",
         "transformers": "ctranslate2",
-        "auto": "ctranslate2",
     }
 
     mapped = alias_map.get(normalized)
