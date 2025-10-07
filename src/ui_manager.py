@@ -1591,7 +1591,15 @@ class UIManager:
             self.update_live_transcription_threadsafe = self.update_live_transcription_threadsafe
 
     # Thread-safe method to update live transcription
-    def update_live_transcription_threadsafe(self, text):
+    def update_live_transcription_threadsafe(
+        self,
+        text,
+        *,
+        metadata=None,
+        is_final: bool = False,
+        **_: object,
+    ):
+        del metadata, is_final
         self.main_tk_root.after(0, lambda: self._update_live_transcription(text))
 
     def create_image(self, width, height, color1, color2=None):

@@ -150,6 +150,7 @@ class AppCore:
         self._pending_tray_tooltips: list[str] = []
 
         self.full_transcription = ""
+        self._segment_stream_finalized = False
 
         # Track the latest onboarding outcome so diagnostics and the UI can
         # inspect what happened without parsing log files.
@@ -163,7 +164,7 @@ class AppCore:
             log_status_callback=self._log_status,
             tk_root=self.main_tk_root,
             close_ui_callback=self._close_live_transcription_window,
-            fallback_text_provider=lambda: self.full_transcription.strip(),
+            fallback_text_provider=self._get_fallback_transcription_text,
             reset_transcription_buffer=self._reset_full_transcription,
             delete_temp_audio_callback=self._delete_temp_audio_file,
         )
@@ -1520,14 +1521,37 @@ class AppCore:
                     lambda: messagebox.showerror(error_title, error_message),
                 )
 
-    def _on_segment_transcribed_for_ui(self, text):
+    def _on_segment_transcribed_for_ui(
+        self,
+        text,
+        *,
+        metadata: dict[str, Any] | None = None,
+        is_final: bool = False,
+    ):
         """Callback para enviar texto de segmento para a UI ao vivo."""
+        if text:
+            self.full_transcription += f"{text} "
+        if is_final:
+            self._segment_stream_finalized = True
+            self.full_transcription = self.full_transcription.strip()
         if self.on_segment_transcribed:
-            self.on_segment_transcribed(text)
-        self.full_transcription += text + " " # Acumula a transcrição completa
+            try:
+                self.on_segment_transcribed(
+                    text,
+                    metadata=metadata,
+                    is_final=is_final,
+                )
+            except TypeError:
+                self.on_segment_transcribed(text)
 
     def _reset_full_transcription(self) -> None:
         self.full_transcription = ""
+        self._segment_stream_finalized = False
+
+    def _get_fallback_transcription_text(self) -> str:
+        if not self._segment_stream_finalized:
+            return ""
+        return self.full_transcription.strip()
 
     def _close_live_transcription_window(self) -> None:
         ui_manager = getattr(self, "ui_manager", None)

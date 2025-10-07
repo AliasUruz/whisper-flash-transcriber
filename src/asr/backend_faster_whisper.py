@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any
+from threading import Event
+from typing import Any, Callable, Iterator
 
 
 class FasterWhisperBackend:
@@ -118,19 +119,40 @@ class FasterWhisperBackend:
         import numpy as np
 
         audio = np.zeros(int(16000 * 0.015), dtype="float32")
-        segments, _ = self.model.transcribe(audio)
-        next(segments, None)
+        self.stream_transcribe(audio)
 
-    def transcribe(self, audio: Any, **kwargs) -> dict:
+    def transcribe(
+        self,
+        audio: Any,
+        *,
+        on_segment: Callable[[str], None] | None = None,
+        cancel_event: Event | None = None,
+        **kwargs,
+    ) -> dict:
         """Transcribe the provided audio and return just the text."""
+        text, _ = self.stream_transcribe(
+            audio,
+            on_segment=on_segment,
+            cancel_event=cancel_event,
+            **kwargs,
+        )
+        return {"text": text}
+
+    def stream_transcribe(
+        self,
+        audio: Any,
+        *,
+        on_segment: Callable[..., None] | None = None,
+        cancel_event: Event | None = None,
+        **kwargs,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Iterate over streaming segments, optionally emitting callbacks."""
         if not self.model:
             raise RuntimeError("Backend not loaded")
+
         chunk_length = _coerce_chunk_length(kwargs.pop("chunk_length_s", None))
         if chunk_length is not None:
             kwargs["chunk_length"] = chunk_length
-        # ``WhisperModel.transcribe`` does not accept ``batch_size``. The unified
-        # transcription handler still provides the value for backends that use it,
-        # so we discard it here to avoid ``TypeError``.
         kwargs.pop("batch_size", None)
         sanitized_segments = _sanitize_language_detection_segments(
             kwargs.get("language_detection_segments")
@@ -141,9 +163,54 @@ class FasterWhisperBackend:
             computed_segments = _segments_from_chunk_length(kwargs.get("chunk_length"))
             if computed_segments is not None:
                 kwargs["language_detection_segments"] = computed_segments
-        segments, _ = self.model.transcribe(audio, **kwargs)
-        text = " ".join(segment.text for segment in segments)
-        return {"text": text}
+
+        segment_iterator, _ = self.model.transcribe(audio, **kwargs)
+        iterator: Iterator[Any] = iter(segment_iterator)
+
+        try:
+            current = next(iterator)
+        except StopIteration:
+            return "", []
+
+        aggregated_parts: list[str] = []
+        metadata: list[dict[str, Any]] = []
+
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+
+            segment_info = _segment_to_metadata(current)
+            aggregated_parts.append(current.text)
+            metadata.append(segment_info)
+
+            try:
+                next_segment = next(iterator)
+                has_next = True
+            except StopIteration:
+                next_segment = None
+                has_next = False
+
+            cancel_requested = cancel_event.is_set() if cancel_event is not None else False
+            segment_info["is_final"] = bool(not has_next and not cancel_requested)
+
+            if on_segment is not None:
+                callback_payload = segment_info.copy()
+                try:
+                    on_segment(
+                        current.text,
+                        metadata=callback_payload,
+                        is_final=segment_info["is_final"],
+                    )
+                except TypeError:
+                    on_segment(current.text)
+
+            if not has_next:
+                break
+
+            current = next_segment
+
+        text = " ".join(part for part in aggregated_parts if part).strip()
+        return text, metadata
 
     def unload(self) -> None:
         """Release model resources."""
@@ -224,6 +291,41 @@ def _coerce_chunk_length(raw: Any) -> float | None:
     if math.isnan(chunk) or math.isinf(chunk):
         return None
     return max(0.0, chunk)
+
+
+def _segment_to_metadata(segment: Any) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "id": getattr(segment, "id", None),
+        "start": getattr(segment, "start", None),
+        "end": getattr(segment, "end", None),
+        "text": getattr(segment, "text", ""),
+        "avg_logprob": getattr(segment, "avg_logprob", None),
+        "no_speech_prob": getattr(segment, "no_speech_prob", None),
+        "temperature": getattr(segment, "temperature", None),
+        "compression_ratio": getattr(segment, "compression_ratio", None),
+        "language": getattr(segment, "language", None),
+    }
+    tokens = getattr(segment, "tokens", None)
+    if tokens is not None:
+        try:
+            info["tokens"] = list(tokens)
+        except TypeError:
+            info["tokens"] = tokens
+    words = getattr(segment, "words", None)
+    if words is not None:
+        try:
+            info["words"] = [
+                {
+                    "start": getattr(word, "start", None),
+                    "end": getattr(word, "end", None),
+                    "word": getattr(word, "word", None),
+                    "prob": getattr(word, "probability", getattr(word, "prob", None)),
+                }
+                for word in words
+            ]
+        except TypeError:
+            info["words"] = words
+    return info
 
 
 def _sanitize_language_detection_segments(raw: Any) -> int | None:
