@@ -2247,6 +2247,7 @@ class UIManager:
                 runtime_catalog.append(baseline)
         runtime_by_id = {entry["id"]: entry for entry in runtime_catalog}
         ui_elements["catalog"] = runtime_catalog
+        self._set_settings_meta("catalog", runtime_catalog)
 
         try:
             installed_models = model_manager.list_installed(asr_cache_dir_var.get())
@@ -2370,6 +2371,7 @@ class UIManager:
             except Exception:
                 pass
             self._on_model_change(display_value)
+            self._update_install_button_state()
 
         recommended_entries = [
             entry for entry in runtime_catalog if entry.get("ui_group") == "recommended"
