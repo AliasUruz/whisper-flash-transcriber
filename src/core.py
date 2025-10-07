@@ -1206,6 +1206,7 @@ class AppCore:
         self.record_mode = self.config_manager.get("record_mode")
         self.auto_paste = self.config_manager.get("auto_paste")
         self.agent_key = self.config_manager.get("agent_key")
+        self.hotkey_debounce_ms = self.config_manager.get("hotkey_debounce_ms")
         self.hotkey_stability_service_enabled = self.config_manager.get("hotkey_stability_service_enabled") # Nova configuração unificada
         self.keyboard_library = self.config_manager.get("keyboard_library")
         self.min_record_duration = self.config_manager.get("min_record_duration")
@@ -1217,6 +1218,17 @@ class AppCore:
         self.ct2_quantization = ct2_compute_type
         self.models_storage_dir = self.config_manager.get(MODELS_STORAGE_DIR_CONFIG_KEY)
         # ... e outras configurações que AppCore precisa diretamente
+
+        ahk_manager = getattr(self, "ahk_manager", None)
+        if ahk_manager is not None:
+            try:
+                ahk_manager.set_debounce_window(self.hotkey_debounce_ms)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.warning(
+                    "Failed to propagate hotkey debounce window to manager: %s",
+                    exc,
+                    exc_info=True,
+                )
 
     def _sync_installed_models(self):
         """Atualiza o ConfigManager com os modelos ASR instalados."""

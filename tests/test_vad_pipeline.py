@@ -1,15 +1,36 @@
+import sys
+import tempfile
+import types
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
 try:
+    import keyboard  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - provide lightweight stub
+    keyboard = types.SimpleNamespace()
+
+    def _dummy_handle(*_args, **_kwargs):
+        return object()
+
+    keyboard.add_hotkey = _dummy_handle
+    keyboard.remove_hotkey = lambda *_args, **_kwargs: None
+    keyboard.on_release_key = _dummy_handle
+    keyboard.hook = _dummy_handle
+    keyboard.unhook = lambda *_args, **_kwargs: None
+    sys.modules["keyboard"] = keyboard
+
+try:
     from src.vad_manager import VADManager
+    from src.keyboard_hotkey_manager import KeyboardHotkeyManager
 except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
     import os
-    import sys
 
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from src.vad_manager import VADManager
+    from src.keyboard_hotkey_manager import KeyboardHotkeyManager
 
 
 class DummyConfigManager:
@@ -108,6 +129,54 @@ class TestVADPipeline(unittest.TestCase):
         is_speech_silence, frames_silence = manager.process_chunk(silence)
         self.assertFalse(is_speech_silence)
         self.assertEqual(frames_silence, [])
+
+
+class ImmediateThread:
+    def __init__(self, *_, target=None, **__):
+        self._target = target
+
+    def start(self):
+        if self._target:
+            self._target()
+
+
+class TestHotkeyDebounce(unittest.TestCase):
+    def test_toggle_hotkey_respects_debounce_window(self):
+        events: list[str] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = KeyboardHotkeyManager(config_file=Path(tmpdir) / "hotkey.json")
+            manager.set_callbacks(toggle=lambda: events.append("toggle"))
+            manager.set_debounce_window(200)
+
+            with mock.patch("src.keyboard_hotkey_manager.threading.Thread", new=ImmediateThread):
+                with mock.patch(
+                    "src.keyboard_hotkey_manager.time.perf_counter",
+                    side_effect=[1.0, 1.15, 1.41],
+                ):
+                    manager._on_toggle_key()
+                    manager._on_toggle_key()
+                    manager._on_toggle_key()
+
+        self.assertEqual(events, ["toggle", "toggle"])
+        self.assertIn("toggle", manager._last_trigger_ts)
+        self.assertGreaterEqual(manager._last_trigger_ts["toggle"], 0.0)
+
+    def test_agent_hotkey_without_debounce_triggers_every_time(self):
+        events: list[str] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = KeyboardHotkeyManager(config_file=Path(tmpdir) / "hotkey.json")
+            manager.set_callbacks(agent=lambda: events.append("agent"))
+            manager.set_debounce_window(0)
+
+            with mock.patch("src.keyboard_hotkey_manager.threading.Thread", new=ImmediateThread):
+                with mock.patch(
+                    "src.keyboard_hotkey_manager.time.perf_counter",
+                    side_effect=[5.0, 5.05],
+                ):
+                    manager._on_agent_key()
+                    manager._on_agent_key()
+
+        self.assertEqual(events, ["agent", "agent"])
 
 
 if __name__ == "__main__":

@@ -42,6 +42,8 @@ class KeyboardHotkeyManager:
         self.agent_key = "f4"  # Tecla padrão para comando agêntico
         self.record_mode = "toggle"  # Modo padrão
         self.hotkey_handlers = {}
+        self.debounce_window_ms: float = 200.0
+        self._last_trigger_ts: dict[str, float] = {}
 
         # Carregar configuração se existir
         self._load_config()
@@ -457,6 +459,64 @@ class KeyboardHotkeyManager:
             return
         self.hotkey_handlers.setdefault(handle_id, []).append(handle)
 
+    def set_debounce_window(self, debounce_ms: float | int | None) -> None:
+        """Configure a janela de debounce em milissegundos."""
+
+        previous = self.debounce_window_ms
+        try:
+            if debounce_ms is None:
+                candidate = 0.0
+            else:
+                candidate = float(debounce_ms)
+        except (TypeError, ValueError):
+            self._log(
+                logging.WARNING,
+                "Invalid debounce value provided; keeping previous window.",
+                event="hotkeys.debounce_invalid",
+                supplied=str(debounce_ms),
+                previous_ms=previous,
+            )
+            return
+
+        candidate = max(candidate, 0.0)
+        if candidate == previous:
+            return
+
+        self.debounce_window_ms = candidate
+        self._last_trigger_ts.clear()
+        self._log(
+            logging.INFO,
+            "Hotkey debounce window updated.",
+            event="hotkeys.debounce_updated",
+            debounce_ms=candidate,
+        )
+
+    def _should_process_event(self, handle_id: str) -> bool:
+        """Return ``True`` when the callback tied to ``handle_id`` must run."""
+
+        window_ms = max(self.debounce_window_ms, 0.0)
+        now = time.perf_counter()
+        if window_ms <= 0.0:
+            self._last_trigger_ts[handle_id] = now
+            return True
+
+        last_seen = self._last_trigger_ts.get(handle_id)
+        if last_seen is not None:
+            elapsed_ms = (now - last_seen) * 1000.0
+            if elapsed_ms < window_ms:
+                self._log(
+                    logging.DEBUG,
+                    "Hotkey callback ignored due to debounce window.",
+                    event="hotkeys.debounce_skipped",
+                    handle_id=handle_id,
+                    elapsed_ms=round(elapsed_ms, 3),
+                    debounce_ms=window_ms,
+                )
+                return False
+
+        self._last_trigger_ts[handle_id] = now
+        return True
+
     def _register_hotkeys(self):
         """Registra as hotkeys no sistema."""
         try:
@@ -471,6 +531,7 @@ class KeyboardHotkeyManager:
 
             # Desregistrar hotkeys existentes para evitar duplicação
             self._unregister_hotkeys()
+            self._last_trigger_ts.clear()
 
             # Registrar a tecla de gravação
             self._log(
@@ -666,6 +727,7 @@ class KeyboardHotkeyManager:
             )
             # Garantir que o estado reflita a ausência de hotkeys registradas
             self.is_running = False
+            self._last_trigger_ts.clear()
 
         except Exception as e:
             self._log(
@@ -679,7 +741,7 @@ class KeyboardHotkeyManager:
     def _on_toggle_key(self):
         """Handler para a tecla de toggle."""
         try:
-            if self.callback_toggle:
+            if self.callback_toggle and self._should_process_event("toggle"):
                 threading.Thread(target=self.callback_toggle, daemon=True, name="ToggleCallback").start()
                 self._log(
                     logging.INFO,
@@ -698,7 +760,7 @@ class KeyboardHotkeyManager:
     def _on_press_key(self):
         """Handler para a tecla de press."""
         try:
-            if self.callback_start:
+            if self.callback_start and self._should_process_event("press"):
                 threading.Thread(target=self.callback_start, daemon=True, name="StartCallback").start()
                 self._log(
                     logging.INFO,
@@ -717,7 +779,7 @@ class KeyboardHotkeyManager:
     def _on_agent_key(self):
         """Handler for the agent command hotkey."""
         try:
-            if self.callback_agent:
+            if self.callback_agent and self._should_process_event("agent"):
                 threading.Thread(target=self.callback_agent, daemon=True, name="AgentCallback").start()
                 self._log(
                     logging.INFO,

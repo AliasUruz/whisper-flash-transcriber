@@ -113,6 +113,7 @@ class AppConfig(BaseModel):
     manual_batch_size: int = Field(default=8, ge=1)
     gpu_index: int = Field(default=0, ge=-1)
     hotkey_stability_service_enabled: bool = True
+    hotkey_debounce_ms: int = Field(default=200, ge=0)
     use_vad: bool = False
     vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     vad_silence_duration: float = Field(default=1.0, ge=0.0)
@@ -136,6 +137,9 @@ class AppConfig(BaseModel):
     models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
     deps_install_dir: str = _DEFAULT_DEPS_INSTALL_DIR
     hf_home_dir: str = _DEFAULT_HF_HOME_DIR
+    python_packages_dir: str = str((_DEFAULT_STORAGE_ROOT / "python_packages").expanduser())
+    vad_models_dir: str = str((_DEFAULT_STORAGE_ROOT / "vad").expanduser())
+    hf_cache_dir: str = str((_DEFAULT_STORAGE_ROOT / "hf_cache").expanduser())
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
     asr_model_id: str = "distil-whisper/distil-large-v3"
