@@ -671,6 +671,63 @@ class TranscriptionHandler:
 
         logging.log(level, "[ASR] " + " ".join(parts))
 
+    def _report_model_error(self, message: str, *, state_details: str | None = None) -> None:
+        core_ref = getattr(self, "core_instance_ref", None)
+        state_mgr = getattr(core_ref, "state_manager", None) if core_ref is not None else None
+
+        if state_mgr is not None:
+            try:
+                state_mgr.set_state(
+                    sm.STATE_ERROR_MODEL,
+                    source="transcription_handler",
+                    details=state_details or message,
+                )
+            except Exception:
+                logging.debug(
+                    "Failed to signal STATE_ERROR_MODEL during backend failure handling.",
+                    exc_info=True,
+                )
+
+        if self.on_model_error_callback:
+            try:
+                self.on_model_error_callback(message)
+            except Exception:
+                logging.debug(
+                    "Failed to propagate model error callback.",
+                    exc_info=True,
+                )
+
+    def _handle_ct2_failure(
+        self,
+        *,
+        stage: str,
+        error: Exception,
+        model_id: str,
+        device: str,
+        dtype: str,
+        compute_type: str | None,
+        duration_ms: float | None = None,
+        chunk_length_s: float | None = None,
+        batch_size: int | None = None,
+    ) -> None:
+        self._log_model_event(
+            "load_failure",
+            level=logging.ERROR,
+            backend="ctranslate2",
+            model_id=model_id,
+            device=device,
+            dtype=dtype,
+            compute_type=compute_type,
+            duration_ms=duration_ms,
+            status="fallback",
+            error=str(error),
+            chunk_length_s=chunk_length_s,
+            batch_size=batch_size,
+        )
+        error_message = f"Erro ao {stage} o backend CTranslate2: {error}"
+        self._model_load_started_at = None
+        self._report_model_error(error_message, state_details=error_message)
+
     def _format_audio_source(self, audio_source: str | np.ndarray | bytes | bytearray | list[float] | None) -> str:
         if audio_source is None:
             return "none"
@@ -1146,6 +1203,7 @@ class TranscriptionHandler:
         try:
             self._apply_environment_overrides()
             self.device_in_use = "cpu"
+
             if make_backend is not None:
                 backend_preference = self.config_manager.get("asr_backend") or "transformers"
                 requested_backend_display = (
@@ -1158,243 +1216,314 @@ class TranscriptionHandler:
                     if requested_backend_display
                     else "transformers"
                 )
-                if not backend_candidate:
-                    backend_candidate = "transformers"
+                normalized_candidate = model_manager_module.normalize_backend_label(backend_candidate)
+                if normalized_candidate == "faster-whisper":
+                    normalized_candidate = "ctranslate2"
+                backend_name = normalized_candidate or backend_candidate or "transformers"
+                if not backend_name:
+                    backend_name = "transformers"
 
-                backend_name = backend_candidate
-                try:
-                    self._asr_backend = make_backend(backend_name)
-                except Exception as backend_error:
-                    if backend_name != "transformers":
-                        logging.warning(
-                            "Failed to instantiate backend '%s': %s. Falling back to 'transformers'.",
-                            backend_name,
-                            backend_error,
-                        )
-                        backend_name = "transformers"
-                        self._asr_backend = make_backend(backend_name)
-                    else:
-                        raise
-                self.backend_resolved = backend_name
-
-                req_backend, req_model_id, req_device, req_dtype = self._resolve_asr_settings()
-                logging.info(
-                    "Resolved ASR settings: backend=%s, model=%s, device=%s, dtype=%s",
-                    req_backend,
-                    req_model_id,
-                    req_device,
-                    req_dtype,
+                explicit_ct2_requested = (
+                    isinstance(backend_preference, str)
+                    and backend_preference.strip().lower()
+                    in {"ct2", "ctranslate2", "faster-whisper"}
                 )
+                fallback_allowed = backend_name == "ctranslate2" and not explicit_ct2_requested
 
-                available_cuda = _torch_cuda_available()
-                gpu_count = _torch_cuda_device_count() if available_cuda else 0
+                ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+                ct2_cpu_threads = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
+                asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
 
-                requested_gpu_index: int | None = None
-                if isinstance(req_device, str):
-                    lowered_device = req_device.strip().lower()
-                    if lowered_device.startswith("cuda"):
-                        _, _, suffix = lowered_device.partition(":")
-                        if suffix:
-                            try:
-                                requested_gpu_index = int(suffix)
-                            except ValueError:
-                                requested_gpu_index = None
+                while True:
+                    current_backend = backend_name or "transformers"
+                    self.backend_resolved = current_backend
 
-                config_gpu_idx_raw = self.config_manager.get(GPU_INDEX_CONFIG_KEY, -1)
-                try:
-                    config_gpu_idx = int(config_gpu_idx_raw)
-                except (TypeError, ValueError):
-                    config_gpu_idx = -1
-
-                self.gpu_index_requested = (
-                    requested_gpu_index
-                    if requested_gpu_index is not None
-                    else (config_gpu_idx if config_gpu_idx >= 0 else None)
-                )
-
-                effective_device = "cpu"
-                transformers_device: int | str = -1
-                selected_gpu_index: int | None = None
-
-                if req_device == "cpu":
-                    logging.info("ASR device explicitly set to CPU.")
-                elif isinstance(req_device, str) and req_device.startswith("cuda"):
-                    if not available_cuda or gpu_count == 0:
-                        reason = (
-                            "CUDA not available."
-                            if not available_cuda
-                            else "No GPUs detected."
-                        )
-                        self._emit_device_warning(req_device, "cpu", reason)
-                    else:
-                        target_idx = requested_gpu_index
-                        if target_idx is None or target_idx < 0:
-                            if 0 <= config_gpu_idx < gpu_count:
-                                target_idx = config_gpu_idx
-                            else:
-                                if config_gpu_idx not in (-1, 0):
-                                    logging.warning(
-                                        "Invalid GPU index %s, falling back to GPU 0.",
-                                        config_gpu_idx,
-                                    )
-                                target_idx = 0
-                        if target_idx is not None and target_idx >= gpu_count:
-                            self._emit_device_warning(
-                                req_device,
-                                "cpu",
-                                (
-                                    f"Requested GPU index {target_idx} is out of range for "
-                                    f"{gpu_count} visible device(s)."
-                                ),
-                            )
-                        else:
-                            selected_gpu_index = target_idx
-                            effective_device = f"cuda:{selected_gpu_index}" if selected_gpu_index is not None else "cpu"
-                            transformers_device = (
-                                f"cuda:{selected_gpu_index}" if selected_gpu_index is not None else -1
-                            )
-
-                self.device_in_use = effective_device
-                self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
-
-                logging.info(
-                    "Effective ASR device: %s (transformers_device=%s, gpu_index=%s)",
-                    self.device_in_use,
-                    transformers_device,
-                    self.gpu_index,
-                )
-
-                effective_dtype = self._resolve_effective_dtype(req_dtype)
-                backend_device = effective_device
-                backend_device_index = selected_gpu_index if selected_gpu_index is not None else None
-                if not backend_device.startswith("cuda"):
-                    backend_device_index = None
-
-                load_kwargs = self._build_backend_load_kwargs(
-                    backend_name=backend_name,
-                    asr_dtype=effective_dtype,
-                    asr_ct2_compute_type=self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
-                    asr_cache_dir=self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY),
-                    transformers_device=transformers_device,
-                    backend_device=backend_device,
-                    backend_device_index=backend_device_index,
-                    asr_ct2_cpu_threads=self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY),
-                )
-                load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
-                if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
-                    load_kwargs["cache_dir"] = str(load_kwargs["cache_dir"])
-
-                if hasattr(self._asr_backend, "model_id"):
-                    try:
-                        self._asr_backend.model_id = req_model_id
-                    except Exception:
-                        logging.debug("Unable to propagate model_id to backend instance.", exc_info=True)
-                if hasattr(self._asr_backend, "device"):
-                    try:
-                        self._asr_backend.device = backend_device
-                    except Exception:
-                        logging.debug("Unable to propagate device to backend instance.", exc_info=True)
-                if hasattr(self._asr_backend, "device_index"):
-                    try:
-                        self._asr_backend.device_index = backend_device_index
-                    except Exception:
-                        logging.debug("Unable to propagate device_index to backend instance.", exc_info=True)
-
-                self._update_model_log_context(
-                    backend=backend_name,
-                    model=req_model_id,
-                    device=effective_device,
-                    dtype=load_kwargs.get("dtype", req_dtype),
-                    compute_type=load_kwargs.get(
-                        "ct2_compute_type",
-                        self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
-                    ),
-                    chunk_length_s=float(self.chunk_length_sec),
-                    batch_size=self.batch_size,
-                )
-                load_started_at = time.perf_counter()
-                self._model_load_started_at = load_started_at
-                self._log_model_event(
-                    "load_start",
-                    backend=backend_name,
-                    model_id=req_model_id,
-                    device=effective_device,
-                    dtype=load_kwargs.get("dtype", req_dtype),
-                    compute_type=load_kwargs.get(
-                        "ct2_compute_type",
-                        self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
-                    ),
-                    chunk_length_s=float(self.chunk_length_sec),
-                    batch_size=self.batch_size,
-                )
-                if backend_name in {"transformers", "whisper"} and not _torch_available():
-                    raise RuntimeError(
-                        "PyTorch is required for the Transformers backend but is not installed."
+                    req_backend, req_model_id, req_device, req_dtype = self._resolve_asr_settings()
+                    logging.info(
+                        "Resolved ASR settings: backend=%s, model=%s, device=%s, dtype=%s",
+                        current_backend,
+                        req_model_id,
+                        req_device,
+                        req_dtype,
                     )
-                load_kwargs["model_id"] = req_model_id
-                try:
-                    self._asr_backend.load(**load_kwargs)
-                except Exception as load_error:
-                    duration_ms = (time.perf_counter() - load_started_at) * 1000.0
+
+                    try:
+                        self._asr_backend = make_backend(current_backend)
+                    except Exception as backend_error:
+                        if current_backend == "ctranslate2":
+                            self._handle_ct2_failure(
+                                stage="instanciar",
+                                error=backend_error,
+                                model_id=req_model_id,
+                                device=req_device,
+                                dtype=req_dtype,
+                                compute_type=ct2_compute_type,
+                                chunk_length_s=float(self.chunk_length_sec),
+                                batch_size=self.batch_size,
+                            )
+                            self._asr_backend = None
+                            if fallback_allowed:
+                                logging.warning(
+                                    "Failed to instantiate backend '%s': %s. Attempting fallback to 'transformers'.",
+                                    current_backend,
+                                    backend_error,
+                                )
+                                fallback_allowed = False
+                                backend_name = "transformers"
+                                continue
+                            return None, None
+                        raise
+
+                    available_cuda = _torch_cuda_available()
+                    gpu_count = _torch_cuda_device_count() if available_cuda else 0
+
+                    requested_gpu_index: int | None = None
+                    if isinstance(req_device, str):
+                        lowered_device = req_device.strip().lower()
+                        if lowered_device.startswith("cuda"):
+                            _, _, suffix = lowered_device.partition(":")
+                            if suffix:
+                                try:
+                                    requested_gpu_index = int(suffix)
+                                except ValueError:
+                                    requested_gpu_index = None
+
+                    config_gpu_idx_raw = self.config_manager.get(GPU_INDEX_CONFIG_KEY, -1)
+                    try:
+                        config_gpu_idx = int(config_gpu_idx_raw)
+                    except (TypeError, ValueError):
+                        config_gpu_idx = -1
+
+                    self.gpu_index_requested = (
+                        requested_gpu_index
+                        if requested_gpu_index is not None
+                        else (config_gpu_idx if config_gpu_idx >= 0 else None)
+                    )
+
+                    effective_device = "cpu"
+                    transformers_device: int | str = -1
+                    selected_gpu_index: int | None = None
+
+                    if req_device == "cpu":
+                        logging.info("ASR device explicitly set to CPU.")
+                    elif isinstance(req_device, str) and req_device.startswith("cuda"):
+                        if not available_cuda or gpu_count == 0:
+                            reason = "CUDA is not available."
+                            if not available_cuda:
+                                reason = "CUDA is not available on this system."
+                            elif gpu_count == 0:
+                                reason = "No CUDA devices detected."
+                            self._emit_device_warning(req_device, "cpu", reason)
+                        else:
+                            target_idx = requested_gpu_index
+                            if target_idx is None or target_idx < 0:
+                                if 0 <= config_gpu_idx < gpu_count:
+                                    target_idx = config_gpu_idx
+                                else:
+                                    if config_gpu_idx not in (-1, 0):
+                                        logging.warning(
+                                            "Invalid GPU index %s, falling back to GPU 0.",
+                                            config_gpu_idx,
+                                        )
+                                    target_idx = 0
+                            if target_idx is not None and target_idx >= gpu_count:
+                                self._emit_device_warning(
+                                    req_device,
+                                    "cpu",
+                                    (
+                                        f"Requested GPU index {target_idx} is out of range for "
+                                        f"{gpu_count} visible device(s)."
+                                    ),
+                                )
+                            else:
+                                selected_gpu_index = target_idx
+                                effective_device = (
+                                    f"cuda:{selected_gpu_index}" if selected_gpu_index is not None else "cpu"
+                                )
+                                transformers_device = (
+                                    f"cuda:{selected_gpu_index}" if selected_gpu_index is not None else -1
+                                )
+
+                    self.device_in_use = effective_device
+                    self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
+
+                    logging.info(
+                        "Effective ASR device: %s (transformers_device=%s, gpu_index=%s)",
+                        self.device_in_use,
+                        transformers_device,
+                        self.gpu_index,
+                    )
+
+                    effective_dtype = self._resolve_effective_dtype(req_dtype)
+                    backend_device = effective_device
+                    backend_device_index = selected_gpu_index if selected_gpu_index is not None else None
+                    if not backend_device.startswith("cuda"):
+                        backend_device_index = None
+
+                    load_kwargs = self._build_backend_load_kwargs(
+                        backend_name=current_backend,
+                        asr_dtype=effective_dtype,
+                        asr_ct2_compute_type=ct2_compute_type,
+                        asr_cache_dir=asr_cache_dir,
+                        transformers_device=transformers_device,
+                        backend_device=backend_device,
+                        backend_device_index=backend_device_index,
+                        asr_ct2_cpu_threads=ct2_cpu_threads,
+                    )
+                    load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
+                    if "cache_dir" in load_kwargs and load_kwargs["cache_dir"]:
+                        load_kwargs["cache_dir"] = str(load_kwargs["cache_dir"])
+
+                    if hasattr(self._asr_backend, "model_id"):
+                        try:
+                            self._asr_backend.model_id = req_model_id
+                        except Exception:
+                            logging.debug(
+                                "Unable to propagate model_id to backend instance.",
+                                exc_info=True,
+                            )
+                    if hasattr(self._asr_backend, "device"):
+                        try:
+                            self._asr_backend.device = backend_device
+                        except Exception:
+                            logging.debug(
+                                "Unable to propagate device to backend instance.",
+                                exc_info=True,
+                            )
+                    if hasattr(self._asr_backend, "device_index"):
+                        try:
+                            self._asr_backend.device_index = backend_device_index
+                        except Exception:
+                            logging.debug(
+                                "Unable to propagate device_index to backend instance.",
+                                exc_info=True,
+                            )
+
+                    current_compute_type = load_kwargs.get("ct2_compute_type", ct2_compute_type)
+                    self._update_model_log_context(
+                        backend=current_backend,
+                        model=req_model_id,
+                        device=effective_device,
+                        dtype=load_kwargs.get("dtype", req_dtype),
+                        compute_type=current_compute_type,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        batch_size=self.batch_size,
+                    )
+                    load_started_at = time.perf_counter()
+                    self._model_load_started_at = load_started_at
                     self._log_model_event(
-                        "load_failure",
-                        level=logging.ERROR,
-                        backend=backend_name,
+                        "load_start",
+                        backend=current_backend,
                         model_id=req_model_id,
                         device=effective_device,
                         dtype=load_kwargs.get("dtype", req_dtype),
-                        compute_type=load_kwargs.get(
-                            "ct2_compute_type",
-                            self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
-                        ),
+                        compute_type=current_compute_type,
                         chunk_length_s=float(self.chunk_length_sec),
                         batch_size=self.batch_size,
+                    )
+                    if current_backend in {"transformers", "whisper"} and not _torch_available():
+                        raise RuntimeError(
+                            "PyTorch is required for the Transformers backend but is not installed."
+                        )
+                    load_kwargs["model_id"] = req_model_id
+                    try:
+                        self._asr_backend.load(**load_kwargs)
+                    except Exception as load_error:
+                        duration_ms = (time.perf_counter() - load_started_at) * 1000.0
+                        if current_backend == "ctranslate2":
+                            self._handle_ct2_failure(
+                                stage="carregar",
+                                error=load_error,
+                                model_id=req_model_id,
+                                device=effective_device,
+                                dtype=load_kwargs.get("dtype", req_dtype),
+                                compute_type=current_compute_type,
+                                duration_ms=duration_ms,
+                                chunk_length_s=float(self.chunk_length_sec),
+                                batch_size=self.batch_size,
+                            )
+                            self._asr_backend = None
+                            if fallback_allowed:
+                                logging.warning(
+                                    "Failed to load backend '%s': %s. Attempting fallback to 'transformers'.",
+                                    current_backend,
+                                    load_error,
+                                )
+                                fallback_allowed = False
+                                backend_name = "transformers"
+                                continue
+                            return None, None
+                        self._log_model_event(
+                            "load_failure",
+                            level=logging.ERROR,
+                            backend=current_backend,
+                            model_id=req_model_id,
+                            device=effective_device,
+                            dtype=load_kwargs.get("dtype", req_dtype),
+                            compute_type=current_compute_type,
+                            chunk_length_s=float(self.chunk_length_sec),
+                            batch_size=self.batch_size,
+                            duration_ms=duration_ms,
+                            error=str(load_error),
+                        )
+                        self._model_load_started_at = None
+                        raise
+
+                    warmup_failed: Exception | None = None
+                    warmup_duration_ms: float | None = None
+                    warmup_started_at = time.perf_counter()
+                    try:
+                        self._asr_backend.warmup()
+                        warmup_duration_ms = (time.perf_counter() - warmup_started_at) * 1000.0
+                        self._log_model_event(
+                            "warmup",
+                            backend=current_backend,
+                            duration_ms=warmup_duration_ms,
+                            status="success",
+                        )
+                    except Exception as warmup_error:
+                        warmup_failed = warmup_error
+                        warmup_duration_ms = (time.perf_counter() - warmup_started_at) * 1000.0
+                        logging.debug("ASR backend warmup failed: %s", warmup_error)
+                        self._log_model_event(
+                            "warmup",
+                            level=logging.WARNING,
+                            backend=current_backend,
+                            duration_ms=warmup_duration_ms,
+                            status="failed",
+                            error=str(warmup_error),
+                        )
+
+                    duration_ms = (time.perf_counter() - load_started_at) * 1000.0
+                    resolved_device = getattr(self._asr_backend, "device", effective_device)
+                    resolved_model = getattr(self._asr_backend, "model_id", req_model_id)
+                    resolved_dtype = load_kwargs.get("dtype", req_dtype)
+                    resolved_compute = current_compute_type
+                    self._update_model_log_context(
+                        backend=current_backend,
+                        model=resolved_model,
+                        device=resolved_device,
+                        dtype=resolved_dtype,
+                        compute_type=resolved_compute,
+                        chunk_length_s=float(self.chunk_length_sec),
+                        batch_size=self.batch_size,
+                    )
+                    self._log_model_event(
+                        "load_success",
+                        backend=current_backend,
+                        device=resolved_device,
+                        dtype=resolved_dtype,
+                        compute_type=resolved_compute,
                         duration_ms=duration_ms,
-                        error=str(load_error),
+                        status="warmup_failed" if warmup_failed else "ready",
                     )
                     self._model_load_started_at = None
-                    raise
-
-                warmup_failed = None
-                try:
-                    self._asr_backend.warmup()
-                except Exception as warmup_error:
-                    warmup_failed = warmup_error
-                    logging.debug("ASR backend warmup failed: %s", warmup_error)
-
-                duration_ms = (time.perf_counter() - load_started_at) * 1000.0
-                resolved_device = getattr(self._asr_backend, "device", effective_device)
-                resolved_model = getattr(self._asr_backend, "model_id", req_model_id)
-                resolved_dtype = load_kwargs.get("dtype", req_dtype)
-                resolved_compute = load_kwargs.get(
-                    "ct2_compute_type",
-                    self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
-                )
-                self._update_model_log_context(
-                    backend=backend_name,
-                    model=resolved_model,
-                    device=resolved_device,
-                    dtype=resolved_dtype,
-                    compute_type=resolved_compute,
-                    chunk_length_s=float(self.chunk_length_sec),
-                    batch_size=self.batch_size,
-                )
-                self._log_model_event(
-                    "load_success",
-                    backend=backend_name,
-                    device=resolved_device,
-                    dtype=resolved_dtype,
-                    compute_type=resolved_compute,
-                    duration_ms=duration_ms,
-                    status="warmup_failed" if warmup_failed else "ready",
-                )
-                self._model_load_started_at = None
-                logging.info(
-                    "Backend '%s' initialized on device %s.",
-                    self.backend_resolved,
-                    self.device_in_use,
-                )
-                return self._asr_backend, None
+                    logging.info(
+                        "Backend '%s' initialized on device %s.",
+                        self.backend_resolved,
+                        self.device_in_use,
+                    )
+                    return self._asr_backend, None
 
             self._asr_backend = None
             model_id = self.asr_model_id
