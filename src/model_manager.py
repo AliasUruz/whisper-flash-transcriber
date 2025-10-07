@@ -188,12 +188,19 @@ DISPLAY_NAMES: Dict[str, str] = {
     "distil-whisper/distil-large-v3": "Distil Whisper Large v3 (CT2)",
     "faster-whisper/medium.en": "Faster-Whisper Medium.en",
     "openai/whisper-large-v3-turbo": "Whisper Large v3 Turbo",
-    "distil-whisper/distil-large-v3": "Distil Whisper Large v3",
+}
+
+# Legacy aliases kept for backwards compatibility/documentation purposes.
+# They should never override curated identifiers above.
+_LEGACY_DISPLAY_ALIASES: Dict[str, str] = {
     "Systran/faster-whisper-medium": "Faster-Whisper Medium",
     "Systran/faster-whisper-medium-int8": "Faster-Whisper Medium Int8",
     "Systran/faster-whisper-small": "Faster-Whisper Small",
     "Systran/faster-whisper-small-int8": "Faster-Whisper Small Int8",
 }
+
+for _alias, _label in _LEGACY_DISPLAY_ALIASES.items():
+    DISPLAY_NAMES.setdefault(_alias, _label)
 
 # Para reintroduzir outros modelos futuramente, basta estender as estruturas
 # CURATED e DISPLAY_NAMES abaixo.
