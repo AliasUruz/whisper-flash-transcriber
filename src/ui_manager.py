@@ -3850,6 +3850,18 @@ class UIManager:
                 detect_agent_key_button.pack(side="left", padx=5)
                 Tooltip(detect_agent_key_button, "Captura um novo atalho do agente.")
 
+                layout_help = ctk.CTkLabel(
+                    general_frame,
+                    text=(
+                        "Compatibilidade: atalhos reconhecem layouts ABNT2, US International "
+                        "e variam automaticamente teclas especiais (ex.: ç, ´, ~)."
+                    ),
+                    wraplength=500,
+                    justify="left",
+                    text_color="gray70",
+                )
+                layout_help.pack(fill="x", padx=5, pady=(2, 8))
+
                 # Recording Mode
                 mode_frame = ctk.CTkFrame(general_frame)
                 mode_frame.pack(fill="x", pady=5)

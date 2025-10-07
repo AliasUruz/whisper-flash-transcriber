@@ -11,6 +11,7 @@ import keyboard
 
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
 from .logging_utils import get_logger, log_context
+from .hotkey_normalization import _normalize_key_name
 
 LOGGER = get_logger(
     "whisper_flash_transcriber.hotkeys",
@@ -112,9 +113,19 @@ class KeyboardHotkeyManager:
 
             with path.open('r', encoding='utf-8') as f:
                 config = json.load(f)
-                self.record_key = config.get('record_key', self.record_key)
-                self.agent_key = config.get('agent_key', self.agent_key)
-                self.record_mode = config.get('record_mode', self.record_mode)
+                self.record_key = (
+                    _normalize_key_name(config.get('record_key', self.record_key))
+                    or self.record_key
+                )
+                self.agent_key = (
+                    _normalize_key_name(config.get('agent_key', self.agent_key))
+                    or self.agent_key
+                )
+                self.record_mode = str(
+                    config.get('record_mode', self.record_mode)
+                ).lower()
+                if self.record_mode not in {"toggle", "press"}:
+                    self.record_mode = "toggle"
                 self._log(
                     logging.INFO,
                     "Hotkey configuration loaded.",
@@ -167,9 +178,16 @@ class KeyboardHotkeyManager:
         try:
             path = self._config_path
             path.parent.mkdir(parents=True, exist_ok=True)
+            normalized_record = _normalize_key_name(self.record_key) or "f3"
+            normalized_agent = _normalize_key_name(self.agent_key) or "f4"
+            self.record_key = normalized_record
+            self.agent_key = normalized_agent
+            self.record_mode = str(self.record_mode or "toggle").lower()
+            if self.record_mode not in {"toggle", "press"}:
+                self.record_mode = "toggle"
             config = {
-                'record_key': self.record_key,
-                'agent_key': self.agent_key,
+                'record_key': normalized_record,
+                'agent_key': normalized_agent,
                 'record_mode': self.record_mode
             }
             with path.open('w', encoding='utf-8') as f:
@@ -204,7 +222,7 @@ class KeyboardHotkeyManager:
     ) -> dict[str, Any]:
         """Attempt to register a hotkey to validate permissions without keeping it active."""
 
-        candidate = (hotkey or self.record_key or "f3").strip()
+        candidate = _normalize_key_name(hotkey or self.record_key or "f3") or "f3"
         registration_id = None
         start_time = time.perf_counter()
         try:
@@ -356,13 +374,18 @@ class KeyboardHotkeyManager:
 
             # Atualizar valores
             if record_key is not None:
-                self.record_key = record_key.lower()
+                normalized_record = _normalize_key_name(record_key)
+                self.record_key = normalized_record or "f3"
 
             if agent_key is not None:
-                self.agent_key = agent_key.lower()
+                normalized_agent = _normalize_key_name(agent_key)
+                self.agent_key = normalized_agent or "f4"
 
             if record_mode is not None:
-                self.record_mode = record_mode
+                normalized_mode = str(record_mode or "toggle").lower()
+                if normalized_mode not in {"toggle", "press"}:
+                    normalized_mode = "toggle"
+                self.record_mode = normalized_mode
 
             # Salvar configuração
             self._save_config()
@@ -455,18 +478,33 @@ class KeyboardHotkeyManager:
                 handle_id=handle_id,
             )
             return
-        self.hotkey_handlers.setdefault(handle_id, []).append(handle)
+        normalized_id = handle_id
+        if isinstance(handle_id, str):
+            key_part, separator, suffix = handle_id.partition(":")
+            normalized_key = _normalize_key_name(key_part)
+            if normalized_key:
+                normalized_id = normalized_key + (separator + suffix if separator else "")
+        self.hotkey_handlers.setdefault(normalized_id, []).append(handle)
 
     def _register_hotkeys(self):
         """Registra as hotkeys no sistema."""
         try:
+            record_mode = str(self.record_mode or "toggle").lower()
+            if record_mode not in {"toggle", "press"}:
+                record_mode = "toggle"
+            record_key = _normalize_key_name(self.record_key) or "f3"
+            agent_key = _normalize_key_name(self.agent_key) or "f4"
+            self.record_mode = record_mode
+            self.record_key = record_key
+            self.agent_key = agent_key
+
             self._log(
                 logging.INFO,
                 "Starting hotkey registration.",
                 event="hotkeys.register_start",
-                record_key=self.record_key,
-                agent_key=self.agent_key,
-                record_mode=self.record_mode,
+                record_key=record_key,
+                agent_key=agent_key,
+                record_mode=record_mode,
             )
 
             # Desregistrar hotkeys existentes para evitar duplicação
@@ -477,8 +515,8 @@ class KeyboardHotkeyManager:
                 logging.INFO,
                 "Registering recording hotkey.",
                 event="hotkeys.register_record",
-                record_key=self.record_key,
-                mode=self.record_mode,
+                record_key=record_key,
+                mode=record_mode,
             )
 
             # Definir o handler para a tecla de gravação
@@ -488,15 +526,15 @@ class KeyboardHotkeyManager:
                 # Para o modo press, registramos dois handlers: um para pressionar e outro para soltar
                 handler = self._on_press_key
                 # Registrar handler para soltar a tecla no modo press
-                if self.record_mode == "press":
+                if record_mode == "press":
                     try:
                         release_handle = keyboard.on_release_key(
-                            self.record_key,
+                            record_key,
                             lambda _: self._on_release_key(),
                             suppress=False,
                         )
                         self._store_hotkey_handle(
-                            f"{self.record_key}:release",
+                            f"{record_key}:release",
                             release_handle,
                         )
                     except OSError as e:
@@ -504,7 +542,7 @@ class KeyboardHotkeyManager:
                             logging.ERROR,
                             "OS error while registering release hotkey.",
                             event="hotkeys.register_release_os_error",
-                            record_key=self.record_key,
+                            record_key=record_key,
                             error=str(e),
                         )
                         return False
@@ -513,7 +551,7 @@ class KeyboardHotkeyManager:
                             logging.ERROR,
                             "Unexpected error while registering release hotkey.",
                             event="hotkeys.register_release_error",
-                            record_key=self.record_key,
+                            record_key=record_key,
                             error=str(e),
                             exc_info=True,
                         )
@@ -522,18 +560,18 @@ class KeyboardHotkeyManager:
                         logging.INFO,
                         "Release handler registered for record hotkey.",
                         event="hotkeys.register_release_success",
-                        record_key=self.record_key,
+                        record_key=record_key,
                     )
 
             # Usar on_press_key em vez de add_hotkey para maior confiabilidade
             try:
                 press_handle = keyboard.on_press_key(
-                    self.record_key,
+                    record_key,
                     lambda _: handler(),
                     suppress=True,
                 )
                 self._store_hotkey_handle(
-                    f"{self.record_key}:press",
+                    f"{record_key}:press",
                     press_handle,
                 )
             except OSError as e:
@@ -541,7 +579,7 @@ class KeyboardHotkeyManager:
                     logging.ERROR,
                     "OS error while registering record hotkey.",
                     event="hotkeys.register_press_os_error",
-                    record_key=self.record_key,
+                    record_key=record_key,
                     error=str(e),
                 )
                 return False
@@ -550,7 +588,7 @@ class KeyboardHotkeyManager:
                     logging.ERROR,
                     "Error while registering record hotkey.",
                     event="hotkeys.register_press_error",
-                    record_key=self.record_key,
+                    record_key=record_key,
                     error=str(e),
                     exc_info=True,
                 )
@@ -559,7 +597,7 @@ class KeyboardHotkeyManager:
                 logging.INFO,
                 "Recording hotkey registered.",
                 event="hotkeys.register_press_success",
-                record_key=self.record_key,
+                record_key=record_key,
             )
 
             # Registrar a tecla de recarga
@@ -567,16 +605,16 @@ class KeyboardHotkeyManager:
                 logging.INFO,
                 "Registering agent hotkey.",
                 event="hotkeys.register_agent",
-                agent_key=self.agent_key,
+                agent_key=agent_key,
             )
             try:
                 agent_handle = keyboard.on_press_key(
-                    self.agent_key,
+                    agent_key,
                     lambda _: self._on_agent_key(),
                     suppress=False,
                 )
                 self._store_hotkey_handle(
-                    f"{self.agent_key}:press",
+                    f"{agent_key}:press",
                     agent_handle,
                 )
             except OSError as e:
@@ -584,7 +622,7 @@ class KeyboardHotkeyManager:
                     logging.ERROR,
                     "OS error while registering agent hotkey.",
                     event="hotkeys.register_agent_os_error",
-                    agent_key=self.agent_key,
+                    agent_key=agent_key,
                     error=str(e),
                 )
                 return False
@@ -593,7 +631,7 @@ class KeyboardHotkeyManager:
                     logging.ERROR,
                     "Unexpected error while registering agent hotkey.",
                     event="hotkeys.register_agent_error",
-                    agent_key=self.agent_key,
+                    agent_key=agent_key,
                     error=str(e),
                     exc_info=True,
                 )
@@ -602,15 +640,15 @@ class KeyboardHotkeyManager:
                 logging.INFO,
                 "Agent hotkey registered.",
                 event="hotkeys.register_agent_success",
-                agent_key=self.agent_key,
+                agent_key=agent_key,
             )
 
             self._log(
                 logging.INFO,
                 "Hotkeys registered successfully.",
                 event="hotkeys.register_complete",
-                record_key=self.record_key,
-                agent_key=self.agent_key,
+                record_key=record_key,
+                agent_key=agent_key,
             )
             return True
 

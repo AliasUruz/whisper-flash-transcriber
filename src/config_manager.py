@@ -21,6 +21,7 @@ from .config_schema import (
     flatten_config_tree,
     normalize_payload_tree,
 )
+from .hotkey_normalization import _normalize_key_name
 from .model_manager import (
     HardwareProfile,
     build_runtime_catalog,
@@ -569,7 +570,14 @@ class ConfigManager:
             return default
 
         # Normalize hotkey fields for internal consumption
-        cfg["record_key"] = str(cfg.get("record_key", self.default_config["record_key"])).lower()
+        default_record_key = (
+            _normalize_key_name(self.default_config["record_key"])
+            or self.default_config["record_key"]
+        )
+        cfg["record_key"] = (
+            _normalize_key_name(cfg.get("record_key", default_record_key))
+            or default_record_key
+        )
         cfg["record_mode"] = str(cfg.get("record_mode", self.default_config["record_mode"])).lower()
 
         # Agent auto paste mirrors auto paste unless explicitly overridden
