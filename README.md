@@ -42,15 +42,23 @@ Whisper Flash Transcriber is a high-performance, hotkey-driven audio transcripti
    ```bash
    pip install -r requirements.txt
    ```
-   The base dependency set installs the faster-whisper/CTranslate2 runtime and all core libraries needed for the default flow.
-   PyTorch and the Transformers pipeline are no longer part of the mandatory stack.
+   The base dependency set installs the faster-whisper/CTranslate2 runtime, `huggingface_hub`, and all core libraries needed for
+   the default flow. Version specifiers now use bounded ranges (for example, `numpy>=1.26,<3` and `psutil>=5.9,<6.1`) so that
+   upgrades remain compatible with PyTorch 2.5.1 and other vendor wheels without forcing exact pins. PyTorch and the
+   Transformers pipeline are no longer part of the mandatory stack.
 
 4. **Optional legacy stack:**
    ```bash
    pip install -r requirements-legacy.txt
    ```
    Install this file only if you plan to run the legacy Transformers + PyTorch workflow. The main application no longer ships
-   that backend, but the optional dependencies remain available for custom forks.
+   that backend, but the optional dependencies remain available for custom forks. The file now pins `torch==2.5.1` to maintain
+   parity with the production baseline; `huggingface_hub` ships with the core requirements, so no additional extras are pulled
+   in by this step. When installing PyTorch on Linux without CUDA, use the CPU index explicitly:
+
+   ```bash
+   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+   ```
 
 ### Optional: Advanced GPU and quantization extras
 
