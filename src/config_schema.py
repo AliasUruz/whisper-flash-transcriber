@@ -362,9 +362,21 @@ def coerce_with_defaults(payload: dict[str, Any], defaults: dict[str, Any]) -> t
     Returns the sanitized configuration dictionary and a list of warning
     messages produced while coercing invalid fields back to their defaults.
     """
-
-    merged = {**defaults, **payload}
+    normalized_payload = dict(payload)
     warnings: list[str] = []
+
+    record_mode_value = normalized_payload.get("record_mode")
+    if isinstance(record_mode_value, str) and record_mode_value.strip().lower() == "hold":
+        warnings.append("Legacy record_mode 'hold' mapped to 'press'.")
+        LOGGER.info(
+            log_context(
+                "Mapping legacy record_mode 'hold' to 'press'.",
+                event="config.legacy_record_mode_mapped",
+            )
+        )
+        normalized_payload["record_mode"] = "press"
+
+    merged = {**defaults, **normalized_payload}
 
     while True:
         try:
