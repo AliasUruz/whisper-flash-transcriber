@@ -97,6 +97,7 @@ LEGACY_HOTKEY_LOCATIONS: tuple[Path, ...] = (
 
 
 DEFAULT_CONFIG = {
+    "show_advanced": False,
     "record_key": "F3",
     "record_mode": "toggle",
     "auto_paste": True,
@@ -160,14 +161,14 @@ DEFAULT_CONFIG = {
     "save_temp_recordings": False,
     "record_storage_mode": "auto",
     "record_storage_limit": 0,
-    "max_memory_seconds_mode": "manual",
+    "max_memory_seconds_mode": "auto",
     "max_memory_seconds": 30,
     "min_free_ram_mb": 1000,
     "auto_ram_threshold_percent": 10,
     "max_parallel_downloads": 1,
     "min_transcription_duration": 1.0,  # Nova configuração
     "chunk_length_sec": 30,
-    "chunk_length_mode": "manual",
+    "chunk_length_mode": "auto",
     "launch_at_startup": False,
     "clear_gpu_cache": True,
     "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
@@ -1189,10 +1190,17 @@ class ConfigManager:
             ]
 
         # chunk_length_mode: 'auto' | 'manual'
-        raw_chunk_mode = str(self.config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual"))).lower()
+        raw_chunk_mode = str(
+            self.config.get(
+                CHUNK_LENGTH_MODE_CONFIG_KEY,
+                self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "auto"),
+            )
+        ).lower()
         if raw_chunk_mode not in ["auto", "manual"]:
-            logging.warning(f"Invalid chunk_length_mode '{raw_chunk_mode}'. Falling back to 'manual'.")
-            raw_chunk_mode = "manual"
+            logging.warning(
+                f"Invalid chunk_length_mode '{raw_chunk_mode}'. Falling back to 'auto'."
+            )
+            raw_chunk_mode = "auto"
         self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = raw_chunk_mode
 
         backend_value = _normalize_asr_backend(
@@ -2834,13 +2842,13 @@ class ConfigManager:
     def get_chunk_length_mode(self):
         return self.config.get(
             CHUNK_LENGTH_MODE_CONFIG_KEY,
-            self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual"),
+            self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "auto"),
         )
 
     def set_chunk_length_mode(self, value: str):
         val = str(value).lower()
         if val not in ["auto", "manual"]:
-            val = "manual"
+            val = "auto"
         self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = val
 
     def set_chunk_length_sec(self, value: float | int):

@@ -150,7 +150,7 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
-        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "auto")
         # Configurações de ASR
         # Inicializar atributos internos sem acionar recarga imediata do backend
         self._asr_backend_name = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
@@ -440,7 +440,7 @@ class TranscriptionHandler:
         self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
-        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "auto")
 
         previous_backend = self._asr_backend_name
         previous_model_id = self._asr_model_id

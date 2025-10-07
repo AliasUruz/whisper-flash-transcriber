@@ -202,6 +202,8 @@ class FirstRunWizard(ctk.CTkToplevel):
         self._build_layout()
         self._build_steps()
         self._show_step(0)
+        self.bind("<Control-Shift-A>", self._toggle_advanced_mode)
+        self.bind("<Control-Shift-a>", self._toggle_advanced_mode)
 
     # ------------------------------------------------------------------
     # Public API
@@ -280,6 +282,7 @@ class FirstRunWizard(ctk.CTkToplevel):
 
         self.download_now_var = tk.BooleanVar(value=self._first_run)
         self.summary_text_var = tk.StringVar(value="")
+        self._show_advanced = bool(cfg.get("show_advanced", False))
 
     def _build_layout(self) -> None:
         self.columnconfigure(0, weight=1)
@@ -694,6 +697,7 @@ class FirstRunWizard(ctk.CTkToplevel):
             "models_storage_dir": self.models_dir_var.get().strip(),
             "asr_cache_dir": self.cache_dir_var.get().strip(),
             "recordings_dir": self.recordings_dir_var.get().strip(),
+            "show_advanced": self._show_advanced,
         }
         return updates
 
@@ -731,8 +735,20 @@ class FirstRunWizard(ctk.CTkToplevel):
             f"Gravações: {self.recordings_dir_var.get().strip()}",
             "",
             "Download imediato: " + ("Sim" if self.download_now_var.get() else "Não"),
+            "Modo avançado: " + ("Ativo" if self._show_advanced else "Simples"),
         ]
         self.summary_text_var.set("\n".join(lines))
+
+    def _toggle_advanced_mode(self, _event=None) -> str | None:
+        self._show_advanced = not self._show_advanced
+        state = "ativado" if self._show_advanced else "desativado"
+        messagebox.showinfo(
+            "Modo avançado",
+            f"Modo avançado {state}.",
+            parent=self,
+        )
+        self._update_summary()
+        return "break"
 
     def _apply_recommended_model(self, choice: str) -> None:
         if choice not in {entry[0] for entry in self._recommended_entries}:
