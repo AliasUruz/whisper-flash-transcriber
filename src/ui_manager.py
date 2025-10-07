@@ -10,7 +10,10 @@ import sys
 import subprocess
 import webbrowser
 from datetime import datetime
-import pystray
+try:
+    import pystray  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - runtime fallback when pystray is missing
+    pystray = None  # type: ignore[assignment]
 from PIL import Image, ImageDraw
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,7 +53,7 @@ from . import state_manager as sm
 
 from .utils.form_validation import safe_get_float, safe_get_int
 from .utils.tooltip import Tooltip
-from .logging_utils import get_log_directory
+from .logging_utils import StructuredMessage, get_log_directory
 from .state_manager import StateEvent
 from .utils.dependency_audit import DependencyAuditResult, DependencyIssue
 
@@ -156,6 +159,8 @@ class UIManager:
 
         self.tray_icon = None
         self._pending_tray_tooltip = None
+        self._tray_icon_unavailable_reason: Optional[str] = None
+        self._window_mode_notified = False
         self.settings_window_instance = None
         self.settings_thread_running = False
         self.settings_window_lock = threading.Lock()
@@ -2771,6 +2776,79 @@ class UIManager:
             logging.debug("Tray tooltip truncated to %d characters: %s", max_len, text)
         return text
 
+    def _set_tray_tooltip(self, text: str) -> None:
+        """Atualiza a tooltip ativa ou armazena o valor para quando o tray estiver disponível."""
+
+        if not text:
+            return
+
+        self._pending_tray_tooltip = text
+        clamped = self._clamp_tray_tooltip(text)
+
+        if not self.tray_icon:
+            if self._tray_icon_unavailable_reason:
+                logging.debug("UIManager: tray icon unavailable, caching tooltip: %s", text)
+            return
+
+        try:
+            self.tray_icon.title = clamped
+        except Exception:
+            logging.debug("UIManager: failed to set tray tooltip directly; caching instead.", exc_info=True)
+
+    def _stop_tooltip_threads(self) -> None:
+        """Encerra com segurança os threads de tooltip."""
+
+        if self.recording_timer_thread and self.recording_timer_thread.is_alive():
+            self.stop_recording_timer_event.set()
+            self.recording_timer_thread.join(timeout=1)
+        self.recording_timer_thread = None
+        if self.transcribing_timer_thread and self.transcribing_timer_thread.is_alive():
+            self.stop_transcribing_timer_event.set()
+            self.transcribing_timer_thread.join(timeout=1)
+        self.transcribing_timer_thread = None
+
+    def _notify_tray_icon_unavailable(self, reason: str | None = None) -> None:
+        """Informa o usuário que o modo bandeja está indisponível e ativa o modo janela."""
+
+        if self._window_mode_notified:
+            return
+
+        self._window_mode_notified = True
+        message = (
+            "Não foi possível inicializar o ícone da bandeja do sistema. "
+            "O aplicativo continuará apenas com a janela de configurações."
+        )
+        if reason:
+            message = f"{message}\n\nMotivo: {reason}"
+
+        try:
+            messagebox.showwarning("Whisper Flash Transcriber", message)
+        except Exception:
+            logging.debug("UIManager: failed to display tray icon warning messagebox.", exc_info=True)
+
+        try:
+            self.run_settings_gui()
+        except Exception:
+            logging.error("UIManager: unable to open settings window after tray failure.", exc_info=True)
+
+    def _handle_tray_icon_failure(self, exc: Exception, tooltip: str) -> None:
+        """Registra o erro de bandeja e ativa o modo apenas janela."""
+
+        reason = str(exc) or exc.__class__.__name__
+        self._tray_icon_unavailable_reason = reason
+        logging.warning(
+            StructuredMessage(
+                "System tray integration unavailable; switching to window-only mode.",
+                event="ui.tray_icon.unavailable",
+                error=str(exc),
+                error_type=exc.__class__.__name__,
+            )
+        )
+        self._stop_tooltip_threads()
+        self.tray_icon = None
+        self._set_tray_tooltip(tooltip)
+        self.main_tk_root.after(0, lambda: self._notify_tray_icon_unavailable(reason))
+
     def _recording_tooltip_updater(self):
         """Atualiza a tooltip com a duração da gravação a cada segundo."""
         while not self.stop_recording_timer_event.is_set():
@@ -2782,7 +2860,9 @@ class UIManager:
             suffix = getattr(self, "_state_context_suffix", "")
             if suffix:
                 tooltip = f"{tooltip}{suffix}"
-            self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
+            self._set_tray_tooltip(tooltip)
+            if not self.tray_icon:
+                break
             time.sleep(1)
 
     def _format_elapsed(self, seconds: float) -> str:
@@ -2834,7 +2914,7 @@ class UIManager:
                 if suffix:
                     tooltip = f"{tooltip}{suffix}"
                 if self.tray_icon:
-                    self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
+                    self._set_tray_tooltip(tooltip)
             except Exception:
                 # Em caso de falha, mantém somente o tempo
                 elapsed = time.time() - start_ts
@@ -2843,7 +2923,14 @@ class UIManager:
                     suffix = getattr(self, "_state_context_suffix", "")
                     if suffix:
                         tooltip = f"{tooltip}{suffix}"
-                    self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
+                    self._set_tray_tooltip(tooltip)
+                else:
+                    tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
+                    suffix = getattr(self, "_state_context_suffix", "")
+                    if suffix:
+                        tooltip = f"{tooltip}{suffix}"
+                    self._set_tray_tooltip(tooltip)
+                    break
             time.sleep(1)
 
     def update_tray_icon(self, state):
@@ -2943,13 +3030,13 @@ class UIManager:
                             rich_tooltip = _apply_suffix(
                                 f"Whisper Recorder (TRANSCRIBING) [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
                             )
-                            self.tray_icon.title = self._clamp_tray_tooltip(rich_tooltip)
+                            self._set_tray_tooltip(rich_tooltip)
                         else:
                             fallback = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
-                            self.tray_icon.title = self._clamp_tray_tooltip(fallback)
+                            self._set_tray_tooltip(fallback)
                     except Exception:
                         fallback = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
-                        self.tray_icon.title = self._clamp_tray_tooltip(fallback)
+                        self._set_tray_tooltip(fallback)
                     self.transcribing_timer_thread = threading.Thread(
                         target=self._transcribing_tooltip_updater,
                         daemon=True,
@@ -2981,7 +3068,7 @@ class UIManager:
                 tooltip = "Whisper Recorder (LOADING_MODEL)"
 
             tooltip_with_context = _apply_suffix(tooltip)
-            self.tray_icon.title = self._clamp_tray_tooltip(tooltip_with_context)
+            self._set_tray_tooltip(tooltip_with_context)
             self.tray_icon.update_menu()
 
             event_name = getattr(event_obj, "name", None) if event_obj is not None else None
@@ -2989,6 +3076,18 @@ class UIManager:
                 logging.debug("Tray icon updated for state: %s (event=%s)", state_str, event_name)
             else:
                 logging.debug("Tray icon updated for state: %s", state_str)
+
+        else:
+            self._stop_tooltip_threads()
+            tooltip = f"Whisper Recorder ({state_str})"
+            if state_str == "IDLE" and self.core_instance_ref:
+                record_key = getattr(self.core_instance_ref, "record_key", "")
+                agent_key = getattr(self.core_instance_ref, "agent_key", "")
+                if record_key and agent_key:
+                    tooltip += f" - Record: {record_key.upper()} - Agent: {agent_key.upper()}"
+            tooltip_with_context = _apply_suffix(tooltip)
+            self._set_tray_tooltip(tooltip_with_context)
+            logging.debug("UIManager: cached tray tooltip for state %s (tray unavailable).", state_str)
 
         if warning_payload:
             warning_level = str(warning_payload.get("level", "info")).lower()
@@ -4136,12 +4235,8 @@ class UIManager:
     def show_status_tooltip(self, message: str) -> None:
         if not message:
             return
-        if self.tray_icon:
-            self.tray_icon.title = self._clamp_tray_tooltip(message)
-            logging.debug("UIManager: tooltip updated to: %s", message)
-        else:
-            self._pending_tray_tooltip = message
-            logging.debug("UIManager: pending tooltip queued: %s", message)
+        self._set_tray_tooltip(message)
+        logging.debug("UIManager: status tooltip request processed: %s", message)
 
     def setup_tray_icon(self):
         # Logic moved from global, adjusted to use self.
@@ -4153,18 +4248,32 @@ class UIManager:
             color1, color2 = self.ICON_COLORS.get(initial_state, self.DEFAULT_ICON_COLOR)
             initial_image = self.create_image(64, 64, color1, color2)
         initial_tooltip = self._pending_tray_tooltip or f"Whisper Recorder ({initial_state})"
+        self._set_tray_tooltip(initial_tooltip)
 
-        self.tray_icon = pystray.Icon(
-            "whisper_recorder",
-            initial_image,
-            initial_tooltip,
-            menu=pystray.Menu(lambda: self.create_dynamic_menu())
-        )
+        try:
+            self.core_instance_ref.set_state_update_callback(self.update_tray_icon)
+            self.core_instance_ref.set_segment_callback(self.update_live_transcription_threadsafe)
+        except Exception:
+            logging.error("UIManager: failed to register tray callbacks with core.", exc_info=True)
+
+        if pystray is None:
+            self._handle_tray_icon_failure(ImportError("pystray module is not available"), initial_tooltip)
+            return
+
+        try:
+            menu_factory = pystray.Menu(lambda: self.create_dynamic_menu())
+            self.tray_icon = pystray.Icon(
+                "whisper_recorder",
+                initial_image,
+                self._clamp_tray_tooltip(initial_tooltip),
+                menu=menu_factory,
+            )
+        except (OSError, ImportError) as exc:
+            self._handle_tray_icon_failure(exc, initial_tooltip)
+            return
+
         if self._pending_tray_tooltip:
-            self.tray_icon.title = self._clamp_tray_tooltip(self._pending_tray_tooltip)
-        # Set update callback in core_instance
-        self.core_instance_ref.set_state_update_callback(self.update_tray_icon)
-        self.core_instance_ref.set_segment_callback(self.update_live_transcription_threadsafe) # Connect segment callback
+            self._set_tray_tooltip(self._pending_tray_tooltip)
 
         # pystray's run() blocks the main thread. Since the application uses
         # Tkinter's mainloop, run the tray icon in detached mode so both loops
@@ -4184,6 +4293,10 @@ class UIManager:
     def create_dynamic_menu(self):
         # Logic moved from global, adjusted to use self.core_instance_ref
         # ...
+        if pystray is None:
+            logging.debug("UIManager: pystray is unavailable; returning empty tray menu.")
+            return tuple()
+
         current_state = self._get_core_state()
         is_recording = current_state == "RECORDING"
 

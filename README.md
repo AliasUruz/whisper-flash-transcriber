@@ -101,6 +101,14 @@ installation estimates.
   - Configure AI services, audio feedback sounds, and additional quality-of-life options.
   - Calibrate VAD behaviour with pre/post speech padding, minimum durations, and silence thresholds.
 
+### Window-only fallback mode
+
+Environments that block access to the operating system tray (for example, missing `pystray`, restricted remote desktops, or
+headless sessions) now trigger a controlled fallback. During startup the diagnostics report records the problem under the
+**System Tray** check, and the runtime emits a structured warning with the `ui.tray_icon.unavailable` event. The application
+automatically opens the settings window so you can continue managing recordings without relying on the tray icon. Install the
+`pystray` and `Pillow` packages and ensure a compatible desktop session is available to restore full tray functionality.
+
 ### ASR backend policy
 
 Whisper Flash Transcriber now distributes only the faster-whisper/CTranslate2 backend. The legacy Transformers
