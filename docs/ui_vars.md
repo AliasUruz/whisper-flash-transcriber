@@ -11,8 +11,8 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Correção de texto | `agent_model_var` | `StringVar` | `CTkOptionMenu` (`agent_model_menu`) | `"gemini_agent_model"` | Seleciona o modelo Gemini específico para o modo agente. |
 | Geral | `hotkey_stability_service_enabled_var` | `BooleanVar` | `CTkSwitch` (`stability_switch`) | `"hotkey_stability_service_enabled"` | Liga/desliga o serviço de estabilização dos hotkeys. |
 | Geral | `launch_at_startup_var` | `BooleanVar` | `CTkSwitch` (`startup_switch`) | `"launch_at_startup"` | Habilita a inicialização automática no Windows. |
-| Armazenamento | `storage_root_dir_var` | `StringVar` | `CTkEntry` (`storage_root_entry`) | `"storage_root_dir"` | Diretório base usado para modelos e outros artefatos pesados. |
-| Armazenamento | `recordings_dir_var` | `StringVar` | `CTkEntry` (`recordings_dir_entry`) | `"recordings_dir"` | Pasta onde arquivos WAV temporários e salvos são armazenados. |
+| Armazenamento | `storage_root_dir_var` | `StringVar` | `CTkEntry` (`storage_root_entry`) | `"storage_root_dir"` | Diretório base usado para modelos e outros artefatos pesados. Alterações disparam `_maybe_migrate_storage_paths()` para mover cache e gravações quando os caminhos específicos não foram sobrescritos. |
+| Armazenamento | `recordings_dir_var` | `StringVar` | `CTkEntry` (`recordings_dir_entry`) | `"recordings_dir"` | Pasta onde arquivos WAV temporários e salvos são armazenados; quando não há override, acompanha a migração disparada pelo `storage_root_dir`. |
 | Som | `sound_enabled_var` | `BooleanVar` | `CTkSwitch` (`sound_switch`) | `"sound_enabled"` | Ativa os bipes de início/fim de gravação. |
 | Som | `sound_frequency_var` | `StringVar` | `CTkEntry` (`freq_entry`) | `"sound_frequency"` | Entrada textual convertida para inteiro ao aplicar as configurações. |
 | Som | `sound_duration_var` | `StringVar` | `CTkEntry` (`duration_entry`) | `"sound_duration"` | Texto convertido para float durante a validação. |
@@ -33,6 +33,8 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Transcrição | `use_vad_var` | `BooleanVar` | `CTkCheckBox` (`vad_checkbox`) | `"use_vad"` | Alterna o uso do VAD Silero (é desativado se o modelo não estiver disponível). |
 | Transcrição | `vad_threshold_var` | `DoubleVar` | `CTkEntry` (`vad_threshold_entry`) | `"vad_threshold"` | Probabilidade mínima para considerar fala. |
 | Transcrição | `vad_silence_duration_var` | `DoubleVar` | `CTkEntry` (`vad_silence_entry`) | `"vad_silence_duration"` | Tempo de silêncio antes de cortar o áudio. |
+| Transcrição | `vad_pre_speech_padding_ms_var` | `IntVar` | — (controle ainda não exposto) | `"vad_pre_speech_padding_ms"` | Variável preparada para configurar o *padding* de pré-fala; enquanto não há widget associado, o valor permanece sincronizado via payload salvo manualmente. |
+| Transcrição | `vad_post_speech_padding_ms_var` | `IntVar` | `CTkEntry` (`vad_post_padding_entry`) | `"vad_post_speech_padding_ms"` | Define a janela extra após o silêncio detectado; o `AudioHandler` e o `VadManager` sincronizam essa margem ao persistir a configuração. |
 | Transcrição | `save_temp_recordings_var` | `BooleanVar` | `CTkSwitch` (`temp_recordings_switch`) | `"save_temp_recordings"` | Mantém ou remove arquivos temporários após o processamento; quando ativo, aplica a cota `record_storage_limit` (MB) e remove gravações antigas para liberar espaço. |
 | Transcrição | `record_storage_mode_var` | `StringVar` | `CTkOptionMenu` (`storage_mode_menu`) | `"record_storage_mode"` | Seleciona memória, disco ou modo automático; também define `new_record_to_memory` no `apply_settings`. |
 | Transcrição | `max_memory_seconds_var` | `DoubleVar` | `CTkEntry` (`mem_time_entry`) | `"max_memory_seconds"` | Limite máximo de áudio em memória antes de migrar para disco. |
@@ -44,7 +46,7 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | ASR | `asr_compute_device_var` | `StringVar` | `CTkOptionMenu` (`asr_device_menu`) | `"asr_compute_device"` + `"gpu_index"` | Representa a seleção textual (*Auto*, *Force CPU*, *GPU X*), traduzida para backend e índice ao aplicar. |
 | ASR | `asr_dtype_var` | `StringVar` | `CTkOptionMenu` (`asr_dtype_menu`) | `"asr_dtype"` | Define a precisão dos tensores do backend Torch. |
 | ASR | `asr_ct2_compute_type_var` | `StringVar` | `CTkOptionMenu` (`asr_ct2_menu`) | `"asr_ct2_compute_type"` | Ajusta o compute type quando o backend é CTranslate2. |
-| ASR | `models_storage_dir_var` | `StringVar` | `CTkEntry` (`models_dir_entry`) | `"models_storage_dir"` | Diretório raiz usado para armazenar modelos e demais artefatos pesados. |
+| ASR | `models_storage_dir_var` | `StringVar` | `CTkEntry` (`models_dir_entry`) | `"models_storage_dir"` | Diretório raiz usado para armazenar modelos e demais artefatos pesados; também serve de destino padrão quando o `storage_root_dir` muda sem override explícito. |
 | ASR | `asr_cache_dir_var` | `StringVar` | `CTkEntry` (`asr_cache_entry`) | `"asr_cache_dir"` | Diretório raiz usado para armazenar modelos baixados. |
 
 ## Notas adicionais
