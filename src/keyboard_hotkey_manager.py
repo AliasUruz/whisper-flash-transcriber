@@ -6,15 +6,27 @@ import threading
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+try:  # pragma: no cover - optional dependency
+    import keyboard  # type: ignore
+except Exception:  # pragma: no cover - optional dependency missing
+    keyboard = None  # type: ignore
 
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
+from .hotkey_normalization import _normalize_key_name
 from .logging_utils import get_logger, join_thread_with_timeout, log_context
 
 LOGGER = get_logger(
     "whisper_flash_transcriber.hotkeys",
     component="KeyboardHotkeyManager",
 )
+
+
+if TYPE_CHECKING:  # pragma: no cover - hints only
+    from .hotkeys import BaseHotkeyDriver
+else:  # pragma: no cover - fallback for optional dependency
+    BaseHotkeyDriver = Any  # type: ignore[misc,assignment]
 
 
 AUXILIARY_JOIN_TIMEOUT = 2.0
@@ -40,6 +52,9 @@ class KeyboardHotkeyManager:
         self.record_key = "f3"  # Tecla padrão
         self.agent_key = "f4"  # Tecla padrão para comando agêntico
         self.record_mode = "toggle"  # Modo padrão
+        self._debounce_window_ms = 0
+        self._last_trigger_ts: dict[str, float] = {}
+        self.hotkey_handlers: dict[str, list[Any]] = {}
         self._drivers: list[BaseHotkeyDriver] = []
         self._active_driver: BaseHotkeyDriver | None = None
         self._active_driver_index: int | None = None
@@ -74,6 +89,21 @@ class KeyboardHotkeyManager:
 
     def _initialize_drivers(self) -> None:
         with self._driver_lock:
+            try:
+                from .hotkeys import build_available_drivers  # type: ignore
+            except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency missing
+                self._drivers = []
+                self._active_driver = None
+                self._active_driver_index = None
+                self._driver_failures = []
+                self._log(
+                    logging.WARNING,
+                    "Hotkey drivers unavailable due to missing optional dependency.",
+                    event="hotkeys.drivers_import_failed",
+                    missing=str(exc),
+                )
+                return
+
             self._drivers = build_available_drivers(log=self._driver_log)
             self._active_driver = None
             self._active_driver_index = None
@@ -95,6 +125,19 @@ class KeyboardHotkeyManager:
     def _driver_entries(self) -> list[tuple[int, BaseHotkeyDriver]]:
         with self._driver_lock:
             return list(enumerate(self._drivers))
+
+    def _should_process_event(self, event_key: str) -> bool:
+        window_ms = max(0, int(self._debounce_window_ms))
+        now = time.perf_counter()
+        if window_ms <= 0:
+            self._last_trigger_ts[event_key] = now
+            return True
+
+        last = self._last_trigger_ts.get(event_key)
+        if last is None or (now - last) * 1000.0 >= window_ms:
+            self._last_trigger_ts[event_key] = now
+            return True
+        return False
 
     def get_active_driver_name(self) -> str | None:
         with self._driver_lock:
@@ -534,6 +577,18 @@ class KeyboardHotkeyManager:
         if agent is not None:
             self.callback_agent = agent
 
+    def set_debounce_window(self, milliseconds: int) -> None:
+        """Adjust the debounce window for hotkey callbacks in milliseconds."""
+
+        value = max(0, int(milliseconds))
+        self._debounce_window_ms = value
+        self._log(
+            logging.INFO,
+            "Updated hotkey debounce window.",
+            event="hotkeys.debounce_window_updated",
+            window_ms=value,
+        )
+
     def describe_persistence_state(self) -> dict[str, object]:
         """Retorna informações de diagnóstico do arquivo de hotkeys."""
 
@@ -636,8 +691,9 @@ class KeyboardHotkeyManager:
                     details={"auxiliary": name},
                 )
 
-    def _store_hotkey_handle(self, handle_id, handle):
-        """Guarda o handle retornado pela biblioteca ``keyboard``."""
+    def _store_hotkey_handle(self, handle_id: str, handle: Any) -> None:
+        """Persist the handle returned by the ``keyboard`` library."""
+
         if handle is None:
             self._log(
                 logging.WARNING,
@@ -646,6 +702,39 @@ class KeyboardHotkeyManager:
                 handle_id=handle_id,
             )
             return
+
+        handles = self.hotkey_handlers.setdefault(handle_id, [])
+        handles.append(handle)
+        self._log(
+            logging.DEBUG,
+            "Stored hotkey handle.",
+            event="hotkeys.handle_stored",
+            handle_id=handle_id,
+            total_handles=len(handles),
+        )
+
+    def _unregister_hotkeys(self) -> None:
+        """Detach any hotkey hooks and clear driver state."""
+
+        if self.hotkey_handlers:
+            for handle_id, handles in list(self.hotkey_handlers.items()):
+                for handle in handles:
+                    if keyboard is None or handle is None:
+                        continue
+                    try:
+                        keyboard.unhook(handle)
+                    except Exception as exc:  # pragma: no cover - optional dependency errors
+                        self._log(
+                            logging.DEBUG,
+                            "Failed to unhook keyboard handle.",
+                            event="hotkeys.unhook_failed",
+                            handle_id=handle_id,
+                            error=str(exc),
+                        )
+                self.hotkey_handlers[handle_id] = []
+            self.hotkey_handlers.clear()
+
+        entries = self._driver_entries()
         for _, driver in entries:
             try:
                 driver.unregister()

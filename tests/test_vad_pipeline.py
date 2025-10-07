@@ -1,23 +1,72 @@
 import builtins
+import importlib
+import json
+import os
+import sys
 import tempfile
 import unittest
+from collections import deque
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
 import numpy as np
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 if not hasattr(builtins, "Mapping"):
     builtins.Mapping = Mapping
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
 except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
-    if PROJECT_ROOT not in sys.path:
-        sys.path.insert(0, PROJECT_ROOT)
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
+
+
+@contextmanager
+def isolated_config_environment(
+    profile_dir: str | os.PathLike[str],
+    *,
+    working_dir: str | os.PathLike[str] | None = None,
+):
+    """Load ``ConfigManager`` inside an isolated profile directory."""
+
+    profile_path = Path(profile_dir).expanduser().resolve()
+    working_path = (
+        Path(working_dir).expanduser().resolve() if working_dir is not None else profile_path
+    )
+
+    profile_path.mkdir(parents=True, exist_ok=True)
+
+    original_env = os.environ.get("WHISPER_FLASH_PROFILE_DIR")
+    original_cwd = Path.cwd()
+    module_name = "src.config_manager"
+    cached_module = sys.modules.pop(module_name, None)
+
+    try:
+        os.environ["WHISPER_FLASH_PROFILE_DIR"] = str(profile_path)
+        os.chdir(str(working_path))
+        module = importlib.import_module(module_name)
+        yield module
+    finally:
+        sys.modules.pop(module_name, None)
+        if cached_module is not None:
+            sys.modules[module_name] = cached_module
+        elif module_name in sys.modules:
+            del sys.modules[module_name]
+
+        if original_env is not None:
+            os.environ["WHISPER_FLASH_PROFILE_DIR"] = original_env
+        else:
+            os.environ.pop("WHISPER_FLASH_PROFILE_DIR", None)
+
+        os.chdir(str(original_cwd))
 
 
 class DummyConfigManager:
