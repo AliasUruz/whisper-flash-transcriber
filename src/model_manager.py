@@ -318,22 +318,28 @@ def normalize_backend_label(backend: str | None) -> str:
     if not normalized:
         return ""
 
-    allowed_aliases = {
-        "ct2",
-        "ctranslate2",
-        "faster whisper",
-        "faster_whisper",
-        "faster-whisper",
-        "auto",
+    alias_map = {
+        "ct2": "ctranslate2",
+        "ctranslate2": "ctranslate2",
+        "faster whisper": "ctranslate2",
+        "faster_whisper": "ctranslate2",
+        "faster-whisper": "ctranslate2",
+        "transformer": "ctranslate2",
+        "transformers": "ctranslate2",
+        "auto": "auto",
     }
-    if normalized not in allowed_aliases:
-        MODEL_LOGGER.debug(
-            log_context(
-                "Mapping unsupported backend label to 'ctranslate2'.",
-                event="model_manager.unsupported_backend_normalized",
-                backend=str(backend),
-            )
+
+    mapped = alias_map.get(normalized)
+    if mapped:
+        return mapped
+
+    MODEL_LOGGER.debug(
+        log_context(
+            "Mapping unsupported backend label to 'ctranslate2'.",
+            event="model_manager.unsupported_backend_normalized",
+            backend=str(backend),
         )
+    )
 
     return "ctranslate2"
 
