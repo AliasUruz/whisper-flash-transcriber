@@ -79,14 +79,15 @@ from .logging_utils import (
     log_duration,
     scoped_correlation_id,
 )
+from .app_identity import APP_DISPLAY_NAME, APP_LOG_NAMESPACE
 from .utils.dependency_audit import DependencyAuditResult, audit_environment
 
 if TYPE_CHECKING:
     from .startup_diagnostics import StartupDiagnosticsReport
 
 
-LOGGER = get_logger('whisper_flash_transcriber.core', component='Core')
-MODEL_LOGGER = get_logger('whisper_recorder.model', component='ModelManager')
+LOGGER = get_logger(f"{APP_LOG_NAMESPACE}.core", component='Core')
+MODEL_LOGGER = get_logger(f"{APP_LOG_NAMESPACE}.model", component='ModelManager')
 
 
 
@@ -1296,23 +1297,26 @@ class AppCore:
             detail = f"ASR cache directory issue ({reason}): {cache_repr}"
         self.state_manager.set_state(event, details=detail, source=f"cache_dir::{context}")
         tooltip = (
-            "Whisper Recorder - configure o diretório de modelos ASR"
+            f"{APP_DISPLAY_NAME} - configure o diretório de modelos ASR"
             if reason == "not_configured"
-            else f"Whisper Recorder - verifique o cache de modelos ASR ({cache_repr})"
+            else f"{APP_DISPLAY_NAME} - verifique o cache de modelos ASR ({cache_repr})"
         )
         self._queue_tooltip_update(tooltip)
 
     def _queue_tooltip_update(self, message: str) -> None:
         if not message:
             return
+        tooltip_message = message.strip()
+        if tooltip_message and not tooltip_message.lower().startswith(APP_DISPLAY_NAME.lower()):
+            tooltip_message = f"{APP_DISPLAY_NAME} - {tooltip_message}"
         ui_manager = getattr(self, "ui_manager", None)
         tray_icon = getattr(ui_manager, "tray_icon", None) if ui_manager else None
         if tray_icon and hasattr(ui_manager, "show_status_tooltip"):
-            self.main_tk_root.after(0, lambda: ui_manager.show_status_tooltip(message))
+            self.main_tk_root.after(0, lambda: ui_manager.show_status_tooltip(tooltip_message))
         else:
-            if message not in self._pending_tray_tooltips:
-                self._pending_tray_tooltips.append(message)
-                LOGGER.debug("AppCore: tooltip pendente armazenada: %s", message)
+            if tooltip_message not in self._pending_tray_tooltips:
+                self._pending_tray_tooltips.append(tooltip_message)
+                LOGGER.debug("AppCore: tooltip pendente armazenada: %s", tooltip_message)
 
     def _publish_dependency_audit_state_event(self) -> None:
         if self._dependency_audit_event_sent:

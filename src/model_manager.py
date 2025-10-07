@@ -23,9 +23,10 @@ except Exception:  # pragma: no cover - allow runtime fallback
     snapshot_download = None  # type: ignore[assignment]
 
 from .logging_utils import get_logger, log_context
+from .app_identity import APP_LOG_NAMESPACE
 
 
-MODEL_LOGGER = get_logger("whisper_recorder.model", component="ModelManager")
+MODEL_LOGGER = get_logger(f"{APP_LOG_NAMESPACE}.model", component="ModelManager")
 
 
 _CT2_KNOWN_QUANTIZATIONS: set[str] = {
