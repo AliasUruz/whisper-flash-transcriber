@@ -58,6 +58,7 @@ class StateEvent(Enum):
     SETTINGS_HOTKEY_START_FAILED = auto()
     SETTINGS_REREGISTER_FAILED = auto()
     SETTINGS_RECOVERED = auto()  # Hotkeys se recuperaram e voltaram a operar
+    DEPENDENCY_AUDIT_READY = auto()
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,7 @@ STATE_FOR_EVENT: dict[StateEvent, str] = {
     StateEvent.SETTINGS_HOTKEY_START_FAILED: STATE_ERROR_SETTINGS,
     StateEvent.SETTINGS_REREGISTER_FAILED: STATE_ERROR_SETTINGS,
     StateEvent.SETTINGS_RECOVERED: STATE_IDLE,
+    StateEvent.DEPENDENCY_AUDIT_READY: STATE_LOADING_MODEL,
 }
 
 
@@ -122,6 +124,7 @@ EVENT_DEFAULT_DETAILS: dict[StateEvent, str] = {
     StateEvent.SETTINGS_HOTKEY_START_FAILED: "KeyboardHotkeyManager failed to start",
     StateEvent.SETTINGS_REREGISTER_FAILED: "Hotkey re-registration failed",
     StateEvent.SETTINGS_RECOVERED: "Recovered stable hotkey registration",
+    StateEvent.DEPENDENCY_AUDIT_READY: "Dependency audit completed",
 }
 
 
