@@ -2534,8 +2534,17 @@ class TranscriptionHandler:
         )
         return self._asr_backend, None
 
-    def shutdown(self, *, wait: bool = True) -> None:
-        """Finaliza o executor e libera os recursos do backend de ASR."""
+    def shutdown(self, *, wait: bool = True, timeout: float | None = 5.0) -> None:
+        """Finaliza o executor e libera os recursos do backend de ASR.
+
+        Args:
+            wait: Se ``True``, aguarda de forma limitada pela conclusão das
+                tarefas em andamento antes de prosseguir com a liberação dos
+                recursos.
+            timeout: Tempo máximo (em segundos) para aguardar tarefas ou
+                threads do executor quando ``wait`` é ``True``. Utilize ``None``
+                para desabilitar o limite, assumindo o risco de bloqueio.
+        """
         LOGGER.info(
             "Shutting down transcription handler resources.",
             extra={"event": "transcription_handler.shutdown.start"},
@@ -2548,9 +2557,17 @@ class TranscriptionHandler:
             cancelled = future.cancel()
             if wait and not cancelled:
                 try:
-                    future.result()
+                    if timeout is not None:
+                        future.result(timeout=timeout)
+                    else:
+                        future.result()
                 except concurrent.futures.CancelledError:
                     pass
+                except concurrent.futures.TimeoutError:
+                    LOGGER.warning(
+                        "Timeout waiting for transcription task to finish; proceeding with shutdown.",
+                        extra={"event": "transcription_handler.shutdown.timeout"},
+                    )
                 except Exception as exc:  # pragma: no cover - defensive logging
                     LOGGER.debug(
                         "Transcription task raised during shutdown: %s",
@@ -2561,14 +2578,35 @@ class TranscriptionHandler:
 
         executor = getattr(self, "transcription_executor", None)
         if executor is not None:
+            executor_threads: tuple[threading.Thread, ...] = tuple(
+                getattr(executor, "_threads", ())
+            )
             try:
-                executor.shutdown(wait=wait)
+                executor.shutdown(wait=False, cancel_futures=True)
             except Exception as exc:  # pragma: no cover - defensive logging
                 LOGGER.warning(
                     "Failed to shutdown transcription executor cleanly: %s",
                     exc,
                 )
             finally:
+                if wait and timeout is not None and executor_threads:
+                    deadline = time.perf_counter() + timeout
+                    for thread in executor_threads:
+                        remaining = deadline - time.perf_counter()
+                        if remaining <= 0:
+                            break
+                        thread.join(timeout=remaining)
+                    alive_threads = [
+                        thread.name for thread in executor_threads if thread.is_alive()
+                    ]
+                    if alive_threads:
+                        LOGGER.warning(
+                            "Executor threads still alive after timeout during shutdown: %s",
+                            ", ".join(alive_threads),
+                        )
+                elif wait and timeout is None and executor_threads:
+                    for thread in executor_threads:
+                        thread.join()
                 self.transcription_executor = None
 
         backend = self._asr_backend
