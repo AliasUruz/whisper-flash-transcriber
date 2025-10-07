@@ -37,7 +37,7 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Transcrição | `vad_pre_speech_padding_ms_var` | `IntVar` | — (controle ainda não exposto) | `"vad_pre_speech_padding_ms"` | Variável preparada para configurar o *padding* de pré-fala; enquanto não há widget associado, o valor permanece sincronizado via payload salvo manualmente. |
 | Transcrição | `vad_post_speech_padding_ms_var` | `IntVar` | `CTkEntry` (`vad_post_padding_entry`) | `"vad_post_speech_padding_ms"` | Define a janela extra após o silêncio detectado; o `AudioHandler` e o `VadManager` sincronizam essa margem ao persistir a configuração. |
 | Transcrição | `save_temp_recordings_var` | `BooleanVar` | `CTkSwitch` (`temp_recordings_switch`) | `"save_temp_recordings"` | Mantém ou remove arquivos temporários após o processamento; quando ativo, aplica a cota `record_storage_limit` (MB) e remove gravações antigas para liberar espaço. |
-| Transcrição | `record_storage_mode_var` | `StringVar` | `CTkOptionMenu` (`storage_mode_menu`) | `"record_storage_mode"` | Seleciona memória, disco ou modo automático; também define `new_record_to_memory` no `apply_settings`. |
+| Transcrição | `record_storage_mode_var` | `StringVar` | `CTkOptionMenu` (`storage_mode_menu`) | `"record_storage_mode"` | Seleciona memória, disco ou modo automático; o payload persistido usa apenas `new_record_storage_mode`. |
 | Transcrição | `max_memory_seconds_var` | `DoubleVar` | `CTkEntry` (`mem_time_entry`) | `"max_memory_seconds"` | Limite máximo de áudio em memória antes de migrar para disco. |
 | Transcrição | `max_memory_seconds_mode_var` | `StringVar` | `CTkOptionMenu` (`mem_mode_menu`) | `"max_memory_seconds_mode"` | Alterna entre cálculo manual e automático do limite de memória. |
 | Transcrição | `display_transcripts_var` | `BooleanVar` | `CTkSwitch` (`display_switch`) | `"display_transcripts_in_terminal"` | Define se o texto final é impresso no terminal. |
@@ -45,7 +45,7 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | ASR | `asr_model_id_var` | `StringVar` | Alimentado por `CTkOptionMenu` (`asr_model_menu`) via `asr_model_display_var` | `"asr_model_id"` | Guarda o identificador interno do modelo escolhido. |
 | ASR | `asr_model_display_var` | `StringVar` | `CTkOptionMenu` (`asr_model_menu`) | `"asr_model_id"` (mapeado por `display_to_id`) | Variável de exibição; converte nomes amigáveis para `asr_model_id_var`. |
 | ASR | `asr_compute_device_var` | `StringVar` | `CTkOptionMenu` (`asr_device_menu`) | `"asr_compute_device"` + `"gpu_index"` | Representa a seleção textual (*Auto*, *Force CPU*, *GPU X*), traduzida para backend e índice ao aplicar. |
-| ASR | `asr_ct2_compute_type_var` | `StringVar` | `CTkOptionMenu` (`asr_ct2_menu`) | `"asr_ct2_compute_type"` | Ajusta o compute type quando o backend é CTranslate2. |
+| ASR | `asr_ct2_compute_type_var` | `StringVar` | `CTkOptionMenu` (`asr_ct2_menu`) | `"asr_ct2_compute_type"` | Seleciona a precisão do pipeline exclusivo CTranslate2 (por exemplo, `auto`, `float16`, `int8`). |
 | ASR | `models_storage_dir_var` | `StringVar` | `CTkEntry` (`models_dir_entry`) | `"models_storage_dir"` (`advanced.storage.models_storage_dir`) | Diretório raiz usado para armazenar modelos e demais artefatos pesados; também serve de destino padrão quando o `storage_root_dir` muda sem override explícito. |
 | ASR | `asr_cache_dir_var` | `StringVar` | `CTkEntry` (`asr_cache_entry`) | `"asr_cache_dir"` (`advanced.storage.asr_cache_dir`) | Diretório raiz usado para armazenar modelos baixados. |
 

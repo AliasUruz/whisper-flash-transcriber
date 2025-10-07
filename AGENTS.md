@@ -41,7 +41,7 @@ This section outlines the fundamental rules and user-mandated instructions that 
 | `config.json` / `secrets.json` | Persisted user settings and API keys. | Automatically created on the first run. |
 
 ### Configuration Schema Notes
-- The legacy flag `record_to_memory` has been fully deprecated. Clients must rely on `record_storage_mode` when updating configuration payloads; any attempt to persist `record_to_memory` will be discarded during update application.
+- The legacy storage flag has been fully deprecated. Clients must rely on `record_storage_mode` when updating configuration payloads; any attempt to persist o identificador antigo será descartado durante a aplicação das atualizações.
 
 ---
 
