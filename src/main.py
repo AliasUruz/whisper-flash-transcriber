@@ -41,9 +41,6 @@ from src.logging_utils import (
     install_exception_hooks,
     setup_logging,
 )
-from src.startup_diagnostics import format_report_for_console, run_startup_diagnostics
-
-
 LOGGER = get_logger("whisper_flash_transcriber.bootstrap", component="Bootstrap")
 
 
@@ -526,6 +523,10 @@ def main(argv: list[str] | None = None) -> int:
         from src.config_manager import ConfigManager  # noqa: E402
         from src.core import AppCore  # noqa: E402
         from src.ui_manager import UIManager  # noqa: E402
+        from src.startup_diagnostics import (  # noqa: E402
+            format_report_for_console,
+            run_startup_diagnostics,
+        )
 
         config_manager = ConfigManager()
         dependency_installer = DependencyInstaller(
