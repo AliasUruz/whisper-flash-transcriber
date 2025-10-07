@@ -636,6 +636,65 @@ class TranscriptionHandler:
 
         logging.log(level, "[ASR] " + " ".join(parts))
 
+    def _emit_transcription_metrics(self, payload: dict[str, object] | None) -> None:
+        """Forward transcription metrics to optional collectors in the core instance."""
+
+        if not payload:
+            return
+
+        core = getattr(self, "core_instance_ref", None)
+        if core is None:
+            return
+
+        potential_attributes = (
+            "transcription_metrics_callback",
+            "transcription_metrics_collector",
+            "transcription_metrics_collectors",
+            "diagnostic_callbacks",
+            "diagnostics_callbacks",
+            "telemetry_collectors",
+            "transcription_diagnostic_callbacks",
+        )
+        potential_methods = (
+            "dispatch_transcription_metrics",
+            "handle_transcription_metrics",
+            "emit_transcription_metrics",
+            "publish_transcription_metrics",
+            "collect_transcription_metrics",
+        )
+
+        callbacks: list[object] = []
+
+        for attr in potential_attributes:
+            target = getattr(core, attr, None)
+            if callable(target):
+                callbacks.append(target)
+            elif isinstance(target, (list, tuple, set)):
+                callbacks.extend(cb for cb in target if callable(cb))
+
+        for method_name in potential_methods:
+            method = getattr(core, method_name, None)
+            if callable(method):
+                callbacks.append(method)
+
+        if not callbacks:
+            return
+
+        seen: set[object] = set()
+        for callback in callbacks:
+            identifier = getattr(callback, "__qualname__", None) or getattr(callback, "__name__", None) or id(callback)
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+            try:
+                callback(payload)
+            except Exception:
+                logging.debug(
+                    "Failed to propagate transcription metrics via %s.",
+                    getattr(callback, "__qualname__", getattr(callback, "__name__", repr(callback))),
+                    exc_info=True,
+                )
+
     def _format_audio_source(self, audio_source: str | np.ndarray | bytes | bytearray | list[float] | None) -> str:
         if audio_source is None:
             return "none"

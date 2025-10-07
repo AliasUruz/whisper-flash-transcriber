@@ -10,10 +10,11 @@ import os
 import shutil
 import time
 from dataclasses import dataclass
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from threading import Event, RLock
-from typing import Any, Dict, List, NamedTuple
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 

@@ -7,7 +7,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
 from .logging_utils import get_logger, log_context
 from .model_manager import CURATED, normalize_backend_label
@@ -17,6 +24,11 @@ LOGGER = get_logger(__name__, component='ConfigSchema')
 
 _DEFAULT_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
 _DEFAULT_MODELS_STORAGE_DIR = str((_DEFAULT_STORAGE_ROOT / "models").expanduser())
+_DEFAULT_DEPS_INSTALL_DIR = str((_DEFAULT_STORAGE_ROOT / "deps").expanduser())
+_DEFAULT_HF_HOME_DIR = str((Path(_DEFAULT_DEPS_INSTALL_DIR) / "huggingface").expanduser())
+_DEFAULT_TRANSFORMERS_CACHE_DIR = str(
+    (Path(_DEFAULT_DEPS_INSTALL_DIR) / "transformers").expanduser()
+)
 _SUPPORTED_UI_LANGUAGE_MAP = {
     "en": "en-US",
     "en-us": "en-US",
@@ -126,9 +138,9 @@ class AppConfig(BaseModel):
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
     models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
-    deps_install_dir: str = _DEFAULT_DEPS_STORAGE_DIR
-    hf_home_dir: str = str((Path(_DEFAULT_DEPS_STORAGE_DIR) / "huggingface").expanduser())
-    transformers_cache_dir: str = str((Path(_DEFAULT_DEPS_STORAGE_DIR) / "transformers").expanduser())
+    deps_install_dir: str = _DEFAULT_DEPS_INSTALL_DIR
+    hf_home_dir: str = _DEFAULT_HF_HOME_DIR
+    transformers_cache_dir: str = _DEFAULT_TRANSFORMERS_CACHE_DIR
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
     asr_model_id: str = "distil-whisper/distil-large-v3"
@@ -313,16 +325,47 @@ class AppConfig(BaseModel):
 
     @field_validator("asr_model_id", mode="before")
     @classmethod
-    def _validate_asr_model_id(cls, value: Any) -> str:
+    def _validate_asr_model_id(cls, value: Any, info: ValidationInfo) -> str:
         if not isinstance(value, str):
             raise ValueError("asr_model_id must be a string")
         normalized = value.strip()
         if not normalized:
             raise ValueError("asr_model_id must not be empty")
-        if normalized not in _CURATED_MODEL_IDS:
-            raise ValueError(
-                f"asr_model_id must be one of {sorted(_CURATED_MODEL_IDS)}"
-            )
+
+        allowed_ids = set(_CURATED_MODEL_IDS)
+        runtime_ids: set[str] = set()
+
+        def _extract_ids(source: Any) -> None:
+            if isinstance(source, list):
+                for entry in source:
+                    if isinstance(entry, dict):
+                        candidate = entry.get("model_id") or entry.get("id")
+                        if isinstance(candidate, str):
+                            candidate = candidate.strip()
+                            if candidate:
+                                runtime_ids.add(candidate)
+                    elif isinstance(entry, str):
+                        candidate = entry.strip()
+                        if candidate:
+                            runtime_ids.add(candidate)
+
+        if info is not None:
+            data = info.data or {}
+            _extract_ids(data.get("asr_curated_catalog"))
+            _extract_ids(data.get("asr_installed_models"))
+
+            context = getattr(info, "context", None) or {}
+            if isinstance(context, dict):
+                _extract_ids(context.get("asr_curated_catalog"))
+                _extract_ids(context.get("asr_installed_models"))
+
+        if normalized in allowed_ids or normalized in runtime_ids:
+            return normalized
+
+        LOGGER.debug(
+            "Accepting non-curated ASR model id '%s' during config validation.",
+            normalized,
+        )
         return normalized
 
     @field_validator("asr_backend", mode="before")
