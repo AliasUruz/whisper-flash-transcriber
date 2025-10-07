@@ -2771,24 +2771,95 @@ class UIManager:
             logging.debug("Tray tooltip truncated to %d characters: %s", max_len, text)
         return text
 
+    def _schedule_tray_tooltip_update(self, tooltip: str) -> None:
+        """Agenda atualização da tooltip da bandeja no thread principal do Tk."""
+
+        if self.main_tk_root is None:
+            return
+
+        def _apply():
+            if self.tray_icon:
+                self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
+
+        self.main_tk_root.after(0, _apply)
+
+    def _update_recording_tooltip_tick(self) -> bool:
+        """Atualiza a tooltip de gravação uma vez. Retorna False se não houver start_time."""
+
+        start_time = getattr(self.core_instance_ref.audio_handler, "start_time", None)
+        if start_time is None:
+            return False
+
+        elapsed = time.time() - start_time
+        tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
+        suffix = getattr(self, "_state_context_suffix", "")
+        if suffix:
+            tooltip = f"{tooltip}{suffix}"
+
+        self._schedule_tray_tooltip_update(tooltip)
+        return True
+
     def _recording_tooltip_updater(self):
         """Atualiza a tooltip com a duração da gravação a cada segundo."""
-        while not self.stop_recording_timer_event.is_set():
-            start_time = getattr(self.core_instance_ref.audio_handler, "start_time", None)
-            if start_time is None:
+        if not self._update_recording_tooltip_tick():
+            self.stop_recording_timer_event.set()
+            return
+
+        while not self.stop_recording_timer_event.wait(1):
+            if not self._update_recording_tooltip_tick():
+                self.stop_recording_timer_event.set()
                 break
-            elapsed = time.time() - start_time
-            tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
-            suffix = getattr(self, "_state_context_suffix", "")
-            if suffix:
-                tooltip = f"{tooltip}{suffix}"
-            self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
-            time.sleep(1)
 
     def _format_elapsed(self, seconds: float) -> str:
         """Formata segundos em MM:SS."""
         m, s = divmod(int(seconds), 60)
         return f"{m:02d}:{s:02d}"
+
+    def _update_transcribing_tooltip_tick(self, start_ts: float) -> None:
+        """Atualiza a tooltip de transcrição para um tick, incluindo dados técnicos."""
+
+        elapsed = time.time() - start_ts
+        suffix = getattr(self, "_state_context_suffix", "")
+
+        tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
+
+        try:
+            tech = ""
+            th = getattr(self.core_instance_ref, "transcription_handler", None)
+            if th is not None:
+                device_in_use = getattr(th, "device_in_use", None)
+                if device_in_use:
+                    device = str(device_in_use)
+                else:
+                    gpu_index = getattr(th, "gpu_index", -1)
+                    device = f"cuda:{gpu_index}" if isinstance(gpu_index, int) and gpu_index >= 0 else "cpu"
+                compute_type = (
+                    getattr(th, "compute_type_in_use", None)
+                    or getattr(th, "asr_ct2_compute_type", None)
+                    or "default"
+                )
+                try:
+                    import importlib.util as _spec_util
+
+                    attn_impl = "FA2" if _spec_util.find_spec("flash_attn") is not None else "SDPA"
+                except Exception:
+                    attn_impl = "SDPA"
+                chunk = getattr(th, "chunk_length_sec", None)
+                chunk_display = chunk if chunk not in (None, "") else "auto"
+                bs = getattr(th, "last_dynamic_batch_size", None) if hasattr(th, "last_dynamic_batch_size") else None
+                if bs in (None, ""):
+                    bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
+                bs_display = bs if bs not in (None, "") else "auto"
+                tech = f" [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
+            tooltip = f"{tooltip}{tech}"
+        except Exception:
+            # Mantém apenas o tempo em caso de falha na coleta de informações técnicas
+            pass
+
+        if suffix:
+            tooltip = f"{tooltip}{suffix}"
+
+        self._schedule_tray_tooltip_update(tooltip)
 
     def _transcribing_tooltip_updater(self):
         """Atualiza a tooltip com a duração da transcrição a cada segundo.
@@ -2797,54 +2868,10 @@ class UIManager:
         quando disponíveis, atualizando a cada tick.
         """
         start_ts = time.time()
-        while not self.stop_transcribing_timer_event.is_set():
-            try:
-                tech = ""
-                th = getattr(self.core_instance_ref, "transcription_handler", None)
-                if th is not None:
-                    device_in_use = getattr(th, "device_in_use", None)
-                    if device_in_use:
-                        device = str(device_in_use)
-                    else:
-                        gpu_index = getattr(th, "gpu_index", -1)
-                        device = f"cuda:{gpu_index}" if isinstance(gpu_index, int) and gpu_index >= 0 else "cpu"
-                    compute_type = (
-                        getattr(th, "compute_type_in_use", None)
-                        or getattr(th, "asr_ct2_compute_type", None)
-                        or "default"
-                    )
-                    try:
-                        import importlib.util as _spec_util
-                        attn_impl = "FA2" if _spec_util.find_spec("flash_attn") is not None else "SDPA"
-                    except Exception:
-                        attn_impl = "SDPA"
-                    chunk = getattr(th, "chunk_length_sec", None)
-                    chunk_display = chunk if chunk not in (None, "") else "auto"
-                    # Se disponível no handler, podemos expor last_dynamic_batch_size; fallback em None
-                    bs = getattr(th, "last_dynamic_batch_size", None) if hasattr(th, "last_dynamic_batch_size") else None
-                    if bs in (None, ""):
-                        bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
-                    bs_display = bs if bs not in (None, "") else "auto"
-                    tech = (
-                        f" [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
-                    )
-                elapsed = time.time() - start_ts
-                tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)}){tech}"
-                suffix = getattr(self, "_state_context_suffix", "")
-                if suffix:
-                    tooltip = f"{tooltip}{suffix}"
-                if self.tray_icon:
-                    self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
-            except Exception:
-                # Em caso de falha, mantém somente o tempo
-                elapsed = time.time() - start_ts
-                if self.tray_icon:
-                    tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
-                    suffix = getattr(self, "_state_context_suffix", "")
-                    if suffix:
-                        tooltip = f"{tooltip}{suffix}"
-                    self.tray_icon.title = self._clamp_tray_tooltip(tooltip)
-            time.sleep(1)
+        self._update_transcribing_tooltip_tick(start_ts)
+
+        while not self.stop_transcribing_timer_event.wait(1):
+            self._update_transcribing_tooltip_tick(start_ts)
 
     def update_tray_icon(self, state):
         # Logic moved from global, ajustado para lidar com payloads estruturados
@@ -4263,6 +4290,14 @@ class UIManager:
     def on_exit_app(self, *_):
         # Logic moved from global, adjusted to use self.
         logging.info("Exit requested from tray icon.")
+        self.stop_recording_timer_event.set()
+        self.stop_transcribing_timer_event.set()
+
+        if self.recording_timer_thread and self.recording_timer_thread.is_alive():
+            self.recording_timer_thread.join(timeout=1)
+        if self.transcribing_timer_thread and self.transcribing_timer_thread.is_alive():
+            self.transcribing_timer_thread.join(timeout=1)
+
         if self.core_instance_ref:
             self.core_instance_ref.shutdown()
         if self.tray_icon:
