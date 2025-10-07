@@ -1,5 +1,7 @@
 import copy
 import hashlib
+import importlib
+import importlib.util
 import json
 import logging
 import os
@@ -14,11 +16,17 @@ from typing import Any, List, TYPE_CHECKING
 import requests
 
 from .config_schema import coerce_with_defaults
-from .model_manager import get_curated_entry, list_catalog, list_installed, normalize_backend_label
+from .model_manager import (
+    HardwareProfile,
+    build_runtime_catalog,
+    get_curated_entry,
+    list_catalog,
+    list_installed,
+    normalize_backend_label,
+    select_recommended_model,
+)
 from .logging_utils import StructuredMessage, get_logger, log_context
-
-if TYPE_CHECKING:
-    from .startup_diagnostics import StartupDiagnosticsReport
+from .utils import get_total_memory_mb
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -170,17 +178,14 @@ DEFAULT_CONFIG = {
     "hf_home_dir": _DEFAULT_HF_HOME_DIR,
     "transformers_cache_dir": _DEFAULT_TRANSFORMERS_CACHE_DIR,
     "recordings_dir": _DEFAULT_RECORDINGS_DIR,
-    "python_packages_dir": _DEFAULT_PYTHON_PACKAGES_DIR,
-    "vad_models_dir": _DEFAULT_VAD_MODELS_DIR,
-    "hf_cache_dir": _DEFAULT_HF_CACHE_DIR,
-    "asr_model_id": "openai/whisper-large-v3-turbo",
+    "asr_model_id": "distil-whisper/distil-large-v3",
     "asr_backend": "ctranslate2",
     "asr_compute_device": "auto",
     "asr_dtype": "float16",
     "asr_ct2_compute_type": "int8_float16",
     "asr_cache_dir": _DEFAULT_ASR_CACHE_DIR,
     "asr_installed_models": [],
-    "asr_curated_catalog": [],
+    "asr_curated_catalog": list_catalog(),
     "asr_curated_catalog_url": "",
     "asr_last_download_status": {
         "status": "unknown",
@@ -418,7 +423,9 @@ class ConfigManager:
             self._bootstrap_state["secrets"]["migrated_from"] = migrated_secrets
 
         self._bootstrap_logged = False
-        self._runtime_notices: list[dict[str, Any]] = []
+        self._runtime_hardware_profile: HardwareProfile | None = None
+        self._runtime_model_catalog: list[dict[str, Any]] = []
+        self._runtime_recommendation: dict[str, Any] | None = None
         self.load_config()
         url = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
         if url:
@@ -587,6 +594,67 @@ class ConfigManager:
         """Apply derived configuration values after schema validation."""
 
         cfg = self.config
+
+        def _detect_hardware_profile() -> HardwareProfile:
+            system_ram_mb: int | None = None
+            try:
+                total_ram = get_total_memory_mb()
+                if isinstance(total_ram, (int, float)):
+                    system_ram_mb = int(total_ram)
+            except Exception:
+                logging.debug("Unable to determine system RAM.", exc_info=True)
+
+            has_cuda = False
+            gpu_count = 0
+            max_vram_mb = 0
+            torch_mod = None
+
+            torch_spec = importlib.util.find_spec("torch")
+            if torch_spec is not None:
+                try:
+                    torch_mod = importlib.import_module("torch")
+                except Exception:
+                    logging.debug("torch import failed during hardware probing.", exc_info=True)
+                    torch_mod = None
+
+            if torch_mod is not None:
+                cuda_module = getattr(torch_mod, "cuda", None)
+                is_available = getattr(cuda_module, "is_available", None)
+                if callable(is_available):
+                    try:
+                        has_cuda = bool(is_available())
+                    except Exception:
+                        logging.debug("torch.cuda.is_available() failed.", exc_info=True)
+                        has_cuda = False
+                if has_cuda:
+                    device_count_fn = getattr(cuda_module, "device_count", None)
+                    if callable(device_count_fn):
+                        try:
+                            gpu_count = int(device_count_fn())
+                        except Exception:
+                            logging.debug("torch.cuda.device_count() failed.", exc_info=True)
+                            gpu_count = 0
+                    get_props = getattr(cuda_module, "get_device_properties", None)
+                    if callable(get_props):
+                        for idx in range(max(gpu_count, 0)):
+                            try:
+                                props = get_props(idx)
+                                total_memory = getattr(props, "total_memory", 0)
+                                if total_memory:
+                                    max_vram_mb = max(
+                                        max_vram_mb,
+                                        int(int(total_memory) // (1024 * 1024)),
+                                    )
+                            except Exception:
+                                logging.debug("Failed to read CUDA device properties for index %d.", idx, exc_info=True)
+                                continue
+
+            return HardwareProfile(
+                system_ram_mb=system_ram_mb,
+                has_cuda=has_cuda,
+                gpu_count=gpu_count,
+                max_vram_mb=max_vram_mb,
+            )
 
         def _source_value(key: str, *, default: Any) -> Any:
             if applied_updates and key in applied_updates:
@@ -1020,11 +1088,37 @@ class ConfigManager:
         )
 
         cfg[ASR_CURATED_CATALOG_CONFIG_KEY] = list_catalog()
+
+        hardware_profile = _detect_hardware_profile()
+        runtime_catalog = build_runtime_catalog(hardware_profile)
+        recommendation_entry = select_recommended_model(runtime_catalog)
+
+        self._runtime_hardware_profile = hardware_profile
+        self._runtime_model_catalog = copy.deepcopy(runtime_catalog)
+
         default_model_id = str(self.default_config[ASR_MODEL_ID_CONFIG_KEY])
         configured_model_id = str(
             cfg.get(ASR_MODEL_ID_CONFIG_KEY, default_model_id)
         ).strip() or default_model_id
+
+        user_defined_model = False
+        if loaded_config and ASR_MODEL_ID_CONFIG_KEY in loaded_config:
+            user_defined_model = True
+        if applied_updates and ASR_MODEL_ID_CONFIG_KEY in applied_updates:
+            user_defined_model = True
+
         curated_entry = get_curated_entry(configured_model_id)
+        auto_selected_model = False
+
+        if not user_defined_model and recommendation_entry is not None:
+            configured_model_id = recommendation_entry["id"]
+            curated_entry = get_curated_entry(configured_model_id)
+            auto_selected_model = True
+
+        if curated_entry is None and recommendation_entry is not None:
+            configured_model_id = recommendation_entry["id"]
+            curated_entry = get_curated_entry(configured_model_id)
+
         if curated_entry is None:
             logging.warning(
                 "Configured ASR model '%s' is not part of the curated catalog; falling back to '%s'.",
@@ -1033,7 +1127,15 @@ class ConfigManager:
             )
             configured_model_id = default_model_id
             curated_entry = get_curated_entry(configured_model_id)
+
         cfg[ASR_MODEL_ID_CONFIG_KEY] = configured_model_id
+
+        recommendation_payload = None
+        if recommendation_entry is not None:
+            recommendation_payload = copy.deepcopy(recommendation_entry)
+            recommendation_payload["auto_applied"] = auto_selected_model
+            recommendation_payload["hardware_profile"] = hardware_profile.to_dict()
+        self._runtime_recommendation = recommendation_payload
 
         expected_backend = normalize_backend_label(
             curated_entry.get("backend") if curated_entry else None
@@ -2603,6 +2705,15 @@ class ConfigManager:
             self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = self.default_config[
                 ASR_CURATED_CATALOG_CONFIG_KEY
             ]
+
+    def get_runtime_model_catalog(self) -> list[dict[str, Any]]:
+        return copy.deepcopy(self._runtime_model_catalog)
+
+    def get_runtime_recommendation(self) -> dict[str, Any] | None:
+        return copy.deepcopy(self._runtime_recommendation) if self._runtime_recommendation else None
+
+    def get_runtime_hardware_profile(self) -> HardwareProfile | None:
+        return self._runtime_hardware_profile
 
     def update_asr_curated_catalog_from_url(self, url: str, timeout: int = 10) -> bool:
         """Carrega um catálogo curado de modelos de ASR a partir de ``url``.

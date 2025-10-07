@@ -83,30 +83,13 @@ During the initial startup the application will create the persistent profile un
 folder before continuing, so the bootstrap completes successfully even when the
 installation directory is read-only.
 
-## First launch experience
-
-When the profile is brand-new the application presents a guided first-run wizard
-before the tray UI is initialized. The wizard is built with `customtkinter` and
-walks through the following stages:
-
-1. **Directories:** select the base storage root, the dedicated models cache,
-   and the WAV recordings directory. Each field can target a different drive so
-   large downloads stay off the system disk.
-2. **ASR bootstrap:** choose the curated backend and Whisper model that should
-   be loaded after startup. The wizard keeps the backend aligned with the model
-   catalog to avoid incompatible combinations.
-3. **Capture preferences:** toggle voice activity detection as well as the
-   automatic paste behaviour for both standard transcriptions and Agent mode.
-4. **Optional installations:** flag curated models and extra Python packages
-   for the bootstrapper. Selected models are downloaded automatically once the
-   main window is ready, while optional packages are logged so they can be
-   installed via `pip`.
-5. **Summary and snapshot:** a checklist summarises every decision and offers
-   an optional export that writes a Markdown report to `plans/`.
-
-The configuration choices are persisted through `ConfigManager` before the
-`AppCore` instance is created, guaranteeing that the main UI launches with the
-requested storage locations and backend already applied.
+At the same time the application inspects the available CPU and GPU resources and
+automatically selects a curated Whisper model that matches the detected hardware.
+This decision takes into account estimated download sizes, disk usage and memory
+requirements so that first-time users land on a viable configuration without extra
+tuning. You can later review and change the model from the **Settings → Transcription →
+ASR** section, where recommended and advanced options are grouped with download and
+installation estimates.
 
 ### Configuration
 

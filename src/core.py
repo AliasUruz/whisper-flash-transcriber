@@ -592,6 +592,36 @@ class AppCore:
     def _prompt_model_install(self, model_id, backend, cache_dir, ct2_type):
         """Agenda um prompt para download do modelo na thread principal."""
 
+        def _format_size(value):
+            try:
+                amount = float(int(value))
+            except (TypeError, ValueError):
+                return "?"
+            if amount <= 0:
+                return "?"
+            units = ["B", "KB", "MB", "GB", "TB"]
+            for unit in units:
+                if amount < 1024 or unit == units[-1]:
+                    return f"{amount:.1f} {unit}"
+                amount /= 1024
+            return f"{amount:.1f} PB"
+
+        def _format_duration(seconds):
+            try:
+                total_seconds = float(seconds)
+            except (TypeError, ValueError):
+                return ""
+            if total_seconds <= 0:
+                return ""
+            minutes = int(total_seconds // 60)
+            secs = int(round(total_seconds % 60))
+            if secs == 60:
+                minutes += 1
+                secs = 0
+            if minutes:
+                return f"~{minutes} min {secs:02d} s"
+            return f"~{secs} s"
+
         def _ask_user():
             with self.model_prompt_lock:
                 if self.model_prompt_active:
@@ -616,205 +646,62 @@ class AppCore:
             try:
                 options: list[dict[str, Any]] = []
                 try:
-                    options = self.model_manager.get_ui_model_options()
-                except Exception as catalog_error:  # pragma: no cover - UI fallback
-                    MODEL_LOGGER.error(
-                        "Failed to build curated model catalog for install prompt: %s",
-                        catalog_error,
-                        exc_info=True,
-                    )
-
-                normalized_backend = self.model_manager.normalize_backend_label(backend)
-                initial_option_id: str | None = None
-                current_profile: dict[str, Any] | None = None
-                try:
-                    current_profile = self.model_manager.get_model_variant_requirements(
-                        model_id, quantization=ct2_type
-                    )
-                except Exception:  # pragma: no cover - metadata best effort
-                    MODEL_LOGGER.debug(
-                        "Unable to compute current curated profile for %s.",
-                        model_id,
-                        exc_info=True,
-                    )
-
-                if options and current_profile:
-                    preferred_token = current_profile.get("quantization_token", "default")
-                    for option in options:
-                        if option.get("model_id") != model_id:
-                            continue
-                        option_backend = self.model_manager.normalize_backend_label(
-                            option.get("backend_label") or option.get("backend")
-                        )
-                        if (
-                            normalized_backend
-                            and option_backend
-                            and option_backend != normalized_backend
-                        ):
-                            continue
-                        if option.get("quantization_token") == preferred_token:
-                            initial_option_id = option.get("option_id")
-                            break
-
-                    if not initial_option_id:
-                        candidate = next(
-                            (
-                                opt
-                                for opt in options
-                                if opt.get("model_id") == model_id
-                                and opt.get("variant_recommended")
-                            ),
-                            None,
-                        )
-                        if candidate:
-                            initial_option_id = candidate.get("option_id")
-
-                if options and not initial_option_id:
-                    initial_option_id = options[0].get("option_id")
-
-                if options:
-                    help_text = (
-                        "Escolha o modelo Whisper que será instalado agora. Modelos maiores oferecem "
-                        "melhor fidelidade, porém exigem mais VRAM e tempo de download. Variantes int8 "
-                        "reduzem o uso de memória com impacto mínimo na qualidade. Você poderá alterar "
-                        "essa decisão posteriormente nas configurações."
-                    )
-
-                    selection = prompt_model_installation(
-                        self.main_tk_root,
-                        options,
-                        initial_option_id=initial_option_id,
-                        focus_model_id=model_id,
-                        help_text=help_text,
-                    )
-
-                    if not selection:
-                        self.config_manager.record_model_prompt_decision(
-                            "defer", model_id, backend
-                        )
-                        MODEL_LOGGER.info(
-                            log_context(
-                                "Usuário adiou a instalação do modelo curado.",
-                                event="model.install_prompt.deferred",
-                                model=model_id,
-                                backend=backend,
-                            )
-                        )
-                        self.state_manager.set_state(
-                            sm.StateEvent.MODEL_DOWNLOAD_DECLINED,
-                            details=f"User deferred download for '{model_id}'",
-                            source="model_prompt",
-                        )
-                        self.main_tk_root.after(
-                            0,
-                            lambda: messagebox.showinfo(
-                                "Modelos",
-                                "Nenhum modelo instalado. Você pode concluir a instalação mais tarde nas configurações.",
-                            ),
-                        )
-                        return
-
-                    selected_model_id = selection.get("model_id", model_id)
-                    selected_backend = selection.get("backend_label") or selection.get("backend") or backend
-                    selected_backend = self.model_manager.normalize_backend_label(selected_backend)
-                    selected_quant = (
-                        selection.get("ct2_quantization")
-                        or selection.get("quantization")
-                        or ct2_type
-                    )
-
-                    updates = {
-                        ASR_MODEL_ID_CONFIG_KEY: selected_model_id,
-                        ASR_BACKEND_CONFIG_KEY: selected_backend,
-                    }
-                    if selected_backend == "ctranslate2":
-                        updates[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = selected_quant or "default"
-                    else:
-                        updates[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = "default"
-
-                    try:
-                        _, warnings = self.config_manager.apply_updates(updates)
-                        for warning in warnings:
-                            LOGGER.warning("Model selection warning: %s", warning)
-                    except Exception as apply_error:
-                        MODEL_LOGGER.error(
-                            "Falha ao aplicar atualização de modelo curado: %s",
-                            apply_error,
-                            exc_info=True,
-                        )
-                        messagebox.showerror(
-                            "Modelos",
-                            "Não foi possível salvar a escolha do modelo. Consulte os logs para mais detalhes.",
-                        )
-                        self.state_manager.set_state(sm.STATE_ERROR_SETTINGS)
-                        return
-
-                    self._apply_initial_config_to_core_attributes()
-
-                    cache_dir_value = (
-                        self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY) or cache_dir
-                    )
-                    ct2_quant = (
-                        self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
-                        if selected_backend == "ctranslate2"
-                        else None
-                    )
-
-                    self.config_manager.record_model_prompt_decision(
-                        "accept", selected_model_id, selected_backend
-                    )
-                    MODEL_LOGGER.info(
-                        log_context(
-                            "Usuário confirmou a instalação do modelo curado.",
-                            event="model.install_prompt.accepted",
-                            model=selected_model_id,
-                            backend=selected_backend,
-                            quantization=ct2_quant or "default",
-                            estimated_bytes=selection.get("estimated_size_bytes", 0),
-                            min_vram_gb=selection.get("min_vram_gb"),
-                        )
-                    )
-
-                    cancel_event = threading.Event()
-                    self._active_model_download_event = cancel_event
-                    self._start_model_download(
-                        selected_model_id,
-                        selected_backend,
-                        cache_dir_value,
-                        ct2_quant,
-                        timeout=self.model_download_timeout,
-                        cancel_event=cancel_event,
-                    )
-                    return
-
-                MODEL_LOGGER.warning(
-                    "Model selection UI unavailable; falling back to legacy confirmation dialog."
-                )
-
-                try:
-                    size_bytes, file_count = self.model_manager.get_model_download_size(
-                        model_id, quantization=ct2_type
-                    )
+                    size_bytes, file_count = self.model_manager.get_model_download_size(model_id)
                     size_gb = size_bytes / (1024 ** 3)
-                    download_msg = (
-                        f"Download de aproximadamente {size_gb:.2f} GB ({file_count} arquivos)."
-                    )
-                except Exception as size_error:  # pragma: no cover - fallback
-                    MODEL_LOGGER.debug(
-                        "Could not fetch download size for %s: %s",
-                        model_id,
-                        size_error,
-                        exc_info=True,
-                    )
-                    download_msg = "Tamanho do download indisponível."
+                    download_msg = f"Download of approximately {size_gb:.2f} GB ({file_count} files)."
+                except Exception as size_error:
+                    MODEL_LOGGER.debug(f"Could not fetch download size for {model_id}: {size_error}")
+                    download_msg = "Download size unavailable."
+                runtime_catalog = self.config_manager.get_runtime_model_catalog()
+                runtime_entry = next((item for item in runtime_catalog if item.get("id") == model_id), None)
+                recommendation_entry = self.config_manager.get_runtime_recommendation() or {}
+                display_name = runtime_entry.get("display_name", model_id) if runtime_entry else model_id
+                backend_label = backend or (runtime_entry.get("backend") if runtime_entry else "")
+                if backend_label:
+                    intro_line = f"Modelo '{display_name}' ({backend_label}) não está instalado."
+                else:
+                    intro_line = f"Modelo '{display_name}' não está instalado."
 
-                prompt_text = (
-                    f"Modelo '{model_id}' não está instalado.\n{download_msg}\nDeseja iniciar o download agora?"
-                )
-                if messagebox.askyesno("Modelos", prompt_text):
-                    self.config_manager.record_model_prompt_decision(
-                        "accept", model_id, backend
-                    )
+                detail_lines = [intro_line, download_msg]
+
+                if runtime_entry:
+                    disk_text = _format_size(runtime_entry.get("estimated_disk_bytes"))
+                    if disk_text != "?":
+                        detail_lines.append(f"Uso em disco após instalação: {disk_text}.")
+                    duration_text = _format_duration(runtime_entry.get("estimated_download_seconds"))
+                    if duration_text:
+                        bandwidth = runtime_entry.get("estimated_download_reference_mbps")
+                        if isinstance(bandwidth, (int, float)) and bandwidth:
+                            detail_lines.append(
+                                f"Tempo estimado de download: {duration_text} em {float(bandwidth):.0f} Mbps."
+                            )
+                        else:
+                            detail_lines.append(f"Tempo estimado de download: {duration_text}.")
+                    status = runtime_entry.get("hardware_status") or "ok"
+                    messages = runtime_entry.get("hardware_messages") or []
+                    if status == "blocked":
+                        note = "; ".join(messages) if messages else "requisitos não atendidos."
+                        detail_lines.append(f"⚠️ Incompatível: {note}")
+                    elif status == "warn":
+                        note = "; ".join(messages) if messages else "desempenho pode ser limitado."
+                        detail_lines.append(f"⚠️ Aviso: {note}")
+                    else:
+                        if messages:
+                            detail_lines.append("Compatível: " + "; ".join(messages))
+                        else:
+                            detail_lines.append("Compatível com o hardware detectado.")
+
+                recommendation_id = recommendation_entry.get("id")
+                recommendation_name = recommendation_entry.get("display_name", recommendation_id)
+                if recommendation_id:
+                    if recommendation_id == model_id:
+                        detail_lines.append("✅ Este é o modelo recomendado automaticamente para o seu hardware.")
+                    elif recommendation_name:
+                        detail_lines.append(f"Recomendado para o seu hardware: {recommendation_name}.")
+
+                prompt_text = "\n".join(detail_lines + ["", "Deseja iniciar o download agora?"])
+                if messagebox.askyesno("Model Download", prompt_text):
+                    self.config_manager.record_model_prompt_decision("accept", model_id, backend)
                     cancel_event = threading.Event()
                     self._active_model_download_event = cancel_event
                     self._start_model_download(

@@ -15,8 +15,6 @@ from pathlib import Path, PurePosixPath
 from threading import Event, RLock
 from typing import Any, Dict, List, NamedTuple
 
-from contextlib import contextmanager
-
 from huggingface_hub import HfApi, scan_cache_dir, snapshot_download
 
 from .logging_utils import get_logger, log_context
@@ -87,6 +85,24 @@ class ModelDownloadResult:
     target_dir: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class HardwareProfile:
+    """Snapshot of the detected hardware relevant to ASR model selection."""
+
+    system_ram_mb: int | None = None
+    has_cuda: bool = False
+    gpu_count: int = 0
+    max_vram_mb: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "system_ram_mb": self.system_ram_mb,
+            "has_cuda": self.has_cuda,
+            "gpu_count": self.gpu_count,
+            "max_vram_mb": self.max_vram_mb,
+        }
+
+
 class DownloadCancelledError(Exception):
     """Raised when a model download is cancelled or aborted."""
 
@@ -111,177 +127,61 @@ class InsufficientSpaceError(RuntimeError):
         self.free_bytes = int(free_bytes)
 
 
-# Curated catalog of officially supported ASR models.
-# Each entry maps a Hugging Face model id to the backend that powers it.
+# Curated catalog of officially supported ASR models with lightweight options.
 CURATED: List[Dict[str, Any]] = [
-    {
-        "id": "openai/whisper-large-v3-turbo",
-        "backend": "ctranslate2",
-        "display_name": "Whisper Large v3 Turbo",
-        "description": (
-            "Precisão premium para cenários complexos, com suporte completo a idiomas."
-        ),
-        "priority": 10,
-        "default_quantization": "int8_float16",
-        "variants": [
-            {
-                "quantization": "int8_float16",
-                "label": "Int8 + FP16 (recomendado)",
-                "description": (
-                    "Equilíbrio entre qualidade e VRAM; ideal para GPUs de 8 GB ou superiores."
-                ),
-                "min_vram_gb": 8,
-                "estimated_size_bytes": 6_700_000_000,
-                "estimated_file_count": 37,
-                "recommended": True,
-                "aliases": ["default", "balanced"],
-            },
-            {
-                "quantization": "int8",
-                "label": "Int8 (CPU/GPU moderada)",
-                "description": (
-                    "Reduz ainda mais o uso de memória com leve impacto na fidelidade."
-                ),
-                "min_vram_gb": 4,
-                "estimated_size_bytes": 4_300_000_000,
-                "estimated_file_count": 37,
-                "aliases": ["compact"],
-            },
-            {
-                "quantization": "float16",
-                "label": "FP16 (máxima fidelidade)",
-                "description": (
-                    "Maior qualidade possível, requer GPUs com 12 GB de VRAM ou mais."
-                ),
-                "min_vram_gb": 12,
-                "estimated_size_bytes": 9_400_000_000,
-                "estimated_file_count": 37,
-                "aliases": ["fp16", "full"],
-            },
-        ],
-    },
     {
         "id": "distil-whisper/distil-large-v3",
         "backend": "ctranslate2",
-        "display_name": "Distil Whisper Large v3",
-        "description": (
-            "Versão destilada ~2× mais leve, mantendo boa cobertura multilingue."
-        ),
-        "priority": 20,
-        "default_quantization": "int8_float16",
-        "variants": [
-            {
-                "quantization": "int8_float16",
-                "label": "Int8 + FP16",
-                "description": "Excelente compromisso entre velocidade e qualidade.",
-                "min_vram_gb": 5,
-                "estimated_size_bytes": 3_200_000_000,
-                "estimated_file_count": 32,
-                "recommended": True,
-                "aliases": ["default"],
-            },
-            {
-                "quantization": "int8",
-                "label": "Int8 (ultra-compacto)",
-                "description": "Otimizando memória para CPU ou GPUs de 3 GB.",
-                "min_vram_gb": 3,
-                "estimated_size_bytes": 2_000_000_000,
-                "estimated_file_count": 32,
-                "aliases": ["compact"],
-            },
-        ],
+        "ui_group": "recommended",
+        "recommended_priority": 100,
+        "preferred_device": "cpu",
+        "requires_gpu": False,
+        "min_system_ram_mb": 6000,
+        "min_vram_mb": 0,
+        "estimated_download_bytes": 1_550_000_000,
+        "estimated_disk_bytes": 3_100_000_000,
+        "estimated_download_reference_mbps": 50.0,
+        "estimated_cpu_rtf": 0.9,
+        "estimated_gpu_rtf": 0.35,
+        "description": "Distilled multilingual weights tuned for fast CPU inference.",
     },
     {
-        "id": "Systran/faster-whisper-medium",
+        "id": "faster-whisper/medium.en",
         "backend": "faster-whisper",
-        "display_name": "Faster-Whisper Medium",
-        "description": "Modelo FP16 com boa acurácia e latência moderada.",
-        "priority": 30,
-        "min_vram_gb": 5,
-        "estimated_size_bytes": 2_900_000_000,
-        "estimated_file_count": 26,
-        "variants": [
-            {
-                "quantization": None,
-                "label": "FP16",
-                "description": "Padrão para GPUs ≥5 GB de VRAM.",
-                "min_vram_gb": 5,
-                "estimated_size_bytes": 2_900_000_000,
-                "estimated_file_count": 26,
-                "recommended": True,
-                "aliases": ["default"],
-            }
-        ],
+        "ui_group": "recommended",
+        "recommended_priority": 90,
+        "preferred_device": "gpu",
+        "requires_gpu": False,
+        "min_system_ram_mb": 8000,
+        "min_vram_mb": 6144,
+        "estimated_download_bytes": 1_650_000_000,
+        "estimated_disk_bytes": 3_200_000_000,
+        "estimated_download_reference_mbps": 50.0,
+        "estimated_cpu_rtf": 1.5,
+        "estimated_gpu_rtf": 0.4,
+        "description": "English-only medium model optimized for the faster-whisper runtime.",
     },
     {
-        "id": "Systran/faster-whisper-medium-int8",
-        "backend": "faster-whisper",
-        "display_name": "Faster-Whisper Medium Int8",
-        "description": "Variante int8 para reduzir VRAM mantendo boa qualidade.",
-        "priority": 40,
-        "min_vram_gb": 3,
-        "estimated_size_bytes": 1_500_000_000,
-        "estimated_file_count": 26,
-        "variants": [
-            {
-                "quantization": None,
-                "label": "Int8",
-                "description": "Ideal para GPUs de 3–4 GB ou execução em CPU.",
-                "min_vram_gb": 3,
-                "estimated_size_bytes": 1_500_000_000,
-                "estimated_file_count": 26,
-                "recommended": True,
-                "aliases": ["default", "int8"],
-            }
-        ],
-    },
-    {
-        "id": "Systran/faster-whisper-small",
-        "backend": "faster-whisper",
-        "display_name": "Faster-Whisper Small",
-        "description": "Modelo leve para baixa latência, ótimo para notebooks.",
-        "priority": 50,
-        "min_vram_gb": 2,
-        "estimated_size_bytes": 1_100_000_000,
-        "estimated_file_count": 18,
-        "variants": [
-            {
-                "quantization": None,
-                "label": "FP16",
-                "description": "Padrão em FP16 para GPUs de 2 GB.",
-                "min_vram_gb": 2,
-                "estimated_size_bytes": 1_100_000_000,
-                "estimated_file_count": 18,
-                "recommended": True,
-                "aliases": ["default"],
-            }
-        ],
-    },
-    {
-        "id": "Systran/faster-whisper-small-int8",
-        "backend": "faster-whisper",
-        "display_name": "Faster-Whisper Small Int8",
-        "description": "Consumo mínimo de memória, ideal para CPUs ou GPUs integradas.",
-        "priority": 60,
-        "min_vram_gb": 1,
-        "estimated_size_bytes": 650_000_000,
-        "estimated_file_count": 18,
-        "variants": [
-            {
-                "quantization": None,
-                "label": "Int8",
-                "description": "Ocupação mínima com pequena perda de fidelidade.",
-                "min_vram_gb": 1,
-                "estimated_size_bytes": 650_000_000,
-                "estimated_file_count": 18,
-                "recommended": True,
-                "aliases": ["default", "int8"],
-            }
-        ],
+        "id": "openai/whisper-large-v3-turbo",
+        "backend": "ctranslate2",
+        "ui_group": "advanced",
+        "recommended_priority": 70,
+        "preferred_device": "gpu",
+        "requires_gpu": True,
+        "min_system_ram_mb": 12000,
+        "min_vram_mb": 12288,
+        "estimated_download_bytes": 3_600_000_000,
+        "estimated_disk_bytes": 7_200_000_000,
+        "estimated_download_reference_mbps": 50.0,
+        "estimated_cpu_rtf": 3.8,
+        "estimated_gpu_rtf": 0.25,
+        "description": "High-fidelity multilingual Turbo weights for high-end GPUs.",
     },
 ]
 
 DISPLAY_NAMES: Dict[str, str] = {
+    "distil-whisper/distil-large-v3": "Distil Whisper Large v3 (CT2)",
+    "faster-whisper/medium.en": "Faster-Whisper Medium.en",
     "openai/whisper-large-v3-turbo": "Whisper Large v3 Turbo",
     "distil-whisper/distil-large-v3": "Distil Whisper Large v3",
     "Systran/faster-whisper-medium": "Faster-Whisper Medium",
@@ -295,6 +195,8 @@ DISPLAY_NAMES: Dict[str, str] = {
 
 
 _INSTALL_METADATA_FILENAME = "install.json"
+
+_DEFAULT_DOWNLOAD_BANDWIDTH_MBPS = 50.0
 
 
 def _write_install_metadata(
@@ -1176,6 +1078,149 @@ def list_catalog() -> List[Dict[str, Any]]:
             normalized["variants"] = [copy.deepcopy(v) for v in variants]
         catalog.append(normalized)
     return catalog
+
+
+def _format_gib(mb_value: int) -> str:
+    if mb_value <= 0:
+        return "0.0 GB"
+    return f"{mb_value / 1024:.1f} GB"
+
+
+def _estimate_download_seconds(
+    bytes_value: Any, bandwidth_mbps: float | None
+) -> float | None:
+    if not bandwidth_mbps:
+        return None
+    try:
+        normalized = int(bytes_value)
+    except (TypeError, ValueError):
+        return None
+    if normalized <= 0:
+        return None
+    bits = float(normalized) * 8.0
+    try:
+        return bits / (float(bandwidth_mbps) * 1_000_000.0)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def build_runtime_catalog(
+    hardware: HardwareProfile,
+    *,
+    bandwidth_mbps: float | None = _DEFAULT_DOWNLOAD_BANDWIDTH_MBPS,
+) -> List[Dict[str, Any]]:
+    """Return curated entries enriched with runtime heuristics for ``hardware``."""
+
+    catalog: List[Dict[str, Any]] = []
+    base_catalog = list_catalog()
+    available_ram = hardware.system_ram_mb or 0
+    available_vram = hardware.max_vram_mb or 0
+
+    for entry in base_catalog:
+        enriched = copy.deepcopy(entry)
+        enriched["ui_group"] = str(entry.get("ui_group", "advanced") or "advanced").lower()
+        preferred_device = str(entry.get("preferred_device", "cpu") or "cpu").lower()
+        requires_gpu = bool(entry.get("requires_gpu", False))
+        min_vram_mb = int(entry.get("min_vram_mb") or 0)
+        min_system_ram_mb = int(entry.get("min_system_ram_mb") or 0)
+        recommended_priority = int(entry.get("recommended_priority") or 0)
+
+        enriched["preferred_device"] = preferred_device
+        enriched["requires_gpu"] = requires_gpu
+        enriched["min_vram_mb"] = min_vram_mb
+        enriched["min_system_ram_mb"] = min_system_ram_mb
+        enriched["recommended_priority"] = recommended_priority
+
+        download_bytes = entry.get("estimated_download_bytes")
+        disk_bytes = entry.get("estimated_disk_bytes")
+        enriched["estimated_download_bytes"] = (
+            int(download_bytes)
+            if isinstance(download_bytes, (int, float))
+            else None
+        )
+        enriched["estimated_disk_bytes"] = (
+            int(disk_bytes)
+            if isinstance(disk_bytes, (int, float))
+            else None
+        )
+        enriched["estimated_download_seconds"] = _estimate_download_seconds(
+            download_bytes,
+            bandwidth_mbps,
+        )
+        enriched["estimated_download_reference_mbps"] = bandwidth_mbps
+
+        warnings: list[str] = []
+        blockers: list[str] = []
+
+        if requires_gpu and not hardware.has_cuda:
+            blockers.append("GPU necessária não detectada.")
+
+        if min_vram_mb > 0:
+            if not hardware.has_cuda:
+                message = (
+                    f"GPU com >= {_format_gib(min_vram_mb)} de VRAM recomendada."
+                    if not requires_gpu
+                    else f"Requer GPU com >= {_format_gib(min_vram_mb)} de VRAM."
+                )
+                (blockers if requires_gpu else warnings).append(message)
+            elif available_vram and available_vram < min_vram_mb:
+                message = (
+                    f"Requer >= {_format_gib(min_vram_mb)} de VRAM (detectado {_format_gib(available_vram)})."
+                )
+                (blockers if requires_gpu else warnings).append(message)
+
+        if min_system_ram_mb > 0 and available_ram and available_ram < min_system_ram_mb:
+            warnings.append(
+                f"Requer >= {_format_gib(min_system_ram_mb)} de RAM (detectado {_format_gib(available_ram)})."
+            )
+
+        if preferred_device == "gpu" and not hardware.has_cuda and not requires_gpu:
+            warnings.append("GPU recomendada para melhor desempenho.")
+
+        status = "blocked" if blockers else ("warn" if warnings else "ok")
+        enriched["hardware_status"] = status
+        enriched["hardware_blockers"] = blockers
+        enriched["hardware_warnings"] = warnings
+        enriched["hardware_messages"] = blockers + warnings
+        enriched["hardware_profile"] = hardware.to_dict()
+
+        catalog.append(enriched)
+
+    return catalog
+
+
+def select_recommended_model(
+    runtime_catalog: List[Dict[str, Any]]
+) -> Dict[str, Any] | None:
+    """Return the best-fit curated entry for the current hardware."""
+
+    candidates: list[tuple[int, int, int, Dict[str, Any]]] = []
+    for entry in runtime_catalog:
+        priority = int(entry.get("recommended_priority") or 0)
+        if priority <= 0:
+            continue
+        if entry.get("hardware_status") == "blocked":
+            continue
+        group_bonus = 1 if entry.get("ui_group") == "recommended" else 0
+        min_vram = int(entry.get("min_vram_mb") or 0)
+        candidates.append((priority, group_bonus, -min_vram, copy.deepcopy(entry)))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    return candidates[0][3]
+
+
+def find_runtime_entry(
+    model_id: str, runtime_catalog: List[Dict[str, Any]]
+) -> Dict[str, Any] | None:
+    """Return the enriched runtime catalog entry for ``model_id`` when available."""
+
+    for entry in runtime_catalog:
+        if entry.get("id") == model_id:
+            return copy.deepcopy(entry)
+    return None
 
 
 def list_installed(cache_dir: str | Path) -> List[Dict[str, str]]:

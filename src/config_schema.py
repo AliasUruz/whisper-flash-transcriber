@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .logging_utils import get_logger, log_context
+from .model_manager import CURATED, normalize_backend_label
 
 LOGGER = get_logger(__name__, component='ConfigSchema')
 
@@ -27,6 +28,12 @@ _SUPPORTED_UI_LANGUAGE_MAP = {
     "português": "pt-BR",
 }
 _DEFAULT_UI_LANGUAGE = "en-US"
+
+_CURATED_MODEL_IDS = {entry["id"] for entry in CURATED}
+_ALLOWED_ASR_BACKENDS = {
+    normalize_backend_label(entry.get("backend"))
+    for entry in CURATED
+} | {"transformers"}
 
 
 class ASRDownloadStatus(BaseModel):
@@ -127,10 +134,7 @@ class AppConfig(BaseModel):
     transformers_cache_dir: str = str((Path(_DEFAULT_DEPS_STORAGE_DIR) / "transformers").expanduser())
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     recordings_dir: str = str((_DEFAULT_STORAGE_ROOT / "recordings").expanduser())
-    python_packages_dir: str = _DEFAULT_PYTHON_PACKAGES_DIR
-    vad_models_dir: str = _DEFAULT_VAD_MODELS_DIR
-    hf_cache_dir: str = _DEFAULT_HF_CACHE_DIR
-    asr_model_id: str = "openai/whisper-large-v3-turbo"
+    asr_model_id: str = "distil-whisper/distil-large-v3"
     asr_backend: str = "ctranslate2"
     asr_compute_device: str = "auto"
     asr_dtype: str = "float16"
@@ -310,35 +314,31 @@ class AppConfig(BaseModel):
             return [str(item).strip() for item in value if item is not None]
         return [str(value)]
 
-    @field_validator("asr_curated_catalog", mode="before")
+    @field_validator("asr_model_id", mode="before")
     @classmethod
-    def _coerce_catalog(cls, value: Any) -> list[dict[str, Any]]:
-        if value is None:
-            return []
-        if isinstance(value, dict):
-            return [dict(value)]
-        if isinstance(value, (list, tuple, set)):
-            coerced: list[dict[str, Any]] = []
-            for item in value:
-                if isinstance(item, dict):
-                    coerced.append(dict(item))
-                    continue
-                if isinstance(item, str):
-                    try:
-                        parsed = json.loads(item)
-                    except Exception:
-                        continue
-                    if isinstance(parsed, dict):
-                        coerced.append(parsed)
-            return coerced
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except Exception:
-                return []
-            if isinstance(parsed, dict):
-                return [parsed]
-        return []
+    def _validate_asr_model_id(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("asr_model_id must be a string")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("asr_model_id must not be empty")
+        if normalized not in _CURATED_MODEL_IDS:
+            raise ValueError(
+                f"asr_model_id must be one of {sorted(_CURATED_MODEL_IDS)}"
+            )
+        return normalized
+
+    @field_validator("asr_backend", mode="before")
+    @classmethod
+    def _validate_asr_backend(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("asr_backend must be a string")
+        normalized = normalize_backend_label(value)
+        if normalized not in _ALLOWED_ASR_BACKENDS:
+            raise ValueError(
+                f"asr_backend must be one of {sorted(_ALLOWED_ASR_BACKENDS)}"
+            )
+        return normalized
 
     @field_validator("agent_auto_paste", mode="before")
     @classmethod
