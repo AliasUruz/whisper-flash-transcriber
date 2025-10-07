@@ -9,13 +9,6 @@ from collections.abc import Callable, Iterable
 from typing import Any, Mapping, TYPE_CHECKING
 from pathlib import Path
 from threading import RLock
-try:
-    import pyautogui  # Still required for _do_paste
-except ImportError as exc:
-    raise SystemExit(
-        "Error: the 'pyautogui' library is not installed. "
-        "Run 'pip install -r requirements.txt' before starting the application."
-    ) from exc
 import pyperclip  # Still required for _handle_transcription_result
 from tkinter import messagebox  # Added for message boxes in _on_model_load_failed
 
@@ -156,6 +149,10 @@ class AppCore:
         # Track the latest onboarding outcome so diagnostics and the UI can
         # inspect what happened without parsing log files.
         self._last_onboarding_outcome: dict[str, Any] | None = None
+
+        # Cache opcional para módulos importados sob demanda
+        self._pyautogui_module = None
+        self._pyautogui_unavailable = False
 
         self.action_orchestrator = ActionOrchestrator(
             state_manager=self.state_manager,
@@ -1563,14 +1560,44 @@ class AppCore:
 
     def _do_paste(self):
         # Lógica movida de WhisperCore._do_paste
+        module = self._ensure_pyautogui_module()
+        if module is None:
+            return
+
         try:
             hotkey_sequence = self._resolve_paste_hotkey_sequence()
-            pyautogui.hotkey(*hotkey_sequence)
+            module.hotkey(*hotkey_sequence)
             LOGGER.info("Text pasted.")
             self._log_status("Text pasted.")
-        except Exception as e:
-            LOGGER.error(f"Failed to execute paste automation: {e}")
+        except Exception as exc:
+            LOGGER.error("Failed to execute paste automation: %s", exc)
             self._log_status("Error: failed to simulate the paste hotkey.", error=True)
+
+    def _ensure_pyautogui_module(self) -> Any | None:
+        """Load and cache ``pyautogui`` on demand for paste automation."""
+
+        if self._pyautogui_module is not None:
+            return self._pyautogui_module
+
+        if self._pyautogui_unavailable:
+            return None
+
+        try:
+            import pyautogui  # type: ignore
+        except ImportError as exc:  # pragma: no cover - depende da instalação do usuário
+            LOGGER.warning(
+                "Auto-paste unavailable because 'pyautogui' is missing: %s",
+                exc,
+            )
+            self._log_status(
+                "Auto-paste requires the 'pyautogui' package. Install it via 'pip install -r requirements.txt'.",
+                error=True,
+            )
+            self._pyautogui_unavailable = True
+            return None
+
+        self._pyautogui_module = pyautogui
+        return pyautogui
 
     def _resolve_paste_hotkey_sequence(self) -> tuple[str, ...]:
         """Resolve the hotkey combination used for auto-paste."""
