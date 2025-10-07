@@ -40,14 +40,15 @@ Whisper Flash Transcriber is a high-performance, hotkey-driven audio transcripti
 
 3. **Install the required dependencies:**
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements.txt -c constraints.txt
    ```
-   The base dependency set installs the faster-whisper/CTranslate2 runtime and all core libraries needed for the default flow.
-   PyTorch and the Transformers pipeline are no longer part of the mandatory stack.
+   The optional `-c constraints.txt` flag keeps installations inside the validated compatibility window; omit it if you need to
+   prototype with newer packages temporarily. The base dependency set installs the faster-whisper/CTranslate2 runtime and all
+   core libraries needed for the default flow. PyTorch and the Transformers pipeline are no longer part of the mandatory stack.
 
 4. **Optional legacy stack:**
    ```bash
-   pip install -r requirements-legacy.txt
+   pip install -r requirements-legacy.txt -c constraints.txt
    ```
    Install this file only if you plan to run the legacy Transformers + PyTorch workflow. The main application no longer ships
    that backend, but the optional dependencies remain available for custom forks.
@@ -57,7 +58,7 @@ Whisper Flash Transcriber is a high-performance, hotkey-driven audio transcripti
 Install the optional requirements only when you need GPU-centric optimizations such as quantized models:
 
 ```bash
-pip install -r requirements-optional.txt
+pip install -r requirements-optional.txt -c constraints.txt
 ```
 
 This set contains packages such as `bitsandbytes`. Upstream only ships prebuilt wheels for Linux (including WSL) and conda-based
@@ -175,7 +176,9 @@ Manual verification (recommended after storage or model changes):
    - Repeat the process with overrides enabled to confirm that migrations are skipped and logs report the decision.
 3. **Dependency audit**
    - Run `pip list --outdated` inside the virtual environment to review available updates.
-   - For each candidate library, cross-check release notes before upgrading and rerun `pytest` to verify compatibility.
+  - For each candidate library, cross-check release notes before upgrading and rerun `pytest` to verify compatibility.
+  - Use `constraints.txt` during installations to remain within supported upper bounds, unless you are purposefully validating
+    newer releases.
 
 Document any deviations or failures inside the `plans/` folder so future operators can trace remediation steps.
 
