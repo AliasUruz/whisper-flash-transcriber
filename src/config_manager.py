@@ -140,10 +140,7 @@ DEFAULT_CONFIG = {
         "Transcribed speech: {text}"
     ),
     "ui_language": "en-US",
-    "batch_size": 16,  # Valor padrão para o modo automático
-    "batch_size_mode": "auto",  # Novo: 'auto' ou 'manual'
-    "manual_batch_size": 8,  # Novo: Valor para o modo manual
-    "gpu_index": 0,
+    "batch_size": 16,
     "hotkey_stability_service_enabled": True,  # Nova configuração unificada
     "use_vad": False,
     "vad_threshold": 0.5,
@@ -169,7 +166,6 @@ DEFAULT_CONFIG = {
     "min_transcription_duration": 1.0,  # Nova configuração
     "chunk_length_sec": 30,
     "chunk_length_mode": "manual",
-    "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
     "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
@@ -225,10 +221,7 @@ SOUND_FREQUENCY_CONFIG_KEY = "sound_frequency"
 SOUND_DURATION_CONFIG_KEY = "sound_duration"
 SOUND_VOLUME_CONFIG_KEY = "sound_volume"
 HOTKEY_STABILITY_SERVICE_ENABLED_CONFIG_KEY = "hotkey_stability_service_enabled" # Nova constante unificada
-BATCH_SIZE_CONFIG_KEY = "batch_size" # Agora é o batch size padrão para o modo auto
-BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
-MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
-GPU_INDEX_CONFIG_KEY = "gpu_index"
+BATCH_SIZE_CONFIG_KEY = "batch_size"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
 RECORD_STORAGE_MODE_CONFIG_KEY = "record_storage_mode"
 RECORD_STORAGE_LIMIT_CONFIG_KEY = "record_storage_limit"
@@ -267,7 +260,6 @@ GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 GEMINI_TIMEOUT_CONFIG_KEY = "gemini_timeout"
 # Novas constantes para otimizações de desempenho
 CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
-ENABLE_TORCH_COMPILE_CONFIG_KEY = "enable_torch_compile"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
@@ -611,47 +603,26 @@ class ConfigManager:
             has_cuda = False
             gpu_count = 0
             max_vram_mb = 0
-            torch_mod = None
 
-            torch_spec = importlib.util.find_spec("torch")
-            if torch_spec is not None:
+            ct2_spec = importlib.util.find_spec("ctranslate2")
+            ct2_module = None
+            if ct2_spec is not None:
                 try:
-                    torch_mod = importlib.import_module("torch")
+                    ct2_module = importlib.import_module("ctranslate2")
                 except Exception:
-                    logging.debug("torch import failed during hardware probing.", exc_info=True)
-                    torch_mod = None
+                    logging.debug("ctranslate2 import failed during hardware probing.", exc_info=True)
+                    ct2_module = None
 
-            if torch_mod is not None:
-                cuda_module = getattr(torch_mod, "cuda", None)
-                is_available = getattr(cuda_module, "is_available", None)
-                if callable(is_available):
+            if ct2_module is not None:
+                get_device_count = getattr(ct2_module, "get_device_count", None)
+                if callable(get_device_count):
                     try:
-                        has_cuda = bool(is_available())
+                        gpu_count = int(get_device_count("cuda"))
+                        has_cuda = gpu_count > 0
                     except Exception:
-                        logging.debug("torch.cuda.is_available() failed.", exc_info=True)
+                        logging.debug("ctranslate2.get_device_count('cuda') failed.", exc_info=True)
+                        gpu_count = 0
                         has_cuda = False
-                if has_cuda:
-                    device_count_fn = getattr(cuda_module, "device_count", None)
-                    if callable(device_count_fn):
-                        try:
-                            gpu_count = int(device_count_fn())
-                        except Exception:
-                            logging.debug("torch.cuda.device_count() failed.", exc_info=True)
-                            gpu_count = 0
-                    get_props = getattr(cuda_module, "get_device_properties", None)
-                    if callable(get_props):
-                        for idx in range(max(gpu_count, 0)):
-                            try:
-                                props = get_props(idx)
-                                total_memory = getattr(props, "total_memory", 0)
-                                if total_memory:
-                                    max_vram_mb = max(
-                                        max_vram_mb,
-                                        int(int(total_memory) // (1024 * 1024)),
-                                    )
-                            except Exception:
-                                logging.debug("Failed to read CUDA device properties for index %d.", idx, exc_info=True)
-                                continue
 
             return HardwareProfile(
                 system_ram_mb=system_ram_mb,
@@ -695,22 +666,16 @@ class ConfigManager:
             cfg.get(LAUNCH_AT_STARTUP_CONFIG_KEY, self.default_config[LAUNCH_AT_STARTUP_CONFIG_KEY])
         )
 
-        # Track whether the user explicitly defined batch size / GPU index
+        # Track whether the user explicitly defined batch size
         batch_size_specified = bool(cfg.get("batch_size_specified"))
-        gpu_index_specified = bool(cfg.get("gpu_index_specified"))
 
         if loaded_config is not None:
             batch_size_specified = BATCH_SIZE_CONFIG_KEY in loaded_config
-            gpu_index_specified = GPU_INDEX_CONFIG_KEY in loaded_config
 
-        if applied_updates is not None:
-            if BATCH_SIZE_CONFIG_KEY in applied_updates:
-                batch_size_specified = True
-            if GPU_INDEX_CONFIG_KEY in applied_updates:
-                gpu_index_specified = True
+        if applied_updates is not None and BATCH_SIZE_CONFIG_KEY in applied_updates:
+            batch_size_specified = True
 
         cfg["batch_size_specified"] = batch_size_specified
-        cfg["gpu_index_specified"] = gpu_index_specified
 
         def _coerce_path(value: Any, *, default: Path) -> Path:
             if value in (None, ""):
@@ -1210,11 +1175,6 @@ class ConfigManager:
             raw_chunk_mode = "manual"
         self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = raw_chunk_mode
 
-        # enable_torch_compile: bool
-        self.config[ENABLE_TORCH_COMPILE_CONFIG_KEY] = _parse_bool(
-            self.config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False))
-        )
-
         backend_value = _normalize_asr_backend(
             self.config.get(ASR_BACKEND_CONFIG_KEY, self.default_config[ASR_BACKEND_CONFIG_KEY])
         )
@@ -1230,23 +1190,6 @@ class ConfigManager:
             model_id_value = str(self.default_config[ASR_MODEL_ID_CONFIG_KEY])
         self.config[ASR_MODEL_ID_CONFIG_KEY] = model_id_value
     
-        # Lógica de validação para gpu_index
-        try:
-            raw_gpu_idx_val = _source_value(
-                GPU_INDEX_CONFIG_KEY,
-                default=cfg.get(GPU_INDEX_CONFIG_KEY, -1),
-            )
-            gpu_idx_val = int(raw_gpu_idx_val)
-            if gpu_idx_val < -1:
-                logging.warning(f"Invalid GPU index '{gpu_idx_val}'. Must be -1 (auto) or >= 0. Using auto (-1).")
-                self.config[GPU_INDEX_CONFIG_KEY] = -1
-            else:
-                self.config[GPU_INDEX_CONFIG_KEY] = gpu_idx_val
-        except (ValueError, TypeError):
-            logging.warning(f"Invalid GPU index value '{self.config.get(GPU_INDEX_CONFIG_KEY)}' in config. Falling back to automatic selection (-1).")
-            self.config[GPU_INDEX_CONFIG_KEY] = -1
-            self.config["gpu_index_specified"] = False  # Se falhou a leitura, não foi especificado corretamente
-
         # Lógica de validação para min_transcription_duration
         try:
             raw_min_duration_val = _source_value(
@@ -2891,15 +2834,6 @@ class ConfigManager:
         if val not in ["auto", "manual"]:
             val = "manual"
         self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = val
-
-    def get_enable_torch_compile(self):
-        return self.config.get(
-            ENABLE_TORCH_COMPILE_CONFIG_KEY,
-            self.default_config.get(ENABLE_TORCH_COMPILE_CONFIG_KEY, False),
-        )
-
-    def set_enable_torch_compile(self, value: bool):
-        self.config[ENABLE_TORCH_COMPILE_CONFIG_KEY] = bool(value)
 
     def set_chunk_length_sec(self, value: float | int):
         try:

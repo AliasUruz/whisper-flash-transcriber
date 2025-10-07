@@ -1,12 +1,13 @@
 import concurrent.futures
 import importlib
 import importlib.util
+import importlib
 import logging
 import threading
 import time
-from contextlib import contextmanager
 import os
-from typing import TYPE_CHECKING, Any
+from functools import lru_cache
+from typing import Any
 
 import numpy as np
 
@@ -41,12 +42,8 @@ from .config_manager import (
     SERVICE_OPENROUTER,
     SERVICE_GEMINI,
     BATCH_SIZE_CONFIG_KEY,
-    BATCH_SIZE_MODE_CONFIG_KEY,
-    MANUAL_BATCH_SIZE_CONFIG_KEY,
-    GPU_INDEX_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
-    CLEAR_GPU_CACHE_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
@@ -54,60 +51,32 @@ from .config_manager import (
 from . import model_manager as model_manager_module
 from .logging_utils import current_correlation_id, get_logger, scoped_correlation_id
 
-if TYPE_CHECKING:  # pragma: no cover - hints only
-    import torch as torch_type
 
-torch: Any | None
-_torch_spec = importlib.util.find_spec("torch")
-if _torch_spec is not None:  # pragma: no cover - import side effect
-    torch = importlib.import_module("torch")
-else:  # pragma: no cover - optional dependency missing
-    torch = None
-
-
-def _torch_available() -> bool:
-    return torch is not None
-
-
-def _torch_cuda_available() -> bool:
-    if torch is None:
-        return False
-    cuda = getattr(torch, "cuda", None)
-    if cuda is None:
-        return False
+@lru_cache(maxsize=1)
+def _ctranslate2_module() -> Any | None:
     try:
-        return bool(cuda.is_available())
+        return importlib.import_module("ctranslate2")
     except Exception:
-        return False
+        logging.debug("Unable to import ctranslate2 module.", exc_info=True)
+        return None
 
 
-def _torch_cuda_device_count() -> int:
-    if not _torch_cuda_available():
+def _ct2_cuda_device_count() -> int:
+    module = _ctranslate2_module()
+    if module is None:
         return 0
-    device_count = getattr(torch.cuda, "device_count", None)
-    if device_count is None:
+    get_count = getattr(module, "get_device_count", None)
+    if not callable(get_count):
         return 0
     try:
-        return int(device_count())
+        return int(get_count("cuda"))
     except Exception:
+        logging.debug("ctranslate2.get_device_count failed for CUDA.", exc_info=True)
         return 0
 
 
-@contextmanager
-def _torch_no_grad():
-    if torch is not None and hasattr(torch, "no_grad"):
-        with torch.no_grad():
-            yield
-    else:
-        yield
-
-
-def _require_torch() -> "torch_type":
-    if torch is None:
-        raise RuntimeError(
-            "PyTorch is required for the selected ASR backend but is not installed."
-        )
-    return torch
+def _ct2_cuda_available() -> bool:
+    return _ct2_cuda_device_count() > 0
 
 LOGGER = get_logger('whisper_flash_transcriber.transcription', component='TranscriptionHandler')
 
@@ -155,13 +124,8 @@ class TranscriptionHandler:
         self._model_load_started_at: float | None = None
 
         # Configurações de modelo e API (carregadas do config_manager)
-        self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
-        self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY) # Novo
-        self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY) # Novo
-        self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
-        self.gpu_index_requested = self.gpu_index
+        self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)
         self.batch_size_specified = self.config_manager.get("batch_size_specified") # Ainda usado para validação
-        self.gpu_index_specified = self.config_manager.get("gpu_index_specified") # Ainda usado para validação
 
         self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
         self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
@@ -173,7 +137,6 @@ class TranscriptionHandler:
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
-        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
         # Configurações de ASR
         # Inicializar atributos internos sem acionar recarga imediata do backend
         self._asr_backend_name = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
@@ -229,7 +192,6 @@ class TranscriptionHandler:
         asr_ct2_compute_type,
         asr_cache_dir,
         backend_device,
-        backend_device_index,
         asr_ct2_cpu_threads,
     ) -> dict:
         """Constroi os parâmetros de ``load`` para o backend escolhido."""
@@ -240,8 +202,6 @@ class TranscriptionHandler:
             }
             if backend_device:
                 payload["device"] = backend_device
-            if backend_device_index is not None:
-                payload["device_index"] = backend_device_index
             try:
                 if asr_ct2_cpu_threads is not None:
                     threads = int(asr_ct2_cpu_threads)
@@ -356,17 +316,6 @@ class TranscriptionHandler:
 
         self.pipe = None
 
-        if bool(self.config_manager.get(CLEAR_GPU_CACHE_CONFIG_KEY)) and _torch_cuda_available():
-            try:
-                assert torch is not None  # narrow type for static checkers
-                torch.cuda.empty_cache()
-            except Exception as cache_error:
-                logging.debug(
-                    "Failed to clear CUDA cache before reload: %s",
-                    cache_error,
-                    exc_info=True,
-                )
-
         try:
             model, processor = self._initialize_model_and_processor()
         except Exception as exc:  # salvaguarda contra erros inesperados
@@ -452,10 +401,6 @@ class TranscriptionHandler:
         previous_openrouter_model = getattr(self, "openrouter_model", "")
 
         self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)
-        self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY)
-        self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)
-        self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
-        self.gpu_index_requested = self.gpu_index
         self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
         self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
         self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
@@ -466,7 +411,6 @@ class TranscriptionHandler:
         self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
         self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
         self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
-        self.enable_torch_compile = bool(self.config_manager.get("enable_torch_compile", False))
 
         previous_backend = self._asr_backend_name
         previous_model_id = self._asr_model_id
@@ -561,7 +505,7 @@ class TranscriptionHandler:
         dtype = (self.asr_dtype or "auto").lower()
 
         if compute_device == "auto":
-            compute_device = "cuda" if _torch_cuda_available() else "cpu"
+            compute_device = "cuda" if _ct2_cuda_available() else "cpu"
 
         if dtype == "auto":
             dtype = "float16" if compute_device.startswith("cuda") else "float32"
@@ -720,15 +664,6 @@ class TranscriptionHandler:
 
     def _initialize_model_and_processor(self):
         try:
-            if _torch_cuda_available():
-                try:
-                    assert torch is not None
-                    torch.cuda.empty_cache()
-                except Exception:
-                    logging.debug(
-                        "Failed to clear CUDA cache before model load.",
-                        exc_info=True,
-                    )
             model, processor = self._load_model_task()
         except Exception as exc:
             error_message = f"Pipeline initialization error: {exc}"
@@ -920,32 +855,14 @@ class TranscriptionHandler:
         return processed_text or transcribed_text
 
     def _get_dynamic_batch_size(self) -> int:
-        device_in_use = (str(self.device_in_use or "").lower())
-        if not (_torch_cuda_available() and device_in_use.startswith("cuda")):
-            logging.info(
-                "GPU unavailable or not selected; using CPU batch size (4).",
-                extra={"event": "batch_size", "status": "cpu_fallback"},
-            )
-            self.last_dynamic_batch_size = 4
-            return 4
-
-        if self.batch_size_mode == "manual":
-            logging.info(
-                f"Manual batch size mode selected. Using configured value: {self.manual_batch_size}",
-                extra={"event": "batch_size", "status": "manual"},
-            )
-            self.last_dynamic_batch_size = self.manual_batch_size
-            return self.manual_batch_size
-
-        # Lógica para modo "auto" (dinâmico)
-        resolved_index = self.gpu_index if isinstance(self.gpu_index, int) else 0
-        value = select_batch_size(
-            resolved_index,
-            fallback=self.batch_size,
-            chunk_length_sec=self.chunk_length_sec
+        compute_type = self.asr_ct2_compute_type
+        batch = select_batch_size(
+            base=self.batch_size,
+            ct2_compute_type=compute_type,
+            chunk_length_sec=self.chunk_length_sec,
         )
-        self.last_dynamic_batch_size = value
-        return value
+        self.last_dynamic_batch_size = batch
+        return batch
 
     def _emit_device_warning(self, preferred: str, actual: str, reason: str, *, level: str = "warning") -> None:
         """Registra e propaga avisos de fallback de dispositivo."""
@@ -1113,86 +1030,33 @@ class TranscriptionHandler:
             req_dtype,
         )
 
-        available_cuda = _torch_cuda_available()
-        gpu_count = _torch_cuda_device_count() if available_cuda else 0
-
-        requested_gpu_index: int | None = None
-        if isinstance(req_device, str):
-            lowered_device = req_device.strip().lower()
-            if lowered_device.startswith("cuda"):
-                _, _, suffix = lowered_device.partition(":")
-                if suffix:
-                    try:
-                        requested_gpu_index = int(suffix)
-                    except ValueError:
-                        requested_gpu_index = None
-
-        config_gpu_idx_raw = self.config_manager.get(GPU_INDEX_CONFIG_KEY, -1)
-        try:
-            config_gpu_idx = int(config_gpu_idx_raw)
-        except (TypeError, ValueError):
-            config_gpu_idx = -1
-
-        self.gpu_index_requested = (
-            requested_gpu_index
-            if requested_gpu_index is not None
-            else (config_gpu_idx if config_gpu_idx >= 0 else None)
-        )
+        available_cuda = _ct2_cuda_available()
 
         effective_device = "cpu"
-        selected_gpu_index: int | None = None
 
         if req_device == "cpu":
             logging.info("ASR device explicitly set to CPU.")
         elif isinstance(req_device, str) and req_device.startswith("cuda"):
-            if not available_cuda or gpu_count == 0:
-                reason = (
-                    "CUDA not available."
-                    if not available_cuda
-                    else "No GPUs detected."
+            if not available_cuda:
+                self._emit_device_warning(
+                    req_device,
+                    "cpu",
+                    "CUDA execution not available via CTranslate2.",
                 )
-                self._emit_device_warning(req_device, "cpu", reason)
             else:
-                target_idx = requested_gpu_index
-                if target_idx is None or target_idx < 0:
-                    if 0 <= config_gpu_idx < gpu_count:
-                        target_idx = config_gpu_idx
-                    else:
-                        if config_gpu_idx not in (-1, 0):
-                            logging.warning(
-                                "Invalid GPU index %s, falling back to GPU 0.",
-                                config_gpu_idx,
-                            )
-                        target_idx = 0
-                if target_idx is not None and target_idx >= gpu_count:
-                    self._emit_device_warning(
-                        req_device,
-                        "cpu",
-                        (
-                            f"Requested GPU index {target_idx} is out of range for "
-                            f"{gpu_count} visible device(s)."
-                        ),
-                    )
-                else:
-                    selected_gpu_index = target_idx
-                    effective_device = (
-                        f"cuda:{selected_gpu_index}" if selected_gpu_index is not None else "cpu"
-                    )
+                effective_device = "cuda"
+        elif isinstance(req_device, str):
+            effective_device = req_device
 
         self.device_in_use = effective_device
-        self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
 
         logging.info(
-            "Effective ASR device: %s (gpu_index=%s)",
+            "Effective ASR device: %s",
             self.device_in_use,
-            self.gpu_index,
         )
 
         effective_dtype = self._resolve_effective_dtype(req_dtype)
         backend_device = effective_device
-        backend_device_index = selected_gpu_index if selected_gpu_index is not None else None
-        if not backend_device.startswith("cuda"):
-            backend_device_index = None
 
         load_kwargs = self._build_backend_load_kwargs(
             backend_name=backend_candidate,
@@ -1200,7 +1064,6 @@ class TranscriptionHandler:
             asr_ct2_compute_type=self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY),
             asr_cache_dir=self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY),
             backend_device=backend_device,
-            backend_device_index=backend_device_index,
             asr_ct2_cpu_threads=self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY),
         )
         load_kwargs = {k: v for k, v in load_kwargs.items() if v is not None}
@@ -1217,11 +1080,6 @@ class TranscriptionHandler:
                 self._asr_backend.device = backend_device
             except Exception:
                 logging.debug("Unable to propagate device to backend instance.", exc_info=True)
-        if hasattr(self._asr_backend, "device_index"):
-            try:
-                self._asr_backend.device_index = backend_device_index
-            except Exception:
-                logging.debug("Unable to propagate device_index to backend instance.", exc_info=True)
 
         self._update_model_log_context(
             backend=backend_candidate,

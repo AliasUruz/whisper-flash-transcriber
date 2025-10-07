@@ -46,7 +46,7 @@
 
 ## Checklist C — Auditoria de dependências
 1. [ ] Executar `pip list --outdated` dentro do ambiente virtual.
-2. [ ] Priorizar bibliotecas críticas (`torch`, `ctranslate2`, `faster-whisper`, `sounddevice`).
+2. [ ] Priorizar bibliotecas críticas (`ctranslate2`, `faster-whisper`, `sounddevice`).
 3. [ ] Para cada pacote alvo, consultar changelog oficial e riscos de regressão.
 4. [ ] Registrar na tabela abaixo a decisão (atualizar agora, adiar, requer teste adicional) e o racional técnico.
 5. [ ] Se decidir atualizar, criar *branch* dedicado, aplicar `pip install --upgrade <pacote>` e reexecutar `pytest` + testes manuais das checklists A/B.
@@ -54,7 +54,6 @@
 
 | Pacote | Versão atual | Versão alvo | Decisão | Notas |
 | --- | --- | --- | --- | --- |
-| `torch` | _(preencher)_ | _(preencher)_ | _( ) Atualizar _( ) Adiar_( ) Investigar | Impacto em CUDA e `torch.compile`. |
 | `ctranslate2` | _(preencher)_ | _(preencher)_ | _( ) Atualizar _( ) Adiar_( ) Investigar | Confirmar compatibilidade do compute type. |
 | `faster-whisper` | _(preencher)_ | _(preencher)_ | _( ) Atualizar _( ) Adiar_( ) Investigar | Validar parâmetros aceitos em `transcribe`. |
 | `sounddevice` | _(preencher)_ | _(preencher)_ | _( ) Atualizar _( ) Adiar_( ) Investigar | Testar captura em Windows e WSL. |

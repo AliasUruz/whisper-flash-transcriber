@@ -2181,7 +2181,6 @@ class AppCore:
             "new_agent_model": "gemini_agent_model",
             "new_gemini_prompt": GEMINI_PROMPT_CONFIG_KEY,
             "new_batch_size": "batch_size",
-            "new_gpu_index": "gpu_index",
             "new_hotkey_stability_service_enabled": "hotkey_stability_service_enabled",
             "new_min_transcription_duration": "min_transcription_duration",
             "new_min_record_duration": "min_record_duration",
@@ -2217,7 +2216,6 @@ class AppCore:
             "new_launch_at_startup": LAUNCH_AT_STARTUP_CONFIG_KEY,
             "new_chunk_length_mode": "chunk_length_mode",
             "new_chunk_length_sec": "chunk_length_sec",
-            "new_enable_torch_compile": "enable_torch_compile",
             "new_max_parallel_downloads": "max_parallel_downloads",
         }
 
@@ -2456,9 +2454,7 @@ class AppCore:
             set_launch_at_startup(bool(value))
 
         transcription_config_keys = {
-            "batch_size_mode",
-            "manual_batch_size",
-            "gpu_index",
+            "batch_size",
             "min_transcription_duration",
             "record_to_memory",
             "max_memory_seconds",

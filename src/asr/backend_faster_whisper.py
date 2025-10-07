@@ -219,11 +219,14 @@ class FasterWhisperBackend:
 
 def _has_cuda() -> bool:
     try:
-        import torch
+        import ctranslate2
 
-        return torch.cuda.is_available()
+        get_device_count = getattr(ctranslate2, "get_device_count", None)
+        if callable(get_device_count):
+            return int(get_device_count("cuda")) > 0
     except Exception:
         return False
+    return False
 
 
 def _coerce_device_index(raw: Any) -> int | None:

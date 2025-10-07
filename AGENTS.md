@@ -177,7 +177,7 @@ UI Thread -> UIManager (manages tray icon + settings window)
 ### 7.2 General Rules
 - Always use isolated `venv` environments to prevent conflicts.
 - Update dependencies cautiously and always run the `pytest` suite after any change.
-- For GPU-enabled Torch, document the need for the extra index URL (`https://download.pytorch.org/whl/torch_stable.html`) in the main `README.md`.
+- For GPU-enabled CTranslate2 wheels, document any additional installation notes in the main `README.md`.
 
 ---
 

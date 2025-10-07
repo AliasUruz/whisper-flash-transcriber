@@ -1,89 +1,105 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 import logging
 
 
-def select_batch_size(gpu_index: int, fallback: int = 4, *, chunk_length_sec: float | None = None) -> int:
+__all__ = ["BatchSizeHint", "select_batch_size"]
+
+
+_CT2_COMPUTE_TYPE_LIMITS: dict[str, int] = {
+    # Values derived from empirical runs with the faster-whisper bindings.
+    # They intentionally err on the side of caution so that "base" never
+    # exceeds what a typical GPU with the corresponding precision can handle.
+    "int8": 48,
+    "int8_float16": 32,
+    "int16": 24,
+    "float16": 16,
+    "bfloat16": 16,
+    "float32": 8,
+}
+
+
+@dataclass(slots=True)
+class BatchSizeHint:
+    """Normalized batch-size inputs used by :func:`select_batch_size`.
+
+    ``base`` mirrors the configuration knob exposed in the UI. The optional
+    ``ct2_compute_type`` and ``chunk_length_sec`` parameters are collected from
+    configuration as well and avoid the need for runtime device probing.
     """
-    Calcula batch size dinâmico baseado na VRAM disponível.
-    Ajusta agressividade conforme o tamanho do chunk (segundos):
-      - chunks maiores consomem mais memória -> reduzir batch.
-      - chunks menores permitem batch maior.
+
+    base: int
+    ct2_compute_type: str | None = None
+    chunk_length_sec: float | None = None
+
+
+def _normalize_compute_type(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    if normalized == "auto":
+        return None
+    return normalized or None
+
+
+def _limit_for_compute_type(compute_type: str | None) -> int | None:
+    if compute_type is None:
+        return None
+    return _CT2_COMPUTE_TYPE_LIMITS.get(compute_type)
+
+
+def _sanitize_base(value: int) -> int:
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        numeric = 1
+    return max(1, numeric)
+
+
+def select_batch_size(
+    *,
+    base: int,
+    ct2_compute_type: str | None = None,
+    chunk_length_sec: float | None = None,
+) -> int:
+    """Return a deterministic batch size for CTranslate2 execution.
+
+    The function never inspects the CUDA runtime directly. Instead, it
+    reconciles the user-provided ``base`` with conservative ceilings tied to
+    the configured ``ct2_compute_type`` and optionally scales the result down
+    for very long audio chunks. Short chunks simply stick to the configured
+    value so that operators retain full control over throughput.
     """
-    try:
-        import torch
-    except Exception as e:  # pragma: no cover - torch pode não estar instalado
-        logging.error(
-            "Torch unavailable: %s. Falling back to %s",
-            e,
-            fallback,
-        )
-        return fallback
 
-    if not torch.cuda.is_available() or gpu_index < 0:
-        logging.info(
-            "GPU unavailable or not selected; using CPU batch size"
-        )
-        return fallback
+    batch = _sanitize_base(base)
+    compute_type = _normalize_compute_type(ct2_compute_type)
+    limit = _limit_for_compute_type(compute_type)
+    if limit is not None:
+        batch = min(batch, limit)
 
-    try:
-        device = torch.device(f"cuda:{gpu_index}")
-        free_memory_bytes, total_memory_bytes = torch.cuda.mem_get_info(device)
-        free_memory_gb = free_memory_bytes / (1024 ** 3)
-        total_memory_gb = total_memory_bytes / (1024 ** 3)
-        logging.info(
-            "Checking VRAM for GPU %s: %.2fGB free of %.2fGB.",
-            gpu_index,
-            free_memory_gb,
-            total_memory_gb,
-        )
-        if free_memory_gb >= 10.0:
-            bs = 32
-        elif free_memory_gb >= 6.0:
-            bs = 16
-        elif free_memory_gb >= 4.0:
-            bs = 8
-        elif free_memory_gb >= 2.0:
-            bs = 4
-        else:
-            bs = 2
+    if chunk_length_sec is not None:
+        try:
+            chunk_value = float(chunk_length_sec)
+        except (TypeError, ValueError):
+            chunk_value = 0.0
 
-        # Ajuste por tamanho de chunk (heurística simples e segura)
-        if chunk_length_sec is not None:
-            try:
-                cl = float(chunk_length_sec)
-                if cl >= 60:
-                    factor = 0.5   # reduzir pela metade
-                elif cl >= 45:
-                    factor = 0.66  # reduzir ~1/3
-                elif cl >= 30:
-                    factor = 0.75
-                elif cl >= 15:
-                    factor = 0.9
-                else:
-                    factor = 1.0
-                new_bs = max(1, int(bs * factor))
-                logging.info(
-                    "Ajustando batch pelo chunk_length_sec=%.1fs: %s -> %s",
-                    cl, bs, new_bs
-                )
-                bs = new_bs
-            except Exception:
-                # Ignorar falhas de conversão
-                pass
+        if chunk_value > 0:
+            if chunk_value > 180:
+                batch = max(1, batch // 4)
+            elif chunk_value > 90:
+                batch = max(1, batch // 3)
+            elif chunk_value > 60:
+                batch = max(1, batch // 2)
 
-        logging.info(
-            "Free VRAM (%.2fGB) -> Dynamic batch size selected: %s",
-            free_memory_gb,
-            bs,
-        )
-        return bs
-    except Exception as e:  # pragma: no cover - erro ao consultar VRAM
-        logging.error(
-            (
-                "Failed to compute dynamic batch size: %s. "
-                "Using fallback value: %s"
-            ),
-            e,
-            fallback,
-            exc_info=True,
-        )
-        return fallback
+    logging.debug(
+        "Resolved CTranslate2 batch size.",
+        extra={
+            "event": "batch_size",
+            "base": base,
+            "ct2_compute_type": compute_type,
+            "chunk_length_sec": chunk_length_sec,
+            "value": batch,
+        },
+    )
+    return batch

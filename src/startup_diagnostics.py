@@ -146,135 +146,94 @@ def _probe_hotkey_subsystem(hotkey_config_path: Path | str | None) -> Diagnostic
     return _result_from_payload("Hotkey Permissions", payload)
 
 
-def _probe_torch_environment() -> DiagnosticResult:
+def _probe_ctranslate2_environment() -> DiagnosticResult:
     try:
-        torch_spec = importlib.util.find_spec("torch")
+        ct2_spec = importlib.util.find_spec("ctranslate2")
     except Exception as exc:
         LOGGER.error(
             StructuredMessage(
-                "Failed to query torch module availability.",
-                event="diagnostics.torch.spec_failed",
+                "Failed to query ctranslate2 module availability.",
+                event="diagnostics.ct2.spec_failed",
                 error=str(exc),
             ),
             exc_info=True,
         )
         payload = {
             "ok": False,
-            "message": "Unable to inspect PyTorch installation.",
+            "message": "Unable to inspect the CTranslate2 runtime.",
             "details": {"error": str(exc)},
-            "suggestion": "Ensure PyTorch is installed and accessible to the interpreter.",
+            "suggestion": "Ensure CTranslate2 is installed to enable model execution.",
             "fatal": False,
         }
-        return _result_from_payload("PyTorch", payload, success_status="warning")
+        return _result_from_payload("CTranslate2", payload, success_status="warning")
 
-    if torch_spec is None:
+    if ct2_spec is None:
         payload = {
             "ok": False,
-            "message": "PyTorch is not installed; GPU acceleration is unavailable.",
+            "message": "CTranslate2 is not installed; transcription cannot start.",
             "details": {},
-            "suggestion": (
-                "Install PyTorch with GPU support using the official wheel index if acceleration is required."
-            ),
-            "fatal": False,
+            "suggestion": "Install the `ctranslate2` package (GPU-enabled wheels are recommended when available).",
+            "fatal": True,
         }
-        return _result_from_payload("PyTorch", payload, success_status="warning")
+        return _result_from_payload("CTranslate2", payload, success_status="error")
 
     try:
-        import torch  # type: ignore
+        ct2_module = importlib.import_module("ctranslate2")
     except Exception as exc:  # pragma: no cover - defensive path
         LOGGER.error(
             StructuredMessage(
-                "Failed to import torch module during diagnostics.",
-                event="diagnostics.torch.import_failed",
+                "Failed to import ctranslate2 during diagnostics.",
+                event="diagnostics.ct2.import_failed",
                 error=str(exc),
             ),
             exc_info=True,
         )
         payload = {
             "ok": False,
-            "message": "PyTorch could not be imported.",
+            "message": "CTranslate2 could not be imported.",
             "details": {"error": str(exc)},
-            "suggestion": "Reinstall PyTorch and verify compatibility with the current Python version.",
-            "fatal": False,
+            "suggestion": "Reinstall CTranslate2 and verify wheel compatibility with the current interpreter.",
+            "fatal": True,
         }
-        return _result_from_payload("PyTorch", payload, success_status="warning")
+        return _result_from_payload("CTranslate2", payload, success_status="error")
 
-    version = getattr(torch, "__version__", "unknown")
-    cuda_available = False
-    cuda_devices: list[dict[str, Any]] = []
+    version = getattr(ct2_module, "__version__", "unknown")
+    cuda_devices: int | None = None
     cuda_error: str | None = None
-    try:
-        cuda_available = bool(torch.cuda.is_available())
-        if cuda_available:
-            device_count = torch.cuda.device_count()
-            for index in range(device_count):
-                try:
-                    name = torch.cuda.get_device_name(index)
-                    props = torch.cuda.get_device_properties(index)
-                    cuda_devices.append(
-                        {
-                            "index": index,
-                            "name": name,
-                            "total_memory_gb": round(props.total_memory / (1024 ** 3), 2),
-                            "compute_capability": f"{props.major}.{props.minor}",
-                        }
-                    )
-                except Exception as gpu_exc:  # pragma: no cover - diagnostics best-effort
-                    cuda_devices.append({"index": index, "error": str(gpu_exc)})
-        else:
-            device_count = 0
-    except Exception as exc:  # pragma: no cover - diagnostics best-effort
-        cuda_error = str(exc)
-        device_count = 0
-        LOGGER.warning(
-            StructuredMessage(
-                "CUDA diagnostics failed.",
-                event="diagnostics.torch.cuda_failure",
-                error=str(exc),
-            ),
-            exc_info=True,
-        )
+    compute_types: dict[str, list[str]] = {}
 
-    details = {
-        "version": version,
-        "cuda_available": cuda_available,
-        "device_count": device_count,
-        "devices": cuda_devices,
-    }
-    if cuda_error:
-        details["cuda_error"] = cuda_error
+    get_device_count = getattr(ct2_module, "get_device_count", None)
+    if callable(get_device_count):
+        try:
+            cuda_devices = int(get_device_count("cuda"))
+        except Exception as exc:
+            cuda_error = str(exc)
+            LOGGER.debug("ctranslate2.get_device_count('cuda') failed.", exc_info=True)
 
-    if cuda_available and cuda_devices:
-        message = f"PyTorch {version} detected with {len(cuda_devices)} CUDA device(s)."
-        payload = {
-            "ok": True,
-            "message": message,
-            "details": details,
-            "suggestion": None,
-            "fatal": False,
-        }
-        return _result_from_payload("PyTorch", payload, success_status="ok")
+    get_supported_types = getattr(ct2_module, "get_supported_compute_types", None)
+    if callable(get_supported_types):
+        try:
+            compute_types["cuda"] = list(get_supported_types("cuda"))
+        except Exception:
+            LOGGER.debug("Unable to query CUDA compute types from ctranslate2.", exc_info=True)
+        try:
+            compute_types["cpu"] = list(get_supported_types("cpu"))
+        except Exception:
+            LOGGER.debug("Unable to query CPU compute types from ctranslate2.", exc_info=True)
 
-    if cuda_available and not cuda_devices:
-        message = f"PyTorch {version} reports CUDA availability but device enumeration failed."
-        payload = {
-            "ok": False,
-            "message": message,
-            "details": details,
-            "suggestion": "Check GPU drivers and ensure the user has permission to access the GPU device.",
-            "fatal": False,
-        }
-        return _result_from_payload("PyTorch", payload, success_status="warning")
-
-    message = f"PyTorch {version} loaded without CUDA support; CPU execution will be used."
     payload = {
-        "ok": False,
-        "message": message,
-        "details": details,
-        "suggestion": "Install a CUDA-enabled build of PyTorch if GPU acceleration is desired.",
+        "ok": True,
+        "message": "CTranslate2 runtime detected.",
+        "details": {
+            "version": version,
+            "cuda_device_count": cuda_devices,
+            "compute_types": compute_types,
+            "cuda_error": cuda_error,
+        },
+        "suggestion": "Install the GPU-enabled wheels if CUDA acceleration is desired." if not cuda_devices else "",
         "fatal": False,
     }
-    return _result_from_payload("PyTorch", payload, success_status="warning")
+    return _result_from_payload("CTranslate2", payload)
 
 
 def run_startup_diagnostics(
@@ -287,7 +246,7 @@ def run_startup_diagnostics(
     report = StartupDiagnosticsReport()
     report.add(_probe_audio_subsystem())
     report.add(_probe_hotkey_subsystem(hotkey_config_path))
-    report.add(_probe_torch_environment())
+    report.add(_probe_ctranslate2_environment())
 
     try:
         register = getattr(config_manager, "register_startup_diagnostics", None)
