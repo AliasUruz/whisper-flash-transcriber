@@ -41,7 +41,6 @@ _DEFAULT_STORAGE_ROOT_DIR = str(_BASE_STORAGE_ROOT)
 _DEFAULT_MODELS_STORAGE_DIR = _DEFAULT_STORAGE_ROOT_DIR
 _DEFAULT_ASR_CACHE_DIR = str((_BASE_STORAGE_ROOT / "asr").expanduser())
 _DEFAULT_RECORDINGS_DIR = str((_BASE_STORAGE_ROOT / "recordings").expanduser())
-_DEFAULT_MODELS_STORAGE_DIR = str((_BASE_STORAGE_ROOT / "models").expanduser())
 
 
 _PROFILE_ENV_VAR = "WHISPER_FLASH_PROFILE_DIR"
@@ -155,9 +154,8 @@ DEFAULT_CONFIG = {
     "enable_torch_compile": False,
     "launch_at_startup": False,
     "clear_gpu_cache": True,
-    "models_storage_dir": _DEFAULT_STORAGE_ROOT_DIR,
     "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
-    "models_storage_dir": _DEFAULT_STORAGE_ROOT_DIR,
+    "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
     "recordings_dir": _DEFAULT_RECORDINGS_DIR,
     "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "ctranslate2",
