@@ -43,7 +43,7 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | ASR | `asr_backend_var` | `StringVar` | `CTkOptionMenu` (`asr_backend_menu`) | `"asr_backend"` | Permite sobrepor o backend inferido pelo modelo selecionado. |
 | ASR | `asr_model_id_var` | `StringVar` | Alimentado por `CTkOptionMenu` (`asr_model_menu`) via `asr_model_display_var` | `"asr_model_id"` | Guarda o identificador interno do modelo escolhido. |
 | ASR | `asr_model_display_var` | `StringVar` | `CTkOptionMenu` (`asr_model_menu`) | `"asr_model_id"` (mapeado por `display_to_id`) | Variável de exibição; converte nomes amigáveis para `asr_model_id_var`. |
-| ASR | `asr_compute_device_var` | `StringVar` | `CTkOptionMenu` (`asr_device_menu`) | `"asr_compute_device"` + `"gpu_index"` | Representa a seleção textual (*Auto*, *Force CPU*, *GPU X*), traduzida para backend e índice ao aplicar. |
+| ASR | `asr_compute_device_var` | `StringVar` | `CTkOptionMenu` (`asr_device_menu`) | `"asr_compute_device"` | Representa a seleção textual (*Auto*, *Prefer GPU*, *Force CPU*), mapeada para o dispositivo aceito pelo CTranslate2 sem exigir índices de GPU. |
 | ASR | `asr_dtype_var` | `StringVar` | `CTkOptionMenu` (`asr_dtype_menu`) | `"asr_dtype"` | Define a precisão dos tensores do backend Torch. |
 | ASR | `asr_ct2_compute_type_var` | `StringVar` | `CTkOptionMenu` (`asr_ct2_menu`) | `"asr_ct2_compute_type"` | Ajusta o compute type quando o backend é CTranslate2. |
 | ASR | `models_storage_dir_var` | `StringVar` | `CTkEntry` (`models_dir_entry`) | `"models_storage_dir"` | Diretório raiz usado para armazenar modelos e demais artefatos pesados; também serve de destino padrão quando o `storage_root_dir` muda sem override explícito. |

@@ -219,9 +219,12 @@ class FasterWhisperBackend:
 
 def _has_cuda() -> bool:
     try:
-        import torch
+        import ctranslate2  # type: ignore
+    except Exception:
+        return False
 
-        return torch.cuda.is_available()
+    try:
+        return bool(ctranslate2.get_supported_compute_types("cuda"))
     except Exception:
         return False
 

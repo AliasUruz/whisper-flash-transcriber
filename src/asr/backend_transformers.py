@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import importlib
 import logging
 
 from ..logging_utils import get_logger, log_context
@@ -31,7 +32,13 @@ class TransformersBackend:
     ) -> None:
         """Load model and processor, constructing the inference pipeline."""
         from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
-        import torch
+
+        try:
+            torch = importlib.import_module("torch")
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "The Transformers backend requires the 'torch' package. Install it using the optional requirements."
+            ) from exc
 
         model_override = kwargs.pop("model_id", None)
         if model_override:

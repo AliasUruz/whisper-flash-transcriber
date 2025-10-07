@@ -140,10 +140,7 @@ DEFAULT_CONFIG = {
         "Transcribed speech: {text}"
     ),
     "ui_language": "en-US",
-    "batch_size": 16,  # Valor padrão para o modo automático
-    "batch_size_mode": "auto",  # Novo: 'auto' ou 'manual'
-    "manual_batch_size": 8,  # Novo: Valor para o modo manual
-    "gpu_index": 0,
+    "batch_size": 16,
     "hotkey_stability_service_enabled": True,  # Nova configuração unificada
     "use_vad": False,
     "vad_threshold": 0.5,
@@ -226,9 +223,6 @@ SOUND_DURATION_CONFIG_KEY = "sound_duration"
 SOUND_VOLUME_CONFIG_KEY = "sound_volume"
 HOTKEY_STABILITY_SERVICE_ENABLED_CONFIG_KEY = "hotkey_stability_service_enabled" # Nova constante unificada
 BATCH_SIZE_CONFIG_KEY = "batch_size" # Agora é o batch size padrão para o modo auto
-BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
-MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
-GPU_INDEX_CONFIG_KEY = "gpu_index"
 SAVE_TEMP_RECORDINGS_CONFIG_KEY = "save_temp_recordings"
 RECORD_STORAGE_MODE_CONFIG_KEY = "record_storage_mode"
 RECORD_STORAGE_LIMIT_CONFIG_KEY = "record_storage_limit"
@@ -694,23 +688,6 @@ class ConfigManager:
         cfg[LAUNCH_AT_STARTUP_CONFIG_KEY] = bool(
             cfg.get(LAUNCH_AT_STARTUP_CONFIG_KEY, self.default_config[LAUNCH_AT_STARTUP_CONFIG_KEY])
         )
-
-        # Track whether the user explicitly defined batch size / GPU index
-        batch_size_specified = bool(cfg.get("batch_size_specified"))
-        gpu_index_specified = bool(cfg.get("gpu_index_specified"))
-
-        if loaded_config is not None:
-            batch_size_specified = BATCH_SIZE_CONFIG_KEY in loaded_config
-            gpu_index_specified = GPU_INDEX_CONFIG_KEY in loaded_config
-
-        if applied_updates is not None:
-            if BATCH_SIZE_CONFIG_KEY in applied_updates:
-                batch_size_specified = True
-            if GPU_INDEX_CONFIG_KEY in applied_updates:
-                gpu_index_specified = True
-
-        cfg["batch_size_specified"] = batch_size_specified
-        cfg["gpu_index_specified"] = gpu_index_specified
 
         def _coerce_path(value: Any, *, default: Path) -> Path:
             if value in (None, ""):
@@ -1230,23 +1207,6 @@ class ConfigManager:
             model_id_value = str(self.default_config[ASR_MODEL_ID_CONFIG_KEY])
         self.config[ASR_MODEL_ID_CONFIG_KEY] = model_id_value
     
-        # Lógica de validação para gpu_index
-        try:
-            raw_gpu_idx_val = _source_value(
-                GPU_INDEX_CONFIG_KEY,
-                default=cfg.get(GPU_INDEX_CONFIG_KEY, -1),
-            )
-            gpu_idx_val = int(raw_gpu_idx_val)
-            if gpu_idx_val < -1:
-                logging.warning(f"Invalid GPU index '{gpu_idx_val}'. Must be -1 (auto) or >= 0. Using auto (-1).")
-                self.config[GPU_INDEX_CONFIG_KEY] = -1
-            else:
-                self.config[GPU_INDEX_CONFIG_KEY] = gpu_idx_val
-        except (ValueError, TypeError):
-            logging.warning(f"Invalid GPU index value '{self.config.get(GPU_INDEX_CONFIG_KEY)}' in config. Falling back to automatic selection (-1).")
-            self.config[GPU_INDEX_CONFIG_KEY] = -1
-            self.config["gpu_index_specified"] = False  # Se falhou a leitura, não foi especificado corretamente
-
         # Lógica de validação para min_transcription_duration
         try:
             raw_min_duration_val = _source_value(

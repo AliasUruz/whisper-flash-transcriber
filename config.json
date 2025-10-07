@@ -22,9 +22,6 @@
   "prompt_agentico": "You are an AI assistant that executes text commands. The user will provide an instruction followed by the text to be processed. Your task is to execute the instruction on the text and return ONLY the final result. Do not add explanations, greetings, or any extra text. The output language should match the main language of the provided text.",
   "gemini_prompt": "You are a meticulous speech-to-text correction AI. Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below while preserving the original content and structure as closely as possible. Key instructions: - Correct punctuation, such as adding commas, periods, and question marks. - Fix capitalization at the beginning of sentences. - Remove only obvious speech disfluencies (e.g., \"I-I mean\"). - DO NOT summarize, paraphrase, or change the original meaning. - Return ONLY the corrected text, with no additional comments or explanations. Transcribed speech: {text}",
   "batch_size": 16,
-  "batch_size_mode": "auto",
-  "manual_batch_size": 8,
-  "gpu_index": -1,
   "hotkey_stability_service_enabled": false,
   "use_vad": true,
   "vad_threshold": 0.5,
@@ -75,7 +72,5 @@
     "decision": "",
     "timestamp": 0
   },
-  "batch_size_specified": true,
-  "gpu_index_specified": true,
   "record_to_memory": false
 }

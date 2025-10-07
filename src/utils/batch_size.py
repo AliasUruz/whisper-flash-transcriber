@@ -1,89 +1,84 @@
+from __future__ import annotations
+
 import logging
 
 
-def select_batch_size(gpu_index: int, fallback: int = 4, *, chunk_length_sec: float | None = None) -> int:
+_COMPUTE_TYPE_BASELINES: dict[str, int] = {
+    "default": 16,
+    "int8": 24,
+    "int8_float16": 24,
+    "int8_float32": 16,
+    "float16": 16,
+    "bfloat16": 12,
+    "float32": 8,
+}
+
+
+def _normalize_compute_type(value: str | None) -> str:
+    if not value:
+        return "default"
+    lowered = value.strip().lower()
+    if lowered in {"fp16", "half"}:
+        return "float16"
+    if lowered in {"fp32"}:
+        return "float32"
+    return lowered
+
+
+def select_batch_size(
+    ct2_compute_type: str | None,
+    fallback: int = 4,
+    *,
+    chunk_length_sec: float | None = None,
+    max_batch_size: int | None = None,
+) -> int:
+    """Sugere um ``batch_size`` seguro sem depender de medições de VRAM.
+
+    A heurística considera apenas parâmetros expostos pelo runtime CTranslate2,
+    em especial o ``ct2_compute_type`` configurado e, opcionalmente, o tamanho
+    alvo de ``chunk_length_sec``. O objetivo é fornecer um valor coerente mesmo
+    em ambientes sem PyTorch instalado.
     """
-    Calcula batch size dinâmico baseado na VRAM disponível.
-    Ajusta agressividade conforme o tamanho do chunk (segundos):
-      - chunks maiores consomem mais memória -> reduzir batch.
-      - chunks menores permitem batch maior.
-    """
-    try:
-        import torch
-    except Exception as e:  # pragma: no cover - torch pode não estar instalado
-        logging.error(
-            "Torch unavailable: %s. Falling back to %s",
-            e,
-            fallback,
-        )
-        return fallback
 
-    if not torch.cuda.is_available() or gpu_index < 0:
-        logging.info(
-            "GPU unavailable or not selected; using CPU batch size"
-        )
-        return fallback
+    normalized_type = _normalize_compute_type(ct2_compute_type)
+    baseline = _COMPUTE_TYPE_BASELINES.get(normalized_type, max(fallback, 1))
 
-    try:
-        device = torch.device(f"cuda:{gpu_index}")
-        free_memory_bytes, total_memory_bytes = torch.cuda.mem_get_info(device)
-        free_memory_gb = free_memory_bytes / (1024 ** 3)
-        total_memory_gb = total_memory_bytes / (1024 ** 3)
-        logging.info(
-            "Checking VRAM for GPU %s: %.2fGB free of %.2fGB.",
-            gpu_index,
-            free_memory_gb,
-            total_memory_gb,
-        )
-        if free_memory_gb >= 10.0:
-            bs = 32
-        elif free_memory_gb >= 6.0:
-            bs = 16
-        elif free_memory_gb >= 4.0:
-            bs = 8
-        elif free_memory_gb >= 2.0:
-            bs = 4
-        else:
-            bs = 2
+    value = baseline
 
-        # Ajuste por tamanho de chunk (heurística simples e segura)
-        if chunk_length_sec is not None:
-            try:
-                cl = float(chunk_length_sec)
-                if cl >= 60:
-                    factor = 0.5   # reduzir pela metade
-                elif cl >= 45:
-                    factor = 0.66  # reduzir ~1/3
-                elif cl >= 30:
-                    factor = 0.75
-                elif cl >= 15:
-                    factor = 0.9
-                else:
-                    factor = 1.0
-                new_bs = max(1, int(bs * factor))
-                logging.info(
-                    "Ajustando batch pelo chunk_length_sec=%.1fs: %s -> %s",
-                    cl, bs, new_bs
-                )
-                bs = new_bs
-            except Exception:
-                # Ignorar falhas de conversão
-                pass
+    if chunk_length_sec is not None:
+        try:
+            chunk = float(chunk_length_sec)
+        except (TypeError, ValueError):
+            chunk = None
+        if chunk is not None and chunk > 0:
+            if chunk >= 75:
+                value = max(1, int(value * 0.4))
+            elif chunk >= 60:
+                value = max(1, int(value * 0.5))
+            elif chunk >= 45:
+                value = max(1, int(value * 0.66))
+            elif chunk >= 30:
+                value = max(1, int(value * 0.8))
 
-        logging.info(
-            "Free VRAM (%.2fGB) -> Dynamic batch size selected: %s",
-            free_memory_gb,
-            bs,
-        )
-        return bs
-    except Exception as e:  # pragma: no cover - erro ao consultar VRAM
-        logging.error(
-            (
-                "Failed to compute dynamic batch size: %s. "
-                "Using fallback value: %s"
-            ),
-            e,
-            fallback,
-            exc_info=True,
-        )
-        return fallback
+    if max_batch_size is not None:
+        try:
+            limit = int(max_batch_size)
+        except (TypeError, ValueError):
+            limit = None
+        if limit is not None and limit > 0:
+            value = min(value, limit)
+
+    value = max(1, int(value))
+    if isinstance(chunk_length_sec, (int, float)):
+        chunk_repr = f"{float(chunk_length_sec):.1f}"
+    else:
+        chunk_repr = "unknown"
+
+    logging.debug(
+        "Batch size suggestion: compute_type=%s chunk=%s fallback=%s -> %s",
+        normalized_type,
+        chunk_repr,
+        fallback,
+        value,
+    )
+    return value

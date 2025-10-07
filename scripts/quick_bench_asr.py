@@ -378,71 +378,13 @@ def main() -> None:
 # --- Tests ---------------------------------------------------------------
 
 
-def _make_handler_for_tests(chunk: float = 30.0, gpu_index: int = 0) -> "_TranscriptionHandler":
+def _make_handler_for_tests(chunk: float = 30.0) -> "_TranscriptionHandler":
     _ensure_app_dependencies()
     assert _TRANSCRIPTION_HANDLER_CLS is not None
 
     handler = _TRANSCRIPTION_HANDLER_CLS.__new__(_TRANSCRIPTION_HANDLER_CLS)
     handler.chunk_length_sec = chunk
-    handler.gpu_index = gpu_index
     return handler
-
-
-def _mock_cuda_env(
-    monkeypatch,
-    *,
-    available: bool,
-    free_gb: float = 0.0,
-    total_gb: float = 16.0,
-    raise_error: bool = False,
-) -> None:
-    """Configure torch.cuda mocks for TranscriptionHandler tests."""
-
-    fake_cuda = SimpleNamespace()
-    fake_cuda.is_available = lambda: available
-
-    if raise_error:
-        def _fail(_device):
-            raise RuntimeError("mock mem_get_info failure")
-
-        fake_cuda.mem_get_info = _fail
-    else:
-        def _mem_info(_device):
-            return (int(free_gb * (1024 ** 3)), int(total_gb * (1024 ** 3)))
-
-        fake_cuda.mem_get_info = _mem_info
-
-    _ensure_app_dependencies()
-    assert _TRANSCRIPTION_HANDLER_MODULE is not None
-
-    monkeypatch.setattr(_TRANSCRIPTION_HANDLER_MODULE.torch, "cuda", fake_cuda)
-    monkeypatch.setattr(_TRANSCRIPTION_HANDLER_MODULE.torch, "device", lambda spec: spec)
-
-
-def test_effective_chunk_length_cpu(monkeypatch):
-    handler = _make_handler_for_tests(chunk=37.0, gpu_index=-1)
-    _mock_cuda_env(monkeypatch, available=False)
-    assert handler._effective_chunk_length() == 37.0
-
-
-def test_effective_chunk_length_gpu_buckets(monkeypatch):
-    handler = _make_handler_for_tests(chunk=30.0, gpu_index=0)
-    scenarios = [
-        (12.5, 60.0),
-        (8.2, 45.0),
-        (6.4, 30.0),
-        (4.3, 20.0),
-        (3.0, 15.0),
-    ]
-    for free_gb, expected in scenarios:
-        _mock_cuda_env(monkeypatch, available=True, free_gb=free_gb)
-        assert handler._effective_chunk_length() == expected
-
-
-def test_effective_chunk_length_meminfo_failure(monkeypatch):
-    handler = _make_handler_for_tests(chunk=42.0, gpu_index=0)
-    _mock_cuda_env(monkeypatch, available=True, raise_error=True)
-    assert handler._effective_chunk_length() == 42.0
 
 
 def test_apply_settings_payload_headless():

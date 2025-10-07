@@ -112,9 +112,6 @@ class AppConfig(BaseModel):
     gemini_prompt: str = ""
     ui_language: str = _DEFAULT_UI_LANGUAGE
     batch_size: int = Field(default=16, ge=1)
-    batch_size_mode: str = "auto"
-    manual_batch_size: int = Field(default=8, ge=1)
-    gpu_index: int = Field(default=0, ge=-1)
     hotkey_stability_service_enabled: bool = True
     use_vad: bool = False
     vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -215,13 +212,6 @@ class AppConfig(BaseModel):
         if isinstance(value, str):
             return cls._normalize_lower(value, allowed={"toggle", "press"}, field_name="record_mode")
         raise ValueError("record_mode must be a string")
-
-    @field_validator("batch_size_mode", mode="before")
-    @classmethod
-    def _validate_batch_size_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return cls._normalize_lower(value, allowed={"auto", "manual"}, field_name="batch_size_mode")
-        raise ValueError("batch_size_mode must be a string")
 
     @field_validator("record_storage_mode", mode="before")
     @classmethod

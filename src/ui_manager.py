@@ -1,7 +1,7 @@
 
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
-from tkinter import BooleanVar, filedialog, simpledialog  # Adicionado para diálogos
+from tkinter import BooleanVar, filedialog  # Adicionado para diálogos
 import logging
 import threading
 import time
@@ -42,7 +42,6 @@ from .config_manager import (
     ASR_CACHE_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
     DEPS_INSTALL_DIR_CONFIG_KEY,
-    GPU_INDEX_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     DEFAULT_CONFIG,
@@ -54,11 +53,6 @@ from .utils.tooltip import Tooltip
 from .logging_utils import get_log_directory
 from .state_manager import StateEvent
 from .utils.dependency_audit import DependencyAuditResult, DependencyIssue
-
-# Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
-# Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
-# Para este plano, vamos movê-lo para cá.
-# import torch # Necessário para get_available_devices_for_ui - REMOVIDO
 
 try:
     from .model_manager import (
@@ -112,23 +106,24 @@ except Exception:  # pragma: no cover - fallback caso o módulo não exista
 
     _default_model_manager = _DummyModelManager()
 
-def get_available_devices_for_ui():
-    """Returns a list of devices for the settings interface."""
-    devices = ["Auto-select (Recommended)"]
+def _ct2_supports_cuda() -> bool:
     try:
-        import torch
-        if torch.cuda.is_available():
-            num_gpus = torch.cuda.device_count()
-            for i in range(num_gpus):
-                try:
-                    name = torch.cuda.get_device_name(i)
-                    total_mem_gb = torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
-                    devices.append(f"GPU {i}: {name} ({total_mem_gb:.1f}GB)")
-                except Exception as e:
-                    devices.append(f"GPU {i}: Error getting name")
-                    logging.error(f"Could not get GPU name {i}: {e}")
-    except ImportError:
-        logging.debug("torch not found, returning CPU-only devices.")
+        import ctranslate2  # type: ignore
+    except Exception:
+        return False
+    try:
+        supported = ctranslate2.get_supported_compute_types("cuda")
+    except Exception:
+        return False
+    return bool(supported)
+
+
+def get_available_devices_for_ui() -> list[str]:
+    """Returns device options tailored for the CTranslate2 runtime."""
+
+    devices = ["Auto-select (Recommended)"]
+    if _ct2_supports_cuda():
+        devices.append("Prefer GPU (CUDA)")
     devices.append("Force CPU")
     return devices
 
@@ -1341,16 +1336,12 @@ class UIManager:
         asr_cache_dir_to_apply = str(asr_cache_path)
 
         selected_device_str = asr_compute_device_var.get() if asr_compute_device_var else "Auto-select (Recommended)"
-        gpu_index_to_apply = -1
         if "Force CPU" in selected_device_str:
             asr_compute_device_to_apply = "cpu"
-        elif selected_device_str.startswith("GPU"):
+        elif "Prefer GPU" in selected_device_str:
             asr_compute_device_to_apply = "cuda"
-            try:
-                gpu_index_to_apply = int(selected_device_str.split(":")[0].replace("GPU", "").strip())
-            except (ValueError, IndexError):
-                messagebox.showerror("Invalid Value", "Invalid GPU index.", parent=settings_win)
-                return
+        else:
+            asr_compute_device_to_apply = "auto"
 
         models_text = gemini_models_textbox.get("1.0", "end-1c") if gemini_models_textbox else ""
         new_models_list = [line.strip() for line in models_text.split("\n") if line.strip()]
@@ -1401,7 +1392,6 @@ class UIManager:
             new_agent_model=agent_model_to_apply,
             new_gemini_model_options=new_models_list,
             new_batch_size=batch_size_to_apply,
-            new_gpu_index=gpu_index_to_apply,
             new_hotkey_stability_service_enabled=hotkey_stability_to_apply,
             new_min_transcription_duration=min_transcription_duration_to_apply,
             new_min_record_duration=min_record_duration_to_apply,
@@ -2827,16 +2817,7 @@ class UIManager:
                 tech = ""
                 th = getattr(self.core_instance_ref, "transcription_handler", None)
                 if th is not None:
-                    import torch
-                    device_in_use = getattr(th, "device_in_use", None)
-                    if device_in_use:
-                        device = str(device_in_use)
-                    else:
-                        device = (
-                            f"cuda:{getattr(th, 'gpu_index', -1)}"
-                            if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0
-                            else "cpu"
-                        )
+                    device = str(getattr(th, "device_in_use", "") or "cpu")
                     dtype = "fp16" if str(device).startswith("cuda") else "fp32"
                     try:
                         import importlib.util as _spec_util
@@ -2932,16 +2913,7 @@ class UIManager:
                         # Esses atributos são expostos via core_instance_ref.transcription_handler
                         th = getattr(self.core_instance_ref, "transcription_handler", None)
                         if th is not None:
-                            import torch
-                            device_in_use = getattr(th, "device_in_use", None)
-                            if device_in_use:
-                                device = str(device_in_use)
-                            else:
-                                device = (
-                                    f"cuda:{getattr(th, 'gpu_index', -1)}"
-                                    if torch.cuda.is_available() and getattr(th, 'gpu_index', -1) >= 0
-                                    else "cpu"
-                                )
+                            device = str(getattr(th, "device_in_use", "") or "cpu")
                             dtype = "fp16" if str(device).startswith("cuda") else "fp32"
                             # Determinar attn_impl conforme detecção feita no handler
                             try:
@@ -3493,21 +3465,12 @@ class UIManager:
                     coerce=lambda v: str(v).lower(),
                     allowed={"auto", "cpu", "cuda"},
                 )
-                gpu_index_value = self._resolve_initial_value(
-                    GPU_INDEX_CONFIG_KEY,
-                    var_name="gpu_index",
-                    coerce=lambda v: int(float(v)),
-                )
                 if asr_compute_device_value == "cpu":
                     current_device_selection = "Force CPU"
-                elif asr_compute_device_value == "cuda" and gpu_index_value >= 0:
-                    for dev in available_devices:
-                        if dev.startswith(f"GPU {gpu_index_value}"):
-                            current_device_selection = dev
-                            break
+                elif asr_compute_device_value == "cuda":
+                    current_device_selection = "Prefer GPU (CUDA)"
                 asr_compute_device_var = ctk.StringVar(value=current_device_selection)
                 self._set_settings_var("asr_compute_device_var", asr_compute_device_var)
-                self._gpu_selection_var = asr_compute_device_var
 
                 # Internal GUI functions (detect_key_task_internal, apply_settings, close_settings, etc.)
                 # Will need to be adapted to call methods of self.core_instance_ref and self.config_manager
@@ -3637,16 +3600,12 @@ class UIManager:
 
                     # Logic for converting UI to GPU index
                     selected_device_str = asr_compute_device_var.get()
-                    gpu_index_to_apply = -1 # Default to "Auto-select"
                     if "Force CPU" in selected_device_str:
                         asr_compute_device_to_apply = "cpu"
-                    elif selected_device_str.startswith("GPU"):
+                    elif "Prefer GPU" in selected_device_str:
                         asr_compute_device_to_apply = "cuda"
-                        try:
-                            gpu_index_to_apply = int(selected_device_str.split(":")[0].replace("GPU", "").strip())
-                        except (ValueError, IndexError):
-                            messagebox.showerror("Invalid Value", "Invalid GPU index.", parent=settings_win)
-                            return
+                    else:
+                        asr_compute_device_to_apply = "auto"
                     asr_dtype_to_apply = asr_dtype_var.get()
                     asr_ct2_compute_type_to_apply = asr_ct2_compute_type_var.get()
                     asr_cache_dir_to_apply = asr_cache_dir_var.get()
@@ -3679,7 +3638,6 @@ class UIManager:
                             "new_agent_model": model_to_apply,
                             "new_gemini_model_options": new_models_list,
                             "new_batch_size": batch_size_to_apply,
-                            "new_gpu_index": gpu_index_to_apply,
                             "new_hotkey_stability_service_enabled": hotkey_stability_service_enabled_to_apply, # Nova configuração unificada
                             "new_min_transcription_duration": min_transcription_duration_to_apply,
                             "new_min_record_duration": min_record_duration_to_apply,
@@ -4260,27 +4218,6 @@ class UIManager:
                 )
             ),
             pystray.MenuItem(
-                '\U0001f4e6 Tamanho do Lote',
-                pystray.Menu(
-                    pystray.MenuItem(
-                        'Automático (VRAM)',
-                        lambda icon, item: self.core_instance_ref.update_setting('batch_size_mode', 'auto'),
-                        radio=True,
-                        checked=lambda item: self.config_manager.get('batch_size_mode') == 'auto'
-                    ),
-                    pystray.MenuItem(
-                        'Manual',
-                        lambda icon, item: self.core_instance_ref.update_setting('batch_size_mode', 'manual'),
-                        radio=True,
-                        checked=lambda item: self.config_manager.get('batch_size_mode') == 'manual'
-                    ),
-                    pystray.MenuItem(
-                        'Definir Batch Size Manual...',
-                        lambda icon, item: self.main_tk_root.after(0, self._prompt_for_manual_batch_size)
-                    )
-                )
-            ),
-            pystray.MenuItem(
                 '\U0001f4c4 Abrir Logs',
                 lambda icon, item: self.main_tk_root.after(0, self.open_logs_directory)
             ),
@@ -4335,30 +4272,6 @@ class UIManager:
             else "Correção de texto desativada."
         )
         self.show_status_tooltip(status_message)
-
-    def _prompt_for_manual_batch_size(self):
-        """Prompts the user for a manual batch size and applies it."""
-        current_manual_batch_size = self.config_manager.get("manual_batch_size", 8)
-        new_batch_size_str = simpledialog.askstring(
-            "Definir Batch Size Manual",
-            f"Insira o novo Batch Size manual (atual: {current_manual_batch_size}):",
-            parent=self.settings_window_instance # Usar a janela de configurações como pai se estiver aberta
-        )
-        if new_batch_size_str:
-            try:
-                new_batch_size = int(new_batch_size_str)
-                if new_batch_size > 0:
-                    self.core_instance_ref.update_setting(
-                        'batch_size_mode', 'manual'
-                    )
-                    self.core_instance_ref.update_setting(
-                        'manual_batch_size', new_batch_size
-                    )
-                    logging.info(f"Batch Size manual definido para: {new_batch_size}")
-                else:
-                    messagebox.showerror("Input Error", "Batch size must be a positive integer.", parent=self.settings_window_instance)
-            except ValueError:
-                messagebox.showerror("Input Error", "Invalid entry. Please provide an integer.", parent=self.settings_window_instance)
 
 
 
