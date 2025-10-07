@@ -521,6 +521,9 @@ def main(argv: list[str] | None = None) -> int:
         from src.config_manager import ConfigManager  # noqa: E402
         from src.core import AppCore  # noqa: E402
         from src.ui_manager import UIManager  # noqa: E402
+        from src.installers.dependency_installer import (  # noqa: E402
+            DependencyInstaller,
+        )
         from src.startup_diagnostics import (  # noqa: E402
             format_report_for_console,
             run_startup_diagnostics,
@@ -575,6 +578,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return exit_code
 
+        main_tk_root: tk.Tk | None = None
         app_core_instance = None
         ui_manager_instance = None
 
@@ -589,7 +593,8 @@ def main(argv: list[str] | None = None) -> int:
                 app_core_instance.shutdown()
             if ui_manager_instance and ui_manager_instance.tray_icon:
                 ui_manager_instance.tray_icon.stop()
-            main_tk_root.after(0, main_tk_root.quit)
+            if main_tk_root is not None:
+                main_tk_root.after(0, main_tk_root.quit)
 
         atexit.register(
             lambda: LOGGER.info(
@@ -599,6 +604,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         )
+
+        main_tk_root = tk.Tk()
+        main_tk_root.withdraw()
+        main_tk_root.title("Whisper Flash Transcriber")
+        main_tk_root.protocol("WM_DELETE_WINDOW", on_exit_app_enhanced)
 
         icon_path = ICON_PATH
         if not os.path.exists(icon_path):
@@ -627,7 +637,6 @@ def main(argv: list[str] | None = None) -> int:
             hotkey_config_path=str(HOTKEY_CONFIG_PATH),
             startup_diagnostics=diagnostics_report,
         )
-        app_core_instance.dependency_installer = dependency_installer
         ui_manager_instance = UIManager(
             main_tk_root,
             app_core_instance.config_manager,
@@ -666,6 +675,7 @@ def main(argv: list[str] | None = None) -> int:
                 event="ui.mainloop.stop",
             )
         )
+        return 0
     except Exception as exc:
         LOGGER.critical(
             StructuredMessage(
