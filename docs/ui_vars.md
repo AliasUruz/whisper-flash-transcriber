@@ -2,6 +2,8 @@
 
 Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de configurações criada em `UIManager.run_settings_gui`. Cada linha relaciona a variável com o widget que a consome e a chave de configuração persistida pela `ConfigManager`. Os nomes dos widgets correspondem às variáveis locais usadas ao instanciá-los.
 
+> **Nota:** Os campos avançados agora vivem dentro do namespace `advanced`. As variáveis continuam a usar as chaves legadas (planas) porque `ConfigManager` realiza o mapeamento via `path_for_key()`, garantindo compatibilidade com `config.json` herdados.
+
 | Seção | Variável | Tipo | Widget(s) associado(s) | Chave(s) de configuração | Observações |
 | --- | --- | --- | --- | --- | --- |
 | Geral | `auto_paste_var` | `BooleanVar` | `CTkSwitch` (`paste_switch`) | `"auto_paste"` | Alterna o recurso de auto-colagem após a transcrição. |
@@ -11,8 +13,8 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | Correção de texto | `agent_model_var` | `StringVar` | `CTkOptionMenu` (`agent_model_menu`) | `"gemini_agent_model"` | Seleciona o modelo Gemini específico para o modo agente. |
 | Geral | `hotkey_stability_service_enabled_var` | `BooleanVar` | `CTkSwitch` (`stability_switch`) | `"hotkey_stability_service_enabled"` | Liga/desliga o serviço de estabilização dos hotkeys. |
 | Geral | `launch_at_startup_var` | `BooleanVar` | `CTkSwitch` (`startup_switch`) | `"launch_at_startup"` | Habilita a inicialização automática no Windows. |
-| Armazenamento | `storage_root_dir_var` | `StringVar` | `CTkEntry` (`storage_root_entry`) | `"storage_root_dir"` | Diretório base usado para modelos e outros artefatos pesados. Alterações disparam `_maybe_migrate_storage_paths()` para mover cache e gravações quando os caminhos específicos não foram sobrescritos. |
-| Armazenamento | `recordings_dir_var` | `StringVar` | `CTkEntry` (`recordings_dir_entry`) | `"recordings_dir"` | Pasta onde arquivos WAV temporários e salvos são armazenados; quando não há override, acompanha a migração disparada pelo `storage_root_dir`. |
+| Armazenamento | `storage_root_dir_var` | `StringVar` | `CTkEntry` (`storage_root_entry`) | `"storage_root_dir"` (`advanced.storage.storage_root_dir`) | Diretório base usado para modelos e outros artefatos pesados. Alterações disparam `_maybe_migrate_storage_paths()` para mover cache e gravações quando os caminhos específicos não foram sobrescritos. |
+| Armazenamento | `recordings_dir_var` | `StringVar` | `CTkEntry` (`recordings_dir_entry`) | `"recordings_dir"` (`advanced.storage.recordings_dir`) | Pasta onde arquivos WAV temporários e salvos são armazenados; quando não há override, acompanha a migração disparada pelo `storage_root_dir`. |
 | Som | `sound_enabled_var` | `BooleanVar` | `CTkSwitch` (`sound_switch`) | `"sound_enabled"` | Ativa os bipes de início/fim de gravação. |
 | Som | `sound_frequency_var` | `StringVar` | `CTkEntry` (`freq_entry`) | `"sound_frequency"` | Entrada textual convertida para inteiro ao aplicar as configurações. |
 | Som | `sound_duration_var` | `StringVar` | `CTkEntry` (`duration_entry`) | `"sound_duration"` | Texto convertido para float durante a validação. |
@@ -44,8 +46,8 @@ Este documento consolida todas as instâncias de `ctk.*Var` usadas na janela de 
 | ASR | `asr_model_display_var` | `StringVar` | `CTkOptionMenu` (`asr_model_menu`) | `"asr_model_id"` (mapeado por `display_to_id`) | Variável de exibição; converte nomes amigáveis para `asr_model_id_var`. |
 | ASR | `asr_compute_device_var` | `StringVar` | `CTkOptionMenu` (`asr_device_menu`) | `"asr_compute_device"` + `"gpu_index"` | Representa a seleção textual (*Auto*, *Force CPU*, *GPU X*), traduzida para backend e índice ao aplicar. |
 | ASR | `asr_ct2_compute_type_var` | `StringVar` | `CTkOptionMenu` (`asr_ct2_menu`) | `"asr_ct2_compute_type"` | Ajusta o compute type quando o backend é CTranslate2. |
-| ASR | `models_storage_dir_var` | `StringVar` | `CTkEntry` (`models_dir_entry`) | `"models_storage_dir"` | Diretório raiz usado para armazenar modelos e demais artefatos pesados; também serve de destino padrão quando o `storage_root_dir` muda sem override explícito. |
-| ASR | `asr_cache_dir_var` | `StringVar` | `CTkEntry` (`asr_cache_entry`) | `"asr_cache_dir"` | Diretório raiz usado para armazenar modelos baixados. |
+| ASR | `models_storage_dir_var` | `StringVar` | `CTkEntry` (`models_dir_entry`) | `"models_storage_dir"` (`advanced.storage.models_storage_dir`) | Diretório raiz usado para armazenar modelos e demais artefatos pesados; também serve de destino padrão quando o `storage_root_dir` muda sem override explícito. |
+| ASR | `asr_cache_dir_var` | `StringVar` | `CTkEntry` (`asr_cache_entry`) | `"asr_cache_dir"` (`advanced.storage.asr_cache_dir`) | Diretório raiz usado para armazenar modelos baixados. |
 
 ## Notas adicionais
 

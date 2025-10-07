@@ -15,7 +15,12 @@ from typing import Any, List, TYPE_CHECKING
 
 import requests
 
-from .config_schema import coerce_with_defaults
+from .config_schema import (
+    AppConfig,
+    coerce_with_defaults,
+    flatten_config_tree,
+    normalize_payload_tree,
+)
 from .model_manager import (
     HardwareProfile,
     build_runtime_catalog,
@@ -96,114 +101,8 @@ LEGACY_HOTKEY_LOCATIONS: tuple[Path, ...] = (
 )
 
 
-DEFAULT_CONFIG = {
-    "record_key": "F3",
-    "record_mode": "toggle",
-    "auto_paste": True,
-    "agent_auto_paste": True,
-    "auto_paste_modifier": "auto",
-    "min_record_duration": 0.5,
-    "sound_enabled": True,
-    "sound_frequency": 400,
-    "sound_duration": 0.3,
-    "sound_volume": 0.5,
-    "agent_key": "F4",
-    "keyboard_library": "win32",
-    "text_correction_enabled": False,
-    "text_correction_service": "none",
-    "openrouter_api_key": "",
-    "openrouter_model": "deepseek/deepseek-chat-v3-0324:free",
-    "gemini_api_key": "",
-    "gemini_model": "gemini-2.5-flash-lite",
-    "gemini_agent_model": "gemini-2.5-flash-lite",
-    "openrouter_timeout": 30,
-    "gemini_timeout": 120,
-    "ai_provider": "gemini",
-    "openrouter_prompt": "",
-    "prompt_agentico": (
-        "You are an AI assistant that executes text commands. "
-        "The user will provide an instruction followed by the text to be processed. "
-        "Your task is to execute the instruction on the text and return ONLY the final result. "
-        "Do not add explanations, greetings, or any extra text. "
-        "The output language should match the main language of the provided text."
-    ),
-    "gemini_prompt": (
-        "You are a meticulous speech-to-text correction AI. "
-        "Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below "
-        "while preserving the original content and structure as closely as possible. "
-        "Key instructions: - Correct punctuation, such as adding commas, periods, and question marks. "
-        "- Fix capitalization at the beginning of sentences. "
-        "- Remove only obvious speech disfluencies (e.g., \"I-I mean\"). "
-        "- DO NOT summarize, paraphrase, or change the original meaning. "
-        "- Return ONLY the corrected text, with no additional comments or explanations. "
-        "Transcribed speech: {text}"
-    ),
-    "ui_language": "en-US",
-    "batch_size": 16,  # Valor padrão para o modo automático
-    "batch_size_mode": "auto",  # Novo: 'auto' ou 'manual'
-    "manual_batch_size": 8,  # Novo: Valor para o modo manual
-    "gpu_index": 0,
-    "hotkey_stability_service_enabled": True,  # Nova configuração unificada
-    "use_vad": False,
-    "vad_threshold": 0.5,
-    # Duração máxima da pausa preservada antes que o silêncio seja descartado
-    "vad_silence_duration": 1.0,
-    # Valores alinhados com AppConfig em config_schema.py para coerência de VAD.
-    "vad_pre_speech_padding_ms": 150,
-    "vad_post_speech_padding_ms": 300,
-    "display_transcripts_in_terminal": False,
-    "gemini_model_options": [
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro"
-    ],
-    "save_temp_recordings": False,
-    "record_storage_mode": "auto",
-    "record_storage_limit": 0,
-    "max_memory_seconds_mode": "manual",
-    "max_memory_seconds": 30,
-    "min_free_ram_mb": 1000,
-    "auto_ram_threshold_percent": 10,
-    "max_parallel_downloads": 1,
-    "min_transcription_duration": 1.0,  # Nova configuração
-    "chunk_length_sec": 30,
-    "chunk_length_mode": "manual",
-    "launch_at_startup": False,
-    "clear_gpu_cache": True,
-    "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
-    "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
-    "deps_install_dir": _DEFAULT_DEPS_INSTALL_DIR,
-    "hf_home_dir": _DEFAULT_HF_HOME_DIR,
-    "recordings_dir": _DEFAULT_RECORDINGS_DIR,
-    "asr_model_id": "distil-whisper/distil-large-v3",
-    "asr_backend": "ctranslate2",
-    "asr_compute_device": "auto",
-    "asr_ct2_compute_type": "int8_float16",
-    "asr_cache_dir": _DEFAULT_ASR_CACHE_DIR,
-    "asr_installed_models": [],
-    "asr_curated_catalog": list_catalog(),
-    "asr_curated_catalog_url": "",
-    "asr_last_download_status": {
-        "status": "unknown",
-        "timestamp": "",
-        "model_id": "",
-        "backend": "",
-        "message": "",
-        "details": "",
-        "target_dir": "",
-        "bytes_downloaded": 0,
-        "throughput_bps": 0.0,
-        "duration_seconds": 0.0,
-    },
-    "asr_download_history": [],
-    "asr_last_prompt_decision": {
-        "model_id": "",
-        "backend": "",
-        "decision": "",
-        "timestamp": 0,
-    },
-    "first_run_completed": False,
-}
+DEFAULT_CONFIG_TREE = AppConfig().model_dump()
+DEFAULT_CONFIG = flatten_config_tree(DEFAULT_CONFIG_TREE)
 
 
 LOGGER = get_logger("whisper_flash_transcriber.config", component="ConfigManager")
@@ -263,10 +162,9 @@ GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 GEMINI_TIMEOUT_CONFIG_KEY = "gemini_timeout"
 # Novas constantes para otimizações de desempenho
 CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
-AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
+ENABLE_TORCH_COMPILE_CONFIG_KEY = "enable_torch_compile"
 GEMINI_AGENT_PROMPT_CONFIG_KEY = "prompt_agentico"
 OPENROUTER_PROMPT_CONFIG_KEY = "openrouter_prompt"
-OPENROUTER_AGENT_PROMPT_CONFIG_KEY = "openrouter_agent_prompt"
 GEMINI_PROMPT_CONFIG_KEY = "gemini_prompt"
 FIRST_RUN_COMPLETED_CONFIG_KEY = "first_run_completed"
 SETTINGS_WINDOW_GEOMETRY = "550x700"
@@ -348,7 +246,11 @@ def _normalize_asr_backend(name: str | None) -> str | None:
 class ConfigManager:
     """Gerencia persistência de configuração e segredos do aplicativo."""
 
-    def __init__(self, config_file=CONFIG_FILE, default_config=DEFAULT_CONFIG):
+    def __init__(
+        self,
+        config_file: str = CONFIG_FILE,
+        default_config_tree: dict[str, Any] | None = None,
+    ):
         resolved_config_path = Path(config_file).expanduser()
         if not resolved_config_path.is_absolute():
             candidate_name = resolved_config_path.name
@@ -357,7 +259,10 @@ class ConfigManager:
             else:
                 resolved_config_path = (Path.cwd() / resolved_config_path).expanduser()
 
-        self.default_config = default_config
+        if default_config_tree is None:
+            default_config_tree = DEFAULT_CONFIG_TREE
+        self.default_config_tree = copy.deepcopy(default_config_tree)
+        self.default_config = flatten_config_tree(self.default_config_tree)
         self.config_file = str(resolved_config_path)
         self.config_path = resolved_config_path
         self._config_path = resolved_config_path
@@ -392,6 +297,7 @@ class ConfigManager:
             )
             secrets_existed = self._secrets_path.exists()
 
+        self.config_tree = copy.deepcopy(self.default_config_tree)
         self.config = {}
         self._config_hash = None
         self._secrets_hash = None
@@ -569,11 +475,14 @@ class ConfigManager:
                 )
             )
 
-        sanitized_cfg, validation_warnings = coerce_with_defaults(raw_cfg, self.default_config)
+        sanitized_tree, validation_warnings = coerce_with_defaults(
+            raw_cfg, self.default_config_tree
+        )
         for warning in validation_warnings:
             logging.warning(warning)
 
-        self.config = sanitized_cfg
+        self.config_tree = sanitized_tree
+        self.config = flatten_config_tree(sanitized_tree)
         self._apply_runtime_overrides(
             loaded_config=loaded_config_from_file,
             previous_config=None,
@@ -1488,6 +1397,8 @@ class ConfigManager:
         safe_config.pop(OPENROUTER_API_KEY_CONFIG_KEY, None)
         logging.info("Settings applied: %s", str(safe_config))
 
+        self.config_tree = normalize_payload_tree(self.config)
+
         try:
             self.apply_environment_overrides()
         except Exception as exc:  # pragma: no cover - defensive guard
@@ -1517,11 +1428,14 @@ class ConfigManager:
         candidate = copy.deepcopy(self.config)
         candidate.update(filtered_updates)
 
-        sanitized_cfg, warnings = coerce_with_defaults(candidate, self.default_config)
+        sanitized_tree, warnings = coerce_with_defaults(
+            candidate, self.default_config_tree
+        )
         for warning in warnings:
             logging.warning(warning)
 
-        self.config = sanitized_cfg
+        self.config_tree = sanitized_tree
+        self.config = flatten_config_tree(sanitized_tree)
         self._apply_runtime_overrides(
             applied_updates=filtered_updates,
             previous_config=previous_config,
@@ -1540,14 +1454,15 @@ class ConfigManager:
 
         previous_config = copy.deepcopy(self.config)
 
-        sanitized_cfg, warnings = coerce_with_defaults(
+        sanitized_tree, warnings = coerce_with_defaults(
             copy.deepcopy(self.default_config),
-            self.default_config,
+            self.default_config_tree,
         )
         for warning in warnings:
             logging.warning(warning)
 
-        self.config = sanitized_cfg
+        self.config_tree = sanitized_tree
+        self.config = flatten_config_tree(sanitized_tree)
         self._apply_runtime_overrides(
             applied_updates=self.default_config,
             previous_config=previous_config,
@@ -1868,14 +1783,14 @@ class ConfigManager:
     def save_config(self) -> PersistenceOutcome:
         """Salva as configurações não sensíveis no config.json e as sensíveis no secrets.json."""
 
-        config_to_save = copy.deepcopy(self.config)
+        config_to_save_flat = copy.deepcopy(self.config)
         secrets_to_save = {}
 
         secret_keys = [GEMINI_API_KEY_CONFIG_KEY, OPENROUTER_API_KEY_CONFIG_KEY]
 
         for key in secret_keys:
-            if key in config_to_save:
-                secrets_to_save[key] = config_to_save.pop(key)
+            if key in config_to_save_flat:
+                secrets_to_save[key] = config_to_save_flat.pop(key)
 
         keys_to_ignore = [
             "tray_menu_items",
@@ -1883,8 +1798,11 @@ class ConfigManager:
             "asr_curated_catalog",
         ]
         for key in keys_to_ignore:
-            if key in config_to_save:
-                del config_to_save[key]
+            if key in config_to_save_flat:
+                del config_to_save_flat[key]
+
+        config_to_save = normalize_payload_tree(config_to_save_flat)
+        self.config_tree = copy.deepcopy(config_to_save)
 
         self._ensure_directory(self.config_path)
         self._ensure_directory(self.secrets_path)

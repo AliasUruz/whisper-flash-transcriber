@@ -1,46 +1,31 @@
-# First Run Wizard
+# First-run Wizard
 
-The first-launch experience introduces a dedicated wizard that captures the
-minimum configuration required to operate Whisper Flash Transcriber. The flow is
-executed before the tray UI is created and runs once unless the configuration is
-reset.
+The onboarding wizard exists to collect just enough information to run the hotkey → capture → CTranslate2 → paste loop. Everything else belongs to the advanced namespace and stays hidden until the full settings window is available.
 
 ## Lifecycle
+1. `main.py` provisions the profile directory and instantiates `ConfigManager`.
+2. When `config_manager.is_first_run()` returns `True`, a hidden Tk root window launches `FirstRunWizard.launch()` before the tray UI appears.
+3. The wizard gathers the minimal payload, calls `ConfigManager.apply_updates()` with the resulting dictionary, and optionally exports a Markdown plan under `plans/`.
+4. Control returns to `AppCore` and `UIManager`. If the selected Whisper model is not cached, the bootstrap thread triggers an immediate download so the first transcription runs without further prompts.
 
-1. `main.py` instantiates `ConfigManager` and persists default files.
-2. If `config_manager.is_first_run()` returns `True`, a hidden Tk root window is
-   created and passed to `FirstRunWizard.launch`.
-3. The wizard gathers the user choices, persists them through
-   `ConfigManager.apply_updates`, and optionally exports a Markdown snapshot to
-   `plans/`.
-4. The application continues with `AppCore` and `UIManager` initialization. When
-   models were selected for immediate installation the bootstrapper spawns a
-   background thread that calls `model_manager.ensure_download` for each model.
+Cancelling the wizard aborts the bootstrap. You can relaunch the application later without leaving behind a partially configured profile.
 
-Cancelling the wizard aborts the startup sequence so the user can relaunch it
-later without a partially configured profile.
+## Data collected by the wizard
+| Step | Fields | Notes |
+| --- | --- | --- |
+| Hotkey | `record_key`, `record_mode`, `auto_paste` | Establishes how the minimal workflow is triggered and whether the transcript is pasted automatically. |
+| Storage root | `advanced.storage.storage_root_dir` (plus derived directories when they follow the defaults) | The wizard only asks for a single root. Advanced overrides such as `models_storage_dir` or `recordings_dir` remain available from the full settings window. |
+| Model selection | `asr_model_id` / `asr_backend` | The curated catalog is filtered based on the detected hardware profile. The backend mirrors the catalog entry, so users start with a valid CTranslate2 pairing. |
+| Optional downloads | List of curated models | Allows preparing multiple models up front; all installs run sequentially after the wizard exits. |
 
-## Step breakdown
-
-| Step | Description |
-| --- | --- |
-| Directories | Choose the storage root, ASR models directory, and recordings folder. Each path supports browsing via native file dialogs. |
-| ASR bootstrap | Select the curated backend and model. The backend automatically follows the curated catalog entry for the selected model. |
-| Capture preferences | Toggle voice activity detection and automatic paste behaviour, including agent-mode overrides and the modifier strategy. |
-| Optional installations | Mark curated models for immediate download and optional Python packages for manual installation. |
-| Summary | Review the selections through read-only checklists and choose whether to export a Markdown plan to `plans/`. |
+Voice activity detection, AI corrections, directory overrides, and other advanced controls are deliberately skipped here. They remain accessible from Settings → Advanced once the minimal workflow is working.
 
 ## Exported plan format
+When the operator asks for an export, the wizard writes `plans/first-run-<timestamp>.md` with a snapshot of:
 
-When the user requests an export the wizard creates
-`plans/first-run-<timestamp>.md`. The document is fully self-contained and
-includes:
+- The hotkey strategy and auto-paste preference.
+- The resolved storage root and any derived directories that follow it.
+- The selected ASR backend/model pair and the download queue (if any).
+- Environment hints such as `PYTHONPATH` additions when `advanced.storage.python_packages_dir` lives outside the virtual environment.
 
-- The resolved directories.
-- The ASR backend and model pair.
-- Voice activity detection and paste preferences.
-- The list of models queued for installation.
-- The list of Python packages flagged for manual setup.
-
-This artifact is intended for reproducibility audits and can be committed to the
-repository if the operator wants to track environment provenance.
+The plan is fully self-contained so you can check it into version control or share it across machines to reproduce the same minimal setup.

@@ -35,6 +35,7 @@ from .config_manager import (
     OPENROUTER_TIMEOUT_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
+    GEMINI_AGENT_MODEL_CONFIG_KEY,
     SERVICE_NONE,
     SERVICE_OPENROUTER,
     SERVICE_GEMINI,
@@ -43,6 +44,8 @@ from .config_manager import (
     MANUAL_BATCH_SIZE_CONFIG_KEY,
     GPU_INDEX_CONFIG_KEY,
     CHUNK_LENGTH_SEC_CONFIG_KEY,
+    CHUNK_LENGTH_MODE_CONFIG_KEY,
+    ENABLE_TORCH_COMPILE_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     CLEAR_GPU_CACHE_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
@@ -50,7 +53,7 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
 )
 from . import model_manager as model_manager_module
-from .logging_utils import current_correlation_id, get_logger, scoped_correlation_id
+from .logging_utils import current_correlation_id, get_logger, log_context, scoped_correlation_id
 
 if TYPE_CHECKING:  # pragma: no cover - hints only
     import torch as torch_type
@@ -133,24 +136,29 @@ class TranscriptionHandler:
         self._model_load_started_at: float | None = None
 
         # Configurações de modelo e API (carregadas do config_manager)
-        self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY) # Agora é o batch_size padrão para o modo auto
-        self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY) # Novo
-        self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY) # Novo
+        get_config = self.config_manager.get
+
+        self.batch_size = get_config(BATCH_SIZE_CONFIG_KEY)
+        self.batch_size_mode = get_config(BATCH_SIZE_MODE_CONFIG_KEY)
+        self.manual_batch_size = get_config(MANUAL_BATCH_SIZE_CONFIG_KEY)
         self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
         self.gpu_index_requested = self.gpu_index
-        self.batch_size_specified = self.config_manager.get("batch_size_specified") # Ainda usado para validação
-        self.gpu_index_specified = self.config_manager.get("gpu_index_specified") # Ainda usado para validação
+        self.batch_size_specified = get_config("batch_size_specified")
+        self.gpu_index_specified = get_config("gpu_index_specified")
 
-        self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
-        self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
-        self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
-        self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-        self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
-        self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
-        self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
-        self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
-        self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
-        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.text_correction_enabled = get_config(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
+        self.text_correction_service = get_config(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
+        self.openrouter_api_key = get_config(OPENROUTER_API_KEY_CONFIG_KEY)
+        self.openrouter_model = get_config(OPENROUTER_MODEL_CONFIG_KEY)
+        self.gemini_api_key = get_config(GEMINI_API_KEY_CONFIG_KEY)
+        self.gemini_agent_model = get_config(GEMINI_AGENT_MODEL_CONFIG_KEY)
+        self.gemini_prompt = get_config(GEMINI_PROMPT_CONFIG_KEY)
+        self.min_transcription_duration = get_config(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.chunk_length_sec = get_config(CHUNK_LENGTH_SEC_CONFIG_KEY)
+        self.chunk_length_mode = get_config(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual")
+        self.enable_torch_compile = bool(
+            get_config(ENABLE_TORCH_COMPILE_CONFIG_KEY, False)
+        )
         # Configurações de ASR
         # Inicializar atributos internos sem acionar recarga imediata do backend
         self._asr_backend_name = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
@@ -245,9 +253,22 @@ class TranscriptionHandler:
                     request_timeout=openrouter_timeout,
                 )
                 self.openrouter_api = self.openrouter_client
-                logging.info("OpenRouter API client initialized.")
+                LOGGER.info(
+                    log_context(
+                        "OpenRouter API client initialized.",
+                        event="transcription.openrouter.ready",
+                        model=self.openrouter_model,
+                    )
+                )
             except Exception as e:
-                logging.error(f"Error initializing OpenRouter API client: {e}")
+                LOGGER.error(
+                    log_context(
+                        "Failed to initialize OpenRouter API client.",
+                        event="transcription.openrouter.error",
+                        error=str(e),
+                    ),
+                    exc_info=True,
+                )
 
         # O cliente Gemini agora é injetado, então sua inicialização foi removida daqui.
         # A inicialização do OpenRouter é mantida.
@@ -426,21 +447,26 @@ class TranscriptionHandler:
         previous_openrouter_key = getattr(self, "openrouter_api_key", "")
         previous_openrouter_model = getattr(self, "openrouter_model", "")
 
-        self.batch_size = self.config_manager.get(BATCH_SIZE_CONFIG_KEY)
-        self.batch_size_mode = self.config_manager.get(BATCH_SIZE_MODE_CONFIG_KEY)
-        self.manual_batch_size = self.config_manager.get(MANUAL_BATCH_SIZE_CONFIG_KEY)
-        self.gpu_index = self.config_manager.get(GPU_INDEX_CONFIG_KEY)
+        get_config = self.config_manager.get
+
+        self.batch_size = get_config(BATCH_SIZE_CONFIG_KEY)
+        self.batch_size_mode = get_config(BATCH_SIZE_MODE_CONFIG_KEY)
+        self.manual_batch_size = get_config(MANUAL_BATCH_SIZE_CONFIG_KEY)
+        self.gpu_index = get_config(GPU_INDEX_CONFIG_KEY)
         self.gpu_index_requested = self.gpu_index
-        self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
-        self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
-        self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
-        self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-        self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
-        self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
-        self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
-        self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
-        self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
-        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.text_correction_enabled = get_config(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
+        self.text_correction_service = get_config(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
+        self.openrouter_api_key = get_config(OPENROUTER_API_KEY_CONFIG_KEY)
+        self.openrouter_model = get_config(OPENROUTER_MODEL_CONFIG_KEY)
+        self.gemini_api_key = get_config(GEMINI_API_KEY_CONFIG_KEY)
+        self.gemini_agent_model = get_config(GEMINI_AGENT_MODEL_CONFIG_KEY)
+        self.gemini_prompt = get_config(GEMINI_PROMPT_CONFIG_KEY)
+        self.min_transcription_duration = get_config(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.chunk_length_sec = get_config(CHUNK_LENGTH_SEC_CONFIG_KEY)
+        self.chunk_length_mode = get_config(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual")
+        self.enable_torch_compile = bool(
+            get_config(ENABLE_TORCH_COMPILE_CONFIG_KEY, False)
+        )
 
         previous_backend = self._asr_backend_name
         previous_model_id = self._asr_model_id
@@ -449,12 +475,13 @@ class TranscriptionHandler:
         previous_ct2_threads = getattr(self, "asr_ct2_cpu_threads", None)
         previous_cache_dir = getattr(self, "asr_cache_dir", None)
 
-        backend_value = self.config_manager.get(ASR_BACKEND_CONFIG_KEY)
-        model_value = self.config_manager.get(ASR_MODEL_ID_CONFIG_KEY)
-        device_value = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
-        ct2_type_value = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
-        ct2_threads_value = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
-        cache_dir_value = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+        backend_value = get_config(ASR_BACKEND_CONFIG_KEY)
+        model_value = get_config(ASR_MODEL_ID_CONFIG_KEY)
+        device_value = get_config(ASR_COMPUTE_DEVICE_CONFIG_KEY)
+        dtype_value = get_config(ASR_DTYPE_CONFIG_KEY)
+        ct2_type_value = get_config(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
+        ct2_threads_value = get_config(ASR_CT2_CPU_THREADS_CONFIG_KEY)
+        cache_dir_value = get_config(ASR_CACHE_DIR_CONFIG_KEY)
 
         backend_changed = backend_value != previous_backend
         model_changed = model_value != previous_model_id
@@ -503,17 +530,24 @@ class TranscriptionHandler:
             self._apply_environment_overrides()
 
         if reload_needed and trigger_reload:
-            logging.info(
-                "Transcription handler detected critical changes; reloading ASR backend.",
+            LOGGER.info(
+                log_context(
+                    "Reloading ASR backend after configuration change.",
+                    event="transcription.config.reload",
+                )
             )
             self.reload_asr()
 
         if correction_changed:
             self._init_api_clients()
 
-        logging.info(
-            "Transcription handler configuration refreshed.",
-            extra={"event": "transcription_config_update"},
+        LOGGER.info(
+            log_context(
+                "Transcription handler configuration refreshed.",
+                event="transcription.config.updated",
+                reload_triggered=bool(reload_needed and trigger_reload),
+                ai_clients_refreshed=bool(correction_changed),
+            )
         )
         return reload_needed
 
