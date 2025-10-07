@@ -10,6 +10,12 @@ from typing import Any
 import keyboard
 
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
+from .logging_utils import get_logger, log_context
+
+LOGGER = get_logger(
+    "whisper_flash_transcriber.hotkeys",
+    component="KeyboardHotkeyManager",
+)
 
 class KeyboardHotkeyManager:
     """
@@ -76,25 +82,31 @@ class KeyboardHotkeyManager:
                     try:
                         path.parent.mkdir(parents=True, exist_ok=True)
                         shutil.move(str(legacy_path), str(path))
-                        logging.info(
-                            "Legacy hotkey configuration migrated from '%s' to '%s'.",
-                            legacy_path,
-                            path,
+                        self._log(
+                            logging.INFO,
+                            "Legacy hotkey configuration migrated.",
+                            event="hotkeys.config_migrated",
+                            legacy_path=str(legacy_path),
+                            path=str(path),
                         )
                         migrated = True
                         break
                     except Exception as exc:
-                        logging.warning(
-                            "Failed to migrate legacy hotkey configuration from '%s' to '%s': %s",
-                            legacy_path,
-                            path,
-                            exc,
+                        self._log(
+                            logging.WARNING,
+                            "Failed to migrate legacy hotkey configuration.",
+                            event="hotkeys.config_migrate_failed",
+                            legacy_path=str(legacy_path),
+                            path=str(path),
+                            error=str(exc),
                         )
                         break
                 if not migrated:
-                    logging.info(
-                        "'%s' not found. Creating it with default values for the first launch.",
-                        path,
+                    self._log(
+                        logging.INFO,
+                        "Hotkey configuration file missing; creating defaults.",
+                        event="hotkeys.config_create_default",
+                        path=str(path),
                     )
                     self._save_config()
 
@@ -162,11 +174,14 @@ class KeyboardHotkeyManager:
             }
             with path.open('w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
-            logging.info(
-                "Configuration saved: record_key=%s, agent_key=%s, record_mode=%s",
-                self.record_key,
-                self.agent_key,
-                self.record_mode,
+            self._log(
+                logging.INFO,
+                "Hotkey configuration saved.",
+                event="hotkeys.config_save_success",
+                record_key=self.record_key,
+                agent_key=self.agent_key,
+                record_mode=self.record_mode,
+                path=self.config_file,
             )
         except Exception as e:
             self._log(
