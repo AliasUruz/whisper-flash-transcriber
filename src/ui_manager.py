@@ -36,6 +36,8 @@ from .config_manager import (
     GEMINI_API_KEY_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
     SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    RECORD_STORAGE_MODE_CONFIG_KEY,
+    RECORD_STORAGE_LIMIT_CONFIG_KEY,
     STORAGE_ROOT_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
@@ -46,9 +48,18 @@ from .config_manager import (
     RECORDINGS_DIR_CONFIG_KEY,
     DEPS_INSTALL_DIR_CONFIG_KEY,
     GPU_INDEX_CONFIG_KEY,
+    BATCH_SIZE_MODE_CONFIG_KEY,
+    MANUAL_BATCH_SIZE_CONFIG_KEY,
+    MAX_MEMORY_SECONDS_MODE_CONFIG_KEY,
+    CHUNK_LENGTH_MODE_CONFIG_KEY,
+    CHUNK_LENGTH_SEC_CONFIG_KEY,
+    USE_VAD_CONFIG_KEY,
+    VAD_THRESHOLD_CONFIG_KEY,
+    VAD_SILENCE_DURATION_CONFIG_KEY,
     VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     DEFAULT_CONFIG,
+    SIMPLE_MODE_RESET_KEYS,
 )
 from . import state_manager as sm
 
@@ -335,6 +346,27 @@ class UIManager:
             self._set_settings_meta("_advanced_callbacks", callbacks)
         callbacks.append(callback)
 
+    def _build_simple_mode_reset_payload(self) -> dict[str, Any]:
+        """Compose the payload that restores simple mode defaults."""
+
+        builder = getattr(self.config_manager, "build_simple_mode_reset_payload", None)
+        if callable(builder):
+            payload = builder()
+        else:  # pragma: no cover - legacy compatibility path
+            defaults = getattr(self.config_manager, "default_config", {})
+            payload = {
+                key: defaults.get(key)
+                for key in SIMPLE_MODE_RESET_KEYS
+                if key in defaults
+            }
+            payload.setdefault(TEXT_CORRECTION_ENABLED_CONFIG_KEY, False)
+            payload.setdefault(TEXT_CORRECTION_SERVICE_CONFIG_KEY, SERVICE_NONE)
+            payload.setdefault(MAX_MEMORY_SECONDS_MODE_CONFIG_KEY, "auto")
+            payload.setdefault(CHUNK_LENGTH_MODE_CONFIG_KEY, "auto")
+
+        payload["show_advanced"] = False
+        return payload
+
     def _set_global_advanced_visibility(
         self, show: bool, *, persist: bool = True
     ) -> None:
@@ -376,13 +408,35 @@ class UIManager:
         if not persist:
             return
 
+        reset_payload: dict[str, Any] | None = None
+        if not show:
+            try:
+                reset_payload = self._build_simple_mode_reset_payload()
+            except Exception:  # pragma: no cover - defensive guard
+                logging.error(
+                    "Failed to build simple mode reset payload.",
+                    exc_info=True,
+                )
+                reset_payload = {"show_advanced": False}
+
         core = getattr(self, "core_instance_ref", None)
         try:
-            if core is not None:
-                core.update_setting("show_advanced", show)
+            if reset_payload is not None:
+                if core is not None:
+                    core.apply_settings_from_external(**reset_payload)
+                else:
+                    _, warnings = self.config_manager.apply_updates(reset_payload)
+                    if warnings:
+                        logging.warning(
+                            "Simple mode reset required adjustments: %s",
+                            "; ".join(warnings),
+                        )
             else:
-                self.config_manager.set("show_advanced", show)
-                self.config_manager.save_config()
+                if core is not None:
+                    core.update_setting("show_advanced", show)
+                else:
+                    self.config_manager.set("show_advanced", show)
+                    self.config_manager.save_config()
         except Exception:
             logging.error(
                 "Failed to persist show_advanced state.",

@@ -304,6 +304,25 @@ ASR_CURATED_CATALOG_CONFIG_KEY = "asr_curated_catalog"
 ASR_CURATED_CATALOG_URL_CONFIG_KEY = "asr_curated_catalog_url"
 ASR_LAST_DOWNLOAD_STATUS_KEY = "asr_last_download_status"
 
+SIMPLE_MODE_RESET_KEYS: tuple[str, ...] = (
+    TEXT_CORRECTION_ENABLED_CONFIG_KEY,
+    TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+    BATCH_SIZE_MODE_CONFIG_KEY,
+    MANUAL_BATCH_SIZE_CONFIG_KEY,
+    USE_VAD_CONFIG_KEY,
+    VAD_THRESHOLD_CONFIG_KEY,
+    VAD_SILENCE_DURATION_CONFIG_KEY,
+    VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+    VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+    SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+    RECORD_STORAGE_MODE_CONFIG_KEY,
+    RECORD_STORAGE_LIMIT_CONFIG_KEY,
+    MAX_MEMORY_SECONDS_MODE_CONFIG_KEY,
+    "max_memory_seconds",
+    CHUNK_LENGTH_MODE_CONFIG_KEY,
+    CHUNK_LENGTH_SEC_CONFIG_KEY,
+)
+
 
 @dataclass(frozen=True)
 class PersistenceRecord:
@@ -1623,6 +1642,22 @@ class ConfigManager:
             if previous_config.get(key) != value
         }
         return changed_keys, warnings
+
+    def build_simple_mode_reset_payload(self) -> dict[str, Any]:
+        """Return sanitized defaults for reverting to the simplified experience."""
+
+        defaults = self.default_config
+        payload: dict[str, Any] = {}
+        for key in SIMPLE_MODE_RESET_KEYS:
+            if key in defaults:
+                payload[key] = copy.deepcopy(defaults[key])
+
+        payload.setdefault(TEXT_CORRECTION_ENABLED_CONFIG_KEY, False)
+        payload.setdefault(TEXT_CORRECTION_SERVICE_CONFIG_KEY, SERVICE_NONE)
+        payload.setdefault(MAX_MEMORY_SECONDS_MODE_CONFIG_KEY, "auto")
+        payload.setdefault(CHUNK_LENGTH_MODE_CONFIG_KEY, "auto")
+
+        return payload
 
     def reset_to_defaults(self) -> tuple[dict[str, Any], set[str]]:
         """Reset the configuration to the baked-in defaults and persist them."""
