@@ -1,30 +1,14 @@
-import importlib
-import json
-import os
-import sys
+import builtins
 import tempfile
 import unittest
-from contextlib import contextmanager
+from collections.abc import Mapping
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-
-try:
-    import keyboard  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - provide lightweight stub
-    keyboard = types.SimpleNamespace()
-
-    def _dummy_handle(*_args, **_kwargs):
-        return object()
-
-    keyboard.add_hotkey = _dummy_handle
-    keyboard.remove_hotkey = lambda *_args, **_kwargs: None
-    keyboard.on_release_key = _dummy_handle
-    keyboard.hook = _dummy_handle
-    keyboard.unhook = lambda *_args, **_kwargs: None
-    sys.modules["keyboard"] = keyboard
+if not hasattr(builtins, "Mapping"):
+    builtins.Mapping = Mapping
 
 try:
     from src.vad_manager import VADManager
@@ -34,33 +18,6 @@ except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
         sys.path.insert(0, PROJECT_ROOT)
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
-
-try:
-    import src.config_manager as config_manager_module
-except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
-    if PROJECT_ROOT not in sys.path:
-        sys.path.insert(0, PROJECT_ROOT)
-    import src.config_manager as config_manager_module
-
-
-@contextmanager
-def isolated_config_environment(profile_dir: str, *, working_dir: str | None = None):
-    env_var = "WHISPER_FLASH_PROFILE_DIR"
-    previous_env = os.environ.get(env_var)
-    previous_cwd = os.getcwd()
-    try:
-        if working_dir is not None:
-            os.chdir(working_dir)
-        os.environ[env_var] = profile_dir
-        module = importlib.reload(config_manager_module)
-        yield module
-    finally:
-        if previous_env is None:
-            os.environ.pop(env_var, None)
-        else:
-            os.environ[env_var] = previous_env
-        os.chdir(previous_cwd)
-        importlib.reload(config_manager_module)
 
 
 class DummyConfigManager:
@@ -384,6 +341,84 @@ class TestConfigMigration(unittest.TestCase):
                     "record_to_memory",
                     expected_profile_config.read_text(encoding="utf-8"),
                 )
+
+
+class TestKeyboardHotkeys(unittest.TestCase):
+    def setUp(self):
+        self.keyboard_mock = mock.Mock()
+        self.keyboard_patch = mock.patch(
+            "src.keyboard_hotkey_manager.keyboard",
+            self.keyboard_mock,
+        )
+        self.keyboard_patch.start()
+        self.addCleanup(self.keyboard_patch.stop)
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.config_path = Path(self.temp_dir.name) / "hotkeys.json"
+
+    def _create_manager(self):
+        return KeyboardHotkeyManager(config_file=self.config_path)
+
+    def test_stop_clears_hotkey_state(self):
+        manager = self._create_manager()
+        manager.is_running = True
+        manager.hotkey_handlers = {
+            "record:press": ["handle-1", "handle-2"],
+            "agent:press": ["handle-3"],
+        }
+
+        manager.stop()
+
+        self.assertEqual(
+            self.keyboard_mock.unhook.call_args_list,
+            [
+                mock.call("handle-1"),
+                mock.call("handle-2"),
+                mock.call("handle-3"),
+            ],
+        )
+        self.assertEqual(manager.hotkey_handlers, {})
+        self.assertFalse(manager.is_running)
+
+    def test_restart_debounces_and_restarts_handlers(self):
+        manager = self._create_manager()
+        manager.is_running = True
+        manager.hotkey_handlers = {"record:press": ["handle-1"]}
+
+        call_order: list[str] = []
+        original_stop = manager.stop
+
+        def stop_side_effect():
+            call_order.append("stop")
+            return original_stop()
+
+        def start_side_effect():
+            call_order.append("start")
+            manager.is_running = True
+            manager.hotkey_handlers = {"record:press": ["new-handle"]}
+            return True
+
+        with mock.patch.object(manager, "stop", side_effect=stop_side_effect) as mock_stop:
+            with mock.patch.object(manager, "start", side_effect=start_side_effect) as mock_start:
+                with mock.patch("src.keyboard_hotkey_manager.time.sleep") as mock_sleep:
+                    mock_sleep.side_effect = lambda duration: call_order.append(f"sleep:{duration}")
+                    result = manager.restart()
+
+        self.assertTrue(result)
+        self.assertEqual(call_order, ["stop", "sleep:0.5", "sleep:0.5", "start"])
+        mock_stop.assert_called_once()
+        mock_start.assert_called_once()
+        self.assertEqual(
+            mock_sleep.call_args_list,
+            [mock.call(0.5), mock.call(0.5)],
+        )
+        self.assertEqual(
+            self.keyboard_mock.unhook.call_args_list,
+            [mock.call("handle-1")],
+        )
+        self.assertIn("record:press", manager.hotkey_handlers)
+        self.assertNotIn("handle-1", manager.hotkey_handlers["record:press"])
 
 
 if __name__ == "__main__":
