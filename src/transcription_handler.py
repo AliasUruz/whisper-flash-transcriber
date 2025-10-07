@@ -2,10 +2,12 @@ import concurrent.futures
 import importlib
 import importlib.util
 import logging
+import os
+import statistics
 import threading
 import time
-import os
-from typing import TYPE_CHECKING, Any, Mapping
+from collections import deque
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -182,6 +184,20 @@ class TranscriptionHandler:
         # self.gemini_client é injetado
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
         self.last_dynamic_batch_size = None
+        self.last_effective_chunk_length = float(self.chunk_length_sec or 0.0) if self.chunk_length_sec else None
+        self._chunk_length_configured = float(self.chunk_length_sec or 0.0) if self.chunk_length_sec else None
+        self._batch_tuning: dict[str, float | None] = {"base": None, "current": None}
+        self._chunk_tuning: dict[str, float | None] = {
+            "base": None,
+            "current": None,
+            "min": None,
+            "max": None,
+        }
+        self._adaptive_metrics: dict[str, object] = {}
+        self._recovery_budget = 0
+        self._asr_loaded = False
+
+        self._initialize_adaptive_state()
 
         self._init_api_clients()
 
@@ -207,6 +223,270 @@ class TranscriptionHandler:
             "TranscriptionHandler applied environment overrides: %s",
             ", ".join(f"{k}={v}" for k, v in overrides.items()),
         )
+
+    # ------------------------------------------------------------------
+    # Adaptive tuning helpers
+    # ------------------------------------------------------------------
+    def _initialize_adaptive_state(self) -> None:
+        """Reset internal structures used for dynamic tuning."""
+
+        base_chunk = self._coerce_chunk_length(self.chunk_length_sec)
+        if base_chunk is None or base_chunk <= 0:
+            default_value = self.config_manager.default_config.get(
+                CHUNK_LENGTH_SEC_CONFIG_KEY,
+                30.0,
+            )
+            base_chunk = float(default_value)
+
+        self._chunk_length_configured = float(base_chunk)
+        self._chunk_tuning = {
+            "base": float(base_chunk),
+            "current": float(base_chunk),
+            "min": None,
+            "max": None,
+        }
+        self._batch_tuning = {"base": None, "current": None, "min": 1}
+        self._adaptive_metrics = {
+            "durations": deque(maxlen=6),
+            "success_streak": 0,
+        }
+        self._recovery_budget = 0
+
+        self._recalculate_chunk_bounds()
+        self.last_effective_chunk_length = self._chunk_tuning["current"]
+        self.chunk_length_sec = self._chunk_tuning["current"]
+
+    def _coerce_chunk_length(self, raw: object) -> float | None:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    def _is_gpu_active(self) -> bool:
+        device = str(self.device_in_use or "").lower()
+        if device.startswith("cuda"):
+            return _torch_cuda_available()
+        return _torch_cuda_available() and (self.gpu_index is not None and self.gpu_index >= 0)
+
+    def _recalculate_chunk_bounds(self) -> None:
+        """Update dynamic chunk bounds according to the current device."""
+
+        base = self._chunk_tuning.get("base") or 30.0
+        if base <= 0:
+            base = 30.0
+
+        gpu_active = self._is_gpu_active()
+        min_chunk = max(8.0, base * 0.5)
+        if gpu_active:
+            max_chunk = min(120.0, max(base, base * 1.6))
+        else:
+            max_chunk = min(75.0, max(base, base * 1.2))
+
+        self._chunk_tuning["min"] = float(min_chunk)
+        self._chunk_tuning["max"] = float(max_chunk)
+
+        current = self._chunk_tuning.get("current")
+        if current is None:
+            current = base
+
+        clamped = float(max(min_chunk, min(current, max_chunk)))
+        self._chunk_tuning["current"] = clamped
+        self.last_effective_chunk_length = clamped
+        self.chunk_length_sec = clamped
+
+    def _refresh_adaptive_config(self) -> None:
+        """Synchronize adaptive state with updated configuration values."""
+
+        configured = self._coerce_chunk_length(self.chunk_length_sec)
+        if configured is None:
+            configured = self._chunk_length_configured or 30.0
+        self._chunk_length_configured = float(configured)
+        self._chunk_tuning["base"] = float(configured)
+
+        if self.chunk_length_mode == "manual":
+            self._chunk_tuning["current"] = float(configured)
+        elif self._chunk_tuning.get("current") is None:
+            self._chunk_tuning["current"] = float(configured)
+
+        self._recalculate_chunk_bounds()
+
+    def _get_effective_chunk_length(self) -> float:
+        """Return the chunk length considering adaptive tuning."""
+
+        if self.chunk_length_mode == "manual":
+            value = self._coerce_chunk_length(self._chunk_length_configured)
+            if value is None:
+                value = self._chunk_tuning.get("base") or 30.0
+            self.chunk_length_sec = float(value)
+            self.last_effective_chunk_length = float(value)
+            return float(value)
+
+        current = self._chunk_tuning.get("current")
+        if current is None:
+            current = self._chunk_tuning.get("base") or 30.0
+        min_chunk = self._chunk_tuning.get("min") or 8.0
+        max_chunk = self._chunk_tuning.get("max") or current
+        effective = float(max(min_chunk, min(current, max_chunk)))
+        self._chunk_tuning["current"] = effective
+        self.chunk_length_sec = effective
+        self.last_effective_chunk_length = effective
+        return effective
+
+    def _record_adaptive_metrics(
+        self,
+        *,
+        inference_duration_s: float | None,
+        chunk_length_s: float | None,
+        had_oom: bool,
+    ) -> None:
+        """Update heuristics with runtime feedback."""
+
+        if self.chunk_length_mode == "manual" and self.batch_size_mode == "manual":
+            return
+
+        chunk_length = self._coerce_chunk_length(chunk_length_s)
+        if chunk_length is None:
+            chunk_length = self._chunk_tuning.get("current") or self._chunk_tuning.get("base") or 30.0
+
+        metrics = self._adaptive_metrics
+        durations: deque[float] = metrics.get("durations", deque(maxlen=6))  # type: ignore[assignment]
+        if "durations" not in metrics:
+            metrics["durations"] = durations
+
+        if had_oom:
+            durations.clear()
+            metrics["success_streak"] = 0
+            self._recovery_budget = 3
+            self._apply_oom_penalty(chunk_length)
+            return
+
+        if inference_duration_s is None:
+            return
+
+        durations.append(float(inference_duration_s))
+        metrics["success_streak"] = metrics.get("success_streak", 0) + 1
+        if self._recovery_budget > 0:
+            self._recovery_budget -= 1
+            return
+
+        if len(durations) >= 3:
+            self._apply_duration_feedback(chunk_length, durations)
+
+    def _apply_oom_penalty(self, chunk_length: float) -> None:
+        """Handle an out-of-memory event by reducing aggressiveness."""
+
+        self._adjust_chunk_length(chunk_length, factor=0.6, reason="OOM detected")
+        self._adjust_batch_size(factor=0.5, reason="OOM detected")
+
+    def _apply_duration_feedback(self, chunk_length: float, durations: deque[float]) -> None:
+        median_duration = statistics.median(durations)
+        if chunk_length <= 0:
+            chunk_length = self._chunk_tuning.get("current") or self._chunk_tuning.get("base") or 30.0
+
+        ratio = median_duration / max(chunk_length, 1e-6)
+        if ratio > 1.35:
+            self._adjust_chunk_length(chunk_length, factor=0.8, reason="slow inference")
+            self._adjust_batch_size(factor=0.8, reason="slow inference")
+            durations.clear()
+            self._recovery_budget = 2
+        elif ratio < 0.65:
+            self._adjust_chunk_length(chunk_length, factor=1.15, reason="fast inference", grow=True)
+            self._adjust_batch_size(factor=1.15, reason="fast inference", grow=True)
+            durations.clear()
+
+    def _adjust_batch_size(self, *, factor: float, reason: str, grow: bool = False) -> None:
+        if self.batch_size_mode == "manual":
+            return
+
+        base = self._batch_tuning.get("base")
+        current = self._batch_tuning.get("current")
+        reference = base or current or self.last_dynamic_batch_size or 4
+        if reference is None:
+            reference = 4
+
+        if grow:
+            if base is None:
+                return
+            target = max(1, int(round((current or reference) * factor)))
+            capped = min(int(base), target)
+            if current is None or capped > current:
+                self._batch_tuning["current"] = capped
+                logging.info(
+                    "Dynamic batch size increased to %s (%s).",
+                    capped,
+                    reason,
+                )
+                self._report_adjustment(
+                    f"Dynamic batch size increased to {capped} ({reason}).",
+                    level=logging.INFO,
+                )
+        else:
+            current = current or reference
+            candidate = max(1, int(round(current * factor)))
+            if candidate < current:
+                self._batch_tuning["current"] = candidate
+                logging.warning(
+                    "Dynamic batch size reduced to %s (%s).",
+                    candidate,
+                    reason,
+                )
+                self._report_adjustment(
+                    f"Dynamic batch size reduced to {candidate} ({reason}).",
+                    level=logging.WARNING,
+                )
+
+    def _adjust_chunk_length(
+        self,
+        chunk_length: float,
+        *,
+        factor: float,
+        reason: str,
+        grow: bool = False,
+    ) -> None:
+        if self.chunk_length_mode == "manual":
+            return
+
+        current = self._chunk_tuning.get("current") or chunk_length
+        base = self._chunk_tuning.get("base") or chunk_length
+        min_chunk = self._chunk_tuning.get("min") or current
+        max_chunk = self._chunk_tuning.get("max") or base
+
+        if grow:
+            target = min(max_chunk, max(current, current * factor, current + 1.0, base))
+            target = round(target, 1)
+            if target > current + 0.25:
+                self._chunk_tuning["current"] = float(target)
+                self.chunk_length_sec = float(target)
+                self.last_effective_chunk_length = float(target)
+                message = (
+                    f"Stable inference detected. Increasing chunk_length_sec from {current:.1f}s to {target:.1f}s."
+                )
+                logging.info(message)
+                self._report_adjustment(message, level=logging.INFO)
+        else:
+            target = max(min_chunk, min(current, current * factor))
+            target = round(target, 1)
+            if target < current - 0.25:
+                self._chunk_tuning["current"] = float(target)
+                self.chunk_length_sec = float(target)
+                self.last_effective_chunk_length = float(target)
+                message = (
+                    f"{reason.capitalize()}: reducing chunk_length_sec from {current:.1f}s to {target:.1f}s."
+                )
+                logging.warning(message)
+                self._report_adjustment(message, level=logging.WARNING)
+
+    def _detect_oom(self, exc: BaseException) -> bool:
+        message = str(exc).lower()
+        indicators = (
+            "cuda out of memory",
+            "cublas error",
+            "cudnn error",
+            "out of memory",
+            "hip error out of memory",
+        )
+        return any(token in message for token in indicators)
 
     def _build_backend_load_kwargs(
         self,
@@ -466,16 +746,23 @@ class TranscriptionHandler:
         self.manual_batch_size = get_config(MANUAL_BATCH_SIZE_CONFIG_KEY)
         self.gpu_index = get_config(GPU_INDEX_CONFIG_KEY)
         self.gpu_index_requested = self.gpu_index
-        self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
-        self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
-        self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
-        self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-        self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
-        self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
-        self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
-        self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
-        self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
-        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "auto")
+        if self.batch_size_mode == "manual":
+            self._batch_tuning["current"] = None
+            self._batch_tuning["base"] = None
+        self.text_correction_enabled = get_config(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
+        self.text_correction_service = get_config(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
+        self.openrouter_api_key = get_config(OPENROUTER_API_KEY_CONFIG_KEY)
+        self.openrouter_model = get_config(OPENROUTER_MODEL_CONFIG_KEY)
+        self.gemini_api_key = get_config(GEMINI_API_KEY_CONFIG_KEY)
+        self.gemini_agent_model = get_config(GEMINI_AGENT_MODEL_CONFIG_KEY)
+        self.gemini_prompt = get_config(GEMINI_PROMPT_CONFIG_KEY)
+        self.min_transcription_duration = get_config(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.chunk_length_sec = get_config(CHUNK_LENGTH_SEC_CONFIG_KEY)
+        self.chunk_length_mode = get_config(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual")
+        self.enable_torch_compile = bool(
+            get_config(ENABLE_TORCH_COMPILE_CONFIG_KEY, False)
+        )
+        self._refresh_adaptive_config()
 
         previous_backend = self._asr_backend_name
         previous_model_id = self._asr_model_id
@@ -1315,6 +1602,155 @@ class TranscriptionHandler:
 
             return processed_text or transcribed_text
 
+    def transcribe_audio_segment(
+        self,
+        audio_source: str | np.ndarray | bytes | bytearray | list[float],
+        agent_mode: bool,
+        *,
+        correlation_id: str | None = None,
+    ) -> None:
+        """Submit a transcription job and feed adaptive heuristics."""
+
+        if not self.is_model_ready():
+            logging.warning(
+                "Model not ready. Ignoring transcription request.",
+                extra={"event": "transcription", "status": "model_unready"},
+            )
+            return
+
+        if self.transcription_future and not self.transcription_future.done():
+            logging.warning(
+                "Transcription already running. Rejecting new audio segment.",
+                extra={"event": "transcription", "status": "busy"},
+            )
+            return
+
+        backend = getattr(self, "_asr_backend", None)
+        if backend is None:
+            logging.error(
+                "ASR backend unavailable when attempting to transcribe.",
+                extra={"event": "transcription", "status": "backend_missing"},
+            )
+            return
+
+        chunk_length = self._get_effective_chunk_length()
+        batch_size = self._get_dynamic_batch_size()
+        audio_description = self._format_audio_source(audio_source)
+
+        self.transcription_cancel_event.clear()
+
+        logging.info(
+            "[ASR] transcription_start chunk_length_s=%.1f batch_size=%s agent_mode=%s audio=%s",
+            chunk_length,
+            batch_size,
+            agent_mode,
+            audio_description,
+        )
+
+        def _segment_callback(text: str, *, metadata: dict | None = None, is_final: bool = False) -> None:
+            callback = self.on_segment_transcribed_callback
+            if not callback:
+                return
+            try:
+                callback(text, metadata=metadata, is_final=is_final)
+            except TypeError:
+                callback(text)
+
+        def _transcription_job() -> None:
+            with scoped_correlation_id(correlation_id):
+                start_time = time.perf_counter()
+                payload: dict[str, object] = {
+                    "event": "transcription_run",
+                    "chunk_length_s": float(chunk_length),
+                    "batch_size": int(batch_size),
+                    "agent_mode": bool(agent_mode),
+                    "device": self.device_in_use or "unknown",
+                }
+                had_oom = False
+                try:
+                    if self.on_segment_transcribed_callback:
+                        text, metadata = backend.stream_transcribe(
+                            audio_source,
+                            on_segment=_segment_callback,
+                            cancel_event=self.transcription_cancel_event,
+                            chunk_length_s=chunk_length,
+                            batch_size=batch_size,
+                        )
+                    else:
+                        text, metadata = backend.stream_transcribe(
+                            audio_source,
+                            cancel_event=self.transcription_cancel_event,
+                            chunk_length_s=chunk_length,
+                            batch_size=batch_size,
+                        )
+
+                    duration_s = time.perf_counter() - start_time
+                    payload["duration_ms"] = duration_s * 1000.0
+                    payload["segments"] = len(metadata or [])
+                    self._record_adaptive_metrics(
+                        inference_duration_s=duration_s,
+                        chunk_length_s=chunk_length,
+                        had_oom=False,
+                    )
+
+                    processed_text = self._process_ai_pipeline(text, agent_mode)
+                    if agent_mode:
+                        if self.on_agent_result_callback:
+                            self.on_agent_result_callback(processed_text or text)
+                    else:
+                        if self.on_transcription_result_callback:
+                            self.on_transcription_result_callback(processed_text, text)
+
+                    payload["status"] = "completed"
+                    payload["raw_text_chars"] = len(text or "")
+                    self._emit_transcription_metrics(payload)
+                    logging.info(
+                        "[ASR] transcription_complete chunk_length_s=%.1f batch_size=%s duration_ms=%.2f agent_mode=%s",
+                        chunk_length,
+                        batch_size,
+                        payload.get("duration_ms", 0.0),
+                        agent_mode,
+                    )
+                except Exception as exc:
+                    duration_s = time.perf_counter() - start_time
+                    had_oom = self._detect_oom(exc)
+                    if had_oom:
+                        self._record_adaptive_metrics(
+                            inference_duration_s=None,
+                            chunk_length_s=chunk_length,
+                            had_oom=True,
+                        )
+                    elif duration_s > 0:
+                        self._record_adaptive_metrics(
+                            inference_duration_s=duration_s,
+                            chunk_length_s=chunk_length,
+                            had_oom=False,
+                        )
+
+                    payload["status"] = "error"
+                    payload["error"] = str(exc)
+                    payload["duration_ms"] = duration_s * 1000.0
+                    self._emit_transcription_metrics(payload)
+
+                    logging.error("Transcription failed: %s", exc, exc_info=True)
+                    if had_oom:
+                        logging.warning(
+                            "OOM detected during transcription. New chunk_length_sec=%.1f batch_size=%s",
+                            self.chunk_length_sec,
+                            self.last_dynamic_batch_size,
+                        )
+                    if self.on_model_error_callback:
+                        try:
+                            self.on_model_error_callback(str(exc))
+                        except Exception:
+                            logging.debug("Failed to propagate transcription error callback.", exc_info=True)
+                finally:
+                    self.transcription_cancel_event.clear()
+
+        future = self.transcription_executor.submit(_transcription_job)
+        self.transcription_future = future
+        future.add_done_callback(lambda _f: setattr(self, "transcription_future", None))
+
     def _get_dynamic_batch_size(self) -> int:
         device_in_use = (str(self.device_in_use or "").lower())
         if not (_torch_cuda_available() and device_in_use.startswith("cuda")):
@@ -1340,8 +1776,25 @@ class TranscriptionHandler:
             fallback=self.batch_size,
             chunk_length_sec=self.chunk_length_sec
         )
-        self.last_dynamic_batch_size = value
-        return value
+        base_value = max(1, int(value or 1))
+        self._batch_tuning["base"] = base_value
+
+        current = self._batch_tuning.get("current")
+        if current is None:
+            current = base_value
+        else:
+            current = max(1, min(int(current), base_value))
+        self._batch_tuning["current"] = current
+
+        final_value = max(1, int(current))
+        self.last_dynamic_batch_size = final_value
+        logging.info(
+            "Dynamic batch size resolved: %s (base=%s, mode=auto).",
+            final_value,
+            base_value,
+            extra={"event": "batch_size", "status": "auto", "base": base_value},
+        )
+        return final_value
 
     def _emit_device_warning(self, preferred: str, actual: str, reason: str, *, level: str = "warning") -> None:
         """Registra e propaga avisos de fallback de dispositivo."""
@@ -1751,6 +2204,7 @@ class TranscriptionHandler:
 
         self.device_in_use = effective_device
         self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
+        self._recalculate_chunk_bounds()
 
         logging.info(
             "Effective ASR device: %s (gpu_index=%s)",
@@ -1821,6 +2275,12 @@ class TranscriptionHandler:
             self._asr_backend.load(**load_kwargs)
         except Exception as load_error:
             duration_ms = (time.perf_counter() - load_started_at) * 1000.0
+            if self._detect_oom(load_error):
+                self._record_adaptive_metrics(
+                    inference_duration_s=None,
+                    chunk_length_s=self.chunk_length_sec,
+                    had_oom=True,
+                )
             self._log_model_event(
                 "load_failure",
                 level=logging.ERROR,
