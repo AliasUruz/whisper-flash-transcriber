@@ -101,7 +101,23 @@ pip install -r requirements-extras.txt
 | `playwright` | The UI automation bridge used by integration scripts in `scripts/` and power-user workflows. |
 | `accelerate`, `datasets[audio]` | Batch automation helpers and dataset tooling used by advanced users when remediating dependencies or benchmarking models. |
 
-When you opt into any of these features, double-check the related configuration keys inside the `advanced` namespace so the runtime knows which services are active. Secrets continue to live in `secrets.json` even when the file is written in the new nested layout.
+### Headless Mode
+
+When you need background operation without the system tray icon or any Tk windows,
+launch Whisper Flash Transcriber in headless mode:
+
+```bash
+python src/main.py --headless
+```
+
+The recorder, transcription pipeline, hotkeys, and automatic paste continue to work,
+but all Tk-based UI surfaces (settings window, onboarding wizard, diagnostic dialogs)
+are suppressed. Any message box that would normally appear is logged instead so you
+can monitor issues from the console. Exit the process with <kbd>Ctrl</kbd> + <kbd>C</kbd>
+or by calling the shutdown hotkeys configured for your environment.
+On Windows you can achieve the same by invoking `Run Whisper.bat --headless`.
+
+### Configuration
 
 ## Documentation map
 | File | Summary |
