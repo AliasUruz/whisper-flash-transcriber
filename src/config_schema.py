@@ -15,6 +15,17 @@ LOGGER = get_logger(__name__, component='ConfigSchema')
 
 _DEFAULT_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
 _DEFAULT_MODELS_STORAGE_DIR = str((_DEFAULT_STORAGE_ROOT / "models").expanduser())
+_SUPPORTED_UI_LANGUAGE_MAP = {
+    "en": "en-US",
+    "en-us": "en-US",
+    "english": "en-US",
+    "pt": "pt-BR",
+    "pt-br": "pt-BR",
+    "pt_br": "pt-BR",
+    "portuguese": "pt-BR",
+    "português": "pt-BR",
+}
+_DEFAULT_UI_LANGUAGE = "en-US"
 
 
 class ASRDownloadStatus(BaseModel):
@@ -71,6 +82,7 @@ class AppConfig(BaseModel):
     openrouter_prompt: str = ""
     prompt_agentico: str = ""
     gemini_prompt: str = ""
+    ui_language: str = _DEFAULT_UI_LANGUAGE
     batch_size: int = Field(default=16, ge=1)
     batch_size_mode: str = "auto"
     manual_batch_size: int = Field(default=8, ge=1)
@@ -146,6 +158,23 @@ class AppConfig(BaseModel):
                 return "auto"
             return "+".join(normalized_parts)
         return str(value)
+
+    @field_validator("ui_language", mode="before")
+    @classmethod
+    def _normalize_ui_language(cls, value: Any) -> str:
+        if value is None:
+            return _DEFAULT_UI_LANGUAGE
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return _DEFAULT_UI_LANGUAGE
+            mapped = _SUPPORTED_UI_LANGUAGE_MAP.get(normalized.lower())
+            if mapped:
+                return mapped
+            raise ValueError(
+                f"ui_language must be one of {sorted(set(_SUPPORTED_UI_LANGUAGE_MAP.values()))}"
+            )
+        raise ValueError("ui_language must be a string")
 
     @field_validator("record_mode", mode="before")
     @classmethod

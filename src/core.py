@@ -1,4 +1,5 @@
 import atexit
+import json
 import logging
 import os
 import sys
@@ -61,6 +62,11 @@ from .transcription_handler import TranscriptionHandler
 from .keyboard_hotkey_manager import KeyboardHotkeyManager # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
 from . import model_manager as model_manager_module
+from .onboarding.first_run_wizard import (
+    DownloadProgressPanel,
+    FirstRunWizard,
+    WizardResult,
+)
 from .logging_utils import (
     StructuredMessage,
     get_logger,
@@ -114,6 +120,10 @@ class AppCore:
         self.state_manager = sm.StateManager(sm.STATE_LOADING_MODEL, main_tk_root)
 
         self.full_transcription = ""
+
+        # Track the latest onboarding outcome so diagnostics and the UI can
+        # inspect what happened without parsing log files.
+        self._last_onboarding_outcome: dict[str, Any] | None = None
 
         self.action_orchestrator = ActionOrchestrator(
             state_manager=self.state_manager,
@@ -177,6 +187,7 @@ class AppCore:
         self.model_prompt_active = False
         self._active_recording_correlation_id: str | None = None
         self._recording_started_at: float | None = None
+        self._onboarding_active = False
 
     @property
     def ui_manager(self):
@@ -205,6 +216,245 @@ class AppCore:
 
         self._active_model_download_event: threading.Event | None = None
         self.model_download_timeout = self._resolve_model_download_timeout()
+        self._maybe_run_initial_onboarding()
+
+    def _maybe_run_initial_onboarding(self) -> None:
+        try:
+            snapshot = self.config_manager.describe_persistence_state()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "Unable to inspect persistence state for onboarding: %s",
+                exc,
+                exc_info=True,
+            )
+            return
+
+        if not snapshot.get("first_run"):
+            LOGGER.debug("Onboarding wizard skipped: profile already initialized.")
+            return
+
+        LOGGER.info("Launching onboarding wizard for first run.")
+        outcome = self._launch_onboarding(snapshot=snapshot, force=True, reason="startup")
+        if outcome is not None:
+            self._last_onboarding_outcome = outcome
+
+    def _launch_onboarding(
+        self,
+        *,
+        snapshot: Mapping[str, Any],
+        force: bool,
+        reason: str,
+    ) -> dict[str, Any] | None:
+        if self._onboarding_active:
+            LOGGER.info(
+                "Onboarding wizard already active; ignoring launch request (%s).",
+                reason,
+            )
+            return None
+
+        if not force and not snapshot.get("first_run"):
+            LOGGER.debug(
+                "Onboarding launch ignored for reason '%s': not a first-run profile.",
+                reason,
+            )
+            return None
+
+        self._onboarding_active = True
+        try:
+            wizard_result = self._run_onboarding_wizard(snapshot=snapshot, force=force)
+        finally:
+            self._onboarding_active = False
+
+        if wizard_result is None:
+            LOGGER.info("Onboarding wizard dismissed without changes (%s).", reason)
+            return None
+
+        outcome = self._apply_onboarding_result(wizard_result, source=reason)
+        self._last_onboarding_outcome = outcome
+        return outcome
+
+    def _run_onboarding_wizard(
+        self,
+        *,
+        snapshot: Mapping[str, Any],
+        force: bool,
+    ) -> WizardResult | None:
+        try:
+            catalog = self.model_manager.list_catalog()
+        except Exception as exc:  # pragma: no cover - catalog retrieval best effort
+            MODEL_LOGGER.debug(
+                "Unable to retrieve curated catalog for onboarding: %s",
+                exc,
+                exc_info=True,
+            )
+            catalog = []
+
+        config_snapshot = dict(self.config_manager.config)
+        hotkey_defaults = {
+            "record_key": self.config_manager.get("record_key"),
+            "agent_key": self.config_manager.get("agent_key"),
+            "record_mode": self.config_manager.get("record_mode"),
+        }
+
+        profile_dir = snapshot.get("profile_dir") or snapshot.get("config", {}).get("path")
+        wizard = FirstRunWizard(
+            self.main_tk_root,
+            first_run=force or bool(snapshot.get("first_run")),
+            config_snapshot=config_snapshot,
+            hotkey_defaults=hotkey_defaults,
+            profile_dir=str(profile_dir) if profile_dir else None,
+            recommended_models=catalog,
+        )
+        return wizard.run()
+
+    def _apply_onboarding_result(
+        self,
+        result: WizardResult,
+        *,
+        source: str,
+    ) -> dict[str, Any]:
+        updates = dict(result.config_updates or {})
+        hotkeys = dict(result.hotkey_preferences or {})
+        changed_keys: set[str] = set()
+        warnings: list[str] = []
+
+        if updates:
+            LOGGER.info(
+                "Applying onboarding configuration updates (%s): %s",
+                source,
+                ", ".join(sorted(updates.keys())),
+            )
+            changed_keys, warnings = self.config_manager.apply_updates(updates)
+
+        for warning in warnings:
+            LOGGER.warning(warning)
+
+        if updates:
+            LOGGER.debug(
+                "Onboarding persisted %d configuration keys (%s).",
+                len(changed_keys),
+                source,
+            )
+
+        self._reconcile_after_config_update(changed_keys)
+
+        if hotkeys:
+            if getattr(self, "ahk_manager", None) is not None:
+                self.ahk_manager.update_config(
+                    record_key=hotkeys.get("record_key"),
+                    agent_key=hotkeys.get("agent_key"),
+                    record_mode=hotkeys.get("record_mode"),
+                )
+                self.register_hotkeys()
+            else:
+                self._persist_hotkey_preferences(hotkeys)
+
+        download_result = None
+        if result.download_request is not None:
+            request = result.download_request
+            download_result = self.download_model_with_ui(
+                model_id=request.model_id,
+                backend=request.backend,
+                cache_dir=request.cache_dir,
+                quant=request.quant,
+                reason=source,
+            )
+
+        return {"source": source, "download": download_result}
+
+    def _reconcile_after_config_update(self, changed_keys: set[str]) -> None:
+        self._apply_initial_config_to_core_attributes()
+        self.audio_handler.config_manager = self.config_manager
+        self.transcription_handler.config_manager = self.config_manager
+
+        audio_related_keys = {
+            USE_VAD_CONFIG_KEY,
+            VAD_THRESHOLD_CONFIG_KEY,
+            VAD_SILENCE_DURATION_CONFIG_KEY,
+            VAD_PRE_SPEECH_PADDING_MS_CONFIG_KEY,
+            VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
+            RECORD_STORAGE_MODE_CONFIG_KEY,
+            RECORD_STORAGE_LIMIT_CONFIG_KEY,
+            STORAGE_ROOT_DIR_CONFIG_KEY,
+            RECORDINGS_DIR_CONFIG_KEY,
+            MIN_RECORDING_DURATION_CONFIG_KEY,
+        }
+
+        if audio_related_keys & changed_keys:
+            self.audio_handler.update_config()
+
+        transcription_related = {
+            ASR_MODEL_ID_CONFIG_KEY,
+            ASR_BACKEND_CONFIG_KEY,
+            ASR_COMPUTE_DEVICE_CONFIG_KEY,
+            ASR_DTYPE_CONFIG_KEY,
+            ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            ASR_CT2_CPU_THREADS_CONFIG_KEY,
+            ASR_CACHE_DIR_CONFIG_KEY,
+            MODELS_STORAGE_DIR_CONFIG_KEY,
+        }
+
+        reload_required = bool(transcription_related & changed_keys)
+
+        try:
+            reload_needed = self.transcription_handler.update_config(trigger_reload=False)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.error(
+                "Failed to update transcription handler after onboarding: %s",
+                exc,
+                exc_info=True,
+            )
+            self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+            self._log_status(
+                "Error: unable to apply onboarding configuration to the transcription handler.",
+                error=True,
+            )
+            return
+
+        reload_required = reload_required or reload_needed
+
+        if reload_required:
+            self.state_manager.set_state(sm.STATE_LOADING_MODEL)
+            try:
+                self.transcription_handler.start_model_loading()
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.error(
+                    "Failed to trigger ASR model loading after onboarding: %s",
+                    exc,
+                    exc_info=True,
+                )
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+                self._log_status(
+                    "Error: unable to start ASR model loading after onboarding.",
+                    error=True,
+                )
+        else:
+            self.state_manager.set_state(
+                sm.StateEvent.SETTINGS_RECOVERED,
+                details="Onboarding configuration applied.",
+                source="onboarding",
+            )
+
+        if {ASR_CACHE_DIR_CONFIG_KEY, MODELS_STORAGE_DIR_CONFIG_KEY} & changed_keys:
+            self._refresh_installed_models("onboarding", raise_errors=False)
+
+    def _persist_hotkey_preferences(self, hotkeys: Mapping[str, str]) -> None:
+        target = Path(getattr(self, "hotkey_config_path", HOTKEY_CONFIG_FILE))
+        payload = {
+            "record_key": hotkeys.get("record_key", self.config_manager.get("record_key")),
+            "agent_key": hotkeys.get("agent_key", self.config_manager.get("agent_key")),
+            "record_mode": hotkeys.get("record_mode", self.config_manager.get("record_mode")),
+        }
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+            LOGGER.info("Hotkey configuration persisted to %s via onboarding.", target)
+        except Exception as exc:  # pragma: no cover - persistence best effort
+            LOGGER.warning(
+                "Failed to persist hotkey configuration at %s: %s",
+                target,
+                exc,
+            )
 
     def build_bootstrap_report(self) -> dict[str, Any]:
         """Retorna um relatório consolidado do bootstrap inicial."""
@@ -216,6 +466,29 @@ class AppCore:
         if ahk_manager is not None:
             report["hotkeys"] = ahk_manager.describe_persistence_state()
         return report
+
+    def launch_first_run_wizard(self, force: bool = False) -> None:
+        try:
+            snapshot = self.config_manager.describe_persistence_state()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "Unable to obtain persistence snapshot before launching onboarding: %s",
+                exc,
+                exc_info=True,
+            )
+            snapshot = {}
+
+        should_force = force or bool(snapshot.get("first_run"))
+
+        def _invoke() -> None:
+            outcome = self._launch_onboarding(snapshot=snapshot, force=should_force, reason="manual")
+            if outcome is not None:
+                self._last_onboarding_outcome = outcome
+
+        if threading.current_thread() is threading.main_thread():
+            _invoke()
+        else:
+            self.main_tk_root.after(0, _invoke)
 
         try:
             cache_dir = self.config_manager.get("asr_cache_dir")
@@ -253,6 +526,13 @@ class AppCore:
 
         self._cleanup_old_audio_files_on_startup()
         atexit.register(self.shutdown)
+
+    def get_last_onboarding_outcome(self) -> dict[str, Any] | None:
+        """Return a shallow copy of the most recent onboarding outcome."""
+
+        if self._last_onboarding_outcome is None:
+            return None
+        return dict(self._last_onboarding_outcome)
 
     def _resolve_model_download_timeout(self) -> float | None:
         """Return configured timeout (seconds) for ASR downloads."""
@@ -361,15 +641,23 @@ class AppCore:
                 exc_info=True,
             )
 
-    def download_model_and_reload(self, model_id, backend, cache_dir, quant):
+    def download_model_and_reload(
+        self,
+        model_id,
+        backend,
+        cache_dir,
+        quant,
+        *,
+        cancel_event: threading.Event | None = None,
+    ):
         """
         Handles the full model download and subsequent reload process.
         This method is designed to be called from a background thread started by the UI.
         It raises exceptions back to the caller thread.
         """
-        cancel_event = threading.Event()
-        self._active_model_download_event = cancel_event
-        
+        event = cancel_event or threading.Event()
+        self._active_model_download_event = event
+
         try:
             self.state_manager.set_state(sm.STATE_LOADING_MODEL)
             self._record_download_status(
@@ -382,7 +670,7 @@ class AppCore:
             ensure_kwargs = {
                 "quant": quant,
                 "timeout": self.model_download_timeout,
-                "cancel_event": cancel_event,
+                "cancel_event": event,
             }
 
             result = self.model_manager.ensure_download(
@@ -420,7 +708,7 @@ class AppCore:
                 backend,
                 message=str(e) or "Model download cancelled.",
             )
-            raise # Re-raise for the UI thread to handle
+            raise  # Re-raise for the UI thread to handle
         except Exception as e:
             LOGGER.error(f"An error occurred during model download/reload for {model_id}: {e}", exc_info=True)
             self.state_manager.set_state(sm.STATE_ERROR_MODEL)
@@ -431,9 +719,98 @@ class AppCore:
                 message="Model download failed.",
                 details=str(e),
             )
-            raise # Re-raise for the UI thread to handle
+            raise  # Re-raise for the UI thread to handle
         finally:
             self._active_model_download_event = None
+
+    def download_model_with_ui(
+        self,
+        *,
+        model_id: str,
+        backend: str,
+        cache_dir: str,
+        quant: str | None = None,
+        reason: str = "manual",
+    ) -> dict[str, Any]:
+        cancel_event = threading.Event()
+        panel = DownloadProgressPanel(
+            self.main_tk_root,
+            title="Download de Modelo",
+            message=f"Preparando download do modelo '{model_id}'.",
+            on_cancel=cancel_event.set,
+        )
+
+        result: dict[str, Any] = {"status": "pending", "error": None}
+
+        def _worker() -> None:
+            self.main_tk_root.after(
+                0, lambda: panel.update_status("Iniciando download do modelo...")
+            )
+            try:
+                self.download_model_and_reload(
+                    model_id,
+                    backend,
+                    cache_dir,
+                    quant,
+                    cancel_event=cancel_event,
+                )
+            except self._download_cancelled_error as exc:
+                result["status"] = "cancelled"
+                result["error"] = exc
+
+                def _mark_cancelled() -> None:
+                    message = str(exc).strip() or "Download cancelado."
+                    panel.mark_cancelled(message)
+
+                self.main_tk_root.after(0, _mark_cancelled)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                result["status"] = "error"
+                result["error"] = exc
+
+                def _mark_error() -> None:
+                    panel.mark_error(f"Erro durante o download: {exc}")
+
+                self.main_tk_root.after(0, _mark_error)
+            else:
+                result["status"] = "success"
+
+                def _mark_success() -> None:
+                    panel.mark_success("Download concluído com sucesso.")
+                    panel.close_after(1200)
+
+                self.main_tk_root.after(0, _mark_success)
+            finally:
+                self.main_tk_root.after(0, panel.disable_cancel)
+
+        thread = threading.Thread(target=_worker, daemon=True, name="ModelDownloadWizard")
+        panel.open()
+        thread.start()
+        panel.wait_until_closed()
+
+        if result["status"] == "success":
+            LOGGER.info(
+                "Model download completed via onboarding/menu (%s): %s (%s)",
+                reason,
+                model_id,
+                backend,
+            )
+        elif result["status"] == "cancelled":
+            LOGGER.info(
+                "Model download cancelled via onboarding/menu (%s): %s (%s)",
+                reason,
+                model_id,
+                backend,
+            )
+        elif result["status"] == "error":
+            LOGGER.error(
+                "Model download failed via onboarding/menu (%s): %s (%s) -> %s",
+                reason,
+                model_id,
+                backend,
+                result["error"],
+            )
+
+        return result
 
     def _start_model_download(
         self,
@@ -1514,6 +1891,7 @@ class AppCore:
             "new_asr_compute_device": ASR_COMPUTE_DEVICE_CONFIG_KEY,
             "new_asr_dtype": ASR_DTYPE_CONFIG_KEY,
             "new_asr_ct2_compute_type": ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
+            "new_ui_language": UI_LANGUAGE_CONFIG_KEY,
             "new_models_storage_dir": MODELS_STORAGE_DIR_CONFIG_KEY,
             "new_asr_cache_dir": ASR_CACHE_DIR_CONFIG_KEY,
             "new_storage_root_dir": STORAGE_ROOT_DIR_CONFIG_KEY,

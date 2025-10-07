@@ -726,28 +726,26 @@ class UIManager:
         try:
             compute_type_var = self._get_settings_var("asr_ct2_compute_type_var")
             quant = compute_type_var.get() if compute_type_var is not None else None
-            result = self.model_manager.ensure_download(
-                model_id,
-                backend,
-                cache_dir,
-                quant if backend == "ctranslate2" else None,
+            download_result = self.core_instance_ref.download_model_with_ui(
+                model_id=model_id,
+                backend=backend,
+                cache_dir=cache_dir,
+                quant=quant if backend == "ctranslate2" else None,
+                reason="settings",
             )
-            installed_models = self.model_manager.list_installed(cache_dir)
-            self.config_manager.set_asr_installed_models(installed_models)
-            self.config_manager.save_config()
-            self._update_model_info(model_id)
-            downloaded = bool(getattr(result, "downloaded", True))
-            message = "Download completed." if downloaded else "Model already installed."
-            messagebox.showinfo("Model", message)
-        except self._download_cancelled_error:
-            messagebox.showinfo("Model", "Download canceled.")
-        except OSError:
-            messagebox.showerror(
-                "Model",
-                "Unable to write to the ASR cache directory. Please check permissions.",
-            )
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - defensive guard
             messagebox.showerror("Model", f"Download failed: {exc}")
+            return
+
+        status = download_result.get("status")
+        if status == "success":
+            self._update_model_info(model_id)
+            messagebox.showinfo("Model", "Download completed.")
+        elif status == "cancelled":
+            messagebox.showinfo("Model", "Download canceled.")
+        elif status == "error":
+            message = download_result.get("error") or "Unknown error"
+            messagebox.showerror("Model", f"Download failed: {message}")
 
     def _reload_current_model(self) -> None:
         handler = getattr(self.core_instance_ref, "transcription_handler", None)
@@ -1643,8 +1641,6 @@ class UIManager:
                 )
                 return
 
-            download_cancelled_error = self._download_cancelled_error
-
             try:
                 size_bytes, file_count = model_manager.get_model_download_size(model_id)
                 size_gb = size_bytes / (1024 ** 3)
@@ -1659,28 +1655,26 @@ class UIManager:
                 return
 
             try:
-                result = model_manager.ensure_download(
-                    model_id,
-                    backend,
-                    cache_dir,
-                    asr_ct2_compute_type_var.get() if backend == "ctranslate2" else None,
+                download_result = self.core_instance_ref.download_model_with_ui(
+                    model_id=model_id,
+                    backend=backend,
+                    cache_dir=cache_dir,
+                    quant=asr_ct2_compute_type_var.get() if backend == "ctranslate2" else None,
+                    reason="settings",
                 )
-                installed_models = model_manager.list_installed(cache_dir)
-                self.config_manager.set_asr_installed_models(installed_models)
-                self.config_manager.save_config()
-                _update_model_info(model_id)
-                downloaded = bool(getattr(result, "downloaded", True))
-                message = "Download completed." if downloaded else "Model already installed."
-                messagebox.showinfo("Model", message)
-            except download_cancelled_error:
-                messagebox.showinfo("Model", "Download canceled.")
-            except OSError:
-                messagebox.showerror(
-                    "Model",
-                    "Unable to write to the ASR cache directory. Please check permissions.",
-                )
-            except Exception as e:
+            except Exception as e:  # pragma: no cover - defensive guard
                 messagebox.showerror("Model", f"Download failed: {e}")
+                return
+
+            status = download_result.get("status")
+            if status == "success":
+                _update_model_info(model_id)
+                messagebox.showinfo("Model", "Download completed.")
+            elif status == "cancelled":
+                messagebox.showinfo("Model", "Download canceled.")
+            elif status == "error":
+                message = download_result.get("error") or "Unknown error"
+                messagebox.showerror("Model", f"Download failed: {message}")
 
         def _reload_model():
             handler = getattr(self.core_instance_ref, "transcription_handler", None)
@@ -3215,6 +3209,13 @@ class UIManager:
             pystray.MenuItem(
                 '\u2699\ufe0f Configurações',
                 lambda icon, item: self.main_tk_root.after(0, self.run_settings_gui),
+                enabled=lambda item: self._get_core_state() not in ['LOADING_MODEL', 'RECORDING']
+            ),
+            pystray.MenuItem(
+                '\U0001f9ed Assistente Inicial',
+                lambda icon, item: self.main_tk_root.after(
+                    0, lambda: self.core_instance_ref.launch_first_run_wizard(force=True)
+                ),
                 enabled=lambda item: self._get_core_state() not in ['LOADING_MODEL', 'RECORDING']
             ),
             pystray.MenuItem(
