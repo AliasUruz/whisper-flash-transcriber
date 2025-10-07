@@ -33,6 +33,7 @@ from .config_manager import (
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
+    OPENROUTER_MAX_ATTEMPTS_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
     SERVICE_NONE,
@@ -239,10 +240,19 @@ class TranscriptionHandler:
                     OPENROUTER_TIMEOUT_CONFIG_KEY,
                     OpenRouterAPI.DEFAULT_TIMEOUT,
                 )
+                default_attempts = self.config_manager.default_config.get(
+                    OPENROUTER_MAX_ATTEMPTS_CONFIG_KEY,
+                    3,
+                )
+                openrouter_max_attempts = self.config_manager.get_retry_attempts(
+                    OPENROUTER_MAX_ATTEMPTS_CONFIG_KEY,
+                    default_attempts,
+                )
                 self.openrouter_client = OpenRouterAPI(
                     api_key=self.openrouter_api_key,
                     model_id=self.openrouter_model,
                     request_timeout=openrouter_timeout,
+                    max_attempts=openrouter_max_attempts,
                 )
                 self.openrouter_api = self.openrouter_client
                 logging.info("OpenRouter API client initialized.")

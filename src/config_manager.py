@@ -117,7 +117,9 @@ DEFAULT_CONFIG = {
     "gemini_model": "gemini-2.5-flash-lite",
     "gemini_agent_model": "gemini-2.5-flash-lite",
     "openrouter_timeout": 30,
+    "openrouter_max_attempts": 3,
     "gemini_timeout": 120,
+    "gemini_max_attempts": 3,
     "ai_provider": "gemini",
     "openrouter_prompt": "",
     "prompt_agentico": (
@@ -255,12 +257,14 @@ SERVICE_GEMINI = "gemini"
 OPENROUTER_API_KEY_CONFIG_KEY = "openrouter_api_key"
 OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 OPENROUTER_TIMEOUT_CONFIG_KEY = "openrouter_timeout"
+OPENROUTER_MAX_ATTEMPTS_CONFIG_KEY = "openrouter_max_attempts"
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
 GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 # Novas constantes de timeout de APIs externas
 GEMINI_TIMEOUT_CONFIG_KEY = "gemini_timeout"
+GEMINI_MAX_ATTEMPTS_CONFIG_KEY = "gemini_max_attempts"
 # Novas constantes para otimizações de desempenho
 CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
 AI_PROVIDER_CONFIG_KEY = TEXT_CORRECTION_SERVICE_CONFIG_KEY
@@ -396,6 +400,7 @@ class ConfigManager:
         self._config_hash = None
         self._secrets_hash = None
         self._invalid_timeout_cache: dict[str, Any] = {}
+        self._invalid_retry_cache: dict[str, Any] = {}
         self._config_existed_on_boot = config_existed
         self._bootstrap_state: dict[str, dict[str, Any]] = {
             "config": {
@@ -2144,6 +2149,29 @@ class ConfigManager:
             if key in self._invalid_timeout_cache:
                 self._invalid_timeout_cache.pop(key, None)
             return timeout_value
+
+    def get_retry_attempts(self, key: str, default: int) -> int:
+        """Retorna o número máximo de tentativas configurado para a chave."""
+        value = self.get(key, default)
+        try:
+            attempts = int(value)
+            if attempts <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            cached_value = self._invalid_retry_cache.get(key)
+            if value != cached_value:
+                logging.warning(
+                    "Invalid retry attempts '%s' for key '%s'; using default %s attempts.",
+                    value,
+                    key,
+                    int(default),
+                )
+                self._invalid_retry_cache[key] = value
+            return int(default)
+        else:
+            if key in self._invalid_retry_cache:
+                self._invalid_retry_cache.pop(key, None)
+            return attempts
 
     def set(self, key, value):
         if key == ASR_BACKEND_CONFIG_KEY:
