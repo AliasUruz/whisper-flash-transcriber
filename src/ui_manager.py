@@ -30,6 +30,7 @@ from .config_manager import (
     GEMINI_PROMPT_CONFIG_KEY,
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+    TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
@@ -968,6 +969,7 @@ class UIManager:
             "gemini_prompt_correction_textbox",
             "agentico_prompt_textbox",
             "gemini_models_textbox",
+            "text_correction_timeout_entry",
         ]:
             widget = self._get_settings_var(widget_name)
             if widget is None:
@@ -1235,6 +1237,7 @@ class UIManager:
         sound_volume_var = _var("sound_volume_var")
         text_correction_enabled_var = _var("text_correction_enabled_var")
         text_correction_service_var = _var("text_correction_service_var")
+        text_correction_timeout_var = _var("text_correction_timeout_var")
         openrouter_api_key_var = _var("openrouter_api_key_var")
         openrouter_model_var = _var("openrouter_model_var")
         gemini_api_key_var = _var("gemini_api_key_var")
@@ -1310,6 +1313,24 @@ class UIManager:
         agentico_prompt_to_apply = (
             agentico_prompt_textbox.get("1.0", "end-1c") if agentico_prompt_textbox else self.config_manager.get("prompt_agentico")
         )
+
+        text_correction_timeout_to_apply = DEFAULT_CONFIG[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+        if text_correction_timeout_var is not None:
+            timeout_candidate = self._safe_get_float(
+                text_correction_timeout_var,
+                "Tempo limite da correção",
+                settings_win,
+            )
+            if timeout_candidate is None:
+                return
+            if timeout_candidate <= 0:
+                messagebox.showerror(
+                    "Valor inválido",
+                    "O tempo limite da correção deve ser um número positivo.",
+                    parent=settings_win,
+                )
+                return
+            text_correction_timeout_to_apply = timeout_candidate
 
         batch_size_to_apply = self._safe_get_int(batch_size_var, "Batch Size", settings_win)
         if batch_size_to_apply is None:
@@ -1536,6 +1557,7 @@ class UIManager:
             new_agent_key=agent_key_to_apply,
             new_text_correction_enabled=text_correction_enabled_to_apply,
             new_text_correction_service=text_correction_service_to_apply,
+            new_text_correction_timeout=text_correction_timeout_to_apply,
             new_openrouter_api_key=openrouter_api_key_to_apply,
             new_openrouter_model=openrouter_model_to_apply,
             new_gemini_api_key=gemini_api_key_to_apply,
@@ -3531,6 +3553,21 @@ class UIManager:
                     )
                 )
 
+                text_correction_timeout_value = self._resolve_initial_value(
+                    TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+                    var_name="text_correction_timeout",
+                    coerce=lambda v: float(v),
+                )
+                try:
+                    text_correction_timeout_value = float(text_correction_timeout_value)
+                except Exception:
+                    text_correction_timeout_value = float(
+                        DEFAULT_CONFIG[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+                    )
+                text_correction_timeout_var = ctk.StringVar(
+                    value=str(text_correction_timeout_value)
+                )
+
                 openrouter_api_key_var = ctk.StringVar(
                     value=self._resolve_initial_value(
                         OPENROUTER_API_KEY_CONFIG_KEY,
@@ -3745,6 +3782,7 @@ class UIManager:
                     ("text_correction_enabled_var", text_correction_enabled_var),
                     ("text_correction_service_var", text_correction_service_var),
                     ("text_correction_service_label_var", text_correction_service_label_var),
+                    ("text_correction_timeout_var", text_correction_timeout_var),
                     ("openrouter_api_key_var", openrouter_api_key_var),
                     ("openrouter_model_var", openrouter_model_var),
                     ("gemini_api_key_var", gemini_api_key_var),
@@ -3962,6 +4000,7 @@ class UIManager:
                             "new_agent_key": agent_key_to_apply,
                             "new_text_correction_enabled": text_correction_enabled_to_apply,
                             "new_text_correction_service": text_correction_service_to_apply,
+                            "new_text_correction_timeout": text_correction_timeout_to_apply,
                             "new_openrouter_api_key": openrouter_api_key_to_apply,
                             "new_openrouter_model": openrouter_model_to_apply,
                             "new_gemini_api_key": gemini_api_key_to_apply,
@@ -4039,6 +4078,9 @@ class UIManager:
                             ),
                             "None",
                         )
+                    )
+                    text_correction_timeout_var.set(
+                        str(DEFAULT_CONFIG[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY])
                     )
                     # Sincroniza os campos de correção de texto caso os widgets existam
                     try:
@@ -4334,6 +4376,25 @@ class UIManager:
                 self._set_settings_var("service_menu", service_menu)
                 Tooltip(service_menu, "Selecione o serviço de correção de texto.")
                 service_menu.set(text_correction_service_label_var.get())
+
+                correction_timeout_frame = ctk.CTkFrame(ai_frame)
+                correction_timeout_frame.pack(fill="x", pady=5)
+                _register_advanced(correction_timeout_frame, fill="x", pady=5)
+                ctk.CTkLabel(
+                    correction_timeout_frame,
+                    text="Tempo limite da correção (s):",
+                ).pack(side="left", padx=(5, 10))
+                text_correction_timeout_entry = ctk.CTkEntry(
+                    correction_timeout_frame,
+                    textvariable=text_correction_timeout_var,
+                    width=80,
+                )
+                text_correction_timeout_entry.pack(side="left", padx=5)
+                self._set_settings_var("text_correction_timeout_entry", text_correction_timeout_entry)
+                Tooltip(
+                    text_correction_timeout_entry,
+                    "Tempo máximo para aguardar a correção antes de usar o texto bruto.",
+                )
 
                 # --- OpenRouter Settings ---
                 openrouter_frame = ctk.CTkFrame(ai_frame)

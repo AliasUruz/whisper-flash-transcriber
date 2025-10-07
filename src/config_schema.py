@@ -208,6 +208,8 @@ class AdvancedAIConfig(BaseModel):
     gemini_agent_model: str = "gemini-2.5-flash-lite"
     openrouter_timeout: int = Field(default=30, ge=1)
     gemini_timeout: int = Field(default=120, ge=1)
+    text_correction_timeout: float = Field(default=15.0, gt=0.0)
+    ai_provider: str = "gemini"
     openrouter_prompt: str = ""
     prompt_agentico: str = (
         "You are an AI assistant that executes text commands. "

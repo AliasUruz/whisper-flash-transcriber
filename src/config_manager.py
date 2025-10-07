@@ -128,7 +128,7 @@ DEFAULT_CONFIG = {
     "openrouter_timeout": 30,
     "openrouter_max_attempts": 3,
     "gemini_timeout": 120,
-    "gemini_max_attempts": 3,
+    "text_correction_timeout": 15,
     "ai_provider": "gemini",
     "openrouter_prompt": "",
     "prompt_agentico": (
@@ -259,6 +259,7 @@ KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
 TEXT_CORRECTION_ENABLED_CONFIG_KEY = "text_correction_enabled"
 TEXT_CORRECTION_SERVICE_CONFIG_KEY = "text_correction_service"
+TEXT_CORRECTION_TIMEOUT_CONFIG_KEY = "text_correction_timeout"
 ENABLE_AI_CORRECTION_CONFIG_KEY = TEXT_CORRECTION_ENABLED_CONFIG_KEY
 AUTO_PASTE_MODIFIER_CONFIG_KEY = "auto_paste_modifier"
 SERVICE_NONE = "none"
