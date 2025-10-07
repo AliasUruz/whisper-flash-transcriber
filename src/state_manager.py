@@ -4,7 +4,7 @@ This file will contain the StateManager class and related state management logic
 from threading import RLock
 from dataclasses import dataclass
 from enum import Enum, auto, unique
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 
 from .logging_utils import get_logger, log_context, log_duration
 
@@ -60,6 +60,8 @@ class StateEvent(Enum):
     SETTINGS_REREGISTER_FAILED = auto()
     SETTINGS_RECOVERED = auto()  # Hotkeys se recuperaram e voltaram a operar
     DEPENDENCY_AUDIT_READY = auto()
+    TEXT_CORRECTION_BREAKER_TRIPPED = auto()
+    TEXT_CORRECTION_BREAKER_RESET = auto()
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class StateNotification:
     previous_state: str | None = None
     details: object | None = None
     source: str | None = None
+    operation_id: str | None = None
 
 
 STATE_FOR_EVENT: dict[StateEvent, str] = {
@@ -99,6 +102,8 @@ STATE_FOR_EVENT: dict[StateEvent, str] = {
     StateEvent.SETTINGS_REREGISTER_FAILED: STATE_ERROR_SETTINGS,
     StateEvent.SETTINGS_RECOVERED: STATE_IDLE,
     StateEvent.DEPENDENCY_AUDIT_READY: STATE_LOADING_MODEL,
+    StateEvent.TEXT_CORRECTION_BREAKER_TRIPPED: STATE_IDLE,
+    StateEvent.TEXT_CORRECTION_BREAKER_RESET: STATE_IDLE,
 }
 
 
@@ -128,6 +133,8 @@ EVENT_DEFAULT_DETAILS: dict[StateEvent, str] = {
     StateEvent.SETTINGS_REREGISTER_FAILED: "Hotkey re-registration failed",
     StateEvent.SETTINGS_RECOVERED: "Recovered stable hotkey registration",
     StateEvent.DEPENDENCY_AUDIT_READY: "Dependency audit completed",
+    StateEvent.TEXT_CORRECTION_BREAKER_TRIPPED: "Text correction provider temporarily disabled",
+    StateEvent.TEXT_CORRECTION_BREAKER_RESET: "Text correction provider restored",
 }
 
 
@@ -178,6 +185,7 @@ class StateManager:
             details={
                 "state": notification.state,
                 "event_name": event_name,
+                "operation_id": notification.operation_id,
             },
         ) as log_details:
             log_details["subscriber_count"] = len(self._subscribers)
@@ -203,19 +211,14 @@ class StateManager:
             if had_errors:
                 log_details["status"] = "partial"
 
-    def set_state(
+    def _resolve_transition(
         self,
         event: StateEvent | str,
-        *,
-        details: object | None = None,
-        source: str | None = None,
-    ):
-        """Applies a state transition and notifies subscribers."""
+        detail_payload: object | None,
+    ) -> tuple[StateEvent | None, str, str | None, object | None]:
         event_obj: StateEvent | None
         mapped_state: str
         message: str | None
-
-        detail_payload = details
 
         if isinstance(event, StateEvent):
             event_obj = event
@@ -240,32 +243,53 @@ class StateManager:
         else:
             raise ValueError(f"Unsupported state event payload: {event!r}")
 
-        with self._state_lock:
-            previous_state = self._current_state
-            last_event = self._last_notification.event if self._last_notification else None
-            last_state = self._last_notification.state if self._last_notification else None
-            if last_event == event_obj and last_state == mapped_state:
-                self._logger.debug(
-                    log_context(
-                        "Duplicate state notification suppressed.",
-                        event="state.duplicate_suppressed",
-                        state=mapped_state,
-                        event_name=event_obj.name if event_obj else None,
-                        source=source,
-                    )
+        return event_obj, mapped_state, message, detail_payload
+
+    def _apply_transition_locked(
+        self,
+        *,
+        event_obj: StateEvent | None,
+        mapped_state: str,
+        detail_payload: object | None,
+        message: str | None,
+        source: str | None,
+    ) -> tuple[StateNotification, str] | None:
+        previous_state = self._current_state
+        last_event = self._last_notification.event if self._last_notification else None
+        last_state = self._last_notification.state if self._last_notification else None
+        if last_event == event_obj and last_state == mapped_state:
+            self._logger.debug(
+                log_context(
+                    "Duplicate state notification suppressed.",
+                    event="state.duplicate_suppressed",
+                    state=mapped_state,
+                    event_name=event_obj.name if event_obj else None,
+                    source=source,
                 )
-                return
-
-            notification = StateNotification(
-                event=event_obj,
-                state=mapped_state,
-                previous_state=previous_state,
-                details=detail_payload if detail_payload is not None else message,
-                source=source,
             )
-            self._current_state = mapped_state
-            self._last_notification = notification
+            return None
 
+        notification = StateNotification(
+            event=event_obj,
+            state=mapped_state,
+            previous_state=previous_state,
+            details=detail_payload if detail_payload is not None else message,
+            source=source,
+        )
+        self._current_state = mapped_state
+        self._last_notification = notification
+        return notification, previous_state
+
+    def _emit_transition(
+        self,
+        notification: StateNotification,
+        *,
+        previous_state: str,
+        event_obj: StateEvent | None,
+        mapped_state: str,
+        message: str | None,
+        source: str | None,
+    ) -> None:
         origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
         self._logger.info(
             log_context(
@@ -276,10 +300,138 @@ class StateManager:
                 origin=origin_label,
                 message=message,
                 source=source,
+                operation_id=operation_id,
             )
         )
-
         self._notify_subscribers(notification)
+
+    def set_state(
+        self,
+        event: StateEvent | str,
+        *,
+        details: object | None = None,
+        source: str | None = None,
+    ):
+        """Applies a state transition and notifies subscribers."""
+
+        event_obj, mapped_state, message, detail_payload = self._resolve_transition(event, details)
+
+        with self._state_lock:
+            result = self._apply_transition_locked(
+                event_obj=event_obj,
+                mapped_state=mapped_state,
+                detail_payload=detail_payload,
+                message=message,
+                source=source,
+            )
+            if result is None:
+                return
+            notification, previous_state = result
+
+        self._emit_transition(
+            notification,
+            previous_state=previous_state,
+            event_obj=event_obj,
+            mapped_state=mapped_state,
+            message=message,
+            source=source,
+        )
+
+    def _normalize_expected_states(
+        self,
+        expected_state: str | StateEvent | Iterable[str | StateEvent],
+    ) -> set[str]:
+        if isinstance(expected_state, StateEvent):
+            return {STATE_FOR_EVENT[expected_state]}
+        if isinstance(expected_state, str):
+            normalized = expected_state.strip().upper()
+            if not normalized:
+                raise ValueError("expected_state must not be empty")
+            return {normalized}
+
+        try:
+            candidates = list(expected_state)
+        except TypeError as exc:  # pragma: no cover - defensive path
+            raise TypeError(
+                "expected_state must be a state string, StateEvent, or iterable of them."
+            ) from exc
+
+        normalized_states: set[str] = set()
+        for candidate in candidates:
+            if isinstance(candidate, StateEvent):
+                normalized_states.add(STATE_FOR_EVENT[candidate])
+            elif isinstance(candidate, str):
+                normalized = candidate.strip().upper()
+                if normalized:
+                    normalized_states.add(normalized)
+            elif candidate is None:
+                continue
+            else:
+                text = str(candidate).strip().upper()
+                if text:
+                    normalized_states.add(text)
+
+        if not normalized_states:
+            raise ValueError("expected_state must resolve to at least one state value")
+
+        return normalized_states
+
+    def transition_if(
+        self,
+        expected_state: str | StateEvent | Iterable[str | StateEvent],
+        event: StateEvent | str,
+        *,
+        details: object | None = None,
+        source: str | None = None,
+    ) -> bool:
+        """Conditionally apply a transition when the current state matches ``expected_state``.
+
+        This helper should be used by code paths where multiple threads may signal
+        competing transitions (for example, hotkey handlers racing against audio or
+        transcription workers). By guarding the transition with the expected
+        current state we avoid reverting a newer state and reduce race-condition
+        windows when coordinating long-running operations.
+        """
+
+        event_obj, mapped_state, message, detail_payload = self._resolve_transition(event, details)
+        expected_states = self._normalize_expected_states(expected_state)
+
+        with self._state_lock:
+            current_state = self._current_state
+            if current_state not in expected_states:
+                self._logger.debug(
+                    log_context(
+                        "State transition guard rejected request.",
+                        event="state.transition_guard_blocked",
+                        expected_states=sorted(expected_states),
+                        current_state=current_state,
+                        requested_state=mapped_state,
+                        requested_event=event_obj.name if event_obj else None,
+                        source=source,
+                    )
+                )
+                return False
+
+            result = self._apply_transition_locked(
+                event_obj=event_obj,
+                mapped_state=mapped_state,
+                detail_payload=detail_payload,
+                message=message,
+                source=source,
+            )
+            if result is None:
+                return True
+            notification, previous_state = result
+
+        self._emit_transition(
+            notification,
+            previous_state=previous_state,
+            event_obj=event_obj,
+            mapped_state=mapped_state,
+            message=message,
+            source=source,
+        )
+        return True
 
     def get_current_state(self) -> str:
         """Returns the current state."""

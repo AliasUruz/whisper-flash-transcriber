@@ -1,16 +1,23 @@
+import builtins
+import tempfile
 import unittest
-from collections import deque
+from collections.abc import Mapping
+from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
+if not hasattr(builtins, "Mapping"):
+    builtins.Mapping = Mapping
+
 try:
     from src.vad_manager import VADManager
+    from src.keyboard_hotkey_manager import KeyboardHotkeyManager
 except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
     from src.vad_manager import VADManager
+    from src.keyboard_hotkey_manager import KeyboardHotkeyManager
 
 
 class DummyConfigManager:
@@ -197,6 +204,221 @@ class TestVADPipeline(unittest.TestCase):
         self.assertEqual(prepared.dtype, np.float32)
         self.assertTrue(prepared.flags["C_CONTIGUOUS"])
         self.assertGreaterEqual(peak, 0.0)
+
+
+class ImmediateThread:
+    def __init__(self, *_, target=None, **__):
+        self._target = target
+
+    def start(self):
+        if self._target:
+            self._target()
+
+
+class TestHotkeyDebounce(unittest.TestCase):
+    def test_toggle_hotkey_respects_debounce_window(self):
+        events: list[str] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = KeyboardHotkeyManager(config_file=Path(tmpdir) / "hotkey.json")
+            manager.set_callbacks(toggle=lambda: events.append("toggle"))
+            manager.set_debounce_window(200)
+
+            with mock.patch("src.keyboard_hotkey_manager.threading.Thread", new=ImmediateThread):
+                with mock.patch(
+                    "src.keyboard_hotkey_manager.time.perf_counter",
+                    side_effect=[1.0, 1.15, 1.41],
+                ):
+                    manager._on_toggle_key()
+                    manager._on_toggle_key()
+                    manager._on_toggle_key()
+
+        self.assertEqual(events, ["toggle", "toggle"])
+        self.assertIn("toggle", manager._last_trigger_ts)
+        self.assertGreaterEqual(manager._last_trigger_ts["toggle"], 0.0)
+
+    def test_agent_hotkey_without_debounce_triggers_every_time(self):
+        events: list[str] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = KeyboardHotkeyManager(config_file=Path(tmpdir) / "hotkey.json")
+            manager.set_callbacks(agent=lambda: events.append("agent"))
+            manager.set_debounce_window(0)
+
+            with mock.patch("src.keyboard_hotkey_manager.threading.Thread", new=ImmediateThread):
+                with mock.patch(
+                    "src.keyboard_hotkey_manager.time.perf_counter",
+                    side_effect=[5.0, 5.05],
+                ):
+                    manager._on_agent_key()
+                    manager._on_agent_key()
+
+        self.assertEqual(events, ["agent", "agent"])
+
+
+class TestConfigMigration(unittest.TestCase):
+    def test_legacy_record_to_memory_key_is_migrated(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.json"
+            config_path.write_text(json.dumps({"record_to_memory": True}), encoding="utf-8")
+
+            with isolated_config_environment(tmp_dir) as config_module:
+                manager = config_module.ConfigManager(config_file=str(config_path))
+
+                self.assertEqual(manager.config.get("record_storage_mode"), "memory")
+                self.assertNotIn("record_to_memory", manager.config)
+
+                persisted_text = config_path.read_text(encoding="utf-8")
+                self.assertNotIn("record_to_memory", persisted_text)
+
+                persisted = json.loads(persisted_text)
+                storage_settings = (
+                    persisted.get("advanced", {})
+                    .get("storage", {})
+                    .get("record_storage_mode")
+                )
+                self.assertEqual(storage_settings, "memory")
+
+    def test_directory_paths_are_materialized_during_load(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            profile_dir = Path(tmp_dir) / "profile"
+            profile_dir.mkdir()
+            config_path = profile_dir / "config.json"
+
+            storage_root = Path(tmp_dir) / "legacy_storage"
+            payload = {
+                "record_to_memory": False,
+                "storage_root_dir": str(storage_root / "root"),
+                "models_storage_dir": str(storage_root / "root" / "models"),
+                "recordings_dir": str(storage_root / "recordings"),
+                "deps_install_dir": str(storage_root / "deps"),
+            }
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with isolated_config_environment(str(profile_dir)) as config_module:
+                manager = config_module.ConfigManager(config_file=str(config_path))
+
+                storage_root_path = Path(manager.config["storage_root_dir"])
+                models_path = Path(manager.config["models_storage_dir"])
+                recordings_path = Path(manager.config["recordings_dir"])
+                deps_path = Path(manager.config["deps_install_dir"])
+
+                for path in (storage_root_path, models_path, recordings_path, deps_path):
+                    resolved = path.resolve()
+                    self.assertTrue(resolved.exists())
+                    self.assertTrue(resolved.is_dir())
+
+                self.assertEqual(
+                    storage_root_path,
+                    (storage_root / "root").resolve(),
+                )
+
+                self.assertEqual(manager.config.get("record_storage_mode"), "disk")
+                self.assertNotIn("record_to_memory", manager.config)
+
+    def test_legacy_config_file_is_migrated_to_profile_directory(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            legacy_dir = Path(tmp_dir) / "legacy"
+            profile_dir = Path(tmp_dir) / "profile"
+            legacy_dir.mkdir()
+            profile_dir.mkdir()
+
+            legacy_config = legacy_dir / "config.json"
+            legacy_config.write_text(json.dumps({"record_to_memory": True}), encoding="utf-8")
+
+            with isolated_config_environment(
+                str(profile_dir), working_dir=str(legacy_dir)
+            ) as config_module:
+                manager = config_module.ConfigManager()
+                expected_profile_config = profile_dir / "config.json"
+
+                self.assertTrue(expected_profile_config.exists())
+                self.assertFalse(legacy_config.exists())
+                self.assertEqual(
+                    Path(manager.config_file).resolve(), expected_profile_config.resolve()
+                )
+                self.assertEqual(manager.config.get("record_storage_mode"), "memory")
+                self.assertNotIn("record_to_memory", manager.config)
+                self.assertNotIn(
+                    "record_to_memory",
+                    expected_profile_config.read_text(encoding="utf-8"),
+                )
+
+
+class TestKeyboardHotkeys(unittest.TestCase):
+    def setUp(self):
+        self.keyboard_mock = mock.Mock()
+        self.keyboard_patch = mock.patch(
+            "src.keyboard_hotkey_manager.keyboard",
+            self.keyboard_mock,
+        )
+        self.keyboard_patch.start()
+        self.addCleanup(self.keyboard_patch.stop)
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.config_path = Path(self.temp_dir.name) / "hotkeys.json"
+
+    def _create_manager(self):
+        return KeyboardHotkeyManager(config_file=self.config_path)
+
+    def test_stop_clears_hotkey_state(self):
+        manager = self._create_manager()
+        manager.is_running = True
+        manager.hotkey_handlers = {
+            "record:press": ["handle-1", "handle-2"],
+            "agent:press": ["handle-3"],
+        }
+
+        manager.stop()
+
+        self.assertEqual(
+            self.keyboard_mock.unhook.call_args_list,
+            [
+                mock.call("handle-1"),
+                mock.call("handle-2"),
+                mock.call("handle-3"),
+            ],
+        )
+        self.assertEqual(manager.hotkey_handlers, {})
+        self.assertFalse(manager.is_running)
+
+    def test_restart_debounces_and_restarts_handlers(self):
+        manager = self._create_manager()
+        manager.is_running = True
+        manager.hotkey_handlers = {"record:press": ["handle-1"]}
+
+        call_order: list[str] = []
+        original_stop = manager.stop
+
+        def stop_side_effect():
+            call_order.append("stop")
+            return original_stop()
+
+        def start_side_effect():
+            call_order.append("start")
+            manager.is_running = True
+            manager.hotkey_handlers = {"record:press": ["new-handle"]}
+            return True
+
+        with mock.patch.object(manager, "stop", side_effect=stop_side_effect) as mock_stop:
+            with mock.patch.object(manager, "start", side_effect=start_side_effect) as mock_start:
+                with mock.patch("src.keyboard_hotkey_manager.time.sleep") as mock_sleep:
+                    mock_sleep.side_effect = lambda duration: call_order.append(f"sleep:{duration}")
+                    result = manager.restart()
+
+        self.assertTrue(result)
+        self.assertEqual(call_order, ["stop", "sleep:0.5", "sleep:0.5", "start"])
+        mock_stop.assert_called_once()
+        mock_start.assert_called_once()
+        self.assertEqual(
+            mock_sleep.call_args_list,
+            [mock.call(0.5), mock.call(0.5)],
+        )
+        self.assertEqual(
+            self.keyboard_mock.unhook.call_args_list,
+            [mock.call("handle-1")],
+        )
+        self.assertIn("record:press", manager.hotkey_handlers)
+        self.assertNotIn("handle-1", manager.hotkey_handlers["record:press"])
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - runtime fallback when pystray is missi
 from PIL import Image, ImageDraw
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
 # Importar constantes de configuração
 from .config_manager import (
@@ -30,6 +30,7 @@ from .config_manager import (
     GEMINI_PROMPT_CONFIG_KEY,
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+    TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
@@ -56,6 +57,7 @@ from .utils.tooltip import Tooltip
 from .logging_utils import StructuredMessage, get_log_directory
 from .state_manager import StateEvent
 from .utils.dependency_audit import DependencyAuditResult, DependencyIssue
+from .app_identity import APP_DISPLAY_NAME, APP_ID
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -144,8 +146,19 @@ def _backend_display_value_global(value: str | None) -> str:
         return "ctranslate2"
     return normalized
 
+SETTINGS_WINDOW_TITLE = f"{APP_DISPLAY_NAME} Settings"
+
+
 class UIManager:
-    def __init__(self, main_tk_root, config_manager, core_instance_ref, model_manager=None):
+    def __init__(
+        self,
+        main_tk_root,
+        config_manager,
+        core_instance_ref,
+        model_manager=None,
+        *,
+        is_running_as_admin: bool = False,
+    ):
         self.main_tk_root = main_tk_root
         self.config_manager = config_manager
         self.core_instance_ref = core_instance_ref # Reference to the AppCore instance
@@ -181,6 +194,9 @@ class UIManager:
         self._download_snapshot: list[dict[str, Any]] = []
         self._download_history: list[dict[str, Any]] = []
 
+        self.is_running_as_admin = bool(is_running_as_admin)
+        self._is_windows = sys.platform.startswith("win")
+
 
         # Assign methods to the instance
         self.show_live_transcription_window = self._show_live_transcription_window
@@ -203,6 +219,9 @@ class UIManager:
 
         # Controle interno para atualizar a tooltip durante a gravação
         self.recording_timer_thread = None
+
+    def _should_warn_about_elevation(self) -> bool:
+        return self._is_windows and not self.is_running_as_admin
         self.stop_recording_timer_event = threading.Event()
 
         # Controle interno para atualizar a tooltip durante a transcrição
@@ -241,6 +260,50 @@ class UIManager:
     def _set_settings_var(self, name: str, value: Any) -> None:
         self._settings_vars[name] = value
 
+    def _format_hotkey_driver_status_text(self, driver_info: Mapping[str, Any] | None) -> str:
+        if not driver_info:
+            return "Driver de atalhos inativo."
+
+        active = driver_info.get("active")
+        fallback = bool(driver_info.get("fallback_active"))
+        available = [str(item) for item in driver_info.get("available", []) if item]
+
+        if active:
+            if fallback:
+                status = f"Driver de atalhos ativo (fallback): {active}."
+            else:
+                status = f"Driver de atalhos ativo: {active}."
+        else:
+            status = "Driver de atalhos inativo."
+
+        if available:
+            status += f" Disponíveis: {', '.join(available)}."
+
+        failures = driver_info.get("failures") or []
+        if failures:
+            last = failures[-1]
+            reason = last.get("reason")
+            error = last.get("error")
+            details: list[str] = []
+            if reason:
+                details.append(str(reason))
+            if error:
+                details.append(str(error))
+            if details:
+                status += f" Último erro: {' - '.join(details)}."
+
+        return status
+
+    def update_hotkey_driver_status(self, driver_info: Mapping[str, Any] | None) -> None:
+        text = self._format_hotkey_driver_status_text(driver_info)
+        self._hotkey_driver_status_text = text
+        var = self._get_settings_var("hotkey_driver_status_var")
+        if var is not None:
+            try:
+                var.set(text)
+            except Exception:  # pragma: no cover - defensive UI guard
+                logging.debug("Failed to update hotkey driver status label.", exc_info=True)
+
     def _get_settings_var(self, name: str) -> Any:
         return self._settings_vars.get(name)
 
@@ -249,6 +312,82 @@ class UIManager:
 
     def _get_settings_meta(self, name: str, default: Any = None) -> Any:
         return self._settings_meta.get(name, default)
+
+    def _get_advanced_registry(self) -> list[tuple[Any, dict[str, Any]]]:
+        registry = self._get_settings_meta("_advanced_blocks")
+        if registry is None:
+            registry = []
+            self._set_settings_meta("_advanced_blocks", registry)
+        return registry
+
+    def _register_advanced_block(self, widget: Any, **pack_kwargs: Any) -> None:
+        registry = self._get_advanced_registry()
+        registry.append((widget, pack_kwargs))
+        if self._get_settings_meta("show_advanced_active", False):
+            widget.pack(**pack_kwargs)
+
+    def _register_advanced_visibility_callback(
+        self, callback: Callable[[bool], None]
+    ) -> None:
+        callbacks = self._get_settings_meta("_advanced_callbacks")
+        if callbacks is None:
+            callbacks = []
+            self._set_settings_meta("_advanced_callbacks", callbacks)
+        callbacks.append(callback)
+
+    def _set_global_advanced_visibility(
+        self, show: bool, *, persist: bool = True
+    ) -> None:
+        show = bool(show)
+        current = bool(self._get_settings_meta("show_advanced_active", False))
+        if show == current and not persist:
+            return
+
+        self._set_settings_meta("show_advanced_active", show)
+
+        var = self._get_settings_var("show_advanced_var")
+        if var is not None:
+            try:
+                var.set(show)
+            except Exception:
+                logging.debug("Failed to update show_advanced_var state.", exc_info=True)
+
+        for widget, kwargs in list(self._get_advanced_registry()):
+            try:
+                widget.pack_forget()
+            except Exception:
+                pass
+            if show:
+                try:
+                    widget.pack(**kwargs)
+                except Exception:
+                    logging.debug(
+                        "Failed to pack advanced widget %s", widget, exc_info=True
+                    )
+
+        for callback in list(self._get_settings_meta("_advanced_callbacks", [])):
+            try:
+                callback(show)
+            except Exception:
+                logging.debug(
+                    "Advanced visibility callback failed.", exc_info=True
+                )
+
+        if not persist:
+            return
+
+        core = getattr(self, "core_instance_ref", None)
+        try:
+            if core is not None:
+                core.update_setting("show_advanced", show)
+            else:
+                self.config_manager.set("show_advanced", show)
+                self.config_manager.save_config()
+        except Exception:
+            logging.error(
+                "Failed to persist show_advanced state.",
+                exc_info=True,
+            )
 
     def _clear_settings_context(self) -> None:
         self._settings_vars.clear()
@@ -830,6 +969,7 @@ class UIManager:
             "gemini_prompt_correction_textbox",
             "agentico_prompt_textbox",
             "gemini_models_textbox",
+            "text_correction_timeout_entry",
         ]:
             widget = self._get_settings_var(widget_name)
             if widget is None:
@@ -1097,6 +1237,7 @@ class UIManager:
         sound_volume_var = _var("sound_volume_var")
         text_correction_enabled_var = _var("text_correction_enabled_var")
         text_correction_service_var = _var("text_correction_service_var")
+        text_correction_timeout_var = _var("text_correction_timeout_var")
         openrouter_api_key_var = _var("openrouter_api_key_var")
         openrouter_model_var = _var("openrouter_model_var")
         gemini_api_key_var = _var("gemini_api_key_var")
@@ -1173,6 +1314,24 @@ class UIManager:
             agentico_prompt_textbox.get("1.0", "end-1c") if agentico_prompt_textbox else self.config_manager.get("prompt_agentico")
         )
 
+        text_correction_timeout_to_apply = DEFAULT_CONFIG[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+        if text_correction_timeout_var is not None:
+            timeout_candidate = self._safe_get_float(
+                text_correction_timeout_var,
+                "Tempo limite da correção",
+                settings_win,
+            )
+            if timeout_candidate is None:
+                return
+            if timeout_candidate <= 0:
+                messagebox.showerror(
+                    "Valor inválido",
+                    "O tempo limite da correção deve ser um número positivo.",
+                    parent=settings_win,
+                )
+                return
+            text_correction_timeout_to_apply = timeout_candidate
+
         batch_size_to_apply = self._safe_get_int(batch_size_var, "Batch Size", settings_win)
         if batch_size_to_apply is None:
             return
@@ -1224,11 +1383,15 @@ class UIManager:
         save_temp_recordings_to_apply = bool(save_temp_recordings_var.get()) if save_temp_recordings_var else False
         display_transcripts_to_apply = bool(display_transcripts_var.get()) if display_transcripts_var else False
         record_storage_mode_to_apply = record_storage_mode_var.get() if record_storage_mode_var else "auto"
-        max_memory_seconds_mode_to_apply = max_memory_seconds_mode_var.get() if max_memory_seconds_mode_var else "manual"
+        max_memory_seconds_mode_to_apply = (
+            max_memory_seconds_mode_var.get() if max_memory_seconds_mode_var else "auto"
+        )
         max_memory_seconds_to_apply = self._safe_get_float(max_memory_seconds_var, "Max Memory Retention", settings_win)
         if max_memory_seconds_to_apply is None:
             return
-        chunk_length_mode_to_apply = chunk_length_mode_var.get() if chunk_length_mode_var else "manual"
+        chunk_length_mode_to_apply = (
+            chunk_length_mode_var.get() if chunk_length_mode_var else "auto"
+        )
         chunk_length_sec_to_apply = self._safe_get_float(chunk_length_sec_var, "Chunk Length", settings_win)
         if chunk_length_sec_to_apply is None:
             return
@@ -1394,6 +1557,7 @@ class UIManager:
             new_agent_key=agent_key_to_apply,
             new_text_correction_enabled=text_correction_enabled_to_apply,
             new_text_correction_service=text_correction_service_to_apply,
+            new_text_correction_timeout=text_correction_timeout_to_apply,
             new_openrouter_api_key=openrouter_api_key_to_apply,
             new_openrouter_model=openrouter_model_to_apply,
             new_gemini_api_key=gemini_api_key_to_apply,
@@ -1949,7 +2113,9 @@ class UIManager:
         Returns a dictionary with UI references needed by the caller.
         """
 
-        advanced_state = {'visible': False}
+        advanced_state = {
+            'visible': bool(self._get_settings_meta("show_advanced_active", False))
+        }
         advanced_specs = []
         toggle_button_ref = {'widget': None}
 
@@ -1958,7 +2124,7 @@ class UIManager:
             if advanced_state['visible']:
                 widget.pack(**pack_kwargs)
 
-        def _set_advanced_visibility(show: bool) -> None:
+        def _apply_local_visibility(show: bool) -> None:
             advanced_state['visible'] = show
             for widget, pack_kwargs in advanced_specs:
                 try:
@@ -1972,15 +2138,18 @@ class UIManager:
                 button.configure(text='Ocultar avançado' if show else 'Mostrar avançado')
 
         def _toggle_advanced() -> None:
-            _set_advanced_visibility(not advanced_state['visible'])
+            desired = not bool(self._get_settings_meta("show_advanced_active", False))
+            self._set_global_advanced_visibility(desired)
 
         advanced_toggle = ctk.CTkButton(
             asr_frame,
-            text='Mostrar avançado',
+            text='Ocultar avançado' if advanced_state['visible'] else 'Mostrar avançado',
             command=_toggle_advanced,
         )
         advanced_toggle.pack(fill='x', pady=(0, 5))
         toggle_button_ref['widget'] = advanced_toggle
+
+        self._register_advanced_visibility_callback(_apply_local_visibility)
 
         previous_models_dir = {"value": models_storage_dir_var.get() if models_storage_dir_var else ""}
         previous_deps_dir = {"value": deps_install_dir_var.get() if deps_install_dir_var else ""}
@@ -2661,17 +2830,11 @@ class UIManager:
         _update_model_info(asr_model_id_var.get())
         _update_install_button_state()
         _on_backend_change(asr_backend_var.get())
-        should_show_advanced = any(
-            [
-                asr_backend_var.get() not in ("auto", ""),
-                asr_ct2_compute_type_var.get() not in ("auto", "float16"),
-            ]
-        )
-        _set_advanced_visibility(should_show_advanced)
+        _apply_local_visibility(advanced_state['visible'])
 
         return {
             "advanced_toggle": advanced_toggle,
-            "set_advanced_visibility": _set_advanced_visibility,
+            "set_advanced_visibility": _apply_local_visibility,
             "asr_backend_menu": asr_backend_menu,
             "asr_ct2_menu": asr_ct2_menu,
             "asr_model_menu": asr_model_menu,
@@ -2732,6 +2895,7 @@ class UIManager:
                 "details": getattr(notification, "details", None),
                 "source": getattr(notification, "source", None),
                 "previous_state": getattr(notification, "previous_state", None),
+                "operation_id": getattr(notification, "operation_id", None),
             }
             return context["state"], None, context
 
@@ -2763,6 +2927,10 @@ class UIManager:
                 event_name = str(event_obj)
         if event_name:
             parts.append(f"event={event_name}")
+
+        op_id = context.get("operation_id")
+        if op_id and not parts:
+            parts.append(f"op={op_id}")
 
         return f" — {' | '.join(parts)}" if parts else ""
 
@@ -2860,7 +3028,7 @@ class UIManager:
                 self.stop_recording_timer_event.set()
                 break
             elapsed = time.time() - start_time
-            tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
+            tooltip = f"{APP_DISPLAY_NAME} (RECORDING - {self._format_elapsed(elapsed)})"
             suffix = getattr(self, "_state_context_suffix", "")
             if suffix:
                 tooltip = f"{tooltip}{suffix}"
@@ -2959,7 +3127,7 @@ class UIManager:
                         f" [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
                     )
                 elapsed = time.time() - start_ts
-                tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)}){tech}"
+                tooltip = f"{APP_DISPLAY_NAME} (TRANSCRIBING - {self._format_elapsed(elapsed)}){tech}"
                 suffix = getattr(self, "_state_context_suffix", "")
                 if suffix:
                     tooltip = f"{tooltip}{suffix}"
@@ -2969,7 +3137,7 @@ class UIManager:
                 # Em caso de falha, mantém somente o tempo
                 elapsed = time.time() - start_ts
                 if self.tray_icon:
-                    tooltip = f"Whisper Recorder (TRANSCRIBING - {self._format_elapsed(elapsed)})"
+                    tooltip = f"{APP_DISPLAY_NAME} (TRANSCRIBING - {self._format_elapsed(elapsed)})"
                     suffix = getattr(self, "_state_context_suffix", "")
                     if suffix:
                         tooltip = f"{tooltip}{suffix}"
@@ -2995,9 +3163,11 @@ class UIManager:
             self._handle_download_progress(context)
         if context:
             self._last_state_notification = context.get("notification")
+            self._last_operation_id = context.get("operation_id")
             self._state_context_suffix = self._build_state_context_suffix(state_str, context)
         else:
             self._last_state_notification = None
+            self._last_operation_id = None
             self._state_context_suffix = ""
 
         suffix = self._state_context_suffix
@@ -3013,7 +3183,7 @@ class UIManager:
                 color1, color2 = self.ICON_COLORS.get(state_str, self.DEFAULT_ICON_COLOR)
                 icon_image = self.create_image(64, 64, color1, color2)
             self.tray_icon.icon = icon_image
-            tooltip = f"Whisper Recorder ({state_str})"
+            tooltip = f"{APP_DISPLAY_NAME} ({state_str})"
 
             # Controle de threads de tooltip por estado
             if state_str == "RECORDING":
@@ -3033,7 +3203,7 @@ class UIManager:
                 start_time = getattr(self.core_instance_ref.audio_handler, "start_time", None)
                 if start_time is not None:
                     elapsed = time.time() - start_time
-                    tooltip = f"Whisper Recorder (RECORDING - {self._format_elapsed(elapsed)})"
+                    tooltip = f"{APP_DISPLAY_NAME} (RECORDING - {self._format_elapsed(elapsed)})"
 
             elif state_str == "TRANSCRIBING":
                 # Parar contador de RECORDING se estiver ativo
@@ -3078,15 +3248,15 @@ class UIManager:
                                 bs = getattr(th, "batch_size", None) if hasattr(th, "batch_size") else None
                             bs_display = bs if bs not in (None, "") else "auto"
                             rich_tooltip = _apply_suffix(
-                                f"Whisper Recorder (TRANSCRIBING) [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
+                                f"{APP_DISPLAY_NAME} (TRANSCRIBING) [{device} ct2={compute_type} | {attn_impl} | chunk={chunk_display}s | batch={bs_display}]"
                             )
                             self._set_tray_tooltip(rich_tooltip)
                         else:
-                            fallback = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
-                            self._set_tray_tooltip(fallback)
+                            fallback = _apply_suffix(f"{APP_DISPLAY_NAME} (TRANSCRIBING - 00:00)")
+                            self.tray_icon.title = self._clamp_tray_tooltip(fallback)
                     except Exception:
-                        fallback = _apply_suffix("Whisper Recorder (TRANSCRIBING - 00:00)")
-                        self._set_tray_tooltip(fallback)
+                        fallback = _apply_suffix(f"{APP_DISPLAY_NAME} (TRANSCRIBING - 00:00)")
+                        self.tray_icon.title = self._clamp_tray_tooltip(fallback)
                     self.transcribing_timer_thread = threading.Thread(
                         target=self._transcribing_tooltip_updater,
                         daemon=True,
@@ -3111,11 +3281,11 @@ class UIManager:
             # Ajusta tooltip final conforme estado atual para evitar mensagens inconsistentes
             if state_str == "TRANSCRIBING":
                 # Garante que o texto base esteja correto mesmo antes do primeiro tick
-                tooltip = "Whisper Recorder (TRANSCRIBING)"
+                tooltip = f"{APP_DISPLAY_NAME} (TRANSCRIBING)"
             elif state_str == "RECORDING":
-                tooltip = "Whisper Recorder (RECORDING)"
+                tooltip = f"{APP_DISPLAY_NAME} (RECORDING)"
             elif state_str == "LOADING_MODEL":
-                tooltip = "Whisper Recorder (LOADING_MODEL)"
+                tooltip = f"{APP_DISPLAY_NAME} (LOADING_MODEL)"
 
             tooltip_with_context = _apply_suffix(tooltip)
             self._set_tray_tooltip(tooltip_with_context)
@@ -3179,7 +3349,7 @@ class UIManager:
                 ctk.set_default_color_theme("blue")
                 settings_win = ctk.CTkToplevel(self.main_tk_root)
                 self.settings_window_instance = settings_win
-                settings_win.title("Whisper Recorder Settings")
+                settings_win.title(SETTINGS_WINDOW_TITLE)
                 try:
                     settings_win.iconbitmap("icon.ico")
                 except Exception as e:
@@ -3231,6 +3401,14 @@ class UIManager:
 
                 self._clear_settings_context()
                 self._set_settings_var("window", settings_win)
+                show_advanced_initial = bool(
+                    self.config_manager.get("show_advanced", False)
+                )
+                show_advanced_var = ctk.BooleanVar(value=show_advanced_initial)
+                self._set_settings_var("show_advanced_var", show_advanced_var)
+                self._set_settings_meta("show_advanced_active", show_advanced_initial)
+                self._set_settings_meta("_advanced_blocks", [])
+                self._set_settings_meta("_advanced_callbacks", [])
                 service_values_allowed = {SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI}
                 self._set_settings_meta("service_values_allowed", service_values_allowed)
 
@@ -3289,6 +3467,20 @@ class UIManager:
                         coerce=str,
                     )
                 )
+
+                current_driver_info = None
+                manager = getattr(self.core_instance_ref, "ahk_manager", None)
+                if manager is not None:
+                    try:
+                        current_driver_info = manager.describe_driver_state()
+                    except Exception:
+                        logging.debug("Failed to describe hotkey driver state for UI.", exc_info=True)
+                if current_driver_info is not None:
+                    driver_status_initial = self._format_hotkey_driver_status_text(current_driver_info)
+                else:
+                    driver_status_initial = self._hotkey_driver_status_text
+                self._hotkey_driver_status_text = driver_status_initial
+                hotkey_driver_status_var = ctk.StringVar(value=driver_status_initial)
 
                 hotkey_stability_service_enabled_var = ctk.BooleanVar(
                     value=self._resolve_initial_value(
@@ -3359,6 +3551,21 @@ class UIManager:
                         ),
                         "None",
                     )
+                )
+
+                text_correction_timeout_value = self._resolve_initial_value(
+                    TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+                    var_name="text_correction_timeout",
+                    coerce=lambda v: float(v),
+                )
+                try:
+                    text_correction_timeout_value = float(text_correction_timeout_value)
+                except Exception:
+                    text_correction_timeout_value = float(
+                        DEFAULT_CONFIG[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY]
+                    )
+                text_correction_timeout_var = ctk.StringVar(
+                    value=str(text_correction_timeout_value)
                 )
 
                 openrouter_api_key_var = ctk.StringVar(
@@ -3563,6 +3770,7 @@ class UIManager:
                     ("mode_var", mode_var),
                     ("detected_key_var", detected_key_var),
                     ("agent_key_var", agent_key_var),
+                    ("hotkey_driver_status_var", hotkey_driver_status_var),
                     ("agent_model_var", agent_model_var),
                     ("hotkey_stability_service_enabled_var", hotkey_stability_service_enabled_var),
                     ("min_transcription_duration_var", min_transcription_duration_var),
@@ -3574,6 +3782,7 @@ class UIManager:
                     ("text_correction_enabled_var", text_correction_enabled_var),
                     ("text_correction_service_var", text_correction_service_var),
                     ("text_correction_service_label_var", text_correction_service_label_var),
+                    ("text_correction_timeout_var", text_correction_timeout_var),
                     ("openrouter_api_key_var", openrouter_api_key_var),
                     ("openrouter_model_var", openrouter_model_var),
                     ("gemini_api_key_var", gemini_api_key_var),
@@ -3791,6 +4000,7 @@ class UIManager:
                             "new_agent_key": agent_key_to_apply,
                             "new_text_correction_enabled": text_correction_enabled_to_apply,
                             "new_text_correction_service": text_correction_service_to_apply,
+                            "new_text_correction_timeout": text_correction_timeout_to_apply,
                             "new_openrouter_api_key": openrouter_api_key_to_apply,
                             "new_openrouter_model": openrouter_model_to_apply,
                             "new_gemini_api_key": gemini_api_key_to_apply,
@@ -3813,6 +4023,7 @@ class UIManager:
                             "new_vad_silence_duration": vad_silence_duration_to_apply,
                             "new_display_transcripts_in_terminal": display_transcripts_to_apply,
                             "new_launch_at_startup": launch_at_startup_var.get(),
+                            "new_show_advanced": bool(show_advanced_var.get()),
                             # New chunk settings
                             "new_chunk_length_mode": chunk_length_mode_var.get(),
                             "new_chunk_length_sec": float(chunk_length_sec_var.get()),
@@ -3840,6 +4051,10 @@ class UIManager:
 
                     self.core_instance_ref.apply_settings_from_external(**DEFAULT_CONFIG)
 
+                    self._set_global_advanced_visibility(
+                        DEFAULT_CONFIG.get("show_advanced", False), persist=False
+                    )
+
                     auto_paste_var.set(DEFAULT_CONFIG["auto_paste"])
                     mode_var.set(DEFAULT_CONFIG["record_mode"])
                     detected_key_var.set(DEFAULT_CONFIG["record_key"].upper())
@@ -3863,6 +4078,9 @@ class UIManager:
                             ),
                             "None",
                         )
+                    )
+                    text_correction_timeout_var.set(
+                        str(DEFAULT_CONFIG[TEXT_CORRECTION_TIMEOUT_CONFIG_KEY])
                     )
                     # Sincroniza os campos de correção de texto caso os widgets existam
                     try:
@@ -3949,6 +4167,7 @@ class UIManager:
                     record_storage_mode_var.set(DEFAULT_CONFIG["record_storage_mode"])
                     max_memory_seconds_var.set(DEFAULT_CONFIG["max_memory_seconds"])
                     max_memory_seconds_mode_var.set(DEFAULT_CONFIG["max_memory_seconds_mode"])
+                    show_advanced_var.set(DEFAULT_CONFIG.get("show_advanced", False))
                     launch_at_startup_var.set(DEFAULT_CONFIG["launch_at_startup"])
                     asr_backend_var.set(DEFAULT_CONFIG[ASR_BACKEND_CONFIG_KEY])
                     asr_compute_device_var.set(DEFAULT_CONFIG[ASR_COMPUTE_DEVICE_CONFIG_KEY])
@@ -3967,6 +4186,25 @@ class UIManager:
                 general_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
                 general_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(general_frame, text="Configurações Gerais", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+
+                if self._should_warn_about_elevation():
+                    warning_frame = ctk.CTkFrame(general_frame, fg_color=("#2d2416", "#1f1f1f"))
+                    warning_frame.pack(fill="x", padx=5, pady=(0, 8))
+                    warning_label = ctk.CTkLabel(
+                        warning_frame,
+                        text=(
+                            "Aviso: o Windows bloqueia automações entre níveis de privilégio. "
+                            "Se precisar auto-colar em aplicativos executados como administrador, "
+                            "execute o Whisper Flash Transcriber com o mesmo nível para evitar falhas."
+                        ),
+                        wraplength=520,
+                        justify="left",
+                    )
+                    warning_label.pack(anchor="w", padx=8, pady=8)
+                    Tooltip(
+                        warning_frame,
+                        "Auto-colar pode ser bloqueado por aplicativos elevados quando o transcritor roda sem privilégios de administrador.",
+                    )
 
                 # Record Hotkey
                 key_frame = ctk.CTkFrame(general_frame)
@@ -3999,6 +4237,17 @@ class UIManager:
                 detect_agent_key_button.pack(side="left", padx=5)
                 Tooltip(detect_agent_key_button, "Captura um novo atalho do agente.")
 
+                driver_status_frame = ctk.CTkFrame(general_frame)
+                driver_status_frame.pack(fill="x", pady=5)
+                driver_status_label = ctk.CTkLabel(
+                    driver_status_frame,
+                    textvariable=hotkey_driver_status_var,
+                    justify="left",
+                    wraplength=360,
+                )
+                driver_status_label.pack(side="left", padx=5)
+                Tooltip(driver_status_label, "Indica qual driver de atalho está ativo.")
+
                 # Recording Mode
                 mode_frame = ctk.CTkFrame(general_frame)
                 mode_frame.pack(fill="x", pady=5)
@@ -4015,7 +4264,13 @@ class UIManager:
                 paste_frame.pack(fill="x", pady=5)
                 paste_switch = ctk.CTkSwitch(paste_frame, text="Auto-colar", variable=auto_paste_var)
                 paste_switch.pack(side="left", padx=5)
-                Tooltip(paste_switch, "Cola automaticamente a transcrição.")
+                paste_tooltip = "Cola automaticamente a transcrição."
+                if self._should_warn_about_elevation():
+                    paste_tooltip += (
+                        "\nObservação: No Windows, aplicativos executados como administrador ignoram o auto-colar"
+                        " se este aplicativo não estiver com o mesmo nível de privilégio."
+                    )
+                Tooltip(paste_switch, paste_tooltip)
 
                 # Hotkey Stability Service
                 stability_service_frame = ctk.CTkFrame(general_frame)
@@ -4095,7 +4350,6 @@ class UIManager:
 
                 # --- Text Correction (AI Services) Section ---
                 ai_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
-                ai_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(ai_frame, text="Correção de Texto (Serviços de IA)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
 
                 text_correction_frame = ctk.CTkFrame(ai_frame)
@@ -4122,6 +4376,25 @@ class UIManager:
                 self._set_settings_var("service_menu", service_menu)
                 Tooltip(service_menu, "Selecione o serviço de correção de texto.")
                 service_menu.set(text_correction_service_label_var.get())
+
+                correction_timeout_frame = ctk.CTkFrame(ai_frame)
+                correction_timeout_frame.pack(fill="x", pady=5)
+                _register_advanced(correction_timeout_frame, fill="x", pady=5)
+                ctk.CTkLabel(
+                    correction_timeout_frame,
+                    text="Tempo limite da correção (s):",
+                ).pack(side="left", padx=(5, 10))
+                text_correction_timeout_entry = ctk.CTkEntry(
+                    correction_timeout_frame,
+                    textvariable=text_correction_timeout_var,
+                    width=80,
+                )
+                text_correction_timeout_entry.pack(side="left", padx=5)
+                self._set_settings_var("text_correction_timeout_entry", text_correction_timeout_entry)
+                Tooltip(
+                    text_correction_timeout_entry,
+                    "Tempo máximo para aguardar a correção antes de usar o texto bruto.",
+                )
 
                 # --- OpenRouter Settings ---
                 openrouter_frame = ctk.CTkFrame(ai_frame)
@@ -4185,6 +4458,8 @@ class UIManager:
                 self._set_settings_var("gemini_models_textbox", gemini_models_textbox)
                 Tooltip(gemini_models_textbox, "Lista de modelos para tentativa, um por linha.")
 
+                self._register_advanced_block(ai_frame, fill="x", padx=10, pady=5)
+
                 transcription_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
                 transcription_frame.pack(fill="x", padx=10, pady=5)
                 ctk.CTkLabel(
@@ -4220,10 +4495,15 @@ class UIManager:
             ui_elements={},
         )
 
-        # New: Chunk Length Mode
-        chunk_mode_frame = ctk.CTkFrame(transcription_frame)
+        advanced_transcription_frame = ctk.CTkFrame(
+            transcription_frame, fg_color="transparent"
+        )
+
+        chunk_mode_frame = ctk.CTkFrame(advanced_transcription_frame)
         chunk_mode_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(chunk_mode_frame, text="Modo do Tamanho do Bloco:").pack(side="left", padx=(5, 10))
+        ctk.CTkLabel(chunk_mode_frame, text="Modo do Tamanho do Bloco:").pack(
+            side="left", padx=(5, 10)
+        )
         chunk_mode_menu = ctk.CTkOptionMenu(
             chunk_mode_frame,
             variable=chunk_length_mode_var,
@@ -4233,17 +4513,19 @@ class UIManager:
         chunk_mode_menu.pack(side="left", padx=5)
         Tooltip(chunk_mode_menu, "Define como o tamanho do bloco é calculado.")
 
-        # New: Chunk Length (sec)
-        chunk_len_frame = ctk.CTkFrame(transcription_frame)
+        chunk_len_frame = ctk.CTkFrame(advanced_transcription_frame)
         chunk_len_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(chunk_len_frame, text="Duração do Bloco (s):").pack(side="left", padx=(5, 10))
-        chunk_len_entry = ctk.CTkEntry(chunk_len_frame, textvariable=chunk_length_sec_var, width=80)
+        ctk.CTkLabel(chunk_len_frame, text="Duração do Bloco (s):").pack(
+            side="left", padx=(5, 10)
+        )
+        chunk_len_entry = ctk.CTkEntry(
+            chunk_len_frame, textvariable=chunk_length_sec_var, width=80
+        )
         chunk_len_entry.pack(side="left", padx=5)
         self._set_settings_var("chunk_len_entry", chunk_len_entry)
         Tooltip(chunk_len_entry, "Duração fixa do bloco quando em modo manual.")
 
-        # New: Ignore Transcriptions Shorter Than
-        min_transcription_duration_frame = ctk.CTkFrame(transcription_frame)
+        min_transcription_duration_frame = ctk.CTkFrame(advanced_transcription_frame)
         min_transcription_duration_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(
             min_transcription_duration_frame,
@@ -4257,7 +4539,7 @@ class UIManager:
         min_transcription_duration_entry.pack(side="left", padx=5)
         Tooltip(min_transcription_duration_entry, "Descarta segmentos menores que isso.")
 
-        min_record_duration_frame = ctk.CTkFrame(transcription_frame)
+        min_record_duration_frame = ctk.CTkFrame(advanced_transcription_frame)
         min_record_duration_frame.pack(fill="x", pady=5)
         ctk.CTkLabel(
             min_record_duration_frame,
@@ -4271,14 +4553,17 @@ class UIManager:
         min_record_duration_entry.pack(side="left", padx=5)
         Tooltip(min_record_duration_entry, "Descarta gravações menores que isso.")
 
+        vad_wrapper = ctk.CTkFrame(advanced_transcription_frame, fg_color="transparent")
         self._build_vad_section(
-            settings_win,
+            vad_wrapper,
             use_vad_var,
             vad_threshold_var,
             vad_silence_duration_var,
             vad_pre_speech_padding_ms_var,
             vad_post_speech_padding_ms_var,
         )
+
+        self._register_advanced_block(advanced_transcription_frame, fill="x", pady=5)
 
         self._update_text_correction_fields()
 
@@ -4297,31 +4582,14 @@ class UIManager:
             logging.warning("icon.png not found, using fallback image.")
             color1, color2 = self.ICON_COLORS.get(initial_state, self.DEFAULT_ICON_COLOR)
             initial_image = self.create_image(64, 64, color1, color2)
-        initial_tooltip = self._pending_tray_tooltip or f"Whisper Recorder ({initial_state})"
-        self._set_tray_tooltip(initial_tooltip)
+        initial_tooltip = self._pending_tray_tooltip or f"{APP_DISPLAY_NAME} ({initial_state})"
 
-        try:
-            self.core_instance_ref.set_state_update_callback(self.update_tray_icon)
-            self.core_instance_ref.set_segment_callback(self.update_live_transcription_threadsafe)
-        except Exception:
-            logging.error("UIManager: failed to register tray callbacks with core.", exc_info=True)
-
-        if pystray is None:
-            self._handle_tray_icon_failure(ImportError("pystray module is not available"), initial_tooltip)
-            return
-
-        try:
-            menu_factory = pystray.Menu(lambda: self.create_dynamic_menu())
-            self.tray_icon = pystray.Icon(
-                "whisper_recorder",
-                initial_image,
-                self._clamp_tray_tooltip(initial_tooltip),
-                menu=menu_factory,
-            )
-        except (OSError, ImportError) as exc:
-            self._handle_tray_icon_failure(exc, initial_tooltip)
-            return
-
+        self.tray_icon = pystray.Icon(
+            APP_ID,
+            initial_image,
+            initial_tooltip,
+            menu=pystray.Menu(lambda: self.create_dynamic_menu())
+        )
         if self._pending_tray_tooltip:
             self._set_tray_tooltip(self._pending_tray_tooltip)
 

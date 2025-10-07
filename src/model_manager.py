@@ -23,9 +23,10 @@ except Exception:  # pragma: no cover - allow runtime fallback
     snapshot_download = None  # type: ignore[assignment]
 
 from .logging_utils import get_logger, log_context
+from .app_identity import APP_LOG_NAMESPACE
 
 
-MODEL_LOGGER = get_logger("whisper_recorder.model", component="ModelManager")
+MODEL_LOGGER = get_logger(f"{APP_LOG_NAMESPACE}.model", component="ModelManager")
 
 
 _CT2_KNOWN_QUANTIZATIONS: set[str] = {
@@ -188,12 +189,19 @@ DISPLAY_NAMES: Dict[str, str] = {
     "distil-whisper/distil-large-v3": "Distil Whisper Large v3 (CT2)",
     "faster-whisper/medium.en": "Faster-Whisper Medium.en",
     "openai/whisper-large-v3-turbo": "Whisper Large v3 Turbo",
-    "distil-whisper/distil-large-v3": "Distil Whisper Large v3",
+}
+
+# Legacy aliases kept for backwards compatibility/documentation purposes.
+# They should never override curated identifiers above.
+_LEGACY_DISPLAY_ALIASES: Dict[str, str] = {
     "Systran/faster-whisper-medium": "Faster-Whisper Medium",
     "Systran/faster-whisper-medium-int8": "Faster-Whisper Medium Int8",
     "Systran/faster-whisper-small": "Faster-Whisper Small",
     "Systran/faster-whisper-small-int8": "Faster-Whisper Small Int8",
 }
+
+for _alias, _label in _LEGACY_DISPLAY_ALIASES.items():
+    DISPLAY_NAMES.setdefault(_alias, _label)
 
 # Para reintroduzir outros modelos futuramente, basta estender as estruturas
 # CURATED e DISPLAY_NAMES abaixo.
@@ -326,7 +334,7 @@ def normalize_backend_label(backend: str | None) -> str:
         "faster-whisper": "ctranslate2",
         "transformer": "ctranslate2",
         "transformers": "ctranslate2",
-        "auto": "auto",
+        "auto": "ctranslate2",
     }
 
     mapped = alias_map.get(normalized)

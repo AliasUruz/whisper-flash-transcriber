@@ -2,10 +2,12 @@ import concurrent.futures
 import importlib
 import importlib.util
 import logging
+import os
+import statistics
 import threading
 import time
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 import numpy as np
 
@@ -30,9 +32,11 @@ from .config_manager import (
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
     TEXT_CORRECTION_ENABLED_CONFIG_KEY,
     TEXT_CORRECTION_SERVICE_CONFIG_KEY,
+    TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
     OPENROUTER_API_KEY_CONFIG_KEY,
     OPENROUTER_MODEL_CONFIG_KEY,
     OPENROUTER_TIMEOUT_CONFIG_KEY,
+    OPENROUTER_MAX_ATTEMPTS_CONFIG_KEY,
     GEMINI_API_KEY_CONFIG_KEY,
     GEMINI_PROMPT_CONFIG_KEY,
     GEMINI_AGENT_MODEL_CONFIG_KEY,
@@ -53,7 +57,12 @@ from .config_manager import (
     DISPLAY_TRANSCRIPTS_KEY,
 )
 from . import model_manager as model_manager_module
-from .logging_utils import current_correlation_id, get_logger, log_context, scoped_correlation_id
+from .logging_utils import (
+    current_correlation_id,
+    get_logger,
+    operation_context,
+    scoped_correlation_id,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - hints only
     import torch as torch_type
@@ -92,8 +101,13 @@ def _torch_cuda_device_count() -> int:
 
 LOGGER = get_logger('whisper_flash_transcriber.transcription', component='TranscriptionHandler')
 
+DEFAULT_TEXT_CORRECTION_TIMEOUT = 15.0
+T = TypeVar("T")
+
 
 class TranscriptionHandler:
+    CORRECTION_FAILURE_LIMIT = 3
+    CORRECTION_DISABLE_SECONDS = 60.0
 
     def __init__(
         self,
@@ -146,18 +160,19 @@ class TranscriptionHandler:
         self.batch_size_specified = get_config("batch_size_specified")
         self.gpu_index_specified = get_config("gpu_index_specified")
 
-        self.text_correction_enabled = get_config(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
-        self.text_correction_service = get_config(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
-        self.openrouter_api_key = get_config(OPENROUTER_API_KEY_CONFIG_KEY)
-        self.openrouter_model = get_config(OPENROUTER_MODEL_CONFIG_KEY)
-        self.gemini_api_key = get_config(GEMINI_API_KEY_CONFIG_KEY)
-        self.gemini_agent_model = get_config(GEMINI_AGENT_MODEL_CONFIG_KEY)
-        self.gemini_prompt = get_config(GEMINI_PROMPT_CONFIG_KEY)
-        self.min_transcription_duration = get_config(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
-        self.chunk_length_sec = get_config(CHUNK_LENGTH_SEC_CONFIG_KEY)
-        self.chunk_length_mode = get_config(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual")
-        self.enable_torch_compile = bool(
-            get_config(ENABLE_TORCH_COMPILE_CONFIG_KEY, False)
+        self.text_correction_enabled = self.config_manager.get(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
+        self.text_correction_service = self.config_manager.get(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
+        self.openrouter_api_key = self.config_manager.get(OPENROUTER_API_KEY_CONFIG_KEY)
+        self.openrouter_model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
+        self.gemini_api_key = self.config_manager.get(GEMINI_API_KEY_CONFIG_KEY)
+        self.gemini_agent_model = self.config_manager.get('gemini_agent_model')
+        self.gemini_prompt = self.config_manager.get(GEMINI_PROMPT_CONFIG_KEY)
+        self.min_transcription_duration = self.config_manager.get(MIN_TRANSCRIPTION_DURATION_CONFIG_KEY)
+        self.chunk_length_sec = self.config_manager.get(CHUNK_LENGTH_SEC_CONFIG_KEY)
+        self.chunk_length_mode = self.config_manager.get("chunk_length_mode", "manual")
+        self.text_correction_timeout = self.config_manager.get_timeout(
+            TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+            DEFAULT_TEXT_CORRECTION_TIMEOUT,
         )
         # Configurações de ASR
         # Inicializar atributos internos sem acionar recarga imediata do backend
@@ -179,6 +194,26 @@ class TranscriptionHandler:
         # self.gemini_client é injetado
         self.device_in_use = None # Nova variável para armazenar o dispositivo em uso
         self.last_dynamic_batch_size = None
+        self.last_effective_chunk_length = float(self.chunk_length_sec or 0.0) if self.chunk_length_sec else None
+        self._chunk_length_configured = float(self.chunk_length_sec or 0.0) if self.chunk_length_sec else None
+        self._batch_tuning: dict[str, float | None] = {"base": None, "current": None}
+        self._chunk_tuning: dict[str, float | None] = {
+            "base": None,
+            "current": None,
+            "min": None,
+            "max": None,
+        }
+        self._adaptive_metrics: dict[str, object] = {}
+        self._recovery_budget = 0
+        self._asr_loaded = False
+
+        self._initialize_adaptive_state()
+
+        self._correction_failures: dict[str, int] = {
+            SERVICE_GEMINI: 0,
+            SERVICE_OPENROUTER: 0,
+        }
+        self._correction_disabled_until: dict[str, float] = {}
 
         self._init_api_clients()
 
@@ -204,6 +239,270 @@ class TranscriptionHandler:
             "TranscriptionHandler applied environment overrides: %s",
             ", ".join(f"{k}={v}" for k, v in overrides.items()),
         )
+
+    # ------------------------------------------------------------------
+    # Adaptive tuning helpers
+    # ------------------------------------------------------------------
+    def _initialize_adaptive_state(self) -> None:
+        """Reset internal structures used for dynamic tuning."""
+
+        base_chunk = self._coerce_chunk_length(self.chunk_length_sec)
+        if base_chunk is None or base_chunk <= 0:
+            default_value = self.config_manager.default_config.get(
+                CHUNK_LENGTH_SEC_CONFIG_KEY,
+                30.0,
+            )
+            base_chunk = float(default_value)
+
+        self._chunk_length_configured = float(base_chunk)
+        self._chunk_tuning = {
+            "base": float(base_chunk),
+            "current": float(base_chunk),
+            "min": None,
+            "max": None,
+        }
+        self._batch_tuning = {"base": None, "current": None, "min": 1}
+        self._adaptive_metrics = {
+            "durations": deque(maxlen=6),
+            "success_streak": 0,
+        }
+        self._recovery_budget = 0
+
+        self._recalculate_chunk_bounds()
+        self.last_effective_chunk_length = self._chunk_tuning["current"]
+        self.chunk_length_sec = self._chunk_tuning["current"]
+
+    def _coerce_chunk_length(self, raw: object) -> float | None:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    def _is_gpu_active(self) -> bool:
+        device = str(self.device_in_use or "").lower()
+        if device.startswith("cuda"):
+            return _torch_cuda_available()
+        return _torch_cuda_available() and (self.gpu_index is not None and self.gpu_index >= 0)
+
+    def _recalculate_chunk_bounds(self) -> None:
+        """Update dynamic chunk bounds according to the current device."""
+
+        base = self._chunk_tuning.get("base") or 30.0
+        if base <= 0:
+            base = 30.0
+
+        gpu_active = self._is_gpu_active()
+        min_chunk = max(8.0, base * 0.5)
+        if gpu_active:
+            max_chunk = min(120.0, max(base, base * 1.6))
+        else:
+            max_chunk = min(75.0, max(base, base * 1.2))
+
+        self._chunk_tuning["min"] = float(min_chunk)
+        self._chunk_tuning["max"] = float(max_chunk)
+
+        current = self._chunk_tuning.get("current")
+        if current is None:
+            current = base
+
+        clamped = float(max(min_chunk, min(current, max_chunk)))
+        self._chunk_tuning["current"] = clamped
+        self.last_effective_chunk_length = clamped
+        self.chunk_length_sec = clamped
+
+    def _refresh_adaptive_config(self) -> None:
+        """Synchronize adaptive state with updated configuration values."""
+
+        configured = self._coerce_chunk_length(self.chunk_length_sec)
+        if configured is None:
+            configured = self._chunk_length_configured or 30.0
+        self._chunk_length_configured = float(configured)
+        self._chunk_tuning["base"] = float(configured)
+
+        if self.chunk_length_mode == "manual":
+            self._chunk_tuning["current"] = float(configured)
+        elif self._chunk_tuning.get("current") is None:
+            self._chunk_tuning["current"] = float(configured)
+
+        self._recalculate_chunk_bounds()
+
+    def _get_effective_chunk_length(self) -> float:
+        """Return the chunk length considering adaptive tuning."""
+
+        if self.chunk_length_mode == "manual":
+            value = self._coerce_chunk_length(self._chunk_length_configured)
+            if value is None:
+                value = self._chunk_tuning.get("base") or 30.0
+            self.chunk_length_sec = float(value)
+            self.last_effective_chunk_length = float(value)
+            return float(value)
+
+        current = self._chunk_tuning.get("current")
+        if current is None:
+            current = self._chunk_tuning.get("base") or 30.0
+        min_chunk = self._chunk_tuning.get("min") or 8.0
+        max_chunk = self._chunk_tuning.get("max") or current
+        effective = float(max(min_chunk, min(current, max_chunk)))
+        self._chunk_tuning["current"] = effective
+        self.chunk_length_sec = effective
+        self.last_effective_chunk_length = effective
+        return effective
+
+    def _record_adaptive_metrics(
+        self,
+        *,
+        inference_duration_s: float | None,
+        chunk_length_s: float | None,
+        had_oom: bool,
+    ) -> None:
+        """Update heuristics with runtime feedback."""
+
+        if self.chunk_length_mode == "manual" and self.batch_size_mode == "manual":
+            return
+
+        chunk_length = self._coerce_chunk_length(chunk_length_s)
+        if chunk_length is None:
+            chunk_length = self._chunk_tuning.get("current") or self._chunk_tuning.get("base") or 30.0
+
+        metrics = self._adaptive_metrics
+        durations: deque[float] = metrics.get("durations", deque(maxlen=6))  # type: ignore[assignment]
+        if "durations" not in metrics:
+            metrics["durations"] = durations
+
+        if had_oom:
+            durations.clear()
+            metrics["success_streak"] = 0
+            self._recovery_budget = 3
+            self._apply_oom_penalty(chunk_length)
+            return
+
+        if inference_duration_s is None:
+            return
+
+        durations.append(float(inference_duration_s))
+        metrics["success_streak"] = metrics.get("success_streak", 0) + 1
+        if self._recovery_budget > 0:
+            self._recovery_budget -= 1
+            return
+
+        if len(durations) >= 3:
+            self._apply_duration_feedback(chunk_length, durations)
+
+    def _apply_oom_penalty(self, chunk_length: float) -> None:
+        """Handle an out-of-memory event by reducing aggressiveness."""
+
+        self._adjust_chunk_length(chunk_length, factor=0.6, reason="OOM detected")
+        self._adjust_batch_size(factor=0.5, reason="OOM detected")
+
+    def _apply_duration_feedback(self, chunk_length: float, durations: deque[float]) -> None:
+        median_duration = statistics.median(durations)
+        if chunk_length <= 0:
+            chunk_length = self._chunk_tuning.get("current") or self._chunk_tuning.get("base") or 30.0
+
+        ratio = median_duration / max(chunk_length, 1e-6)
+        if ratio > 1.35:
+            self._adjust_chunk_length(chunk_length, factor=0.8, reason="slow inference")
+            self._adjust_batch_size(factor=0.8, reason="slow inference")
+            durations.clear()
+            self._recovery_budget = 2
+        elif ratio < 0.65:
+            self._adjust_chunk_length(chunk_length, factor=1.15, reason="fast inference", grow=True)
+            self._adjust_batch_size(factor=1.15, reason="fast inference", grow=True)
+            durations.clear()
+
+    def _adjust_batch_size(self, *, factor: float, reason: str, grow: bool = False) -> None:
+        if self.batch_size_mode == "manual":
+            return
+
+        base = self._batch_tuning.get("base")
+        current = self._batch_tuning.get("current")
+        reference = base or current or self.last_dynamic_batch_size or 4
+        if reference is None:
+            reference = 4
+
+        if grow:
+            if base is None:
+                return
+            target = max(1, int(round((current or reference) * factor)))
+            capped = min(int(base), target)
+            if current is None or capped > current:
+                self._batch_tuning["current"] = capped
+                logging.info(
+                    "Dynamic batch size increased to %s (%s).",
+                    capped,
+                    reason,
+                )
+                self._report_adjustment(
+                    f"Dynamic batch size increased to {capped} ({reason}).",
+                    level=logging.INFO,
+                )
+        else:
+            current = current or reference
+            candidate = max(1, int(round(current * factor)))
+            if candidate < current:
+                self._batch_tuning["current"] = candidate
+                logging.warning(
+                    "Dynamic batch size reduced to %s (%s).",
+                    candidate,
+                    reason,
+                )
+                self._report_adjustment(
+                    f"Dynamic batch size reduced to {candidate} ({reason}).",
+                    level=logging.WARNING,
+                )
+
+    def _adjust_chunk_length(
+        self,
+        chunk_length: float,
+        *,
+        factor: float,
+        reason: str,
+        grow: bool = False,
+    ) -> None:
+        if self.chunk_length_mode == "manual":
+            return
+
+        current = self._chunk_tuning.get("current") or chunk_length
+        base = self._chunk_tuning.get("base") or chunk_length
+        min_chunk = self._chunk_tuning.get("min") or current
+        max_chunk = self._chunk_tuning.get("max") or base
+
+        if grow:
+            target = min(max_chunk, max(current, current * factor, current + 1.0, base))
+            target = round(target, 1)
+            if target > current + 0.25:
+                self._chunk_tuning["current"] = float(target)
+                self.chunk_length_sec = float(target)
+                self.last_effective_chunk_length = float(target)
+                message = (
+                    f"Stable inference detected. Increasing chunk_length_sec from {current:.1f}s to {target:.1f}s."
+                )
+                logging.info(message)
+                self._report_adjustment(message, level=logging.INFO)
+        else:
+            target = max(min_chunk, min(current, current * factor))
+            target = round(target, 1)
+            if target < current - 0.25:
+                self._chunk_tuning["current"] = float(target)
+                self.chunk_length_sec = float(target)
+                self.last_effective_chunk_length = float(target)
+                message = (
+                    f"{reason.capitalize()}: reducing chunk_length_sec from {current:.1f}s to {target:.1f}s."
+                )
+                logging.warning(message)
+                self._report_adjustment(message, level=logging.WARNING)
+
+    def _detect_oom(self, exc: BaseException) -> bool:
+        message = str(exc).lower()
+        indicators = (
+            "cuda out of memory",
+            "cublas error",
+            "cudnn error",
+            "out of memory",
+            "hip error out of memory",
+        )
+        return any(token in message for token in indicators)
 
     def _build_backend_load_kwargs(
         self,
@@ -247,10 +546,19 @@ class TranscriptionHandler:
                     OPENROUTER_TIMEOUT_CONFIG_KEY,
                     OpenRouterAPI.DEFAULT_TIMEOUT,
                 )
+                default_attempts = self.config_manager.default_config.get(
+                    OPENROUTER_MAX_ATTEMPTS_CONFIG_KEY,
+                    3,
+                )
+                openrouter_max_attempts = self.config_manager.get_retry_attempts(
+                    OPENROUTER_MAX_ATTEMPTS_CONFIG_KEY,
+                    default_attempts,
+                )
                 self.openrouter_client = OpenRouterAPI(
                     api_key=self.openrouter_api_key,
                     model_id=self.openrouter_model,
                     request_timeout=openrouter_timeout,
+                    max_attempts=openrouter_max_attempts,
                 )
                 self.openrouter_api = self.openrouter_client
                 LOGGER.info(
@@ -454,6 +762,9 @@ class TranscriptionHandler:
         self.manual_batch_size = get_config(MANUAL_BATCH_SIZE_CONFIG_KEY)
         self.gpu_index = get_config(GPU_INDEX_CONFIG_KEY)
         self.gpu_index_requested = self.gpu_index
+        if self.batch_size_mode == "manual":
+            self._batch_tuning["current"] = None
+            self._batch_tuning["base"] = None
         self.text_correction_enabled = get_config(TEXT_CORRECTION_ENABLED_CONFIG_KEY)
         self.text_correction_service = get_config(TEXT_CORRECTION_SERVICE_CONFIG_KEY)
         self.openrouter_api_key = get_config(OPENROUTER_API_KEY_CONFIG_KEY)
@@ -466,6 +777,12 @@ class TranscriptionHandler:
         self.chunk_length_mode = get_config(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual")
         self.enable_torch_compile = bool(
             get_config(ENABLE_TORCH_COMPILE_CONFIG_KEY, False)
+        )
+        self._refresh_adaptive_config()
+
+        self.text_correction_timeout = self.config_manager.get_timeout(
+            TEXT_CORRECTION_TIMEOUT_CONFIG_KEY,
+            DEFAULT_TEXT_CORRECTION_TIMEOUT,
         )
 
         previous_backend = self._asr_backend_name
@@ -540,6 +857,7 @@ class TranscriptionHandler:
 
         if correction_changed:
             self._init_api_clients()
+            self.reset_text_correction_breaker(reason="config_change")
 
         LOGGER.info(
             log_context(
@@ -694,6 +1012,330 @@ class TranscriptionHandler:
                     exc_info=True,
                 )
 
+    def transcribe_audio_segment(
+        self,
+        audio_source: str | np.ndarray | bytes | bytearray | list[float] | None,
+        is_agent_mode: bool,
+        *,
+        correlation_id: str | None = None,
+    ) -> bool:
+        """Schedule a transcription job for the provided audio segment."""
+
+        if audio_source is None:
+            logging.error(
+                "Received empty audio payload; transcription aborted.",
+                extra={"event": "transcription.enqueue_failed", "reason": "empty_audio"},
+            )
+            return False
+
+        backend = getattr(self, "_asr_backend", None)
+        if backend is None:
+            logging.warning(
+                "ASR backend not ready. Rejecting audio segment.",
+                extra={"event": "transcription.enqueue_failed", "reason": "backend_unavailable"},
+            )
+            core = getattr(self, "core_instance_ref", None)
+            state_mgr = getattr(core, "state_manager", None) if core is not None else None
+            if state_mgr is not None:
+                try:
+                    state_mgr.set_state(
+                        sm.StateEvent.MODEL_LOADING_FAILED,
+                        details="ASR backend unavailable during transcription request",
+                        source="transcription_handler",
+                    )
+                except Exception:
+                    logging.debug("Failed to propagate backend-unavailable state.", exc_info=True)
+            return False
+
+        self.transcription_cancel_event.clear()
+
+        active_correlation = correlation_id or current_correlation_id()
+        with scoped_correlation_id(active_correlation, preserve_existing=True) as corr_id:
+            try:
+                future = self.transcription_executor.submit(
+                    self._run_transcription_job,
+                    audio_source,
+                    bool(is_agent_mode),
+                    corr_id,
+                )
+            except Exception as exc:
+                logging.error(
+                    "Failed to submit transcription job: %s",
+                    exc,
+                    exc_info=True,
+                    extra={"event": "transcription.enqueue_failed", "reason": "executor_error"},
+                )
+                return False
+
+        self.transcription_future = future
+
+        def _on_done(result_future: concurrent.futures.Future) -> None:
+            if self.transcription_future is result_future:
+                self.transcription_future = None
+            self.transcription_cancel_event.clear()
+            try:
+                result_future.result()
+            except concurrent.futures.CancelledError:
+                logging.info(
+                    "Transcription job cancelled before completion.",
+                    extra={"event": "transcription.cancelled"},
+                )
+            except Exception:
+                logging.error(
+                    "Transcription job raised an exception.",
+                    exc_info=True,
+                    extra={"event": "transcription.job_error"},
+                )
+
+        future.add_done_callback(_on_done)
+        return True
+
+    def _run_transcription_job(
+        self,
+        audio_source: str | np.ndarray | bytes | bytearray | list[float],
+        is_agent_mode: bool,
+        correlation_id: str | None,
+    ) -> None:
+        metrics: dict[str, object] = {
+            "agent_mode": bool(is_agent_mode),
+            "audio_source": self._format_audio_source(audio_source),
+        }
+
+        core = getattr(self, "core_instance_ref", None)
+        state_mgr = getattr(core, "state_manager", None) if core is not None else None
+        if state_mgr is not None:
+            try:
+                state_mgr.set_state(
+                    sm.StateEvent.TRANSCRIPTION_STARTED,
+                    details={
+                        "agent_mode": bool(is_agent_mode),
+                        "correlation_id": correlation_id,
+                    },
+                    source="transcription_handler",
+                )
+            except Exception:
+                logging.debug("Failed to emit TRANSCRIPTION_STARTED state.", exc_info=True)
+
+        try:
+            with scoped_correlation_id(correlation_id, preserve_existing=True):
+                with operation_context(
+                    "Processing transcription segment.",
+                    logger=LOGGER,
+                    event="transcription.pipeline",
+                    details={
+                        "agent_mode": bool(is_agent_mode),
+                        "source": metrics["audio_source"],
+                    },
+                    metrics=metrics,
+                    metric_key="pipeline_duration_ms",
+                ) as operation_id:
+                    metrics["operation_id"] = operation_id
+                    ready_audio = self._await_audio_source_ready(
+                        audio_source,
+                        operation_id=operation_id,
+                        metrics=metrics,
+                    )
+                    asr_payload = self._execute_asr_transcription(
+                        ready_audio,
+                        operation_id=operation_id,
+                        metrics=metrics,
+                    )
+
+                    if self.transcription_cancel_event.is_set():
+                        metrics["status"] = "cancelled"
+                        logging.info(
+                            "Transcription cancelled before completion.",
+                            extra={"event": "transcription.cancelled", "operation_id": operation_id},
+                        )
+                        return
+
+                    raw_text = (asr_payload or {}).get("text", "") or ""
+                    metrics["raw_chars"] = len(raw_text)
+
+                    processed_text = self._process_ai_pipeline(
+                        raw_text,
+                        bool(is_agent_mode),
+                        operation_id=operation_id,
+                        metrics=metrics,
+                    )
+                    metrics["processed_chars"] = len(processed_text or "")
+
+                    self._dispatch_transcription_result(
+                        processed_text,
+                        raw_text,
+                        agent_mode=bool(is_agent_mode),
+                        operation_id=operation_id,
+                        metrics=metrics,
+                    )
+                    metrics.setdefault("status", "success")
+        except Exception as exc:
+            metrics["status"] = "error"
+            metrics["error"] = str(exc)
+            logging.error(
+                "Transcription pipeline failed: %s",
+                exc,
+                exc_info=True,
+                extra={"event": "transcription.pipeline_error"},
+            )
+            if state_mgr is not None:
+                try:
+                    state_mgr.set_state(
+                        sm.STATE_ERROR_TRANSCRIPTION,
+                        details={"message": str(exc)},
+                        source="transcription_handler",
+                    )
+                except Exception:
+                    logging.debug("Failed to emit TRANSCRIPTION error state.", exc_info=True)
+        finally:
+            self._emit_transcription_metrics(metrics)
+
+    def _await_audio_source_ready(
+        self,
+        audio_source: str | np.ndarray | bytes | bytearray | list[float],
+        *,
+        operation_id: str,
+        metrics: dict[str, object],
+    ):
+        details = {
+            "source": metrics.get("audio_source"),
+        }
+        with operation_context(
+            "Awaiting audio readiness.",
+            logger=LOGGER,
+            event="transcription.stage.prepare",
+            details=details,
+            operation_id=operation_id,
+            metrics=metrics,
+            metric_key="prepare_duration_ms",
+        ):
+            if isinstance(audio_source, str):
+                path = Path(audio_source)
+                deadline = time.perf_counter() + 2.5
+                last_size: int | None = None
+                stable_iterations = 0
+                while time.perf_counter() < deadline:
+                    try:
+                        stat = path.stat()
+                    except FileNotFoundError:
+                        time.sleep(0.05)
+                        continue
+                    size = stat.st_size
+                    if size <= 0:
+                        time.sleep(0.05)
+                        continue
+                    if last_size is not None and size == last_size:
+                        stable_iterations += 1
+                        if stable_iterations >= 3:
+                            break
+                    else:
+                        stable_iterations = 0
+                        last_size = size
+                    time.sleep(0.05)
+                metrics["prepare_checks"] = stable_iterations
+            return audio_source
+
+    def _execute_asr_transcription(
+        self,
+        audio_source: str | np.ndarray | bytes | bytearray | list[float],
+        *,
+        operation_id: str,
+        metrics: dict[str, object],
+    ) -> dict[str, object]:
+        backend = getattr(self, "_asr_backend", None)
+        if backend is None:
+            raise RuntimeError("ASR backend is not initialized.")
+
+        chunk_length = float(self.chunk_length_sec or 0.0)
+        batch_size = int(self._get_dynamic_batch_size())
+        metrics.setdefault("chunk_length_s", chunk_length)
+        metrics.setdefault("batch_size", batch_size)
+
+        def _segment_callback(
+            text: str,
+            *,
+            metadata: dict[str, object] | None = None,
+            is_final: bool = False,
+        ) -> None:
+            callback = self.on_segment_transcribed_callback
+            if not callback or not text:
+                return
+            try:
+                callback(text, metadata=metadata, is_final=is_final)
+            except TypeError:
+                callback(text)
+
+        details = {
+            "chunk_length_s": chunk_length,
+            "batch_size": batch_size,
+            "agent_mode": metrics.get("agent_mode"),
+        }
+        with operation_context(
+            "Executing ASR transcription.",
+            logger=LOGGER,
+            event="transcription.stage.asr",
+            details=details,
+            operation_id=operation_id,
+            metrics=metrics,
+            metric_key="asr_duration_ms",
+        ):
+            return backend.transcribe(
+                audio_source,
+                chunk_length_s=chunk_length,
+                batch_size=batch_size,
+                on_segment=_segment_callback if self.on_segment_transcribed_callback else None,
+                cancel_event=self.transcription_cancel_event,
+            )
+
+    def _dispatch_transcription_result(
+        self,
+        processed_text: str,
+        raw_text: str,
+        *,
+        agent_mode: bool,
+        operation_id: str,
+        metrics: dict[str, object],
+    ) -> None:
+        callback = (
+            self.on_agent_result_callback
+            if agent_mode
+            else self.on_transcription_result_callback
+        )
+        if callback is None:
+            logging.debug(
+                "No callback registered for transcription results.",
+                extra={
+                    "event": "transcription.dispatch_skipped",
+                    "agent_mode": agent_mode,
+                    "operation_id": operation_id,
+                },
+            )
+            return
+
+        dispatch_event = (
+            "transcription.stage.dispatch_agent"
+            if agent_mode
+            else "transcription.stage.dispatch_result"
+        )
+        with operation_context(
+            "Dispatching transcription result.",
+            logger=LOGGER,
+            event=dispatch_event,
+            details={
+                "agent_mode": agent_mode,
+                "raw_chars": len(raw_text or ""),
+                "processed_chars": len(processed_text or ""),
+            },
+            operation_id=operation_id,
+            metrics=metrics,
+            metric_key="dispatch_duration_ms",
+            emit_start=False,
+        ):
+            if agent_mode:
+                callback(processed_text)
+            else:
+                corrected_payload = processed_text if processed_text != raw_text else None
+                callback(corrected_payload, raw_text)
+
     def _format_audio_source(self, audio_source: str | np.ndarray | bytes | bytearray | list[float] | None) -> str:
         if audio_source is None:
             return "none"
@@ -792,6 +1434,168 @@ class TranscriptionHandler:
             return SERVICE_GEMINI
         return SERVICE_NONE
 
+    def _provider_label(self, provider: str | None) -> str:
+        mapping = {
+            SERVICE_GEMINI: "gemini",
+            SERVICE_OPENROUTER: "openrouter",
+            SERVICE_NONE: "none",
+        }
+        if not provider:
+            return "unknown"
+        return mapping.get(provider, str(provider))
+
+    def _notify_correction_breaker_state(
+        self,
+        provider: str,
+        status: str,
+        *,
+        cooldown: float | None = None,
+        failures: int | None = None,
+        reason: str | None = None,
+    ) -> None:
+        core = getattr(self, "core_instance_ref", None)
+        state_mgr = getattr(core, "state_manager", None) if core is not None else None
+        provider_label = self._provider_label(provider)
+
+        if status == "tripped":
+            if cooldown is not None:
+                message = (
+                    f"Text correction provider '{provider_label}' disabled for {int(round(cooldown))}s "
+                    f"after {failures or 0} consecutive failure(s)."
+                )
+            else:
+                message = (
+                    f"Text correction provider '{provider_label}' disabled after {failures or 0} consecutive failure(s)."
+                )
+        else:
+            message = f"Text correction provider '{provider_label}' restored."
+
+        details: dict[str, object] = {
+            "message": message,
+            "provider": provider_label,
+            "status": status,
+        }
+        if failures is not None:
+            details["failures"] = failures
+        details["limit"] = self.CORRECTION_FAILURE_LIMIT
+        if cooldown is not None:
+            details["cooldown_seconds"] = float(max(0.0, cooldown))
+        if reason:
+            details["reason"] = reason
+
+        if state_mgr is None:
+            return
+
+        try:
+            event = (
+                sm.StateEvent.TEXT_CORRECTION_BREAKER_TRIPPED
+                if status == "tripped"
+                else sm.StateEvent.TEXT_CORRECTION_BREAKER_RESET
+            )
+            state_mgr.set_state(event, details=details, source="text_correction_breaker")
+        except Exception:
+            logging.debug("Failed to dispatch text correction breaker state event.", exc_info=True)
+
+    def _clear_correction_breaker(self, provider: str, *, notify: bool, reason: str | None = None) -> None:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return
+        previous_failures = self._correction_failures.get(provider, 0)
+        self._correction_failures[provider] = 0
+        disabled_was_active = self._correction_disabled_until.pop(provider, None) is not None
+        if notify and (disabled_was_active or previous_failures):
+            self._notify_correction_breaker_state(provider, "reset", reason=reason)
+
+    def _is_correction_breaker_active(self, provider: str) -> bool:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return False
+        disabled_until = self._correction_disabled_until.get(provider)
+        if disabled_until is None:
+            return False
+        now = time.monotonic()
+        if now >= disabled_until:
+            self._clear_correction_breaker(provider, notify=True, reason="cooldown_elapsed")
+            LOGGER.info(
+                "Text correction provider '%s' cooldown elapsed; breaker reset.",
+                self._provider_label(provider),
+            )
+            return False
+        return True
+
+    def _record_correction_failure(self, provider: str, exc: Exception) -> None:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return
+        failures = self._correction_failures.get(provider, 0) + 1
+        self._correction_failures[provider] = failures
+        provider_label = self._provider_label(provider)
+        LOGGER.warning(
+            "Text correction provider '%s' failure (%d/%d): %s",
+            provider_label,
+            failures,
+            self.CORRECTION_FAILURE_LIMIT,
+            exc,
+        )
+        if failures >= self.CORRECTION_FAILURE_LIMIT:
+            cooldown = self.CORRECTION_DISABLE_SECONDS
+            self._correction_disabled_until[provider] = time.monotonic() + cooldown
+            LOGGER.warning(
+                "Disabling text correction provider '%s' for %.0fs after %d consecutive failure(s).",
+                provider_label,
+                cooldown,
+                failures,
+            )
+            self._notify_correction_breaker_state(
+                provider,
+                "tripped",
+                cooldown=cooldown,
+                failures=failures,
+                reason=repr(exc),
+            )
+
+    def _record_correction_success(self, provider: str) -> None:
+        if provider not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+            return
+        previous_failures = self._correction_failures.get(provider, 0)
+        was_disabled = provider in self._correction_disabled_until
+        if previous_failures or was_disabled:
+            LOGGER.info(
+                "Text correction provider '%s' recovered after %d failure(s).",
+                self._provider_label(provider),
+                previous_failures,
+            )
+        self._clear_correction_breaker(
+            provider,
+            notify=was_disabled,
+            reason="successful_call",
+        )
+        self._correction_failures[provider] = 0
+
+    def reset_text_correction_breaker(
+        self,
+        provider: str | None = None,
+        *,
+        reason: str | None = None,
+        notify: bool = True,
+    ) -> None:
+        """Permite reinicializar manualmente o circuito de correção de texto."""
+        providers = (
+            [provider]
+            if provider
+            else [SERVICE_GEMINI, SERVICE_OPENROUTER]
+        )
+        for entry in providers:
+            if entry not in {SERVICE_GEMINI, SERVICE_OPENROUTER}:
+                continue
+            had_failures = self._correction_failures.get(entry, 0)
+            was_disabled = entry in self._correction_disabled_until
+            self._clear_correction_breaker(entry, notify=notify and was_disabled, reason=reason)
+            self._correction_failures[entry] = 0
+            if had_failures or was_disabled:
+                LOGGER.info(
+                    "Text correction provider '%s' breaker manually reset (reason=%s).",
+                    self._provider_label(entry),
+                    reason or "manual_reset",
+                )
+
     def _correct_text_with_openrouter(self, text):
         if not self.openrouter_client or not text:
             return text
@@ -811,10 +1615,29 @@ class TranscriptionHandler:
             logging.error(f"Failed to call Gemini API get_correction: {e}")
             return text
 
+    def _run_with_timeout(
+        self,
+        func: Callable[..., T],
+        *args,
+        timeout: float | None = None,
+        description: str = "operation",
+        **kwargs,
+    ) -> T:
+        effective_timeout = float(timeout or self.text_correction_timeout or DEFAULT_TEXT_CORRECTION_TIMEOUT)
+        if effective_timeout <= 0:
+            effective_timeout = float(DEFAULT_TEXT_CORRECTION_TIMEOUT)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(func, *args, **kwargs)
+            try:
+                return future.result(timeout=effective_timeout)
+            except concurrent.futures.TimeoutError as exc:
+                future.cancel()
+                raise TimeoutError(
+                    f"{description} timed out after {effective_timeout:.2f} seconds"
+                ) from exc
+
     def _process_ai_pipeline(self, transcribed_text: str, is_agent_mode: bool) -> str:
         """Centraliza o fluxo de pós-processamento baseado em IA."""
-        if not transcribed_text:
-            return transcribed_text
 
         if is_agent_mode:
             if not self.gemini_api or not getattr(self.gemini_api, "is_valid", False):
@@ -824,8 +1647,20 @@ class TranscriptionHandler:
                 )
                 return transcribed_text
             try:
-                agent_response = self.gemini_api.get_agent_response(transcribed_text)
+                agent_response = self._run_with_timeout(
+                    self.gemini_api.get_agent_response,
+                    transcribed_text,
+                    timeout=self.text_correction_timeout,
+                    description="Gemini agent response",
+                )
                 return agent_response or transcribed_text
+            except TimeoutError:
+                logging.warning(
+                    "Gemini agent response timed out after %.2f seconds; returning raw text.",
+                    float(self.text_correction_timeout or DEFAULT_TEXT_CORRECTION_TIMEOUT),
+                    extra={"event": "agent_mode_correction", "status": "timeout"},
+                )
+                return transcribed_text
             except Exception as exc:
                 logging.error(
                     "Failed to fetch response from Gemini agent: %s",
@@ -835,25 +1670,32 @@ class TranscriptionHandler:
                 )
                 return transcribed_text
 
-        if not self.text_correction_enabled:
-            return transcribed_text
+        if metrics is not None:
+            metrics.setdefault("ai_branch", branch)
 
-        active_provider = self._get_text_correction_service()
-        if active_provider == SERVICE_NONE:
-            logging.info(
-                "Text correction disabled or no provider available.",
-                extra={"event": "text_correction", "status": "skipped"},
-            )
-            return transcribed_text
+        details = {
+            "agent_mode": bool(is_agent_mode),
+            "has_text": bool(transcribed_text),
+        }
 
-        if active_provider == SERVICE_GEMINI and (
-            not self.gemini_api or not getattr(self.gemini_api, "is_valid", False)
+        with operation_context(
+            "Running AI post-processing.",
+            logger=LOGGER,
+            event="transcription.stage.ai",
+            details=details,
+            operation_id=operation_id,
+            metrics=metrics,
+            metric_key="ai_duration_ms",
         ):
-            logging.warning(
-                "Gemini client unavailable for text correction.",
-                extra={"event": "text_correction", "provider": "gemini", "status": "unavailable"},
-            )
-            return transcribed_text
+            if not transcribed_text:
+                branch = "empty"
+                logging.debug(
+                    "Skipping AI pipeline: empty transcript.",
+                    extra={"event": "text_correction", "status": "empty", "agent_mode": is_agent_mode},
+                )
+                if metrics is not None:
+                    metrics["ai_branch"] = branch
+                return transcribed_text
 
         if active_provider == SERVICE_OPENROUTER and not self.openrouter_api:
             logging.warning(
@@ -862,17 +1704,50 @@ class TranscriptionHandler:
             )
             return transcribed_text
 
+        if self._is_correction_breaker_active(active_provider):
+            remaining = max(
+                0.0,
+                self._correction_disabled_until.get(active_provider, 0.0) - time.monotonic(),
+            )
+            logging.warning(
+                "Skipping text correction for provider '%s' while breaker cooldown active (%.0fs remaining).",
+                self._provider_label(active_provider),
+                remaining,
+            )
+            return transcribed_text
+
         processed_text = transcribed_text
         self.correction_in_progress = True
+        correction_attempted = False
+        correction_succeeded = False
         try:
             if active_provider == SERVICE_GEMINI:
-                processed_text = self.gemini_api.get_correction(transcribed_text) or transcribed_text
+                processed_text = (
+                    self._run_with_timeout(
+                        self.gemini_api.get_correction,
+                        transcribed_text,
+                        timeout=self.text_correction_timeout,
+                        description="Gemini text correction",
+                    )
+                    or transcribed_text
+                )
             elif active_provider == SERVICE_OPENROUTER:
                 api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
                 if not api_key:
                     logging.warning(
-                        "No API key configured for the OpenRouter provider. Skipping text correction.",
-                        extra={"event": "text_correction", "provider": "openrouter", "status": "no_api_key"},
+                        "Agent mode requested but the Gemini client is unavailable.",
+                        extra={"event": "agent_mode_correction", "status": "unavailable"},
+                    )
+                    return transcribed_text
+                try:
+                    agent_response = client.get_agent_response(transcribed_text)
+                    return agent_response or transcribed_text
+                except Exception as exc:
+                    logging.error(
+                        "Failed to fetch response from Gemini agent: %s",
+                        exc,
+                        exc_info=True,
+                        extra={"event": "agent_mode_correction", "status": "error"},
                     )
                     return transcribed_text
 
@@ -888,17 +1763,34 @@ class TranscriptionHandler:
                         extra={"event": "text_correction", "provider": "openrouter", "status": "reconfigure_failed"},
                     )
                 if prompt:
-                    processed_text = self.openrouter_api.correct_text_async(
+                    processed_text = self._run_with_timeout(
+                        self.openrouter_api.correct_text_async,
                         transcribed_text,
                         prompt,
                         api_key,
                         model,
+                        timeout=self.text_correction_timeout,
+                        description="OpenRouter text correction",
                     )
+                    correction_succeeded = True
                 else:
-                    processed_text = self.openrouter_api.correct_text(transcribed_text)
+                    processed_text = self._run_with_timeout(
+                        self.openrouter_api.correct_text,
+                        transcribed_text,
+                        timeout=self.text_correction_timeout,
+                        description="OpenRouter text correction",
+                    )
             else:
                 logging.error(f"Unknown AI provider: {active_provider}")
                 return transcribed_text
+        except TimeoutError:
+            logging.warning(
+                "Text correction timed out after %.2f seconds using provider '%s'. Returning raw text.",
+                float(self.text_correction_timeout or DEFAULT_TEXT_CORRECTION_TIMEOUT),
+                active_provider,
+                extra={"event": "text_correction", "provider": active_provider, "status": "timeout"},
+            )
+            processed_text = transcribed_text
         except Exception as exc:
             logging.error(
                 "Error while processing text with provider %s: %s",
@@ -907,16 +1799,153 @@ class TranscriptionHandler:
                 exc_info=True,
             )
             processed_text = transcribed_text
+            if correction_attempted:
+                self._record_correction_failure(active_provider, exc)
         finally:
             self.correction_in_progress = False
+
+        if correction_attempted and correction_succeeded:
+            self._record_correction_success(active_provider)
 
         if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
             logging.info(
                 "Text correction produced a result.",
                 extra={"event": "text_correction", "status": "completed", "details": f"chars={len(processed_text)}"},
             )
+            return
 
-        return processed_text or transcribed_text
+        if self.transcription_future and not self.transcription_future.done():
+            logging.warning(
+                "Transcription already running. Rejecting new audio segment.",
+                extra={"event": "transcription", "status": "busy"},
+            )
+            return
+
+        backend = getattr(self, "_asr_backend", None)
+        if backend is None:
+            logging.error(
+                "ASR backend unavailable when attempting to transcribe.",
+                extra={"event": "transcription", "status": "backend_missing"},
+            )
+            return
+
+        chunk_length = self._get_effective_chunk_length()
+        batch_size = self._get_dynamic_batch_size()
+        audio_description = self._format_audio_source(audio_source)
+
+        self.transcription_cancel_event.clear()
+
+        logging.info(
+            "[ASR] transcription_start chunk_length_s=%.1f batch_size=%s agent_mode=%s audio=%s",
+            chunk_length,
+            batch_size,
+            agent_mode,
+            audio_description,
+        )
+
+        def _segment_callback(text: str, *, metadata: dict | None = None, is_final: bool = False) -> None:
+            callback = self.on_segment_transcribed_callback
+            if not callback:
+                return
+            try:
+                callback(text, metadata=metadata, is_final=is_final)
+            except TypeError:
+                callback(text)
+
+        def _transcription_job() -> None:
+            with scoped_correlation_id(correlation_id):
+                start_time = time.perf_counter()
+                payload: dict[str, object] = {
+                    "event": "transcription_run",
+                    "chunk_length_s": float(chunk_length),
+                    "batch_size": int(batch_size),
+                    "agent_mode": bool(agent_mode),
+                    "device": self.device_in_use or "unknown",
+                }
+                had_oom = False
+                try:
+                    if self.on_segment_transcribed_callback:
+                        text, metadata = backend.stream_transcribe(
+                            audio_source,
+                            on_segment=_segment_callback,
+                            cancel_event=self.transcription_cancel_event,
+                            chunk_length_s=chunk_length,
+                            batch_size=batch_size,
+                        )
+                    else:
+                        text, metadata = backend.stream_transcribe(
+                            audio_source,
+                            cancel_event=self.transcription_cancel_event,
+                            chunk_length_s=chunk_length,
+                            batch_size=batch_size,
+                        )
+
+                    duration_s = time.perf_counter() - start_time
+                    payload["duration_ms"] = duration_s * 1000.0
+                    payload["segments"] = len(metadata or [])
+                    self._record_adaptive_metrics(
+                        inference_duration_s=duration_s,
+                        chunk_length_s=chunk_length,
+                        had_oom=False,
+                    )
+
+                    processed_text = self._process_ai_pipeline(text, agent_mode)
+                    if agent_mode:
+                        if self.on_agent_result_callback:
+                            self.on_agent_result_callback(processed_text or text)
+                    else:
+                        if self.on_transcription_result_callback:
+                            self.on_transcription_result_callback(processed_text, text)
+
+                    payload["status"] = "completed"
+                    payload["raw_text_chars"] = len(text or "")
+                    self._emit_transcription_metrics(payload)
+                    logging.info(
+                        "[ASR] transcription_complete chunk_length_s=%.1f batch_size=%s duration_ms=%.2f agent_mode=%s",
+                        chunk_length,
+                        batch_size,
+                        payload.get("duration_ms", 0.0),
+                        agent_mode,
+                    )
+                except Exception as exc:
+                    duration_s = time.perf_counter() - start_time
+                    had_oom = self._detect_oom(exc)
+                    if had_oom:
+                        self._record_adaptive_metrics(
+                            inference_duration_s=None,
+                            chunk_length_s=chunk_length,
+                            had_oom=True,
+                        )
+                    elif duration_s > 0:
+                        self._record_adaptive_metrics(
+                            inference_duration_s=duration_s,
+                            chunk_length_s=chunk_length,
+                            had_oom=False,
+                        )
+
+                    payload["status"] = "error"
+                    payload["error"] = str(exc)
+                    payload["duration_ms"] = duration_s * 1000.0
+                    self._emit_transcription_metrics(payload)
+
+                    logging.error("Transcription failed: %s", exc, exc_info=True)
+                    if had_oom:
+                        logging.warning(
+                            "OOM detected during transcription. New chunk_length_sec=%.1f batch_size=%s",
+                            self.chunk_length_sec,
+                            self.last_dynamic_batch_size,
+                        )
+                    if self.on_model_error_callback:
+                        try:
+                            self.on_model_error_callback(str(exc))
+                        except Exception:
+                            logging.debug("Failed to propagate transcription error callback.", exc_info=True)
+                finally:
+                    self.transcription_cancel_event.clear()
+
+        future = self.transcription_executor.submit(_transcription_job)
+        self.transcription_future = future
+        future.add_done_callback(lambda _f: setattr(self, "transcription_future", None))
 
     def _get_dynamic_batch_size(self) -> int:
         device_in_use = (str(self.device_in_use or "").lower())
@@ -943,8 +1972,25 @@ class TranscriptionHandler:
             fallback=self.batch_size,
             chunk_length_sec=self.chunk_length_sec
         )
-        self.last_dynamic_batch_size = value
-        return value
+        base_value = max(1, int(value or 1))
+        self._batch_tuning["base"] = base_value
+
+        current = self._batch_tuning.get("current")
+        if current is None:
+            current = base_value
+        else:
+            current = max(1, min(int(current), base_value))
+        self._batch_tuning["current"] = current
+
+        final_value = max(1, int(current))
+        self.last_dynamic_batch_size = final_value
+        logging.info(
+            "Dynamic batch size resolved: %s (base=%s, mode=auto).",
+            final_value,
+            base_value,
+            extra={"event": "batch_size", "status": "auto", "base": base_value},
+        )
+        return final_value
 
     def _emit_device_warning(self, preferred: str, actual: str, reason: str, *, level: str = "warning") -> None:
         """Registra e propaga avisos de fallback de dispositivo."""
@@ -1011,6 +2057,199 @@ class TranscriptionHandler:
             daemon=True,
             name="ModelLoadThread",
         ).start()
+
+    def transcribe_audio_segment(
+        self,
+        audio_source: str | np.ndarray,
+        agent_mode: bool,
+        *,
+        correlation_id: str | None = None,
+        operation_id: str | None = None,
+    ) -> bool:
+        """Submit a transcription job for ``audio_source``."""
+
+        if self.transcription_executor is None:
+            LOGGER.error(
+                "Transcription executor is not available.",
+                extra={"event": "transcription.enqueue", "status": "executor_missing", "operation_id": operation_id},
+            )
+            return False
+
+        if self.transcription_future is not None and not self.transcription_future.done():
+            LOGGER.warning(
+                "Transcription already running; rejecting new audio segment.",
+                extra={"event": "transcription.enqueue", "status": "busy", "operation_id": operation_id},
+            )
+            return False
+
+        backend = getattr(self, "_asr_backend", None) or getattr(self, "pipe", None)
+        if backend is None:
+            LOGGER.warning(
+                "ASR backend is not ready to receive audio.",
+                extra={"event": "transcription.enqueue", "status": "backend_unavailable", "operation_id": operation_id},
+            )
+            return False
+
+        core = getattr(self, "core_instance_ref", None)
+        state_mgr = getattr(core, "state_manager", None) if core is not None else None
+
+        formatted_source = self._format_audio_source(audio_source)
+        LOGGER.info(
+            "Submitting transcription task.",
+            extra={
+                "event": "transcription.enqueue",
+                "status": "submitted",
+                "source": formatted_source,
+                "agent_mode": agent_mode,
+                "operation_id": operation_id,
+            },
+        )
+
+        if state_mgr is not None:
+            try:
+                state_mgr.set_state(
+                    sm.StateEvent.TRANSCRIPTION_STARTED,
+                    details={
+                        "source": formatted_source,
+                        "agent_mode": agent_mode,
+                    },
+                    source="transcription_handler",
+                    operation_id=operation_id,
+                )
+            except Exception:
+                LOGGER.debug("Failed to emit TRANSCRIPTION_STARTED state.", exc_info=True)
+
+        self.transcription_cancel_event.clear()
+
+        def _segment_callback(segment_text: str, metadata: dict[str, Any] | None = None, is_final: bool | None = None):
+            if not segment_text:
+                return
+            callback = self.on_segment_transcribed_callback
+            if not callback:
+                return
+            payload = metadata or {}
+            if operation_id and (not isinstance(payload, dict) or "operation_id" not in payload):
+                try:
+                    payload = dict(payload)
+                except Exception:
+                    payload = {"data": metadata} if metadata is not None else {}
+                payload.setdefault("operation_id", operation_id)
+            try:
+                callback(
+                    segment_text,
+                    metadata=payload if isinstance(payload, dict) else None,
+                    is_final=bool(is_final),
+                    operation_id=operation_id,
+                )
+            except TypeError:
+                callback(segment_text)
+            except Exception:
+                LOGGER.debug("Segment callback raised an exception.", exc_info=True)
+
+        cancel_event = self.transcription_cancel_event
+
+        def _run_transcription() -> None:
+            with scoped_correlation_id(correlation_id, preserve_existing=True):
+                with operation_context("transcription", operation_id=operation_id) as active_operation_id:
+                    start_ts = time.perf_counter()
+                    raw_text: str = ""
+                    try:
+                        batch_size = self._get_dynamic_batch_size()
+                        chunk_length = self.chunk_length_sec
+                        transcription_kwargs = {
+                            "chunk_length_s": chunk_length,
+                            "batch_size": batch_size,
+                            "on_segment": _segment_callback,
+                            "cancel_event": cancel_event,
+                        }
+                        result: Any
+                        transcribe_fn = getattr(backend, "transcribe", None)
+                        if callable(transcribe_fn):
+                            result = transcribe_fn(audio_source, **transcription_kwargs)
+                        else:
+                            stream_fn = getattr(backend, "stream_transcribe", None)
+                            if not callable(stream_fn):
+                                raise RuntimeError("Backend does not expose a transcription method")
+                            text, _ = stream_fn(audio_source, **transcription_kwargs)
+                            result = {"text": text}
+
+                        if isinstance(result, Mapping):
+                            raw_text = str(result.get("text", "") or "")
+                        else:
+                            raw_text = str(result or "")
+
+                        processed_text = self._process_ai_pipeline(raw_text, agent_mode)
+                        duration_ms = (time.perf_counter() - start_ts) * 1000.0
+
+                        metrics_payload = {
+                            "operation_id": active_operation_id,
+                            "agent_mode": agent_mode,
+                            "duration_ms": round(duration_ms, 2),
+                            "raw_chars": len(raw_text),
+                            "processed_chars": len(processed_text or ""),
+                        }
+                        self._emit_transcription_metrics(metrics_payload)
+
+                        LOGGER.info(
+                            "Transcription task completed.",
+                            extra={
+                                "event": "transcription.complete",
+                                "duration_ms": round(duration_ms, 2),
+                                "agent_mode": agent_mode,
+                                "operation_id": active_operation_id,
+                                "chars": len(processed_text or raw_text),
+                            },
+                        )
+
+                        if agent_mode and self.on_agent_result_callback:
+                            try:
+                                self.on_agent_result_callback(
+                                    processed_text or raw_text,
+                                    operation_id=active_operation_id,
+                                )
+                            except TypeError:
+                                self.on_agent_result_callback(processed_text or raw_text)
+                        elif self.on_transcription_result_callback:
+                            try:
+                                self.on_transcription_result_callback(
+                                    processed_text,
+                                    raw_text,
+                                    operation_id=active_operation_id,
+                                )
+                            except TypeError:
+                                self.on_transcription_result_callback(processed_text, raw_text)
+                    except Exception as exc:
+                        LOGGER.error(
+                            "Transcription task failed: %s",
+                            exc,
+                            exc_info=True,
+                            extra={"event": "transcription.error", "operation_id": operation_id},
+                        )
+                        if state_mgr is not None:
+                            try:
+                                state_mgr.set_state(
+                                    sm.STATE_ERROR_TRANSCRIPTION,
+                                    details=str(exc),
+                                    source="transcription_handler",
+                                    operation_id=operation_id,
+                                )
+                            except Exception:
+                                LOGGER.debug("Failed to emit error state after transcription failure.", exc_info=True)
+                    finally:
+                        cancel_event.clear()
+
+        future = self.transcription_executor.submit(_run_transcription)
+
+        def _on_done(fut: concurrent.futures.Future[None]) -> None:
+            self.transcription_future = None
+            try:
+                fut.result()
+            except Exception:
+                LOGGER.debug("Transcription future completed with error.", exc_info=True)
+
+        future.add_done_callback(_on_done)
+        self.transcription_future = future
+        return True
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""
@@ -1161,6 +2400,7 @@ class TranscriptionHandler:
 
         self.device_in_use = effective_device
         self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
+        self._recalculate_chunk_bounds()
 
         logging.info(
             "Effective ASR device: %s (gpu_index=%s)",
@@ -1231,6 +2471,12 @@ class TranscriptionHandler:
             self._asr_backend.load(**load_kwargs)
         except Exception as load_error:
             duration_ms = (time.perf_counter() - load_started_at) * 1000.0
+            if self._detect_oom(load_error):
+                self._record_adaptive_metrics(
+                    inference_duration_s=None,
+                    chunk_length_s=self.chunk_length_sec,
+                    had_oom=True,
+                )
             self._log_model_event(
                 "load_failure",
                 level=logging.ERROR,

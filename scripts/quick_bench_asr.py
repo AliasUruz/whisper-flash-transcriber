@@ -545,7 +545,7 @@ def test_apply_settings_payload_headless():
     core_stub = CoreStub()
     config_stub = SimpleNamespace()
     root_stub = SimpleNamespace()
-    ui = UIManager(root_stub, config_stub, core_stub)
+    ui = UIManager(root_stub, config_stub, core_stub, is_running_as_admin=False)
 
     payload = {
         "new_key": "f5",

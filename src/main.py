@@ -52,6 +52,94 @@ ENV_DEFAULTS = {
 }
 
 
+class HeadlessEventLoop:
+    """Minimal event loop shim used when running without Tk."""
+
+    def __init__(self, *, shutdown_event: threading.Event | None = None) -> None:
+        self._shutdown_event = shutdown_event or threading.Event()
+        self._timers: set[threading.Timer] = set()
+        self._lock = threading.Lock()
+
+    def after(self, delay_ms: int, callback, *args):  # type: ignore[override]
+        delay_seconds = max(delay_ms, 0) / 1000
+
+        def _invoke() -> None:
+            try:
+                callback(*args)
+            finally:
+                with self._lock:
+                    self._timers.discard(timer)
+
+        timer = threading.Timer(delay_seconds, _invoke)
+        timer.daemon = True
+        with self._lock:
+            self._timers.add(timer)
+        timer.start()
+        return timer
+
+    def after_cancel(self, timer: threading.Timer) -> None:
+        timer.cancel()
+        with self._lock:
+            self._timers.discard(timer)
+
+    def request_shutdown(self) -> None:
+        self._shutdown_event.set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._shutdown_event.wait(timeout)
+
+    def close(self) -> None:
+        self.request_shutdown()
+        with self._lock:
+            timers = tuple(self._timers)
+            self._timers.clear()
+        for timer in timers:
+            timer.cancel()
+
+
+def _patch_messagebox_for_headless() -> None:
+    """Replace Tk messageboxes with log-based fallbacks for headless execution."""
+
+    dialog_defaults: dict[str, object] = {
+        "showinfo": "ok",
+        "showwarning": "ok",
+        "showerror": "ok",
+        "askyesno": False,
+        "askokcancel": False,
+        "askretrycancel": False,
+        "askyesnocancel": False,
+        "askquestion": "no",
+    }
+
+    for name, default in dialog_defaults.items():
+        original = getattr(messagebox, name, None)
+        if original is None:
+            continue
+
+        def _make_stub(dialog_name: str, fallback: object):
+            def _stub(*args, **kwargs):
+                title = kwargs.get("title")
+                message = kwargs.get("message")
+                if args:
+                    title = title or args[0]
+                if len(args) > 1:
+                    message = message or args[1]
+                LOGGER.warning(
+                    StructuredMessage(
+                        "Suppressed Tkinter messagebox while running headless.",
+                        event="headless.messagebox",
+                        dialog=dialog_name,
+                        title=title,
+                        message=message,
+                    )
+                )
+                return fallback
+
+            return _stub
+
+        setattr(messagebox, name, _make_stub(name, default))
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Whisper Flash Transcriber bootstrap entry point.",
@@ -60,6 +148,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--diagnostics",
         action="store_true",
         help="Run startup diagnostics and exit without launching the UI.",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without initializing the Tk UI or system tray icon.",
     )
     return parser.parse_args(argv)
 
@@ -487,6 +580,7 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    headless = bool(args.headless)
     setup_logging()
     install_exception_hooks(logger=LOGGER)
     LOGGER.debug(
@@ -508,12 +602,13 @@ def main(argv: list[str] | None = None) -> int:
             python_version=sys.version.split()[0],
             working_directory=PROJECT_ROOT,
             diagnostics_only=bool(args.diagnostics),
+            headless=headless,
         )
     )
 
     try:
         configure_environment()
-        if not args.diagnostics:
+        if not args.diagnostics and not headless:
             ensure_display_available()
         configure_cuda_logging()
         patch_tk_variable_cleanup()
@@ -642,6 +737,7 @@ def main(argv: list[str] | None = None) -> int:
             app_core_instance.config_manager,
             app_core_instance,
             model_manager=app_core_instance.model_manager,
+            is_running_as_admin=app_core_instance.is_running_as_admin,
         )
         app_core_instance.ui_manager = ui_manager_instance
         ui_manager_instance.setup_tray_icon()

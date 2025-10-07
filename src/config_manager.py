@@ -7,11 +7,12 @@ import logging
 import os
 import shutil
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox
-from typing import Any, List, TYPE_CHECKING
+from typing import Any, List, Mapping, TYPE_CHECKING
 
 import requests
 
@@ -21,6 +22,7 @@ from .config_schema import (
     flatten_config_tree,
     normalize_payload_tree,
 )
+from .hotkey_normalization import _normalize_key_name
 from .model_manager import (
     HardwareProfile,
     build_runtime_catalog,
@@ -101,8 +103,118 @@ LEGACY_HOTKEY_LOCATIONS: tuple[Path, ...] = (
 )
 
 
-DEFAULT_CONFIG_TREE = AppConfig().model_dump()
-DEFAULT_CONFIG = flatten_config_tree(DEFAULT_CONFIG_TREE)
+DEFAULT_CONFIG = {
+    "show_advanced": False,
+    "record_key": "F3",
+    "record_mode": "toggle",
+    "hotkey_debounce_ms": 200,
+    "auto_paste": True,
+    "agent_auto_paste": True,
+    "auto_paste_modifier": "auto",
+    "min_record_duration": 0.5,
+    "sound_enabled": True,
+    "sound_frequency": 400,
+    "sound_duration": 0.3,
+    "sound_volume": 0.5,
+    "agent_key": "F4",
+    "keyboard_library": "win32",
+    "text_correction_enabled": False,
+    "text_correction_service": "none",
+    "openrouter_api_key": "",
+    "openrouter_model": "deepseek/deepseek-chat-v3-0324:free",
+    "gemini_api_key": "",
+    "gemini_model": "gemini-2.5-flash-lite",
+    "gemini_agent_model": "gemini-2.5-flash-lite",
+    "openrouter_timeout": 30,
+    "openrouter_max_attempts": 3,
+    "gemini_timeout": 120,
+    "text_correction_timeout": 15,
+    "ai_provider": "gemini",
+    "openrouter_prompt": "",
+    "prompt_agentico": (
+        "You are an AI assistant that executes text commands. "
+        "The user will provide an instruction followed by the text to be processed. "
+        "Your task is to execute the instruction on the text and return ONLY the final result. "
+        "Do not add explanations, greetings, or any extra text. "
+        "The output language should match the main language of the provided text."
+    ),
+    "gemini_prompt": (
+        "You are a meticulous speech-to-text correction AI. "
+        "Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below "
+        "while preserving the original content and structure as closely as possible. "
+        "Key instructions: - Correct punctuation, such as adding commas, periods, and question marks. "
+        "- Fix capitalization at the beginning of sentences. "
+        "- Remove only obvious speech disfluencies (e.g., \"I-I mean\"). "
+        "- DO NOT summarize, paraphrase, or change the original meaning. "
+        "- Return ONLY the corrected text, with no additional comments or explanations. "
+        "Transcribed speech: {text}"
+    ),
+    "ui_language": "en-US",
+    "batch_size": 16,  # Valor padrão para o modo automático
+    "batch_size_mode": "auto",  # Novo: 'auto' ou 'manual'
+    "manual_batch_size": 8,  # Novo: Valor para o modo manual
+    "gpu_index": 0,
+    "hotkey_stability_service_enabled": True,  # Nova configuração unificada
+    "use_vad": False,
+    "vad_threshold": 0.5,
+    # Duração máxima da pausa preservada antes que o silêncio seja descartado
+    "vad_silence_duration": 1.0,
+    # Valores alinhados com AppConfig em config_schema.py para coerência de VAD.
+    "vad_pre_speech_padding_ms": 150,
+    "vad_post_speech_padding_ms": 300,
+    "display_transcripts_in_terminal": False,
+    "gemini_model_options": [
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
+    ],
+    "save_temp_recordings": False,
+    "record_storage_mode": "auto",
+    "record_storage_limit": 0,
+    "max_memory_seconds_mode": "auto",
+    "max_memory_seconds": 30,
+    "min_free_ram_mb": 1000,
+    "auto_ram_threshold_percent": 10,
+    "max_parallel_downloads": 1,
+    "min_transcription_duration": 1.0,  # Nova configuração
+    "chunk_length_sec": 30,
+    "chunk_length_mode": "auto",
+    "launch_at_startup": False,
+    "clear_gpu_cache": True,
+    "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
+    "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
+    "deps_install_dir": _DEFAULT_DEPS_INSTALL_DIR,
+    "hf_home_dir": _DEFAULT_HF_HOME_DIR,
+    "recordings_dir": _DEFAULT_RECORDINGS_DIR,
+    "asr_model_id": "distil-whisper/distil-large-v3",
+    "asr_backend": "ctranslate2",
+    "asr_compute_device": "auto",
+    "asr_ct2_compute_type": "int8_float16",
+    "asr_cache_dir": _DEFAULT_ASR_CACHE_DIR,
+    "asr_installed_models": [],
+    "asr_curated_catalog": list_catalog(),
+    "asr_curated_catalog_url": "",
+    "asr_last_download_status": {
+        "status": "unknown",
+        "timestamp": "",
+        "model_id": "",
+        "backend": "",
+        "message": "",
+        "details": "",
+        "target_dir": "",
+        "bytes_downloaded": 0,
+        "throughput_bps": 0.0,
+        "duration_seconds": 0.0,
+    },
+    "asr_download_history": [],
+    "asr_last_prompt_decision": {
+        "model_id": "",
+        "backend": "",
+        "decision": "",
+        "timestamp": 0,
+    },
+    "first_run_completed": False,
+}
 
 
 LOGGER = get_logger("whisper_flash_transcriber.config", component="ConfigManager")
@@ -120,6 +232,7 @@ SOUND_FREQUENCY_CONFIG_KEY = "sound_frequency"
 SOUND_DURATION_CONFIG_KEY = "sound_duration"
 SOUND_VOLUME_CONFIG_KEY = "sound_volume"
 HOTKEY_STABILITY_SERVICE_ENABLED_CONFIG_KEY = "hotkey_stability_service_enabled" # Nova constante unificada
+HOTKEY_DEBOUNCE_MS_CONFIG_KEY = "hotkey_debounce_ms"
 BATCH_SIZE_CONFIG_KEY = "batch_size" # Agora é o batch size padrão para o modo auto
 BATCH_SIZE_MODE_CONFIG_KEY = "batch_size_mode" # Novo
 MANUAL_BATCH_SIZE_CONFIG_KEY = "manual_batch_size" # Novo
@@ -146,6 +259,7 @@ KEYBOARD_LIBRARY_CONFIG_KEY = "keyboard_library"
 KEYBOARD_LIB_WIN32 = "win32"
 TEXT_CORRECTION_ENABLED_CONFIG_KEY = "text_correction_enabled"
 TEXT_CORRECTION_SERVICE_CONFIG_KEY = "text_correction_service"
+TEXT_CORRECTION_TIMEOUT_CONFIG_KEY = "text_correction_timeout"
 ENABLE_AI_CORRECTION_CONFIG_KEY = TEXT_CORRECTION_ENABLED_CONFIG_KEY
 AUTO_PASTE_MODIFIER_CONFIG_KEY = "auto_paste_modifier"
 SERVICE_NONE = "none"
@@ -154,12 +268,14 @@ SERVICE_GEMINI = "gemini"
 OPENROUTER_API_KEY_CONFIG_KEY = "openrouter_api_key"
 OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 OPENROUTER_TIMEOUT_CONFIG_KEY = "openrouter_timeout"
+OPENROUTER_MAX_ATTEMPTS_CONFIG_KEY = "openrouter_max_attempts"
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
 GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 # Novas constantes de timeout de APIs externas
 GEMINI_TIMEOUT_CONFIG_KEY = "gemini_timeout"
+GEMINI_MAX_ATTEMPTS_CONFIG_KEY = "gemini_max_attempts"
 # Novas constantes para otimizações de desempenho
 CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
 ENABLE_TORCH_COMPILE_CONFIG_KEY = "enable_torch_compile"
@@ -319,6 +435,7 @@ class ConfigManager:
         self._config_hash = None
         self._secrets_hash = None
         self._invalid_timeout_cache: dict[str, Any] = {}
+        self._invalid_retry_cache: dict[str, Any] = {}
         self._config_existed_on_boot = config_existed
         self._bootstrap_state: dict[str, dict[str, Any]] = {
             "config": {
@@ -415,13 +532,19 @@ class ConfigManager:
         if "vad_enabled" in loaded_config_from_file:
             logging.info("Migrating legacy 'vad_enabled' key to 'use_vad'.")
             raw_cfg["use_vad"] = _parse_bool(loaded_config_from_file.get("vad_enabled"))
+        legacy_record_to_memory = loaded_config_from_file.get("record_to_memory")
         if (
             "record_storage_mode" not in loaded_config_from_file
             and "record_to_memory" in loaded_config_from_file
         ):
             logging.info("Migrating legacy 'record_to_memory' key to 'record_storage_mode'.")
-            record_to_memory = _parse_bool(loaded_config_from_file.get("record_to_memory"))
+            record_to_memory = _parse_bool(legacy_record_to_memory)
             raw_cfg["record_storage_mode"] = "memory" if record_to_memory else "disk"
+
+        if "record_to_memory" in raw_cfg:
+            raw_cfg.pop("record_to_memory", None)
+        if "record_to_memory" in loaded_config_from_file:
+            loaded_config_from_file.pop("record_to_memory", None)
 
         old_agent_prompt = (
             "Você é um assistente de IA que integra um sistema operacional. "
@@ -586,8 +709,36 @@ class ConfigManager:
             return default
 
         # Normalize hotkey fields for internal consumption
-        cfg["record_key"] = str(cfg.get("record_key", self.default_config["record_key"])).lower()
+        default_record_key = (
+            _normalize_key_name(self.default_config["record_key"])
+            or self.default_config["record_key"]
+        )
+        cfg["record_key"] = (
+            _normalize_key_name(cfg.get("record_key", default_record_key))
+            or default_record_key
+        )
         cfg["record_mode"] = str(cfg.get("record_mode", self.default_config["record_mode"])).lower()
+        debounce_source = cfg.get(
+            HOTKEY_DEBOUNCE_MS_CONFIG_KEY,
+            self.default_config[HOTKEY_DEBOUNCE_MS_CONFIG_KEY],
+        )
+        try:
+            debounce_value = float(debounce_source)
+        except (TypeError, ValueError):
+            logging.warning(
+                "Invalid hotkey_debounce_ms value '%s'; falling back to default %.2f ms.",
+                debounce_source,
+                float(self.default_config[HOTKEY_DEBOUNCE_MS_CONFIG_KEY]),
+            )
+            debounce_value = float(self.default_config[HOTKEY_DEBOUNCE_MS_CONFIG_KEY])
+        else:
+            if debounce_value < 0:
+                logging.warning(
+                    "hotkey_debounce_ms cannot be negative (value=%s); coercing to 0.",
+                    debounce_source,
+                )
+                debounce_value = 0.0
+        cfg[HOTKEY_DEBOUNCE_MS_CONFIG_KEY] = int(round(debounce_value))
 
         # Agent auto paste mirrors auto paste unless explicitly overridden
         auto_paste_value = bool(cfg.get("auto_paste", self.default_config["auto_paste"]))
@@ -1115,10 +1266,17 @@ class ConfigManager:
             ]
 
         # chunk_length_mode: 'auto' | 'manual'
-        raw_chunk_mode = str(self.config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual"))).lower()
+        raw_chunk_mode = str(
+            self.config.get(
+                CHUNK_LENGTH_MODE_CONFIG_KEY,
+                self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "auto"),
+            )
+        ).lower()
         if raw_chunk_mode not in ["auto", "manual"]:
-            logging.warning(f"Invalid chunk_length_mode '{raw_chunk_mode}'. Falling back to 'manual'.")
-            raw_chunk_mode = "manual"
+            logging.warning(
+                f"Invalid chunk_length_mode '{raw_chunk_mode}'. Falling back to 'auto'."
+            )
+            raw_chunk_mode = "auto"
         self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = raw_chunk_mode
 
         backend_value = _normalize_asr_backend(
@@ -2080,6 +2238,29 @@ class ConfigManager:
                 self._invalid_timeout_cache.pop(key, None)
             return timeout_value
 
+    def get_retry_attempts(self, key: str, default: int) -> int:
+        """Retorna o número máximo de tentativas configurado para a chave."""
+        value = self.get(key, default)
+        try:
+            attempts = int(value)
+            if attempts <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            cached_value = self._invalid_retry_cache.get(key)
+            if value != cached_value:
+                logging.warning(
+                    "Invalid retry attempts '%s' for key '%s'; using default %s attempts.",
+                    value,
+                    key,
+                    int(default),
+                )
+                self._invalid_retry_cache[key] = value
+            return int(default)
+        else:
+            if key in self._invalid_retry_cache:
+                self._invalid_retry_cache.pop(key, None)
+            return attempts
+
     def set(self, key, value):
         if key == ASR_BACKEND_CONFIG_KEY:
             value = _normalize_asr_backend(value)
@@ -2793,13 +2974,13 @@ class ConfigManager:
     def get_chunk_length_mode(self):
         return self.config.get(
             CHUNK_LENGTH_MODE_CONFIG_KEY,
-            self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "manual"),
+            self.default_config.get(CHUNK_LENGTH_MODE_CONFIG_KEY, "auto"),
         )
 
     def set_chunk_length_mode(self, value: str):
         val = str(value).lower()
         if val not in ["auto", "manual"]:
-            val = "manual"
+            val = "auto"
         self.config[CHUNK_LENGTH_MODE_CONFIG_KEY] = val
 
     def set_chunk_length_sec(self, value: float | int):

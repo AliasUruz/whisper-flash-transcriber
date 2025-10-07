@@ -162,6 +162,23 @@ def scoped_correlation_id(
 
 
 @contextmanager
+def operation_context(
+    operation_name: str | None = None,
+    *,
+    operation_id: str | None = None,
+) -> Iterator[str]:
+    """Bind ``operation_id`` to log records emitted within the context."""
+
+    resolved_id = operation_id or uuid.uuid4().hex[:8]
+    stack = _operation_stack_var.get()
+    token = _operation_stack_var.set(stack + ((resolved_id, operation_name),))
+    try:
+        yield resolved_id
+    finally:
+        _operation_stack_var.reset(token)
+
+
+@contextmanager
 def log_operation(
     logger: logging.Logger | logging.LoggerAdapter,
     headline: str,
@@ -177,33 +194,37 @@ def log_operation(
     success_details: Mapping[str, Any] | None = None,
     failure_details: Mapping[str, Any] | None = None,
     include_duration: bool = True,
+    operation_id: str | None = None,
+    operation_name: str | None = None,
 ) -> Iterator[str]:
     """Log the lifespan of a structured operation with automatic timing."""
 
-    operation_id = uuid.uuid4().hex[:8]
-    operation_name = event if event else headline
+    resolved_operation_id = operation_id or uuid.uuid4().hex[:8]
+    resolved_operation_name = (
+        operation_name if operation_name is not None else (event if event else headline)
+    )
     stack = _operation_stack_var.get()
-    token = _operation_stack_var.set(stack + ((operation_id, operation_name),))
+    token = _operation_stack_var.set(stack + ((resolved_operation_id, resolved_operation_name),))
 
     start_event = f"{event}.start" if event else None
     success_event = f"{event}.success" if event else None
     failure_event = f"{event}.error" if event else None
 
     start_payload = dict(details or {})
-    start_payload.setdefault("operation_id", operation_id)
+    start_payload.setdefault("operation_id", resolved_operation_id)
 
     logger.log(start_level, StructuredMessage(headline, event=start_event, details=start_payload))
 
     started_at = time.perf_counter()
 
     try:
-        yield operation_id
+        yield resolved_operation_id
     except Exception:
         duration_ms = (time.perf_counter() - started_at) * 1000.0
         detail_payload = dict(details or {})
         if failure_details:
             detail_payload.update(failure_details)
-        detail_payload.setdefault("operation_id", operation_id)
+        detail_payload.setdefault("operation_id", resolved_operation_id)
         if include_duration:
             detail_payload.setdefault("duration_ms", round(duration_ms, 2))
 
@@ -221,7 +242,7 @@ def log_operation(
         detail_payload = dict(details or {})
         if success_details:
             detail_payload.update(success_details)
-        detail_payload.setdefault("operation_id", operation_id)
+        detail_payload.setdefault("operation_id", resolved_operation_id)
         if include_duration:
             detail_payload.setdefault("duration_ms", round(duration_ms, 2))
 
@@ -232,6 +253,80 @@ def log_operation(
                 event=success_event,
                 details=detail_payload,
             ),
+        )
+    finally:
+        _operation_stack_var.reset(token)
+
+
+@contextmanager
+def operation_context(
+    headline: str,
+    *,
+    logger: logging.Logger | logging.LoggerAdapter | None = None,
+    event: str | None = None,
+    details: Mapping[str, Any] | None = None,
+    level: int = logging.INFO,
+    success_level: int | None = None,
+    failure_level: int | None = None,
+    operation_id: str | None = None,
+    emit_start: bool = True,
+    metrics: MutableMapping[str, Any] | None = None,
+    metric_key: str | None = None,
+) -> Iterator[str]:
+    """Context manager that records operation duration while preserving correlation metadata."""
+
+    target_logger = _resolve_logger(logger)
+
+    stack = _operation_stack_var.get()
+    if operation_id is None:
+        if stack:
+            operation_id = stack[-1][0]
+        else:
+            operation_id = uuid.uuid4().hex[:8]
+
+    operation_name = event or headline
+    token = _operation_stack_var.set(stack + ((operation_id, operation_name),))
+
+    start_event = f"{event}.start" if event else None
+    success_event = f"{event}.success" if event else None
+    failure_event = f"{event}.error" if event else None
+
+    payload = dict(details or {})
+    payload.setdefault("operation_id", operation_id)
+
+    started_at = time.perf_counter()
+    if emit_start:
+        target_logger.log(
+            level,
+            StructuredMessage(headline, event=start_event, details=payload),
+        )
+
+    try:
+        yield operation_id
+    except Exception:
+        duration_ms = (time.perf_counter() - started_at) * 1000.0
+        failure_payload = dict(details or {})
+        failure_payload.setdefault("operation_id", operation_id)
+        failure_payload.setdefault("duration_ms", round(duration_ms, 2))
+        if metrics is not None and metric_key:
+            metrics[metric_key] = round(duration_ms, 2)
+            metrics[f"{metric_key}_status"] = "error"
+        target_logger.log(
+            failure_level or logging.ERROR,
+            StructuredMessage(headline, event=failure_event, details=failure_payload),
+        )
+        raise
+    else:
+        duration_ms = (time.perf_counter() - started_at) * 1000.0
+        success_payload = dict(details or {})
+        success_payload.setdefault("operation_id", operation_id)
+        success_payload.setdefault("duration_ms", round(duration_ms, 2))
+        if metrics is not None and metric_key:
+            metrics[metric_key] = round(duration_ms, 2)
+            metrics[f"{metric_key}_status"] = "success"
+        target_logger.log(
+            success_level or level,
+            StructuredMessage(headline, event=success_event, details=success_payload),
         )
     finally:
         _operation_stack_var.reset(token)
@@ -859,6 +954,97 @@ def log_duration(
         )
 
 
+def join_thread_with_timeout(
+    thread: threading.Thread | None,
+    *,
+    timeout: float,
+    logger: logging.Logger | logging.LoggerAdapter,
+    thread_name: str | None = None,
+    event_prefix: str | None = None,
+    details: Mapping[str, Any] | None = None,
+    log_success: bool = False,
+) -> bool:
+    """Wait for ``thread`` to finish, logging when the join exceeds ``timeout``."""
+
+    if thread is None:
+        return True
+
+    if not isinstance(thread, threading.Thread):
+        raise TypeError("join_thread_with_timeout expects a threading.Thread instance or None")
+
+    if thread is threading.current_thread():
+        logger.debug(
+            log_context(
+                "Skipping join on current thread.",
+                event=(f"{event_prefix}.join_skipped_self" if event_prefix else "thread.join_skipped_self"),
+                details={
+                    "thread_name": thread_name or thread.name,
+                },
+            )
+        )
+        return True
+
+    label = thread_name or thread.name or "<unnamed-thread>"
+
+    if not thread.is_alive():
+        if log_success:
+            logger.debug(
+                log_context(
+                    "Thread already stopped before join.",
+                    event=(f"{event_prefix}.join_no_wait" if event_prefix else "thread.join_no_wait"),
+                    details={"thread_name": label},
+                )
+            )
+        return True
+
+    try:
+        thread.join(timeout)
+    except Exception:
+        logger.warning(
+            log_context(
+                "Exception raised while waiting for thread shutdown.",
+                event=(f"{event_prefix}.join_exception" if event_prefix else "thread.join_exception"),
+                details={
+                    "thread_name": label,
+                    "timeout_seconds": timeout,
+                    "thread_ident": thread.ident,
+                },
+            ),
+            exc_info=True,
+        )
+        return False
+
+    if thread.is_alive():
+        extra = {
+            "thread_name": label,
+            "timeout_seconds": timeout,
+            "thread_ident": thread.ident,
+        }
+        if details:
+            extra.update(details)
+        logger.warning(
+            log_context(
+                "Thread did not finish within the allotted timeout.",
+                event=(f"{event_prefix}.join_timeout" if event_prefix else "thread.join_timeout"),
+                details=extra,
+            )
+        )
+        return False
+
+    if log_success:
+        extra = {"thread_name": label, "thread_ident": thread.ident}
+        if details:
+            extra.update(details)
+        logger.debug(
+            log_context(
+                "Thread joined successfully.",
+                event=(f"{event_prefix}.join_success" if event_prefix else "thread.join_success"),
+                details=extra,
+            )
+        )
+    return True
+
+
 def get_logger(
     name: str,
     *,
@@ -956,7 +1142,9 @@ __all__ = [
     "log_duration",
     "log_context",
     "log_event",
+    "join_thread_with_timeout",
     "log_operation",
+    "operation_context",
     "install_exception_hooks",
     "scoped_correlation_id",
     "setup_logging",

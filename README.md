@@ -101,7 +101,34 @@ pip install -r requirements-extras.txt
 | `playwright` | The UI automation bridge used by integration scripts in `scripts/` and power-user workflows. |
 | `accelerate`, `datasets[audio]` | Batch automation helpers and dataset tooling used by advanced users when remediating dependencies or benchmarking models. |
 
-When you opt into any of these features, double-check the related configuration keys inside the `advanced` namespace so the runtime knows which services are active. Secrets continue to live in `secrets.json` even when the file is written in the new nested layout.
+### Headless Mode
+
+When you need background operation without the system tray icon or any Tk windows,
+launch Whisper Flash Transcriber in headless mode:
+
+```bash
+python src/main.py --headless
+```
+
+The recorder, transcription pipeline, hotkeys, and automatic paste continue to work,
+but all Tk-based UI surfaces (settings window, onboarding wizard, diagnostic dialogs)
+are suppressed. Any message box that would normally appear is logged instead so you
+can monitor issues from the console. Exit the process with <kbd>Ctrl</kbd> + <kbd>C</kbd>
+or by calling the shutdown hotkeys configured for your environment.
+On Windows you can achieve the same by invoking `Run Whisper.bat --headless`.
+
+### Simple vs. advanced configuration
+
+- The onboarding wizard opens in a simplified mode by default. Press **Ctrl + Shift + A** at any step to toggle the advanced
+  track and persist the preference in `config.json`. The status is also shown in the final summary page so you can confirm
+  whether additional settings will be available after the first launch.
+- Inside the settings window the **Show advanced** button controls the visibility of VAD fine-tuning, manual batch size,
+  chunk length overrides, RAM limits, and AI correction knobs. When the toggle is off the application automatically reverts to
+  safe defaults such as automatic batching, VAD disabled, and memory management in automatic mode.
+- Advanced changes made while the toggle is disabled are ignored during validation, guaranteeing that the simplified mode keeps
+  a safe configuration even if `config.json` was edited manually.
+
+### Configuration
 
 ## Documentation map
 | File | Summary |

@@ -8,8 +8,9 @@ from typing import Optional
 import requests
 
 from .logging_utils import get_logger, log_context
+from .app_identity import APP_DISPLAY_NAME, APP_OFFICIAL_URL, APP_LOG_NAMESPACE
 
-LOGGER = get_logger('whisper_flash_transcriber.openrouter', component='OpenRouterAPI')
+LOGGER = get_logger(f"{APP_LOG_NAMESPACE}.openrouter", component='OpenRouterAPI')
 
 
 class OpenRouterAPI:
@@ -28,6 +29,11 @@ class OpenRouterAPI:
         model_id: str = "deepseek/deepseek-chat-v3-0324:free",
         max_tokens: int = 4096,
         request_timeout: float = DEFAULT_TIMEOUT,
+        *,
+        max_attempts: int = 3,
+        retry_base_delay: float = 1.0,
+        retry_max_delay: float = 16.0,
+        retry_jitter_factor: float = 0.25,
     ) -> None:
         """Inicializa o cliente OpenRouter.
 
@@ -48,11 +54,15 @@ class OpenRouterAPI:
             request_timeout,
             self.DEFAULT_TIMEOUT,
         )
+        self.max_attempts = max(1, int(max_attempts))
+        self.retry_base_delay = max(0.0, float(retry_base_delay))
+        self.retry_max_delay = max(float(retry_max_delay), self.retry_base_delay or 0.0)
+        self.retry_jitter_factor = max(0.0, float(retry_jitter_factor))
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://whisper-recorder.app",
-            "X-Title": "Whisper Recorder",
+            "HTTP-Referer": APP_OFFICIAL_URL,
+            "X-Title": APP_DISPLAY_NAME,
         }
 
     def _normalize_timeout(
@@ -89,6 +99,10 @@ class OpenRouterAPI:
         api_key: Optional[str] = None,
         model_id: Optional[str] = None,
         request_timeout: Optional[float] = None,
+        max_attempts: Optional[int] = None,
+        retry_base_delay: Optional[float] = None,
+        retry_max_delay: Optional[float] = None,
+        retry_jitter_factor: Optional[float] = None,
     ) -> None:
         """Atualiza chave, modelo e cabeçalhos do cliente.
 
@@ -108,7 +122,35 @@ class OpenRouterAPI:
                 request_timeout,
                 self.request_timeout,
             )
+        if max_attempts is not None:
+            try:
+                attempts = int(max_attempts)
+            except (TypeError, ValueError):
+                attempts = self.max_attempts
+            else:
+                if attempts > 0:
+                    self.max_attempts = attempts
+        if retry_base_delay is not None:
+            try:
+                self.retry_base_delay = max(0.0, float(retry_base_delay))
+            except (TypeError, ValueError):
+                pass
+        if retry_max_delay is not None:
+            try:
+                self.retry_max_delay = max(
+                    float(retry_max_delay),
+                    self.retry_base_delay or 0.0,
+                )
+            except (TypeError, ValueError):
+                pass
+        if retry_jitter_factor is not None:
+            try:
+                self.retry_jitter_factor = max(0.0, float(retry_jitter_factor))
+            except (TypeError, ValueError):
+                pass
         self.headers["Authorization"] = f"Bearer {self.api_key}"
+        self.headers["HTTP-Referer"] = APP_OFFICIAL_URL
+        self.headers["X-Title"] = APP_DISPLAY_NAME
         LOGGER.info(
             "OpenRouter API client re/initialized with model '%s'",
             self.model_id,
@@ -119,20 +161,20 @@ class OpenRouterAPI:
         self,
         payload_json: str,
         attempt_number: int,
-        max_retries: int,
-    ) -> tuple[Optional[dict], bool]:
+        max_attempts: int,
+    ) -> dict:
         """Executa uma tentativa única de requisição ao OpenRouter."""
         LOGGER.info(
             "Sending request to OpenRouter API with model '%s' (attempt %s/%s)",
             self.model_id,
             attempt_number,
-            max_retries,
+            max_attempts,
         )
         LOGGER.debug(
             "OpenRouter payload for model '%s' (attempt %s/%s): %s",
             self.model_id,
             attempt_number,
-            max_retries,
+            max_attempts,
             payload_json,
         )
         try:
@@ -147,24 +189,32 @@ class OpenRouterAPI:
                 "OpenRouter API request timed out after %.2f seconds (attempt %s/%s): %s",
                 self.request_timeout,
                 attempt_number,
-                max_retries,
+                max_attempts,
                 exc,
             )
-            return None, True
+            raise RetryableOperationError(
+                "OpenRouter API request timed out.",
+                error_code="timeout",
+                retryable=True,
+            ) from exc
         except requests.exceptions.RequestException as exc:
             LOGGER.error(
                 "Network error when calling OpenRouter API (attempt %s/%s): %s",
                 attempt_number,
-                max_retries,
+                max_attempts,
                 exc,
             )
-            return None, True
+            raise RetryableOperationError(
+                "OpenRouter API network error.",
+                error_code="network",
+                retryable=True,
+            ) from exc
 
         LOGGER.debug(
             "OpenRouter raw response (status %s, attempt %s/%s): %s",
             response.status_code,
             attempt_number,
-            max_retries,
+            max_attempts,
             response.text,
         )
 
@@ -178,19 +228,24 @@ class OpenRouterAPI:
                 "OpenRouter API HTTP error (status %s) on attempt %s/%s: %s",
                 status_code,
                 attempt_number,
-                max_retries,
+                max_attempts,
                 exc,
             )
             if exc.response is not None:
                 LOGGER.debug(
                     "OpenRouter HTTP error response body (attempt %s/%s): %s",
                     attempt_number,
-                    max_retries,
+                    max_attempts,
                     exc.response.text,
                 )
-            if isinstance(status_code, int) and 400 <= status_code < 500:
-                return None, False
-            return None, True
+            retryable = True
+            if isinstance(status_code, int) and 400 <= status_code < 500 and status_code != 429:
+                retryable = False
+            raise RetryableOperationError(
+                "OpenRouter API returned an HTTP error.",
+                error_code=status_code,
+                retryable=retryable,
+            ) from exc
 
         try:
             result = response.json()
@@ -198,27 +253,33 @@ class OpenRouterAPI:
             LOGGER.error(
                 "Failed to decode OpenRouter API response JSON (attempt %s/%s): %s",
                 attempt_number,
-                max_retries,
+                max_attempts,
                 exc,
             )
-            return None, True
+            raise RetryableOperationError(
+                "Failed to decode OpenRouter API response JSON.",
+                retryable=True,
+            ) from exc
         except Exception as exc:
             LOGGER.error(
                 "Unexpected error while parsing OpenRouter API response (attempt %s/%s): %s",
                 attempt_number,
-                max_retries,
+                max_attempts,
                 exc,
                 exc_info=True,
             )
-            return None, False
+            raise RetryableOperationError(
+                "Unexpected error while parsing OpenRouter API response.",
+                retryable=False,
+            ) from exc
 
-        return result, False
+        return result
 
     def correct_text(
         self,
         text: str,
-        max_retries: int = 3,
-        retry_delay: float = 1,
+        max_retries: Optional[int] = None,
+        retry_delay: Optional[float] = None,
     ) -> str:
         """
         Corrige o texto transcrito usando o modelo Deepseek.
@@ -263,58 +324,74 @@ class OpenRouterAPI:
         }
 
         payload_json = json.dumps(payload, ensure_ascii=False)
-        delay = retry_delay
         start_time = time.time()
+        attempts = max_retries if max_retries is not None else self.max_attempts
+        base_delay = retry_delay if retry_delay is not None else self.retry_base_delay
+        operation_id = f"openrouter:{self.model_id}:{time.monotonic_ns()}"
+        retryable_error_codes = (408, 409, 425, 429, 500, 502, 503, 504)
 
-        for attempt in range(max_retries):
-            attempt_number = attempt + 1
-            result, should_retry = self._perform_single_attempt(
+        def _invoke(attempt_number: int, total_attempts: int) -> str:
+            result = self._perform_single_attempt(
                 payload_json,
                 attempt_number,
-                max_retries,
+                total_attempts,
+            )
+            if result is not None and result.get("choices"):
+                return result["choices"][0]["message"]["content"]
+
+            LOGGER.error(
+                "Unexpected response format from OpenRouter API: %s",
+                result,
+            )
+            LOGGER.debug(
+                "OpenRouter unexpected response payload (attempt %s/%s): %s",
+                attempt_number,
+                total_attempts,
+                json.dumps(result, ensure_ascii=False),
+            )
+            raise RetryableOperationError(
+                "OpenRouter API returned an unexpected payload.",
+                retryable=True,
             )
 
-            if result is not None and 'choices' in result and result['choices']:
-                corrected_text = result['choices'][0]['message']['content']
-                LOGGER.info(
-                    log_context(
-                        "Successfully received corrected text from OpenRouter API.",
-                        event="openrouter.correction_success",
-                        latency_ms=int((time.time() - start_time) * 1000),
-                    )
-                )
-                if corrected_text != text:
-                    LOGGER.info("OpenRouter API made corrections to the text")
-                else:
-                    LOGGER.info("OpenRouter API returned text unchanged")
-                return corrected_text
+        try:
+            corrected_text = retry_with_backoff(
+                _invoke,
+                max_attempts=attempts,
+                base_delay=base_delay,
+                max_delay=self.retry_max_delay,
+                jitter_factor=self.retry_jitter_factor,
+                operation_id=operation_id,
+                logger=LOGGER,
+                retryable_error_codes=retryable_error_codes,
+            )
+        except RetryableOperationError:
+            LOGGER.warning(
+                "Failed to correct text with OpenRouter API, returning original text (operation_id=%s)",
+                operation_id,
+            )
+            return text
+        except Exception:
+            LOGGER.error(
+                "OpenRouter correction failed with unexpected error after retries (operation_id=%s)",
+                operation_id,
+                exc_info=True,
+            )
+            return text
 
-            if result is not None:
-                LOGGER.error(
-                    "Unexpected response format from OpenRouter API: %s",
-                    result,
-                )
-                LOGGER.debug(
-                    "OpenRouter unexpected response payload (attempt %s/%s): %s",
-                    attempt_number,
-                    max_retries,
-                    json.dumps(result, ensure_ascii=False),
-                )
-                should_retry = True
-
-            if should_retry and attempt < max_retries - 1:
-                LOGGER.info("Retrying in %s seconds...", delay)
-                time.sleep(delay)
-                delay *= 2
-            else:
-                if not should_retry:
-                    break
-
-        LOGGER.warning(
-            "Failed to correct text with OpenRouter API, "
-            "returning original text",
+        LOGGER.info(
+            log_context(
+                "Successfully received corrected text from OpenRouter API.",
+                event="openrouter.correction_success",
+                latency_ms=int((time.time() - start_time) * 1000),
+                operation_id=operation_id,
+            )
         )
-        return text
+        if corrected_text != text:
+            LOGGER.info("OpenRouter API made corrections to the text")
+        else:
+            LOGGER.info("OpenRouter API returned text unchanged")
+        return corrected_text
 
     def correct_text_async(
         self, text: str, prompt: str, api_key: str, model: str
@@ -351,43 +428,54 @@ class OpenRouterAPI:
         }
 
         payload_json = json.dumps(payload, ensure_ascii=False)
-        max_attempts = 3
-        delay = 1.0
+        attempts = self.max_attempts
+        operation_id = f"openrouter:{self.model_id}:async:{time.monotonic_ns()}"
+        retryable_error_codes = (408, 409, 425, 429, 500, 502, 503, 504)
 
-        for attempt in range(max_attempts):
-            attempt_number = attempt + 1
-            result, should_retry = self._perform_single_attempt(
+        def _invoke_async(attempt_number: int, total_attempts: int) -> str:
+            result = self._perform_single_attempt(
                 payload_json,
                 attempt_number,
-                max_attempts,
+                total_attempts,
+            )
+            if result is not None and result.get("choices"):
+                return result["choices"][0]["message"]["content"]
+
+            LOGGER.error(
+                "Unexpected response format from OpenRouter API: %s",
+                result,
+            )
+            LOGGER.debug(
+                "OpenRouter unexpected response payload (attempt %s/%s): %s",
+                attempt_number,
+                total_attempts,
+                json.dumps(result, ensure_ascii=False),
+            )
+            raise RetryableOperationError(
+                "OpenRouter API returned an unexpected payload.",
+                retryable=True,
             )
 
-            if result is not None and result.get("choices"):
-                corrected_text = result["choices"][0]["message"]["content"]
-                return corrected_text
-
-            if result is not None:
-                LOGGER.error(
-                    "Unexpected response format from OpenRouter API: %s",
-                    result,
-                )
-                LOGGER.debug(
-                    "OpenRouter unexpected response payload (attempt %s/%s): %s",
-                    attempt_number,
-                    max_attempts,
-                    json.dumps(result, ensure_ascii=False),
-                )
-                should_retry = True
-
-            if should_retry and attempt < max_attempts - 1:
-                LOGGER.info("Retrying in %s seconds...", delay)
-                time.sleep(delay)
-            else:
-                if not should_retry:
-                    break
-
-        LOGGER.warning(
-            "Failed to correct text with OpenRouter API, "
-            "returning original text"
-        )
+        try:
+            return retry_with_backoff(
+                _invoke_async,
+                max_attempts=attempts,
+                base_delay=self.retry_base_delay,
+                max_delay=self.retry_max_delay,
+                jitter_factor=self.retry_jitter_factor,
+                operation_id=operation_id,
+                logger=LOGGER,
+                retryable_error_codes=retryable_error_codes,
+            )
+        except RetryableOperationError:
+            LOGGER.warning(
+                "Failed to correct text with OpenRouter API, returning original text (operation_id=%s)",
+                operation_id,
+            )
+        except Exception:
+            LOGGER.error(
+                "OpenRouter async correction failed with unexpected error after retries (operation_id=%s)",
+                operation_id,
+                exc_info=True,
+            )
         return text
