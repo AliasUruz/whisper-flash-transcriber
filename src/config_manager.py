@@ -9,13 +9,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox
-from typing import Any, List
+from typing import Any, List, TYPE_CHECKING
 
 import requests
 
 from .config_schema import coerce_with_defaults
 from .model_manager import get_curated_entry, list_catalog, list_installed, normalize_backend_label
 from .logging_utils import StructuredMessage, get_logger, log_context
+
+if TYPE_CHECKING:
+    from .startup_diagnostics import StartupDiagnosticsReport
 try:
     from distutils.util import strtobool
 except Exception:  # Python >= 3.12
@@ -1561,6 +1564,28 @@ class ConfigManager:
                 "error": payload.get("error"),
             }
         return report
+
+    def register_startup_diagnostics(self, report: "StartupDiagnosticsReport") -> None:
+        """Attach startup diagnostics to the bootstrap state and persist the report reference."""
+
+        summary = report.to_dict()
+        summary["user_messages"] = report.user_friendly_summary(include_success=False)
+        self._bootstrap_state["diagnostics"] = summary
+        self._startup_diagnostics_report = report
+        BOOTSTRAP_LOGGER.info(
+            StructuredMessage(
+                "Startup diagnostics registered.",
+                event="config.bootstrap.diagnostics_registered",
+                has_errors=report.has_errors,
+                has_warnings=report.has_warnings,
+                has_fatal_errors=report.has_fatal_errors,
+            )
+        )
+
+    def get_startup_diagnostics(self) -> "StartupDiagnosticsReport | None":
+        """Return the latest startup diagnostics report when available."""
+
+        return getattr(self, "_startup_diagnostics_report", None)
 
     def save_config(self) -> PersistenceOutcome:
         """Salva as configurações não sensíveis no config.json e as sensíveis no secrets.json."""

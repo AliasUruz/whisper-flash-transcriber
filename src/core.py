@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
-from typing import Any, Mapping
+from typing import Any, Mapping, TYPE_CHECKING
 from pathlib import Path
 from threading import RLock
 try:
@@ -69,6 +69,9 @@ from .logging_utils import (
     scoped_correlation_id,
 )
 
+if TYPE_CHECKING:
+    from .startup_diagnostics import StartupDiagnosticsReport
+
 
 LOGGER = get_logger('whisper_flash_transcriber.core', component='Core')
 MODEL_LOGGER = get_logger('whisper_recorder.model', component='ModelManager')
@@ -85,6 +88,7 @@ class AppCore:
         *,
         config_manager: ConfigManager | None = None,
         hotkey_config_path: str = HOTKEY_CONFIG_FILE,
+        startup_diagnostics: "StartupDiagnosticsReport | None" = None,
     ):
         self.main_tk_root = main_tk_root # Referência para a raiz Tkinter
         self.hotkey_config_path = hotkey_config_path
@@ -134,6 +138,19 @@ class AppCore:
             "DownloadCancelledError",
             Exception,
         )
+
+        self.startup_diagnostics: "StartupDiagnosticsReport | None" = startup_diagnostics
+        if self.startup_diagnostics is not None:
+            diagnostics = self.startup_diagnostics
+            LOGGER.info(
+                StructuredMessage(
+                    "Startup diagnostics attached to core instance.",
+                    event="core.diagnostics.attached",
+                    has_errors=diagnostics.has_errors,
+                    has_warnings=diagnostics.has_warnings,
+                    has_fatal_errors=diagnostics.has_fatal_errors,
+                )
+            )
 
         # Sincronizar modelos ASR já presentes no disco no início da aplicação
         try:
@@ -215,7 +232,18 @@ class AppCore:
         ahk_manager = getattr(self, "ahk_manager", None)
         if ahk_manager is not None:
             report["hotkeys"] = ahk_manager.describe_persistence_state()
+        if self.startup_diagnostics is not None:
+            diagnostics_payload = self.startup_diagnostics.to_dict()
+            diagnostics_payload["user_messages"] = self.startup_diagnostics.user_friendly_summary(
+                include_success=False
+            )
+            report["diagnostics"] = diagnostics_payload
         return report
+
+    def get_startup_diagnostics(self) -> "StartupDiagnosticsReport | None":
+        """Expose the startup diagnostics report to interested UI components."""
+
+        return self.startup_diagnostics
 
         try:
             cache_dir = self.config_manager.get("asr_cache_dir")

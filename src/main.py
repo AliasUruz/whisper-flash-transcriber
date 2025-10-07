@@ -1,4 +1,5 @@
 import atexit
+import argparse
 import importlib.util
 import json
 import os
@@ -6,6 +7,7 @@ import shutil
 import sys
 import threading
 import tkinter as tk
+import tkinter.messagebox as messagebox
 from pathlib import Path
 
 # Add project root to path
@@ -38,6 +40,7 @@ from src.logging_utils import (
     install_exception_hooks,
     setup_logging,
 )
+from src.startup_diagnostics import format_report_for_console, run_startup_diagnostics
 
 
 LOGGER = get_logger("whisper_flash_transcriber.bootstrap", component="Bootstrap")
@@ -49,6 +52,18 @@ ENV_DEFAULTS = {
     "TRANSFORMERS_NO_ADVISORY_WARNINGS": "1",
     "BITSANDBYTES_NOWELCOME": "1",
 }
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Whisper Flash Transcriber bootstrap entry point.",
+    )
+    parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Run startup diagnostics and exit without launching the UI.",
+    )
+    return parser.parse_args(argv)
 
 
 def ensure_display_available() -> None:
@@ -474,7 +489,8 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
     )
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     setup_logging()
     install_exception_hooks(logger=LOGGER)
     LOGGER.debug(
@@ -495,12 +511,14 @@ def main() -> None:
             event="bootstrap.start",
             python_version=sys.version.split()[0],
             working_directory=PROJECT_ROOT,
+            diagnostics_only=bool(args.diagnostics),
         )
     )
 
     try:
         configure_environment()
-        ensure_display_available()
+        if not args.diagnostics:
+            ensure_display_available()
         configure_cuda_logging()
         patch_tk_variable_cleanup()
 
@@ -510,6 +528,22 @@ def main() -> None:
 
         config_manager = ConfigManager()
         run_startup_preflight(config_manager, hotkey_config_path=HOTKEY_CONFIG_PATH)
+        diagnostics_report = run_startup_diagnostics(
+            config_manager,
+            hotkey_config_path=HOTKEY_CONFIG_PATH,
+        )
+
+        if args.diagnostics:
+            print(format_report_for_console(diagnostics_report))
+            exit_code = 1 if diagnostics_report.has_errors else 0
+            LOGGER.info(
+                StructuredMessage(
+                    "Diagnostics-only execution completed.",
+                    event="bootstrap.diagnostics_only_complete",
+                    exit_code=exit_code,
+                )
+            )
+            return exit_code
 
         app_core_instance = None
         ui_manager_instance = None
@@ -563,6 +597,7 @@ def main() -> None:
             main_tk_root,
             config_manager=config_manager,
             hotkey_config_path=str(HOTKEY_CONFIG_PATH),
+            startup_diagnostics=diagnostics_report,
         )
         ui_manager_instance = UIManager(
             main_tk_root,
@@ -574,6 +609,19 @@ def main() -> None:
         ui_manager_instance.setup_tray_icon()
         app_core_instance.flush_pending_ui_notifications()
         ui_manager_instance.on_exit_app = on_exit_app_enhanced
+
+        if diagnostics_report.has_fatal_errors:
+            fatal_summary = "\n\n".join(
+                diagnostics_report.user_friendly_summary(include_success=False)
+            )
+
+            def _show_diagnostics_failure() -> None:
+                messagebox.showerror(
+                    "Startup diagnostics",
+                    fatal_summary,
+                )
+
+            main_tk_root.after(0, _show_diagnostics_failure)
 
         LOGGER.info(
             StructuredMessage(
@@ -602,4 +650,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
