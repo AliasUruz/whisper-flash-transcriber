@@ -101,8 +101,116 @@ LEGACY_HOTKEY_LOCATIONS: tuple[Path, ...] = (
 )
 
 
-DEFAULT_CONFIG_TREE = AppConfig().model_dump()
-DEFAULT_CONFIG = flatten_config_tree(DEFAULT_CONFIG_TREE)
+DEFAULT_CONFIG = {
+    "record_key": "F3",
+    "record_mode": "toggle",
+    "auto_paste": True,
+    "agent_auto_paste": True,
+    "auto_paste_modifier": "auto",
+    "min_record_duration": 0.5,
+    "sound_enabled": True,
+    "sound_frequency": 400,
+    "sound_duration": 0.3,
+    "sound_volume": 0.5,
+    "agent_key": "F4",
+    "keyboard_library": "win32",
+    "text_correction_enabled": False,
+    "text_correction_service": "none",
+    "openrouter_api_key": "",
+    "openrouter_model": "deepseek/deepseek-chat-v3-0324:free",
+    "gemini_api_key": "",
+    "gemini_model": "gemini-2.5-flash-lite",
+    "gemini_agent_model": "gemini-2.5-flash-lite",
+    "openrouter_timeout": 30,
+    "openrouter_max_attempts": 3,
+    "gemini_timeout": 120,
+    "gemini_max_attempts": 3,
+    "ai_provider": "gemini",
+    "openrouter_prompt": "",
+    "prompt_agentico": (
+        "You are an AI assistant that executes text commands. "
+        "The user will provide an instruction followed by the text to be processed. "
+        "Your task is to execute the instruction on the text and return ONLY the final result. "
+        "Do not add explanations, greetings, or any extra text. "
+        "The output language should match the main language of the provided text."
+    ),
+    "gemini_prompt": (
+        "You are a meticulous speech-to-text correction AI. "
+        "Your primary task is to correct punctuation, capitalization, and minor transcription errors in the text below "
+        "while preserving the original content and structure as closely as possible. "
+        "Key instructions: - Correct punctuation, such as adding commas, periods, and question marks. "
+        "- Fix capitalization at the beginning of sentences. "
+        "- Remove only obvious speech disfluencies (e.g., \"I-I mean\"). "
+        "- DO NOT summarize, paraphrase, or change the original meaning. "
+        "- Return ONLY the corrected text, with no additional comments or explanations. "
+        "Transcribed speech: {text}"
+    ),
+    "ui_language": "en-US",
+    "batch_size": 16,  # Valor padrão para o modo automático
+    "batch_size_mode": "auto",  # Novo: 'auto' ou 'manual'
+    "manual_batch_size": 8,  # Novo: Valor para o modo manual
+    "gpu_index": 0,
+    "hotkey_stability_service_enabled": True,  # Nova configuração unificada
+    "use_vad": False,
+    "vad_threshold": 0.5,
+    # Duração máxima da pausa preservada antes que o silêncio seja descartado
+    "vad_silence_duration": 1.0,
+    # Valores alinhados com AppConfig em config_schema.py para coerência de VAD.
+    "vad_pre_speech_padding_ms": 150,
+    "vad_post_speech_padding_ms": 300,
+    "display_transcripts_in_terminal": False,
+    "gemini_model_options": [
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
+    ],
+    "save_temp_recordings": False,
+    "record_storage_mode": "auto",
+    "record_storage_limit": 0,
+    "max_memory_seconds_mode": "manual",
+    "max_memory_seconds": 30,
+    "min_free_ram_mb": 1000,
+    "auto_ram_threshold_percent": 10,
+    "max_parallel_downloads": 1,
+    "min_transcription_duration": 1.0,  # Nova configuração
+    "chunk_length_sec": 30,
+    "chunk_length_mode": "manual",
+    "launch_at_startup": False,
+    "clear_gpu_cache": True,
+    "storage_root_dir": _DEFAULT_STORAGE_ROOT_DIR,
+    "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
+    "deps_install_dir": _DEFAULT_DEPS_INSTALL_DIR,
+    "hf_home_dir": _DEFAULT_HF_HOME_DIR,
+    "recordings_dir": _DEFAULT_RECORDINGS_DIR,
+    "asr_model_id": "distil-whisper/distil-large-v3",
+    "asr_backend": "ctranslate2",
+    "asr_compute_device": "auto",
+    "asr_ct2_compute_type": "int8_float16",
+    "asr_cache_dir": _DEFAULT_ASR_CACHE_DIR,
+    "asr_installed_models": [],
+    "asr_curated_catalog": list_catalog(),
+    "asr_curated_catalog_url": "",
+    "asr_last_download_status": {
+        "status": "unknown",
+        "timestamp": "",
+        "model_id": "",
+        "backend": "",
+        "message": "",
+        "details": "",
+        "target_dir": "",
+        "bytes_downloaded": 0,
+        "throughput_bps": 0.0,
+        "duration_seconds": 0.0,
+    },
+    "asr_download_history": [],
+    "asr_last_prompt_decision": {
+        "model_id": "",
+        "backend": "",
+        "decision": "",
+        "timestamp": 0,
+    },
+    "first_run_completed": False,
+}
 
 
 LOGGER = get_logger("whisper_flash_transcriber.config", component="ConfigManager")
@@ -154,12 +262,14 @@ SERVICE_GEMINI = "gemini"
 OPENROUTER_API_KEY_CONFIG_KEY = "openrouter_api_key"
 OPENROUTER_MODEL_CONFIG_KEY = "openrouter_model"
 OPENROUTER_TIMEOUT_CONFIG_KEY = "openrouter_timeout"
+OPENROUTER_MAX_ATTEMPTS_CONFIG_KEY = "openrouter_max_attempts"
 GEMINI_API_KEY_CONFIG_KEY = "gemini_api_key"
 GEMINI_MODEL_CONFIG_KEY = "gemini_model"
 GEMINI_AGENT_MODEL_CONFIG_KEY = "gemini_agent_model"
 GEMINI_MODEL_OPTIONS_CONFIG_KEY = "gemini_model_options"
 # Novas constantes de timeout de APIs externas
 GEMINI_TIMEOUT_CONFIG_KEY = "gemini_timeout"
+GEMINI_MAX_ATTEMPTS_CONFIG_KEY = "gemini_max_attempts"
 # Novas constantes para otimizações de desempenho
 CHUNK_LENGTH_MODE_CONFIG_KEY = "chunk_length_mode"
 ENABLE_TORCH_COMPILE_CONFIG_KEY = "enable_torch_compile"
@@ -319,6 +429,7 @@ class ConfigManager:
         self._config_hash = None
         self._secrets_hash = None
         self._invalid_timeout_cache: dict[str, Any] = {}
+        self._invalid_retry_cache: dict[str, Any] = {}
         self._config_existed_on_boot = config_existed
         self._bootstrap_state: dict[str, dict[str, Any]] = {
             "config": {
@@ -2079,6 +2190,29 @@ class ConfigManager:
             if key in self._invalid_timeout_cache:
                 self._invalid_timeout_cache.pop(key, None)
             return timeout_value
+
+    def get_retry_attempts(self, key: str, default: int) -> int:
+        """Retorna o número máximo de tentativas configurado para a chave."""
+        value = self.get(key, default)
+        try:
+            attempts = int(value)
+            if attempts <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            cached_value = self._invalid_retry_cache.get(key)
+            if value != cached_value:
+                logging.warning(
+                    "Invalid retry attempts '%s' for key '%s'; using default %s attempts.",
+                    value,
+                    key,
+                    int(default),
+                )
+                self._invalid_retry_cache[key] = value
+            return int(default)
+        else:
+            if key in self._invalid_retry_cache:
+                self._invalid_retry_cache.pop(key, None)
+            return attempts
 
     def set(self, key, value):
         if key == ASR_BACKEND_CONFIG_KEY:

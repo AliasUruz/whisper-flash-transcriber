@@ -6,9 +6,11 @@ from typing import Any, Optional
 from .config_manager import (
     ConfigManager,
     GEMINI_PROMPT_CONFIG_KEY,
+    GEMINI_MAX_ATTEMPTS_CONFIG_KEY,
     GEMINI_TIMEOUT_CONFIG_KEY,
 )
 from .logging_utils import get_logger, log_context
+from .retry_utils import RetryableOperationError, retry_with_backoff
 
 try:
     import google.generativeai as genai
@@ -218,13 +220,13 @@ class GeminiAPI:
         prompt: str,
         model: Any | None,
         model_id: Optional[str],
-        max_retries: int = 3,
-        retry_delay: int = 1,
+        *,
+        base_delay: float = 1.0,
+        max_delay: float = 16.0,
+        jitter_factor: float = 0.25,
         timeout: int | float = 120,
     ) -> str:
-        """
-        Executa uma requisição para a API Gemini com lógica de retry.
-        """
+        """Executa uma requisição para a API Gemini com lógica de retry."""
         if not prompt:
             LOGGER.warning("Cannot execute request: empty prompt provided.")
             return ""
@@ -238,95 +240,134 @@ class GeminiAPI:
 
         timeout_value = self._resolve_timeout(timeout)
         model_for_log = model_id or "<unknown>"
+        default_attempts = self.config_manager.default_config.get(
+            GEMINI_MAX_ATTEMPTS_CONFIG_KEY,
+            3,
+        )
+        max_attempts = self.config_manager.get_retry_attempts(
+            GEMINI_MAX_ATTEMPTS_CONFIG_KEY,
+            default_attempts,
+        )
+        operation_id = f"gemini:{model_for_log}:{time.monotonic_ns()}"
+        retryable_error_codes = (429, 500, 502, 503, 504)
 
-        for attempt in range(max_retries):
-            attempt_number = attempt + 1
-            should_retry = False
+        def _generate(attempt_number: int, total_attempts: int) -> str:
+            LOGGER.info(
+                "Sending prompt to the Gemini API with model %s (attempt %s/%s)",
+                model_for_log,
+                attempt_number,
+                total_attempts,
+            )
+            LOGGER.debug(
+                "Gemini prompt payload for model '%s' (attempt %s/%s): %s",
+                model_for_log,
+                attempt_number,
+                total_attempts,
+                prompt,
+            )
             try:
-                LOGGER.info(
-                    "Sending prompt to the Gemini API with model %s (attempt %s/%s)",
-                    model_for_log,
-                    attempt_number,
-                    max_retries,
-                )
-                LOGGER.debug(
-                    "Gemini prompt payload for model '%s' (attempt %s/%s): %s",
-                    model_for_log,
-                    attempt_number,
-                    max_retries,
-                    prompt,
-                )
                 response = model.generate_content(
                     prompt,
                     request_options=helper_types.RequestOptions(timeout=timeout_value),
                 )
-                LOGGER.debug(
-                    "Gemini raw response for model '%s' (attempt %s/%s): %s",
-                    model_for_log,
-                    attempt_number,
-                    max_retries,
-                    self._format_response_for_logging(response),
-                )
-
-                if hasattr(response, 'text') and response.text:
-                    generated_text = response.text.strip()
-                    LOGGER.info(
-                        "Gemini API returned a successful response."
-                    )
-                    return generated_text
-
-                LOGGER.warning(
-                    "Gemini API returned an empty response (attempt %s/%s)",
-                    attempt_number,
-                    max_retries,
-                )
-                should_retry = True
-
-            except GoogleAPITimeoutError as e:
+            except GoogleAPITimeoutError as exc:
                 LOGGER.error(
                     "Gemini API request timed out after %.2f seconds (attempt %s/%s): %s",
                     timeout_value,
                     attempt_number,
-                    max_retries,
-                    e,
+                    total_attempts,
+                    exc,
                 )
-                should_retry = True
-            except (BrokenResponseError, IncompleteIterationError) as e:
+                raise RetryableOperationError(
+                    "Gemini API request timed out.",
+                    error_code=getattr(exc, "code", "timeout"),
+                    retryable=True,
+                ) from exc
+            except (BrokenResponseError, IncompleteIterationError) as exc:
                 LOGGER.error(
                     "Gemini API specific error (attempt %s/%s): %s",
                     attempt_number,
-                    max_retries,
-                    e,
+                    total_attempts,
+                    exc,
                 )
+                raise RetryableOperationError(
+                    "Gemini API returned a broken response.",
+                    retryable=True,
+                ) from exc
+            except GoogleAPIError as exc:
+                status_code = getattr(exc, "code", None)
+                if status_code is None and hasattr(exc, "response"):
+                    status_code = getattr(getattr(exc, "response"), "status_code", None)
                 should_retry = True
-            except GoogleAPIError as e:
+                if isinstance(status_code, int) and 400 <= status_code < 500 and status_code != 429:
+                    should_retry = False
                 LOGGER.error(
                     "Gemini API returned an error response (attempt %s/%s): %s",
                     attempt_number,
-                    max_retries,
-                    e,
+                    total_attempts,
+                    exc,
                 )
-                should_retry = True
-            except Exception as e:
+                raise RetryableOperationError(
+                    "Gemini API returned an error response.",
+                    error_code=status_code,
+                    retryable=should_retry,
+                ) from exc
+            except Exception as exc:
                 LOGGER.error(
                     "Error while generating content with the Gemini API (attempt %s/%s): %s",
                     attempt_number,
-                    max_retries,
-                    e,
+                    total_attempts,
+                    exc,
                     exc_info=True,
                 )
-                should_retry = True
+                raise RetryableOperationError(
+                    "Unexpected error while calling Gemini API.",
+                    retryable=True,
+                ) from exc
 
-            if should_retry and attempt < max_retries - 1:
-                LOGGER.info(
-                    "Retrying in %s seconds...",
-                    retry_delay,
-                )
-                time.sleep(retry_delay)
+            LOGGER.debug(
+                "Gemini raw response for model '%s' (attempt %s/%s): %s",
+                model_for_log,
+                attempt_number,
+                total_attempts,
+                self._format_response_for_logging(response),
+            )
 
-        LOGGER.error(
-            "All attempts to generate content with the Gemini API failed."
-        )
+            if hasattr(response, "text") and response.text:
+                generated_text = response.text.strip()
+                LOGGER.info("Gemini API returned a successful response.")
+                return generated_text
+
+            LOGGER.warning(
+                "Gemini API returned an empty response (attempt %s/%s)",
+                attempt_number,
+                total_attempts,
+            )
+            raise RetryableOperationError(
+                "Gemini API returned an empty response.",
+                retryable=True,
+            )
+
+        try:
+            return retry_with_backoff(
+                _generate,
+                max_attempts=max_attempts,
+                base_delay=base_delay,
+                max_delay=max_delay,
+                jitter_factor=jitter_factor,
+                operation_id=operation_id,
+                logger=LOGGER,
+                retryable_error_codes=retryable_error_codes,
+            )
+        except RetryableOperationError:
+            LOGGER.error(
+                "All attempts to generate content with the Gemini API failed."
+            )
+        except Exception:
+            LOGGER.error(
+                "Gemini API request failed with an unexpected error after retries.",
+                exc_info=True,
+            )
         return ""
 
     def get_correction(self, text: str) -> str:
