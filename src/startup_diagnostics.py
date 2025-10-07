@@ -99,11 +99,10 @@ def _result_from_payload(name: str, payload: dict[str, Any], *, success_status: 
     ok = bool(payload.get("ok"))
     status = success_status if ok else "error"
     message = payload.get("message", "")
-    suggestion = payload.get("suggestion")
+    suggestion = payload.get("recommendation") or payload.get("suggestion")
     fatal = bool(payload.get("fatal"))
-    details = {
-        key: value for key, value in payload.items() if key not in {"ok", "message", "suggestion", "fatal"}
-    }
+    excluded_keys = {"ok", "message", "suggestion", "recommendation", "fatal"}
+    details = {key: value for key, value in payload.items() if key not in excluded_keys}
     result = DiagnosticResult(
         name=name,
         status=status,
