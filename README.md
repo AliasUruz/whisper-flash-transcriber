@@ -112,10 +112,15 @@ When you opt into any of these features, double-check the related configuration 
 | `docs/model-loading-flow.md` | Timeline for the CT2 model lifecycle and how the state manager keeps the tray icon accurate during downloads and reloads. |
 | `docs/ui_vars.md` | Mapping between CustomTkinter variables and configuration keys, updated to reflect the advanced namespace. |
 
-## Troubleshooting
-- Use the built-in **Dependency Audit** panel (Settings → Diagnostics) to compare your environment with the manifests listed above. It reports missing packages, mismatched versions, and hash divergences.
-- Logs live under `logs/` and can be tailed while running `python src/main.py` to observe hotkey detection, ASR reloads, and paste automation.
-- The CLI helper `python -m compileall src` remains part of the pre-commit checklist to catch syntax errors quickly.
+### Window-only fallback mode
+
+Environments that block access to the operating system tray (for example, missing `pystray`, restricted remote desktops, or
+headless sessions) now trigger a controlled fallback. During startup the diagnostics report records the problem under the
+**System Tray** check, and the runtime emits a structured warning with the `ui.tray_icon.unavailable` event. The application
+automatically opens the settings window so you can continue managing recordings without relying on the tray icon. Install the
+`pystray` and `Pillow` packages and ensure a compatible desktop session is available to restore full tray functionality.
+
+### ASR backend policy
 
 Whisper Flash Transcriber now distributes only the faster-whisper/CTranslate2 backend. The legacy Transformers
 pipeline has been removed from the packaged application. If you depend on the Transformers stack (for example,

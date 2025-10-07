@@ -146,6 +146,91 @@ def _probe_hotkey_subsystem(hotkey_config_path: Path | str | None) -> Diagnostic
     return _result_from_payload("Hotkey Permissions", payload)
 
 
+def _probe_tray_subsystem() -> DiagnosticResult:
+    try:
+        import pystray  # type: ignore[import-not-found]
+    except ImportError as exc:
+        payload = {
+            "ok": False,
+            "message": "System tray integration is unavailable because pystray is not installed.",
+            "details": {"error": str(exc)},
+            "suggestion": "Install the 'pystray' package to enable the system tray icon.",
+            "fatal": False,
+        }
+        return _result_from_payload("System Tray", payload, success_status="warning")
+
+    try:
+        from PIL import Image  # type: ignore[import-not-found]
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "message": "System tray integration requires Pillow for icon rendering.",
+            "details": {"error": str(exc)},
+            "suggestion": "Install the 'Pillow' package so the tray icon can be rendered.",
+            "fatal": False,
+        }
+        return _result_from_payload("System Tray", payload, success_status="warning")
+
+    try:
+        dummy_image = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "message": "Failed to create a dummy image for the tray icon diagnostic.",
+            "details": {"error": str(exc)},
+            "suggestion": "Verify that Pillow can create RGBA images in this environment.",
+            "fatal": False,
+        }
+        return _result_from_payload("System Tray", payload, success_status="warning")
+
+    icon = None
+    backend_name = None
+    try:
+        icon = pystray.Icon("diagnostic_probe", dummy_image)
+        backend = getattr(icon, "_app", None)
+        if backend is not None:
+            backend_name = backend.__class__.__name__
+    except OSError as exc:
+        payload = {
+            "ok": False,
+            "message": "The current session does not expose a usable system tray backend.",
+            "details": {"error": str(exc), "backend": backend_name},
+            "suggestion": "Launch the application inside a graphical session with a system tray.",
+            "fatal": False,
+        }
+        return _result_from_payload("System Tray", payload, success_status="warning")
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "message": "System tray initialization failed during diagnostics.",
+            "details": {"error": str(exc), "backend": backend_name},
+            "suggestion": "Review display permissions or tray backend availability before retrying.",
+            "fatal": False,
+        }
+        return _result_from_payload("System Tray", payload, success_status="warning")
+    finally:
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:
+                LOGGER.debug(
+                    StructuredMessage(
+                        "Failed to stop diagnostic tray icon instance.",
+                        event="diagnostics.tray.cleanup_failed",
+                    ),
+                    exc_info=True,
+                )
+
+    payload = {
+        "ok": True,
+        "message": "System tray integration is available.",
+        "details": {"backend": backend_name},
+        "suggestion": None,
+        "fatal": False,
+    }
+    return _result_from_payload("System Tray", payload)
+
+
 def _probe_torch_environment() -> DiagnosticResult:
     try:
         torch_spec = importlib.util.find_spec("torch")
@@ -287,6 +372,7 @@ def run_startup_diagnostics(
     report = StartupDiagnosticsReport()
     report.add(_probe_audio_subsystem())
     report.add(_probe_hotkey_subsystem(hotkey_config_path))
+    report.add(_probe_tray_subsystem())
     report.add(_probe_torch_environment())
 
     try:
