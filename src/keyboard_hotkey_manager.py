@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
+import shutil
+import threading
+import time
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -69,6 +72,9 @@ class KeyboardHotkeyManager:
         self._active_driver_index: int | None = None
         self._driver_lock = threading.Lock()
         self._driver_failures: list[dict[str, Any]] = []
+        self._available_driver_names: list[str] = self._probe_available_driver_names()
+        self._active_driver_name: str | None = None
+        self._fallback_active: bool = False
         self.hotkey_handlers: dict[str, list[Any]] = {}
         self._debounce_window_seconds: float = 0.0
         self._last_event_timestamps: dict[str, float] = {}
@@ -95,6 +101,90 @@ class KeyboardHotkeyManager:
             log_context(message, event=event, details=payload or None),
             exc_info=exc_info,
         )
+
+    def _probe_available_driver_names(self) -> list[str]:
+        try:
+            drivers = build_available_drivers(
+                log=lambda lvl, msg, **fields: self._log(
+                    lvl,
+                    msg,
+                    event="hotkeys.driver_probe",
+                    **fields,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive probe
+            self._log(
+                logging.DEBUG,
+                "Failed to probe available hotkey drivers.",
+                event="hotkeys.driver_probe_failed",
+                error=str(exc),
+            )
+            return []
+
+        names: list[str] = []
+        for driver in drivers:
+            try:
+                names.append(driver.name)
+            except Exception as driver_exc:  # pragma: no cover - defensive guard
+                self._log(
+                    logging.DEBUG,
+                    "Failed to resolve hotkey driver name during probe.",
+                    event="hotkeys.driver_probe_name_failed",
+                    error=str(driver_exc),
+                )
+
+        try:
+            has_keyboard_driver = bool(getattr(keyboard, "add_hotkey", None))
+        except Exception:  # pragma: no cover - placeholder raised
+            has_keyboard_driver = False
+        if has_keyboard_driver and "keyboard" not in names:
+            names.insert(0, "keyboard")
+        return names
+
+    def _set_driver_state(self, *, active_name: str | None, fallback: bool) -> None:
+        with self._driver_lock:
+            self._active_driver_name = active_name
+            self._fallback_active = fallback
+            self._active_driver_index = 0 if active_name is not None else None
+            self._active_driver = None
+
+    def _determine_fallback(self, active_name: str | None) -> bool:
+        if active_name is None:
+            return False
+        if not self._available_driver_names:
+            return False
+        return self._available_driver_names[0] != active_name
+
+    def _remember_driver_failure(self, *, reason: str, error: str | None = None) -> None:
+        entry: dict[str, Any] = {"reason": reason}
+        if error:
+            entry["error"] = error
+        with self._driver_lock:
+            self._driver_failures.append(entry)
+            if len(self._driver_failures) > 10:
+                self._driver_failures = self._driver_failures[-10:]
+
+    def _resolve_primary_driver_name(self) -> str | None:
+        if self._available_driver_names:
+            return self._available_driver_names[0]
+        return None
+
+    def get_active_driver_name(self) -> str | None:
+        with self._driver_lock:
+            return self._active_driver_name
+
+    def is_using_fallback(self) -> bool:
+        with self._driver_lock:
+            return self._fallback_active
+
+    def describe_driver_state(self) -> dict[str, Any]:
+        with self._driver_lock:
+            return {
+                "active": self._active_driver_name,
+                "fallback_active": self._fallback_active,
+                "available": list(self._available_driver_names),
+                "failures": [dict(item) for item in self._driver_failures],
+            }
 
     def _load_config(self):
         """Load configuration from disk, creating the file with defaults when it is missing."""
@@ -330,9 +420,15 @@ class KeyboardHotkeyManager:
             return True
 
         try:
+            self._available_driver_names = self._probe_available_driver_names()
             # Registrar as hotkeys e verificar o resultado
             success = self._register_hotkeys()
             if not success:
+                self._remember_driver_failure(
+                    reason="registration_failed",
+                    error="Unable to register hotkeys with available drivers.",
+                )
+                self._set_driver_state(active_name=None, fallback=False)
                 self._log(
                     logging.ERROR,
                     "Failed to register hotkeys during startup.",
@@ -341,6 +437,11 @@ class KeyboardHotkeyManager:
                 self.stop()
                 return False
 
+            driver_name = self._resolve_primary_driver_name() or "keyboard"
+            fallback_active = self._determine_fallback(driver_name)
+            self._set_driver_state(active_name=driver_name, fallback=fallback_active)
+            with self._driver_lock:
+                self._driver_failures.clear()
             self.is_running = True
             self._log(
                 logging.INFO,
@@ -380,6 +481,7 @@ class KeyboardHotkeyManager:
             self.hotkey_handlers.clear()
         # Sempre tente remover as hotkeys, mesmo que o estado esteja incorreto
         self._unregister_hotkeys()
+        self._set_driver_state(active_name=None, fallback=False)
         self.is_running = False
         self._log(
             logging.INFO,
@@ -417,8 +519,14 @@ class KeyboardHotkeyManager:
 
             # Registrar novas hotkeys se estava em execução
             if was_running:
+                self._available_driver_names = self._probe_available_driver_names()
                 result = self._register_hotkeys()
                 if not result:
+                    self._remember_driver_failure(
+                        reason="registration_failed_after_update",
+                        error="Unable to register hotkeys after configuration update.",
+                    )
+                    self._set_driver_state(active_name=None, fallback=False)
                     self._log(
                         logging.ERROR,
                         "Failed to register hotkeys after applying update.",
@@ -430,6 +538,11 @@ class KeyboardHotkeyManager:
                     self.is_running = False
                     return False
                 # Retomar o estado de execução se o registro foi bem-sucedido
+                driver_name = self._resolve_primary_driver_name() or "keyboard"
+                fallback_active = self._determine_fallback(driver_name)
+                self._set_driver_state(active_name=driver_name, fallback=fallback_active)
+                with self._driver_lock:
+                    self._driver_failures.clear()
                 self.is_running = True
 
             self._log(
