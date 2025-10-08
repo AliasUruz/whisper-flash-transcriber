@@ -1856,7 +1856,7 @@ class TranscriptionHandler:
                 "Text correction produced a result.",
                 extra={"event": "text_correction", "status": "completed", "details": f"chars={len(processed_text)}"},
             )
-            return
+            return processed_text
 
         if self.transcription_future and not self.transcription_future.done():
             logging.warning(
