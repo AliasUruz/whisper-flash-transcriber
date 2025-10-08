@@ -1379,10 +1379,20 @@ class TranscriptionHandler:
             emit_start=False,
         ):
             if agent_mode:
-                callback(processed_text)
+                try:
+                    callback(processed_text, operation_id=operation_id)
+                except TypeError:
+                    callback(processed_text)
             else:
                 corrected_payload = processed_text if processed_text != raw_text else None
-                callback(corrected_payload, raw_text)
+                try:
+                    callback(
+                        corrected_payload,
+                        raw_text,
+                        operation_id=operation_id,
+                    )
+                except TypeError:
+                    callback(corrected_payload, raw_text)
 
     def _format_audio_source(self, audio_source: str | np.ndarray | bytes | bytearray | list[float] | None) -> str:
         if audio_source is None:

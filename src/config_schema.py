@@ -378,15 +378,18 @@ class AppConfig(BaseModel):
     auto_paste: bool = True
     agent_auto_paste: bool | None = True
     auto_paste_modifier: str = "auto"
+    ui_language: str = _DEFAULT_UI_LANGUAGE
     min_record_duration: float = Field(default=0.5, ge=0.0)
     sound_enabled: bool = True
     sound_frequency: int = Field(default=400, ge=0)
     sound_duration: float = Field(default=0.3, ge=0.0)
     sound_volume: float = Field(default=0.5, ge=0.0)
     sound: SoundSettings = Field(default_factory=SoundSettings)
+    ui_language: str = _DEFAULT_UI_LANGUAGE
     agent_key: str = "F4"
     keyboard_library: str = "win32"
     hotkey_stability_service_enabled: bool = True
+    ui_language: str = _DEFAULT_UI_LANGUAGE
     text_correction_enabled: bool = False
     text_correction_service: str = "none"
     openrouter_api_key: str = ""
@@ -458,7 +461,7 @@ class AppConfig(BaseModel):
     asr_last_download_status: ASRDownloadStatus = Field(default_factory=ASRDownloadStatus)
     asr_download_history: list[ASRDownloadHistoryEntry] = Field(default_factory=list)
     asr_last_prompt_decision: ASRPromptDecision = Field(default_factory=ASRPromptDecision)
-    advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
+    advanced: AdvancedConfig = Field(default_factory=_build_advanced_config)
     first_run_completed: bool = False
 
     @field_validator("record_key", "agent_key", mode="before")
