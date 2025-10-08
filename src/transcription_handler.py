@@ -54,7 +54,6 @@ from .config_manager import (
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     CLEAR_GPU_CACHE_CONFIG_KEY,
     OPENROUTER_PROMPT_CONFIG_KEY,
-    SAVE_TEMP_RECORDINGS_CONFIG_KEY,
     DISPLAY_TRANSCRIPTS_KEY,
 )
 from . import model_manager as model_manager_module
@@ -1701,13 +1700,22 @@ class TranscriptionHandler:
     ) -> str:
         """Centraliza o fluxo de pós-processamento baseado em IA."""
 
+        branch = "raw"
+        active_provider = SERVICE_NONE
+
         def _set_branch(value: str) -> None:
+            nonlocal branch
+            branch = value
             if metrics is not None:
                 metrics["ai_branch"] = value
+
+        if metrics is not None:
+            metrics.setdefault("ai_branch", branch)
 
         if is_agent_mode:
             _set_branch("agent_mode")
             if not self.gemini_api or not getattr(self.gemini_api, "is_valid", False):
+                _set_branch("agent_unavailable")
                 logging.warning(
                     "Agent mode requested but the Gemini client is unavailable.",
                     extra={"event": "agent_mode_correction", "status": "unavailable"},
@@ -1722,6 +1730,7 @@ class TranscriptionHandler:
                 )
                 return agent_response or transcribed_text
             except TimeoutError:
+                _set_branch("agent_timeout")
                 logging.warning(
                     "Gemini agent response timed out after %.2f seconds; returning raw text.",
                     float(self.text_correction_timeout or DEFAULT_TEXT_CORRECTION_TIMEOUT),
@@ -1729,6 +1738,7 @@ class TranscriptionHandler:
                 )
                 return transcribed_text
             except Exception as exc:
+                _set_branch("agent_error")
                 logging.error(
                     "Failed to fetch response from Gemini agent: %s",
                     exc,
@@ -1737,10 +1747,61 @@ class TranscriptionHandler:
                 )
                 return transcribed_text
 
+        if not self.text_correction_enabled:
+            _set_branch("disabled")
+            return transcribed_text
+
+        configured_service = self.text_correction_service or SERVICE_NONE
+        if configured_service == SERVICE_GEMINI:
+            active_provider = SERVICE_GEMINI
+            _set_branch("gemini")
+        elif configured_service == SERVICE_OPENROUTER:
+            active_provider = SERVICE_OPENROUTER
+            _set_branch("openrouter")
+        else:
+            _set_branch("no_service")
+            return transcribed_text
+
+        if active_provider == SERVICE_GEMINI and (
+            not self.gemini_api or not getattr(self.gemini_api, "is_valid", False)
+        ):
+            _set_branch("gemini_unavailable")
+            logging.warning(
+                "Gemini text correction requested but the client is unavailable.",
+                extra={"event": "text_correction", "provider": "gemini", "status": "unavailable"},
+            )
+            return transcribed_text
+
+        if active_provider == SERVICE_OPENROUTER and not self.openrouter_api:
+            _set_branch("openrouter_unavailable")
+            logging.warning(
+                "OpenRouter client unavailable for text correction.",
+                extra={"event": "text_correction", "provider": "openrouter", "status": "unavailable"},
+            )
+            return transcribed_text
+
+        api_key: str | None = None
+        if active_provider == SERVICE_OPENROUTER:
+            api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
+            if not api_key:
+                _set_branch("openrouter_missing_key")
+                logging.warning(
+                    "OpenRouter selected for text correction but the API key is missing.",
+                    extra={"event": "text_correction", "provider": "openrouter", "status": "missing_key"},
+                )
+                return transcribed_text
+
         details = {
             "agent_mode": bool(is_agent_mode),
             "has_text": bool(transcribed_text),
+            "provider": self._provider_label(active_provider),
         }
+        if metrics is not None:
+            metrics["ai_provider"] = details["provider"]
+
+        processed_text = transcribed_text
+        correction_attempted = False
+        correction_succeeded = False
 
         active_provider = self._get_text_correction_service()
         branch = self._provider_label(active_provider)
@@ -1755,9 +1816,7 @@ class TranscriptionHandler:
             metric_key="ai_duration_ms",
         ):
             if not transcribed_text:
-                branch = "empty"
-                metrics["ai_branch"] = branch
-                metrics["ai_status"] = "skipped"
+                _set_branch("empty")
                 logging.debug(
                     "Skipping AI pipeline: empty transcript.",
                     extra={
@@ -1766,24 +1825,10 @@ class TranscriptionHandler:
                         "agent_mode": is_agent_mode,
                     },
                 )
-                _set_branch(branch)
-                return transcribed_text
-
-            if active_provider in {None, SERVICE_NONE}:
-                branch = "disabled"
-                _set_branch(branch)
-                return transcribed_text
-
-            _set_branch(branch)
-
-            if active_provider == SERVICE_OPENROUTER and not self.openrouter_api:
-                logging.warning(
-                    "OpenRouter client unavailable for text correction.",
-                    extra={"event": "text_correction", "provider": "openrouter", "status": "unavailable"},
-                )
                 return transcribed_text
 
             if self._is_correction_breaker_active(active_provider):
+                _set_branch("breaker_active")
                 remaining = max(
                     0.0,
                     self._correction_disabled_until.get(active_provider, 0.0) - time.monotonic(),
@@ -1795,10 +1840,7 @@ class TranscriptionHandler:
                 )
                 return transcribed_text
 
-            processed_text = transcribed_text
             self.correction_in_progress = True
-            correction_attempted = False
-            correction_succeeded = False
             try:
                 if active_provider == SERVICE_GEMINI:
                     correction_attempted = True
@@ -1814,13 +1856,64 @@ class TranscriptionHandler:
                     correction_succeeded = True
                 elif active_provider == SERVICE_OPENROUTER:
                     correction_attempted = True
-                    api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
-                    if not api_key:
-                        logging.warning(
-                            "OpenRouter API key unavailable; skipping text correction.",
-                            extra={"event": "text_correction", "provider": "openrouter", "status": "missing_key"},
+                    model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
+                    prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                    try:
+                        self.openrouter_api.reinitialize_client(api_key=api_key, model_id=model)
+                    except Exception as exc:
+                        logging.error(
+                            "Failed to reconfigure the OpenRouter client: %s",
+                            exc,
+                            exc_info=True,
+                            extra={"event": "text_correction", "provider": "openrouter", "status": "reconfigure_failed"},
                         )
-                        return transcribed_text
+                    if prompt:
+                        processed_candidate = self._run_with_timeout(
+                            self.openrouter_api.correct_text_async,
+                            transcribed_text,
+                            prompt,
+                            api_key,
+                            model,
+                            timeout=self.text_correction_timeout,
+                            description="OpenRouter text correction",
+                        )
+                    else:
+                        processed_candidate = self._run_with_timeout(
+                            self.openrouter_api.correct_text,
+                            transcribed_text,
+                            timeout=self.text_correction_timeout,
+                            description="OpenRouter text correction",
+                        )
+                    processed_text = processed_candidate or transcribed_text
+                    correction_succeeded = True
+                else:
+                    logging.error("Unknown AI provider: %s", active_provider)
+                    _set_branch("unknown_provider")
+                    return transcribed_text
+            except TimeoutError:
+                provider_label = self._provider_label(active_provider)
+                _set_branch(f"{provider_label}_timeout")
+                logging.warning(
+                    "Text correction timed out after %.2f seconds using provider '%s'. Returning raw text.",
+                    float(self.text_correction_timeout or DEFAULT_TEXT_CORRECTION_TIMEOUT),
+                    provider_label,
+                    extra={"event": "text_correction", "provider": provider_label, "status": "timeout"},
+                )
+                processed_text = transcribed_text
+            except Exception as exc:
+                provider_label = self._provider_label(active_provider)
+                _set_branch(f"{provider_label}_error")
+                logging.error(
+                    "Error while processing text with provider %s: %s",
+                    provider_label,
+                    exc,
+                    exc_info=True,
+                )
+                processed_text = transcribed_text
+                if correction_attempted:
+                    self._record_correction_failure(active_provider, exc)
+            finally:
+                self.correction_in_progress = False
 
                     model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
                     prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
@@ -1898,12 +1991,6 @@ class TranscriptionHandler:
                         )
                         self.correction_in_progress = False
                         return transcribed_text
-
-        if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
-            logging.info(
-                "Text correction produced a result.",
-                extra={"event": "text_correction", "status": "completed", "details": f"chars={len(processed_text)}"},
-            )
 
         return processed_text
 
