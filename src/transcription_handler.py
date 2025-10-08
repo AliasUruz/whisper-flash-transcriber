@@ -1020,13 +1020,18 @@ class TranscriptionHandler:
         is_agent_mode: bool,
         *,
         correlation_id: str | None = None,
+        operation_id: str | None = None,
     ) -> bool:
         """Schedule a transcription job for the provided audio segment."""
 
         if audio_source is None:
             logging.error(
                 "Received empty audio payload; transcription aborted.",
-                extra={"event": "transcription.enqueue_failed", "reason": "empty_audio"},
+                extra={
+                    "event": "transcription.enqueue_failed",
+                    "reason": "empty_audio",
+                    "operation_id": operation_id,
+                },
             )
             return False
 
@@ -1034,7 +1039,11 @@ class TranscriptionHandler:
         if backend is None:
             logging.warning(
                 "ASR backend not ready. Rejecting audio segment.",
-                extra={"event": "transcription.enqueue_failed", "reason": "backend_unavailable"},
+                extra={
+                    "event": "transcription.enqueue_failed",
+                    "reason": "backend_unavailable",
+                    "operation_id": operation_id,
+                },
             )
             core = getattr(self, "core_instance_ref", None)
             state_mgr = getattr(core, "state_manager", None) if core is not None else None
@@ -1042,7 +1051,10 @@ class TranscriptionHandler:
                 try:
                     state_mgr.set_state(
                         sm.StateEvent.MODEL_LOADING_FAILED,
-                        details="ASR backend unavailable during transcription request",
+                        details={
+                            "message": "ASR backend unavailable during transcription request",
+                            "operation_id": operation_id,
+                        },
                         source="transcription_handler",
                     )
                 except Exception:
@@ -1059,13 +1071,18 @@ class TranscriptionHandler:
                     audio_source,
                     bool(is_agent_mode),
                     corr_id,
+                    operation_id,
                 )
             except Exception as exc:
                 logging.error(
                     "Failed to submit transcription job: %s",
                     exc,
                     exc_info=True,
-                    extra={"event": "transcription.enqueue_failed", "reason": "executor_error"},
+                    extra={
+                        "event": "transcription.enqueue_failed",
+                        "reason": "executor_error",
+                        "operation_id": operation_id,
+                    },
                 )
                 return False
 
@@ -1080,13 +1097,19 @@ class TranscriptionHandler:
             except concurrent.futures.CancelledError:
                 logging.info(
                     "Transcription job cancelled before completion.",
-                    extra={"event": "transcription.cancelled"},
+                    extra={
+                        "event": "transcription.cancelled",
+                        "operation_id": operation_id,
+                    },
                 )
             except Exception:
                 logging.error(
                     "Transcription job raised an exception.",
                     exc_info=True,
-                    extra={"event": "transcription.job_error"},
+                    extra={
+                        "event": "transcription.job_error",
+                        "operation_id": operation_id,
+                    },
                 )
 
         future.add_done_callback(_on_done)
@@ -1097,22 +1120,28 @@ class TranscriptionHandler:
         audio_source: str | np.ndarray | bytes | bytearray | list[float],
         is_agent_mode: bool,
         correlation_id: str | None,
+        operation_id: str | None = None,
     ) -> None:
         metrics: dict[str, object] = {
             "agent_mode": bool(is_agent_mode),
             "audio_source": self._format_audio_source(audio_source),
         }
+        if operation_id:
+            metrics["operation_id"] = operation_id
 
         core = getattr(self, "core_instance_ref", None)
         state_mgr = getattr(core, "state_manager", None) if core is not None else None
         if state_mgr is not None:
             try:
+                details = {
+                    "agent_mode": bool(is_agent_mode),
+                    "correlation_id": correlation_id,
+                }
+                if operation_id:
+                    details["operation_id"] = operation_id
                 state_mgr.set_state(
                     sm.StateEvent.TRANSCRIPTION_STARTED,
-                    details={
-                        "agent_mode": bool(is_agent_mode),
-                        "correlation_id": correlation_id,
-                    },
+                    details=details,
                     source="transcription_handler",
                 )
             except Exception:
@@ -1128,18 +1157,19 @@ class TranscriptionHandler:
                         "agent_mode": bool(is_agent_mode),
                         "source": metrics["audio_source"],
                     },
+                    operation_id=operation_id,
                     metrics=metrics,
                     metric_key="pipeline_duration_ms",
-                ) as operation_id:
-                    metrics["operation_id"] = operation_id
+                ) as active_operation_id:
+                    metrics["operation_id"] = active_operation_id
                     ready_audio = self._await_audio_source_ready(
                         audio_source,
-                        operation_id=operation_id,
+                        operation_id=active_operation_id,
                         metrics=metrics,
                     )
                     asr_payload = self._execute_asr_transcription(
                         ready_audio,
-                        operation_id=operation_id,
+                        operation_id=active_operation_id,
                         metrics=metrics,
                     )
 
@@ -1147,7 +1177,10 @@ class TranscriptionHandler:
                         metrics["status"] = "cancelled"
                         logging.info(
                             "Transcription cancelled before completion.",
-                            extra={"event": "transcription.cancelled", "operation_id": operation_id},
+                            extra={
+                                "event": "transcription.cancelled",
+                                "operation_id": active_operation_id,
+                            },
                         )
                         return
 
@@ -1157,7 +1190,7 @@ class TranscriptionHandler:
                     processed_text = self._process_ai_pipeline(
                         raw_text,
                         bool(is_agent_mode),
-                        operation_id=operation_id,
+                        operation_id=active_operation_id,
                         metrics=metrics,
                     )
                     metrics["processed_chars"] = len(processed_text or "")
@@ -1166,7 +1199,7 @@ class TranscriptionHandler:
                         processed_text,
                         raw_text,
                         agent_mode=bool(is_agent_mode),
-                        operation_id=operation_id,
+                        operation_id=active_operation_id,
                         metrics=metrics,
                     )
                     metrics.setdefault("status", "success")
@@ -1177,7 +1210,10 @@ class TranscriptionHandler:
                 "Transcription pipeline failed: %s",
                 exc,
                 exc_info=True,
-                extra={"event": "transcription.pipeline_error"},
+                extra={
+                    "event": "transcription.pipeline_error",
+                    "operation_id": operation_id,
+                },
             )
             if state_mgr is not None:
                 try:

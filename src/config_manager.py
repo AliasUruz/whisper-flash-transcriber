@@ -219,11 +219,6 @@ DEFAULT_CONFIG = {
 DEFAULT_CONFIG_TREE = normalize_payload_tree(DEFAULT_CONFIG)
 
 
-DEFAULT_CONFIG_TREE = AppConfig.model_validate(
-    normalize_payload_tree(DEFAULT_CONFIG)
-).model_dump()
-
-
 LOGGER = get_logger("whisper_flash_transcriber.config", component="ConfigManager")
 BOOTSTRAP_LOGGER = get_logger(
     "whisper_flash_transcriber.config.bootstrap", component="Bootstrap"

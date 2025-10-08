@@ -14,61 +14,59 @@ from unittest import mock
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 if not hasattr(builtins, "Mapping"):
     builtins.Mapping = Mapping
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
 except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
-    if str(PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(PROJECT_ROOT))
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
 
 
 @contextmanager
 def isolated_config_environment(
-    profile_dir: str | os.PathLike[str], *, working_dir: str | os.PathLike[str] | None = None
+    profile_dir: str | os.PathLike[str],
+    *,
+    working_dir: str | os.PathLike[str] | None = None,
 ):
-    env_var = "WHISPER_FLASH_PROFILE_DIR"
-    profile_path = Path(profile_dir).expanduser()
+    """Load ``ConfigManager`` inside an isolated profile directory."""
+
+    profile_path = Path(profile_dir).expanduser().resolve()
+    working_path = (
+        Path(working_dir).expanduser().resolve() if working_dir is not None else profile_path
+    )
+
     profile_path.mkdir(parents=True, exist_ok=True)
 
-    previous_dir = Path.cwd()
-    previous_env = os.environ.get(env_var)
-    modules_to_restore: dict[str, object | None] = {}
-    modules_to_reset = [
-        "src.config_manager",
-        "src.config_schema",
-    ]
+    original_env = os.environ.get("WHISPER_FLASH_PROFILE_DIR")
+    original_cwd = Path.cwd()
+    module_name = "src.config_manager"
+    cached_module = sys.modules.pop(module_name, None)
 
     try:
-        os.environ[env_var] = str(profile_path)
-        if working_dir is not None:
-            os.chdir(working_dir)
-        for name in modules_to_reset:
-            modules_to_restore[name] = sys.modules.pop(name, None)
-        config_module = importlib.import_module("src.config_manager")
-        yield config_module
+        os.environ["WHISPER_FLASH_PROFILE_DIR"] = str(profile_path)
+        os.chdir(str(working_path))
+        module = importlib.import_module(module_name)
+        yield module
     finally:
-        if working_dir is not None:
-            os.chdir(previous_dir)
-        for name in modules_to_reset:
-            module = modules_to_restore.get(name)
-            if module is not None:
-                sys.modules[name] = module
-            else:
-                sys.modules.pop(name, None)
-        if previous_env is None:
-            os.environ.pop(env_var, None)
+        sys.modules.pop(module_name, None)
+        if cached_module is not None:
+            sys.modules[module_name] = cached_module
+        elif module_name in sys.modules:
+            del sys.modules[module_name]
+
+        if original_env is not None:
+            os.environ["WHISPER_FLASH_PROFILE_DIR"] = original_env
         else:
-            os.environ[env_var] = previous_env
+            os.environ.pop("WHISPER_FLASH_PROFILE_DIR", None)
+
+        os.chdir(str(original_cwd))
 
 
 class DummyConfigManager:
