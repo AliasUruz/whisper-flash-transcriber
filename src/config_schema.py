@@ -158,47 +158,62 @@ class SoundSettings(BaseModel):
     volume: float = Field(default=0.5, ge=0.0)
 
 
-class AdvancedHotkeyConfig(BaseModel):
-    """Advanced toggles related to auxiliary hotkeys and modifiers."""
+class AdvancedConfig(BaseModel):
+    """Container for advanced configuration namespaces."""
 
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="allow", str_strip_whitespace=True)
 
-    agent_key: str = "F4"
-    agent_auto_paste: bool | None = True
+    hotkeys: dict[str, Any] = Field(default_factory=dict)
+    ai: dict[str, Any] = Field(default_factory=dict)
+    performance: dict[str, Any] = Field(default_factory=dict)
+    storage: dict[str, Any] = Field(default_factory=dict)
+    vad: dict[str, Any] = Field(default_factory=dict)
+    workflow: dict[str, Any] = Field(default_factory=dict)
+    system: dict[str, Any] = Field(default_factory=dict)
+
+    @staticmethod
+    def _coerce_section(value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, Mapping):
+            return {str(key): value[key] for key in value}
+        raise ValueError("Advanced configuration sections must be mappings")
+
+    @field_validator(
+        "hotkeys",
+        "ai",
+        "performance",
+        "storage",
+        "vad",
+        "workflow",
+        "system",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_sections(cls, value: Any) -> dict[str, Any]:
+        return cls._coerce_section(value)
+
+
+class AppConfig(BaseModel):
+    """Primary configuration schema for Whisper Flash Transcriber."""
+
+    model_config = ConfigDict(extra="allow", str_strip_whitespace=True)
+
+    show_advanced: bool = False
+    record_key: str = "F3"
+    record_mode: str = "toggle"
+    hotkey_debounce_ms: int = Field(default=200, ge=0)
+    auto_paste: bool = True
+    agent_auto_paste: bool = True
     auto_paste_modifier: str = "auto"
-    hotkey_stability_service_enabled: bool = True
-    keyboard_library: str = "win32"
-
-    @field_validator("agent_key", mode="before")
-    @classmethod
-    def _coerce_agent_key(cls, value: Any) -> str:
-        return _coerce_key(value)
-
-    @field_validator("auto_paste_modifier", mode="before")
-    @classmethod
-    def _normalize_modifier(cls, value: Any) -> str:
-        return _normalize_auto_paste_modifier(value)
-
-    @field_validator("agent_auto_paste", mode="before")
-    @classmethod
-    def _coerce_optional_bool(cls, value: Any) -> bool | None:
-        return _optional_bool(value)
-
-
-class AdvancedAIConfig(BaseModel):
-    """Optional AI post-processing and agent integrations."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
+    min_record_duration: float = Field(default=0.5, ge=0.0)
+    sound: SoundSettings = Field(default_factory=SoundSettings)
     text_correction_enabled: bool = False
     text_correction_service: str = "none"
     openrouter_api_key: str = ""
     openrouter_model: str = "deepseek/deepseek-chat-v3-0324:free"
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash-lite"
-    gemini_agent_model: str = "gemini-2.5-flash-lite"
     openrouter_timeout: int = Field(default=30, ge=1)
-    gemini_timeout: int = Field(default=120, ge=1)
+    openrouter_max_attempts: int = Field(default=3, ge=1)
     text_correction_timeout: float = Field(default=15.0, gt=0.0)
     ai_provider: str = "gemini"
     openrouter_prompt: str = ""
@@ -220,6 +235,10 @@ class AdvancedAIConfig(BaseModel):
         "- Return ONLY the corrected text, with no additional comments or explanations. "
         "Transcribed speech: {text}"
     )
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash-lite"
+    gemini_agent_model: str = "gemini-2.5-flash-lite"
+    gemini_timeout: int = Field(default=120, ge=1)
     gemini_model_options: list[str] = Field(
         default_factory=lambda: [
             "gemini-2.5-flash-lite",
@@ -227,210 +246,7 @@ class AdvancedAIConfig(BaseModel):
             "gemini-2.5-pro",
         ]
     )
-
-    @field_validator("text_correction_service", mode="before")
-    @classmethod
-    def _validate_text_service(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed={"none", "openrouter", "gemini"},
-                field_name="text_correction_service",
-            )
-        raise ValueError("text_correction_service must be a string")
-
-    @field_validator("gemini_model_options", mode="before")
-    @classmethod
-    def _coerce_model_options(cls, value: Any) -> list[str]:
-        if value is None:
-            return []
-        if isinstance(value, (list, tuple, set)):
-            coerced: list[str] = []
-            for item in value:
-                if item is None:
-                    continue
-                coerced.append(str(item).strip())
-            return coerced
-        return [str(value)]
-
-
-class AdvancedPerformanceConfig(BaseModel):
-    """Performance tunables kept behind the advanced namespace."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    batch_size: int = Field(default=16, ge=1)
-    batch_size_mode: str = "auto"
-    manual_batch_size: int = Field(default=8, ge=1)
-    gpu_index: int = Field(default=0, ge=-1)
-    chunk_length_sec: float = Field(default=30.0, ge=0.0)
-    chunk_length_mode: str = "auto"
-    enable_torch_compile: bool = False
-    clear_gpu_cache: bool = True
-    asr_compute_device: str = "auto"
-    asr_dtype: str = "float16"
-    asr_ct2_compute_type: str = "int8_float16"
-    asr_ct2_cpu_threads: int | None = Field(default=None, ge=0)
-    max_parallel_downloads: int = Field(default=1, ge=1, le=8)
-
-    @field_validator("batch_size_mode", mode="before")
-    @classmethod
-    def _validate_batch_size_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed=_ALLOWED_BATCH_SIZE_MODES,
-                field_name="batch_size_mode",
-            )
-        raise ValueError("batch_size_mode must be a string")
-
-    @field_validator("chunk_length_mode", mode="before")
-    @classmethod
-    def _validate_chunk_length_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed=_ALLOWED_CHUNK_LENGTH_MODES,
-                field_name="chunk_length_mode",
-            )
-        raise ValueError("chunk_length_mode must be a string")
-
-
-class AdvancedStorageConfig(BaseModel):
-    """Persistent storage settings for recordings and models."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    record_storage_mode: str = "auto"
-    record_storage_limit: int = Field(default=0, ge=0)
-    max_memory_seconds_mode: str = "auto"
-    max_memory_seconds: float = Field(default=30.0, ge=0.0)
-    min_free_ram_mb: int = Field(default=1000, ge=0)
-    auto_ram_threshold_percent: int = Field(default=10, ge=1, le=50)
-    save_temp_recordings: bool = False
-    storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
-    models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
-    recordings_dir: str = _DEFAULT_RECORDINGS_DIR
-    asr_cache_dir: str = _DEFAULT_ASR_CACHE_DIR
-    deps_install_dir: str = _DEFAULT_DEPS_INSTALL_DIR
-    hf_home_dir: str = _DEFAULT_HF_HOME_DIR
-    transformers_cache_dir: str = _DEFAULT_TRANSFORMERS_CACHE_DIR
-    python_packages_dir: str = _DEFAULT_PYTHON_PACKAGES_DIR
-    vad_models_dir: str = _DEFAULT_VAD_MODELS_DIR
-    hf_cache_dir: str = _DEFAULT_HF_CACHE_DIR
-
-    @field_validator("record_storage_mode", mode="before")
-    @classmethod
-    def _validate_storage_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed=_ALLOWED_RECORD_STORAGE_MODES,
-                field_name="record_storage_mode",
-            )
-        raise ValueError("record_storage_mode must be a string")
-
-    @field_validator(
-        "storage_root_dir",
-        "models_storage_dir",
-        "recordings_dir",
-        "asr_cache_dir",
-        "deps_install_dir",
-        "hf_home_dir",
-        "transformers_cache_dir",
-        "python_packages_dir",
-        "vad_models_dir",
-        "hf_cache_dir",
-        mode="before",
-    )
-    @classmethod
-    def _expand_storage_paths(cls, value: Any) -> str:
-        return _expand_path(value)
-
-    @field_validator("max_memory_seconds_mode", mode="before")
-    @classmethod
-    def _validate_memory_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed={"auto", "manual"},
-                field_name="max_memory_seconds_mode",
-            )
-        raise ValueError("max_memory_seconds_mode must be a string")
-
-
-class AdvancedVADConfig(BaseModel):
-    """Voice activity detection overrides."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    use_vad: bool = False
-    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
-    vad_silence_duration: float = Field(default=1.0, ge=0.0)
-    vad_pre_speech_padding_ms: int = Field(default=150, ge=0)
-    vad_post_speech_padding_ms: int = Field(default=300, ge=0)
-
-
-class AdvancedWorkflowConfig(BaseModel):
-    """Miscellaneous workflow options."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    display_transcripts_in_terminal: bool = False
-
-
-class AdvancedSystemConfig(BaseModel):
-    """System integration helpers."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    launch_at_startup: bool = False
-
-
-class AdvancedConfig(BaseModel):
-    """Container holding the advanced namespaced settings."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    hotkeys: AdvancedHotkeyConfig = Field(default_factory=AdvancedHotkeyConfig)
-    ai: AdvancedAIConfig = Field(default_factory=AdvancedAIConfig)
-    performance: AdvancedPerformanceConfig = Field(default_factory=AdvancedPerformanceConfig)
-    storage: AdvancedStorageConfig = Field(default_factory=AdvancedStorageConfig)
-    vad: AdvancedVADConfig = Field(default_factory=AdvancedVADConfig)
-    workflow: AdvancedWorkflowConfig = Field(default_factory=AdvancedWorkflowConfig)
-    system: AdvancedSystemConfig = Field(default_factory=AdvancedSystemConfig)
-
-
-class AppConfig(BaseModel):
-    """Canonical schema for ``config.json`` payloads."""
-
-    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
-
-    show_advanced: bool = False
-    record_key: str = "F3"
-    record_mode: str = "toggle"
-    hotkey_debounce_ms: int = Field(default=200, ge=0)
-    auto_paste: bool = True
-    auto_paste_modifier: str = "auto"
-    agent_auto_paste: bool | None = True
-    min_record_duration: float = Field(default=0.5, ge=0.0)
-    min_transcription_duration: float = Field(default=1.0, ge=0.0)
-    sound: SoundSettings = Field(default_factory=SoundSettings)
-    text_correction_enabled: bool = False
-    text_correction_service: str = "none"
-    openrouter_api_key: str = ""
-    openrouter_model: str = "deepseek/deepseek-chat-v3-0324:free"
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash-lite"
-    gemini_agent_model: str = "gemini-2.5-flash-lite"
-    openrouter_timeout: int = Field(default=30, ge=1)
-    gemini_timeout: int = Field(default=120, ge=1)
-    text_correction_timeout: float = Field(default=15.0, gt=0.0)
-    ai_provider: str = "gemini"
-    openrouter_prompt: str = ""
-    prompt_agentico: str = AdvancedAIConfig.model_fields["prompt_agentico"].default  # type: ignore[index]
-    gemini_prompt: str = AdvancedAIConfig.model_fields["gemini_prompt"].default  # type: ignore[index]
-    gemini_model_options: list[str] = Field(default_factory=AdvancedAIConfig.model_fields["gemini_model_options"].default_factory)  # type: ignore[index]
+    ui_language: str = _DEFAULT_UI_LANGUAGE
     batch_size: int = Field(default=16, ge=1)
     batch_size_mode: str = "auto"
     manual_batch_size: int = Field(default=8, ge=1)
@@ -454,23 +270,21 @@ class AppConfig(BaseModel):
     chunk_length_mode: str = "auto"
     launch_at_startup: bool = False
     clear_gpu_cache: bool = True
-    asr_compute_device: str = "auto"
-    asr_dtype: str = "float16"
-    asr_ct2_compute_type: str = "int8_float16"
-    asr_ct2_cpu_threads: int | None = Field(default=None, ge=0)
+    enable_torch_compile: bool = False
     storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
     models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
     recordings_dir: str = _DEFAULT_RECORDINGS_DIR
     deps_install_dir: str = _DEFAULT_DEPS_INSTALL_DIR
     hf_home_dir: str = _DEFAULT_HF_HOME_DIR
-    transformers_cache_dir: str = _DEFAULT_TRANSFORMERS_CACHE_DIR
+    asr_cache_dir: str = _DEFAULT_ASR_CACHE_DIR
     python_packages_dir: str = _DEFAULT_PYTHON_PACKAGES_DIR
     vad_models_dir: str = _DEFAULT_VAD_MODELS_DIR
     hf_cache_dir: str = _DEFAULT_HF_CACHE_DIR
-    advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
     asr_model_id: str = "distil-whisper/distil-large-v3"
     asr_backend: str = "ctranslate2"
-    ui_language: str = _DEFAULT_UI_LANGUAGE
+    asr_compute_device: str = "auto"
+    asr_ct2_compute_type: str = "int8_float16"
+    asr_ct2_cpu_threads: int = Field(default=0, ge=0)
     asr_installed_models: list[str] = Field(default_factory=list)
     asr_curated_catalog: list[dict[str, Any]] = Field(default_factory=list_catalog)
     asr_curated_catalog_url: str = ""
@@ -480,21 +294,45 @@ class AppConfig(BaseModel):
     batch_size_specified: bool = False
     gpu_index_specified: bool = False
     first_run_completed: bool = False
+    advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
 
     @field_validator("record_key", mode="before")
     @classmethod
     def _coerce_record_key(cls, value: Any) -> str:
         return _coerce_key(value)
 
-    @field_validator("agent_auto_paste", mode="before")
-    @classmethod
-    def _coerce_agent_auto_paste(cls, value: Any) -> bool | None:
-        return _optional_bool(value)
-
     @field_validator("auto_paste_modifier", mode="before")
     @classmethod
-    def _normalize_simple_modifier(cls, value: Any) -> str:
+    def _normalize_modifier(cls, value: Any) -> str:
         return _normalize_auto_paste_modifier(value)
+
+    @field_validator("agent_auto_paste", mode="before")
+    @classmethod
+    def _normalize_agent_auto_paste(cls, value: Any) -> bool:
+        coerced = _optional_bool(value)
+        if coerced is None:
+            return True
+        return bool(coerced)
+
+    @field_validator("text_correction_service", mode="before")
+    @classmethod
+    def _validate_text_service(cls, value: Any) -> str:
+        if isinstance(value, str):
+            return _normalize_lower(
+                value,
+                allowed={"none", "openrouter", "gemini"},
+                field_name="text_correction_service",
+            )
+        raise ValueError("text_correction_service must be a string")
+
+    @field_validator("gemini_model_options", mode="before")
+    @classmethod
+    def _coerce_model_options(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple, set)):
+            return [str(item).strip() for item in value if item is not None]
+        return [str(value)]
 
     @field_validator("ui_language", mode="before")
     @classmethod
@@ -521,74 +359,20 @@ class AppConfig(BaseModel):
         raise ValueError("record_mode must be a string")
 
     @field_validator(
-        "storage_root_dir",
         "models_storage_dir",
         "recordings_dir",
         "deps_install_dir",
         "hf_home_dir",
-        "transformers_cache_dir",
+        "asr_cache_dir",
         "python_packages_dir",
         "vad_models_dir",
         "hf_cache_dir",
+        "storage_root_dir",
         mode="before",
     )
     @classmethod
-    def _expand_primary_paths(cls, value: Any) -> str:
+    def _expand_paths(cls, value: Any) -> str:
         return _expand_path(value)
-
-    @field_validator("record_storage_mode", mode="before")
-    @classmethod
-    def _validate_top_level_storage_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed=_ALLOWED_RECORD_STORAGE_MODES,
-                field_name="record_storage_mode",
-            )
-        raise ValueError("record_storage_mode must be a string")
-
-    @field_validator("max_memory_seconds_mode", mode="before")
-    @classmethod
-    def _validate_top_level_memory_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed={"auto", "manual"},
-                field_name="max_memory_seconds_mode",
-            )
-        raise ValueError("max_memory_seconds_mode must be a string")
-
-    @field_validator("batch_size_mode", mode="before")
-    @classmethod
-    def _validate_top_level_batch_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed=_ALLOWED_BATCH_SIZE_MODES,
-                field_name="batch_size_mode",
-            )
-        raise ValueError("batch_size_mode must be a string")
-
-    @field_validator("chunk_length_mode", mode="before")
-    @classmethod
-    def _validate_top_level_chunk_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed=_ALLOWED_CHUNK_LENGTH_MODES,
-                field_name="chunk_length_mode",
-            )
-        raise ValueError("chunk_length_mode must be a string")
-
-    @field_validator("text_correction_service", mode="before")
-    @classmethod
-    def _validate_top_level_text_service(cls, value: Any) -> str:
-        return AdvancedAIConfig._validate_text_service(value)
-
-    @field_validator("gemini_model_options", mode="before")
-    @classmethod
-    def _coerce_top_level_model_options(cls, value: Any) -> list[str]:
-        return AdvancedAIConfig._coerce_model_options(value)
 
     @field_validator("asr_installed_models", mode="before")
     @classmethod
@@ -606,7 +390,7 @@ class AppConfig(BaseModel):
             raise ValueError("asr_model_id must be a string")
         normalized = value.strip()
         if not normalized:
-            raise ValueError("asr_model_id must not be empty")
+            raise ValueError("asr_model_id cannot be empty")
 
         allowed_ids = set(_CURATED_MODEL_IDS)
         runtime_ids: set[str] = set()
@@ -660,8 +444,6 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def _enforce_simple_mode_defaults(cls, values: "AppConfig") -> "AppConfig":
-        """Clamp advanced-only fields when the simple mode is inactive."""
-
         defaults = cls.model_fields
 
         def _default(name: str) -> Any:
@@ -670,7 +452,7 @@ class AppConfig(BaseModel):
 
         simple_targets: dict[str, Any] = {
             "text_correction_enabled": False,
-            "text_correction_service": _default("text_correction_service"),
+            "text_correction_service": "none",
             "batch_size_mode": _default("batch_size_mode"),
             "manual_batch_size": _default("manual_batch_size"),
             "use_vad": _default("use_vad"),
@@ -681,9 +463,9 @@ class AppConfig(BaseModel):
             "save_temp_recordings": _default("save_temp_recordings"),
             "record_storage_mode": _default("record_storage_mode"),
             "record_storage_limit": _default("record_storage_limit"),
-            "max_memory_seconds_mode": _default("max_memory_seconds_mode"),
+            "max_memory_seconds_mode": "auto",
             "max_memory_seconds": _default("max_memory_seconds"),
-            "chunk_length_mode": _default("chunk_length_mode"),
+            "chunk_length_mode": "auto",
             "chunk_length_sec": _default("chunk_length_sec"),
         }
 
@@ -697,11 +479,9 @@ class AppConfig(BaseModel):
             str(values.record_storage_mode or "auto").lower()
             != str(simple_targets["record_storage_mode"] or "auto").lower(),
             values.record_storage_limit != simple_targets["record_storage_limit"],
-            str(values.max_memory_seconds_mode or "auto").lower()
-            != str(simple_targets["max_memory_seconds_mode"] or "auto").lower(),
+            str(values.max_memory_seconds_mode or "auto").lower() not in {"auto"},
             values.max_memory_seconds != simple_targets["max_memory_seconds"],
-            str(values.chunk_length_mode or "auto").lower()
-            != str(simple_targets["chunk_length_mode"] or "auto").lower(),
+            str(values.chunk_length_mode or "auto").lower() not in {"auto"},
             values.chunk_length_sec != simple_targets["chunk_length_sec"],
             bool(values.save_temp_recordings),
         ]

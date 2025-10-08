@@ -216,6 +216,8 @@ DEFAULT_CONFIG = {
     "first_run_completed": False,
 }
 
+DEFAULT_CONFIG_TREE = normalize_payload_tree(DEFAULT_CONFIG)
+
 
 DEFAULT_CONFIG_TREE = AppConfig.model_validate(
     normalize_payload_tree(DEFAULT_CONFIG)

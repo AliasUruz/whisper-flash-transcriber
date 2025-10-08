@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 import json
-import shutil
-import time
-import threading
 import logging
+import shutil
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+try:  # pragma: no cover - optional dependency
+    import keyboard  # type: ignore[import]
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    keyboard = None  # type: ignore[assignment]
 
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
 from .hotkey_normalization import _normalize_key_name
@@ -42,6 +47,9 @@ class KeyboardHotkeyManager:
         self.record_key = "f3"  # Tecla padrão
         self.agent_key = "f4"  # Tecla padrão para comando agêntico
         self.record_mode = "toggle"  # Modo padrão
+        self.hotkey_handlers: dict[str, list[Any]] = {}
+        self._last_trigger_ts: dict[str, float] = {}
+        self._debounce_window_ms = 0
         self._drivers: list[BaseHotkeyDriver] = []
         self._active_driver: BaseHotkeyDriver | None = None
         self._active_driver_index: int | None = None
@@ -182,6 +190,13 @@ class KeyboardHotkeyManager:
                 ).lower()
                 if self.record_mode not in {"toggle", "press"}:
                     self.record_mode = "toggle"
+                debounce_value = config.get('hotkey_debounce_ms')
+                if debounce_value is not None:
+                    try:
+                        self._debounce_window_ms = max(0, int(debounce_value))
+                    except Exception:
+                        self._debounce_window_ms = max(0, int(self._debounce_window_ms))
+                self._last_trigger_ts.clear()
                 self._log(
                     logging.INFO,
                     "Hotkey configuration loaded.",
@@ -244,7 +259,8 @@ class KeyboardHotkeyManager:
             config = {
                 'record_key': normalized_record,
                 'agent_key': normalized_agent,
-                'record_mode': self.record_mode
+                'record_mode': self.record_mode,
+                'hotkey_debounce_ms': int(self._debounce_window_ms),
             }
             with path.open('w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
@@ -536,6 +552,20 @@ class KeyboardHotkeyManager:
         if agent is not None:
             self.callback_agent = agent
 
+    def set_debounce_window(self, milliseconds: int) -> None:
+        """Define a janela de debounce para eventos repetidos."""
+
+        if milliseconds is None:
+            raise ValueError("Debounce window must be a non-negative integer")
+        try:
+            window_ms = int(milliseconds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Debounce window must be a non-negative integer") from exc
+        if window_ms < 0:
+            raise ValueError("Debounce window must be non-negative")
+        self._debounce_window_ms = window_ms
+        self._last_trigger_ts.clear()
+
     def describe_persistence_state(self) -> dict[str, object]:
         """Retorna informações de diagnóstico do arquivo de hotkeys."""
 
@@ -648,20 +678,36 @@ class KeyboardHotkeyManager:
                 handle_id=handle_id,
             )
             return
-        for _, driver in entries:
-            try:
-                driver.unregister()
-            except Exception as exc:
-                self._log(
-                    logging.DEBUG,
-                    "Driver failed to unregister hotkeys.",
-                    event="hotkeys.unregister_error",
-                    driver=driver.name,
-                    error=str(exc),
-                )
+        handles = self.hotkey_handlers.setdefault(handle_id, [])
+        handles.append(handle)
+
+    def _unregister_hotkeys(self) -> None:
+        """Remove todas as hotkeys atualmente registradas."""
+
+        handles_snapshot = list(self.hotkey_handlers.items())
+        self.hotkey_handlers = {}
+        if keyboard is None:
+            return
+        for group, handles in handles_snapshot:
+            for handle in handles:
+                try:
+                    if hasattr(keyboard, "unhook"):
+                        keyboard.unhook(handle)
+                    elif hasattr(keyboard, "remove_hotkey"):
+                        keyboard.remove_hotkey(handle)
+                except Exception as exc:
+                    self._log(
+                        logging.DEBUG,
+                        "Failed to unregister hotkey handle.",
+                        event="hotkeys.unregister_error",
+                        handle_group=group,
+                        handle_id=str(handle),
+                        error=str(exc),
+                    )
         with self._driver_lock:
             self._active_driver = None
             self._active_driver_index = None
+            self._driver_failures = []
 
     def _register_hotkeys(self):
         """Registra as hotkeys no sistema."""
@@ -790,6 +836,20 @@ class KeyboardHotkeyManager:
             event="hotkeys.register_failure",
             last_error=str(last_error) if last_error else None,
         )
+        return False
+
+    def _should_process_event(self, event: str) -> bool:
+        """Return True when the event should be processed respecting debounce."""
+
+        window_ms = max(0, int(self._debounce_window_ms))
+        now = time.perf_counter()
+        if window_ms <= 0:
+            self._last_trigger_ts[event] = now
+            return True
+        last = self._last_trigger_ts.get(event)
+        if last is None or (now - last) * 1000 >= window_ms:
+            self._last_trigger_ts[event] = now
+            return True
         return False
 
     def _on_toggle_key(self):
