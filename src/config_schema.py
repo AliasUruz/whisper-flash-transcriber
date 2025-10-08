@@ -189,34 +189,6 @@ class AdvancedConfig(BaseModel):
     @classmethod
     def _normalize_sections(cls, value: Any) -> dict[str, Any]:
         return cls._coerce_section(value)
-
-
-class AppConfig(BaseModel):
-    """Primary configuration schema for Whisper Flash Transcriber."""
-
-    model_config = ConfigDict(extra="allow", str_strip_whitespace=True)
-
-    agent_key: str = "F4"
-    hotkey_stability_service_enabled: bool = True
-    keyboard_library: str = "win32"
-    hotkey_debounce_ms: int = Field(default=200, ge=0)
-
-    @field_validator("agent_key", mode="before")
-    @classmethod
-    def _coerce_agent_key(cls, value: Any) -> str:
-        return _coerce_key(value)
-
-    @field_validator("auto_paste_modifier", mode="before")
-    @classmethod
-    def _normalize_modifier(cls, value: Any) -> str:
-        return _normalize_auto_paste_modifier(value)
-
-    @field_validator("agent_auto_paste", mode="before")
-    @classmethod
-    def _coerce_optional_bool(cls, value: Any) -> bool | None:
-        return _optional_bool(value)
-
-
 class AdvancedAIConfig(BaseModel):
     """Optional AI post-processing and agent integrations."""
 
@@ -310,24 +282,6 @@ class AdvancedAIConfig(BaseModel):
     first_run_completed: bool = False
     advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
 
-    @field_validator("record_key", mode="before")
-    @classmethod
-    def _coerce_record_key(cls, value: Any) -> str:
-        return _coerce_key(value)
-
-    @field_validator("auto_paste_modifier", mode="before")
-    @classmethod
-    def _normalize_modifier(cls, value: Any) -> str:
-        return _normalize_auto_paste_modifier(value)
-
-    @field_validator("agent_auto_paste", mode="before")
-    @classmethod
-    def _normalize_agent_auto_paste(cls, value: Any) -> bool:
-        coerced = _optional_bool(value)
-        if coerced is None:
-            return True
-        return bool(coerced)
-
     @field_validator("text_correction_service", mode="before")
     @classmethod
     def _validate_text_service(cls, value: Any) -> str:
@@ -358,6 +312,17 @@ class AdvancedAIConfig(BaseModel):
                 field_name="ai_provider",
             )
         raise ValueError("ai_provider must be a string")
+
+
+class AdvancedHotkeyConfig(BaseModel):
+    """Advanced hotkey bindings organized by namespace."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    general: dict[str, Any] = Field(default_factory=dict)
+    agent: dict[str, Any] = Field(default_factory=dict)
+    playback: dict[str, Any] = Field(default_factory=dict)
+    overrides: dict[str, Any] = Field(default_factory=dict)
 
 
 class AdvancedPerformanceConfig(BaseModel):
@@ -584,7 +549,7 @@ class AppConfig(BaseModel):
 
     @field_validator("ui_language", mode="before")
     @classmethod
-    def _coerce_agent_key(cls, value: Any) -> str:
+    def _coerce_ui_language(cls, value: Any) -> str:
         return _coerce_key(value)
 
     @field_validator("auto_paste_modifier", mode="before")
@@ -698,213 +663,6 @@ class AppConfig(BaseModel):
             )
         return normalized
 
-    @model_validator(mode="after")
-    def _finalize(cls, values: "AppConfig") -> "AppConfig":
-        """Synchronize simple fields, enforce defaults, and mirror advanced sections."""
-
-        advanced_defaults = AdvancedConfig()
-        advanced = values.advanced
-
-        simple_targets = {
-            "ai.text_correction_enabled": advanced_defaults.ai.text_correction_enabled,
-            "ai.text_correction_service": advanced_defaults.ai.text_correction_service,
-            "ai.openrouter_prompt": advanced_defaults.ai.openrouter_prompt,
-            "ai.openrouter_timeout": advanced_defaults.ai.openrouter_timeout,
-            "ai.openrouter_max_attempts": advanced_defaults.ai.openrouter_max_attempts,
-            "ai.gemini_timeout": advanced_defaults.ai.gemini_timeout,
-            "ai.gemini_model": advanced_defaults.ai.gemini_model,
-            "ai.gemini_agent_model": advanced_defaults.ai.gemini_agent_model,
-            "ai.ai_provider": advanced_defaults.ai.ai_provider,
-            "ai.text_correction_timeout": advanced_defaults.ai.text_correction_timeout,
-            "ai.prompt_agentico": advanced_defaults.ai.prompt_agentico,
-            "ai.gemini_model_options": list(advanced_defaults.ai.gemini_model_options),
-            "performance.batch_size_mode": advanced_defaults.performance.batch_size_mode,
-            "performance.manual_batch_size": advanced_defaults.performance.manual_batch_size,
-            "performance.chunk_length_mode": advanced_defaults.performance.chunk_length_mode,
-            "performance.chunk_length_sec": advanced_defaults.performance.chunk_length_sec,
-            "performance.max_parallel_downloads": advanced_defaults.performance.max_parallel_downloads,
-            "storage.record_storage_mode": advanced_defaults.storage.record_storage_mode,
-            "storage.record_storage_limit": advanced_defaults.storage.record_storage_limit,
-            "storage.max_memory_seconds_mode": advanced_defaults.storage.max_memory_seconds_mode,
-            "storage.max_memory_seconds": advanced_defaults.storage.max_memory_seconds,
-            "storage.min_free_ram_mb": advanced_defaults.storage.min_free_ram_mb,
-            "storage.auto_ram_threshold_percent": advanced_defaults.storage.auto_ram_threshold_percent,
-            "storage.save_temp_recordings": advanced_defaults.storage.save_temp_recordings,
-            "vad.use_vad": advanced_defaults.vad.use_vad,
-            "vad.vad_threshold": advanced_defaults.vad.vad_threshold,
-            "vad.vad_silence_duration": advanced_defaults.vad.vad_silence_duration,
-            "vad.vad_pre_speech_padding_ms": advanced_defaults.vad.vad_pre_speech_padding_ms,
-            "vad.vad_post_speech_padding_ms": advanced_defaults.vad.vad_post_speech_padding_ms,
-        }
-
-        advanced_signals = [
-            bool(advanced.ai.text_correction_enabled),
-            str(advanced.ai.text_correction_service or "none").lower() not in {"", "none"},
-            bool(advanced.vad.use_vad),
-            str(advanced.performance.batch_size_mode or "auto").lower()
-            != str(simple_targets["performance.batch_size_mode"] or "auto").lower(),
-            advanced.performance.manual_batch_size
-            != simple_targets["performance.manual_batch_size"],
-            str(advanced.storage.record_storage_mode or "auto").lower()
-            != str(simple_targets["storage.record_storage_mode"] or "auto").lower(),
-            advanced.storage.record_storage_limit
-            != simple_targets["storage.record_storage_limit"],
-            str(advanced.storage.max_memory_seconds_mode or "auto").lower()
-            not in {"auto"},
-            advanced.storage.max_memory_seconds
-            != simple_targets["storage.max_memory_seconds"],
-            str(advanced.performance.chunk_length_mode or "auto").lower()
-            not in {"auto"},
-            advanced.performance.chunk_length_sec
-            != simple_targets["performance.chunk_length_sec"],
-            bool(advanced.storage.save_temp_recordings),
-        ]
-
-        if not values.show_advanced and any(advanced_signals):
-            values.show_advanced = True
-
-        if not values.show_advanced:
-            advanced.ai.text_correction_enabled = simple_targets["ai.text_correction_enabled"]
-            advanced.ai.text_correction_service = simple_targets["ai.text_correction_service"]
-            advanced.ai.openrouter_prompt = simple_targets["ai.openrouter_prompt"]
-            advanced.ai.openrouter_timeout = simple_targets["ai.openrouter_timeout"]
-            advanced.ai.openrouter_max_attempts = simple_targets["ai.openrouter_max_attempts"]
-            advanced.ai.gemini_timeout = simple_targets["ai.gemini_timeout"]
-            advanced.ai.gemini_model = simple_targets["ai.gemini_model"]
-            advanced.ai.gemini_agent_model = simple_targets["ai.gemini_agent_model"]
-            advanced.ai.ai_provider = simple_targets["ai.ai_provider"]
-            advanced.ai.text_correction_timeout = simple_targets["ai.text_correction_timeout"]
-            advanced.ai.prompt_agentico = simple_targets["ai.prompt_agentico"]
-            advanced.ai.gemini_model_options = list(
-                simple_targets["ai.gemini_model_options"]
-            )
-            advanced.performance.batch_size_mode = simple_targets[
-                "performance.batch_size_mode"
-            ]
-            advanced.performance.manual_batch_size = simple_targets[
-                "performance.manual_batch_size"
-            ]
-            advanced.performance.chunk_length_mode = simple_targets[
-                "performance.chunk_length_mode"
-            ]
-            advanced.performance.chunk_length_sec = simple_targets[
-                "performance.chunk_length_sec"
-            ]
-            advanced.performance.max_parallel_downloads = simple_targets[
-                "performance.max_parallel_downloads"
-            ]
-            advanced.storage.record_storage_mode = simple_targets[
-                "storage.record_storage_mode"
-            ]
-            advanced.storage.record_storage_limit = simple_targets[
-                "storage.record_storage_limit"
-            ]
-            advanced.storage.max_memory_seconds_mode = simple_targets[
-                "storage.max_memory_seconds_mode"
-            ]
-            advanced.storage.max_memory_seconds = simple_targets[
-                "storage.max_memory_seconds"
-            ]
-            advanced.storage.min_free_ram_mb = simple_targets[
-                "storage.min_free_ram_mb"
-            ]
-            advanced.storage.auto_ram_threshold_percent = simple_targets[
-                "storage.auto_ram_threshold_percent"
-            ]
-            advanced.storage.save_temp_recordings = simple_targets[
-                "storage.save_temp_recordings"
-            ]
-            advanced.vad.use_vad = simple_targets["vad.use_vad"]
-            advanced.vad.vad_threshold = simple_targets["vad.vad_threshold"]
-            advanced.vad.vad_silence_duration = simple_targets[
-                "vad.vad_silence_duration"
-            ]
-            advanced.vad.vad_pre_speech_padding_ms = simple_targets[
-                "vad.vad_pre_speech_padding_ms"
-            ]
-            advanced.vad.vad_post_speech_padding_ms = simple_targets[
-                "vad.vad_post_speech_padding_ms"
-            ]
-
-        # Mirror advanced sections into the flattened namespace.
-        hotkeys = advanced.hotkeys
-        values.agent_key = hotkeys.agent_key
-        values.agent_auto_paste = hotkeys.agent_auto_paste
-        values.auto_paste_modifier = hotkeys.auto_paste_modifier
-        values.hotkey_stability_service_enabled = hotkeys.hotkey_stability_service_enabled
-        values.keyboard_library = hotkeys.keyboard_library
-
-        ai = advanced.ai
-        values.text_correction_enabled = ai.text_correction_enabled
-        values.text_correction_service = ai.text_correction_service
-        values.openrouter_api_key = ai.openrouter_api_key
-        values.openrouter_model = ai.openrouter_model
-        values.openrouter_timeout = ai.openrouter_timeout
-        values.openrouter_prompt = ai.openrouter_prompt
-        values.openrouter_max_attempts = ai.openrouter_max_attempts
-        values.gemini_api_key = ai.gemini_api_key
-        values.gemini_model = ai.gemini_model
-        values.gemini_agent_model = ai.gemini_agent_model
-        values.gemini_timeout = ai.gemini_timeout
-        values.gemini_prompt = ai.gemini_prompt
-        values.text_correction_timeout = ai.text_correction_timeout
-        values.ai_provider = ai.ai_provider
-        values.prompt_agentico = ai.prompt_agentico
-        values.gemini_model_options = list(ai.gemini_model_options)
-
-        performance = advanced.performance
-        values.batch_size = performance.batch_size
-        values.batch_size_mode = performance.batch_size_mode
-        values.manual_batch_size = performance.manual_batch_size
-        values.gpu_index = performance.gpu_index
-        values.chunk_length_sec = performance.chunk_length_sec
-        values.chunk_length_mode = performance.chunk_length_mode
-        values.clear_gpu_cache = performance.clear_gpu_cache
-        values.asr_compute_device = performance.asr_compute_device
-        values.asr_dtype = performance.asr_dtype
-        values.asr_ct2_compute_type = performance.asr_ct2_compute_type
-        values.asr_ct2_cpu_threads = performance.asr_ct2_cpu_threads
-        values.max_parallel_downloads = performance.max_parallel_downloads
-
-        storage = advanced.storage
-        values.save_temp_recordings = storage.save_temp_recordings
-        values.record_storage_mode = storage.record_storage_mode
-        values.record_storage_limit = storage.record_storage_limit
-        values.max_memory_seconds_mode = storage.max_memory_seconds_mode
-        values.max_memory_seconds = storage.max_memory_seconds
-        values.min_free_ram_mb = storage.min_free_ram_mb
-        values.auto_ram_threshold_percent = storage.auto_ram_threshold_percent
-        values.storage_root_dir = storage.storage_root_dir
-        values.models_storage_dir = storage.models_storage_dir
-        values.recordings_dir = storage.recordings_dir
-        values.asr_cache_dir = storage.asr_cache_dir
-        values.deps_install_dir = storage.deps_install_dir
-        values.hf_home_dir = storage.hf_home_dir
-        values.transformers_cache_dir = storage.transformers_cache_dir
-        values.python_packages_dir = storage.python_packages_dir
-        values.vad_models_dir = storage.vad_models_dir
-        values.hf_cache_dir = storage.hf_cache_dir
-
-        vad_cfg = advanced.vad
-        values.use_vad = vad_cfg.use_vad
-        values.vad_threshold = vad_cfg.vad_threshold
-        values.vad_silence_duration = vad_cfg.vad_silence_duration
-        values.vad_pre_speech_padding_ms = vad_cfg.vad_pre_speech_padding_ms
-        values.vad_post_speech_padding_ms = vad_cfg.vad_post_speech_padding_ms
-
-        workflow = advanced.workflow
-        values.display_transcripts_in_terminal = workflow.display_transcripts_in_terminal
-
-        system = advanced.system
-        values.launch_at_startup = system.launch_at_startup
-
-        sound_cfg = values.sound or SoundSettings()
-        values.sound_enabled = sound_cfg.enabled
-        values.sound_frequency = sound_cfg.frequency
-        values.sound_duration = sound_cfg.duration
-        values.sound_volume = sound_cfg.volume
-
-        return values
 
 
 KEY_PATH_OVERRIDES: dict[str, tuple[str, ...]] = {
