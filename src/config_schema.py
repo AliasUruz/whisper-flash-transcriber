@@ -288,7 +288,6 @@ class AdvancedAIConfig(BaseModel):
     batch_size_specified: bool = False
     gpu_index_specified: bool = False
     first_run_completed: bool = False
-    advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
 
     @field_validator("text_correction_service", mode="before")
     @classmethod
@@ -481,6 +480,7 @@ class AppConfig(BaseModel):
     auto_paste: bool = True
     agent_auto_paste: bool | None = True
     auto_paste_modifier: str = "auto"
+    ui_language: str = _DEFAULT_UI_LANGUAGE
     min_record_duration: float = Field(default=0.5, ge=0.0)
     sound_enabled: bool = True
     sound_frequency: int = Field(default=400, ge=0)
