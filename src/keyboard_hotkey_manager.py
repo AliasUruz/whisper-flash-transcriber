@@ -77,6 +77,7 @@ class KeyboardHotkeyManager:
         self._fallback_active: bool = False
         self.hotkey_handlers: dict[str, list[Any]] = {}
         self._debounce_window_seconds: float = 0.0
+        self._debounce_window_ms: int = 0
         self._last_event_timestamps: dict[str, float] = {}
         self._last_trigger_ts = self._last_event_timestamps
 
@@ -593,6 +594,42 @@ class KeyboardHotkeyManager:
             event="hotkeys.stop",
         )
 
+    def _stop_auxiliary_threads(self) -> None:
+        """Signal and join auxiliary threads managed by the hotkey manager."""
+
+        with self._aux_threads_lock:
+            entries = list(self._auxiliary_threads.items())
+            self._auxiliary_threads.clear()
+
+        for name, payload in entries:
+            thread = payload.get("thread")
+            stop_event = payload.get("stop_event")
+            join_timeout = payload.get("join_timeout", 1.0)
+            try:
+                timeout = float(join_timeout)
+            except (TypeError, ValueError):
+                timeout = 1.0
+
+            if stop_event is not None:
+                try:
+                    stop_event.set()
+                except Exception as exc:  # pragma: no cover - defensive
+                    self._log(
+                        logging.DEBUG,
+                        "Failed to signal auxiliary thread stop event.",
+                        event="hotkeys.aux_thread_signal_failed",
+                        thread=name,
+                        error=str(exc),
+                    )
+
+            join_thread_with_timeout(
+                thread if isinstance(thread, threading.Thread) else None,
+                timeout=timeout,
+                logger=LOGGER,
+                thread_name=name,
+                event_prefix="hotkeys.aux_thread",
+            )
+
     def update_config(self, record_key=None, agent_key=None, record_mode=None):
         """
         Atualiza a configuração do gerenciador de hotkeys.
@@ -683,12 +720,14 @@ class KeyboardHotkeyManager:
             )
             return
 
+        window_ms = int(round(window_seconds * 1000))
         self._debounce_window_seconds = window_seconds
+        self._debounce_window_ms = window_ms
         self._log(
             logging.INFO,
             "Hotkey debounce window updated.",
             event="hotkeys.debounce_updated",
-            debounce_ms=int(window_seconds * 1000),
+            debounce_ms=window_ms,
         )
 
     def set_callbacks(self, toggle=None, start=None, stop=None, agent=None):
@@ -712,18 +751,6 @@ class KeyboardHotkeyManager:
 
         if agent is not None:
             self.callback_agent = agent
-
-    def set_debounce_window(self, milliseconds: int) -> None:
-        """Adjust the debounce window for hotkey callbacks in milliseconds."""
-
-        value = max(0, int(milliseconds))
-        self._debounce_window_ms = value
-        self._log(
-            logging.INFO,
-            "Updated hotkey debounce window.",
-            event="hotkeys.debounce_window_updated",
-            window_ms=value,
-        )
 
     def describe_persistence_state(self) -> dict[str, object]:
         """Retorna informações de diagnóstico do arquivo de hotkeys."""
@@ -1131,20 +1158,6 @@ class KeyboardHotkeyManager:
                 error=str(e),
                 exc_info=True,
             )
-
-    def _should_process_event(self, event: str) -> bool:
-        """Return True when the event should be processed respecting debounce."""
-
-        window_ms = max(0, int(self._debounce_window_ms))
-        now = time.perf_counter()
-        if window_ms <= 0:
-            self._last_trigger_ts[event] = now
-            return True
-        last = self._last_trigger_ts.get(event)
-        if last is None or (now - last) * 1000 >= window_ms:
-            self._last_trigger_ts[event] = now
-            return True
-        return False
 
     def _should_process_event(self, event_type: str) -> bool:
         """Determine whether a hotkey event should trigger callbacks."""
