@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
+import shutil
+import threading
+import time
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -74,11 +77,113 @@ class KeyboardHotkeyManager:
         self._last_event_timestamps: dict[str, float] = {}
         self._last_trigger_ts = self._last_event_timestamps
 
+        self._available_driver_names = self._enumerate_available_driver_names()
+        self._active_driver_name: str | None = None
+        self._fallback_active = False
+
         self._auxiliary_threads: dict[str, dict[str, Any]] = {}
         self._aux_threads_lock = threading.Lock()
 
         # Carregar configuração se existir
         self._load_config()
+
+    def _enumerate_available_driver_names(self) -> list[str]:
+        """Enumerate hotkey driver identifiers available in the runtime."""
+
+        names: list[str] = []
+        try:
+            drivers = build_available_drivers(
+                log=lambda level, message, **fields: self._log(
+                    level,
+                    message,
+                    event="hotkeys.driver.enumerate",
+                    **fields,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            self._log(
+                logging.DEBUG,
+                "Failed to enumerate hotkey drivers.",
+                event="hotkeys.driver.enumerate_failed",
+                error=str(exc),
+                exc_info=True,
+            )
+            return names
+
+        for driver in drivers:
+            try:
+                names.append(driver.name)
+                driver.unregister()
+            except Exception:  # pragma: no cover - defensive cleanup
+                self._log(
+                    logging.DEBUG,
+                    "Driver cleanup after enumeration failed.",
+                    event="hotkeys.driver.enumerate_cleanup_failed",
+                    driver=getattr(driver, "name", "unknown"),
+                    exc_info=True,
+                )
+        return names
+
+    def _record_driver_failure(
+        self,
+        *,
+        driver: str | None,
+        reason: str,
+        error: str | None = None,
+    ) -> None:
+        entry = {
+            "driver": driver,
+            "reason": reason,
+            "error": error,
+            "timestamp": time.time(),
+        }
+        self._driver_failures.append(entry)
+        # Keep only recent failures to avoid uncontrolled growth
+        if len(self._driver_failures) > 10:
+            self._driver_failures = self._driver_failures[-10:]
+
+    def _handle_driver_failure(
+        self,
+        reason: str,
+        error: Exception | str | None = None,
+    ) -> bool:
+        self._active_driver_name = None
+        self._fallback_active = False
+        error_str = None
+        if isinstance(error, Exception):
+            error_str = str(error)
+        elif isinstance(error, str):
+            error_str = error
+        self._record_driver_failure(
+            driver="keyboard" if self._available_driver_names else None,
+            reason=reason,
+            error=error_str,
+        )
+        return False
+
+    def get_active_driver_name(self) -> str | None:
+        """Return the identifier of the currently active hotkey backend."""
+
+        return self._active_driver_name
+
+    def is_using_fallback(self) -> bool:
+        """Indicate whether a fallback driver was selected for hotkeys."""
+
+        return self._fallback_active
+
+    def describe_driver_state(self) -> dict[str, Any]:
+        """Expose diagnostic information about the hotkey driver layer."""
+
+        available = list(self._available_driver_names)
+        if self._active_driver_name and self._active_driver_name not in available:
+            available.insert(0, self._active_driver_name)
+        return {
+            "active": self._active_driver_name,
+            "fallback_active": self._fallback_active,
+            "available": available,
+            "failures": list(self._driver_failures),
+            "is_running": self.is_running,
+        }
 
     def _log(
         self,
@@ -381,6 +486,8 @@ class KeyboardHotkeyManager:
         # Sempre tente remover as hotkeys, mesmo que o estado esteja incorreto
         self._unregister_hotkeys()
         self.is_running = False
+        self._active_driver_name = None
+        self._fallback_active = False
         self._log(
             logging.INFO,
             "KeyboardHotkeyManager stopped.",
@@ -576,6 +683,8 @@ class KeyboardHotkeyManager:
             # Desregistrar hotkeys existentes para evitar duplicação
             self._unregister_hotkeys()
             self._last_trigger_ts.clear()
+            self._active_driver_name = None
+            self._fallback_active = False
 
             # Registrar a tecla de gravação
             self._log(
@@ -612,7 +721,10 @@ class KeyboardHotkeyManager:
                             record_key=self.record_key,
                             error=str(e),
                         )
-                        return False
+                        return self._handle_driver_failure(
+                            "register_release_os_error",
+                            e,
+                        )
                     except Exception as e:
                         self._log(
                             logging.ERROR,
@@ -622,7 +734,10 @@ class KeyboardHotkeyManager:
                             error=str(e),
                             exc_info=True,
                         )
-                        return False
+                        return self._handle_driver_failure(
+                            "register_release_error",
+                            e,
+                        )
                     self._log(
                         logging.INFO,
                         "Release handler registered for record hotkey.",
@@ -649,7 +764,10 @@ class KeyboardHotkeyManager:
                     record_key=self.record_key,
                     error=str(e),
                 )
-                return False
+                return self._handle_driver_failure(
+                    "register_press_os_error",
+                    e,
+                )
             except Exception as e:
                 self._log(
                     logging.ERROR,
@@ -659,7 +777,10 @@ class KeyboardHotkeyManager:
                     error=str(e),
                     exc_info=True,
                 )
-                return False
+                return self._handle_driver_failure(
+                    "register_press_error",
+                    e,
+                )
             self._log(
                 logging.INFO,
                 "Recording hotkey registered.",
@@ -692,7 +813,10 @@ class KeyboardHotkeyManager:
                     agent_key=self.agent_key,
                     error=str(e),
                 )
-                return False
+                return self._handle_driver_failure(
+                    "register_agent_os_error",
+                    e,
+                )
             except Exception as e:
                 self._log(
                     logging.ERROR,
@@ -702,7 +826,10 @@ class KeyboardHotkeyManager:
                     error=str(e),
                     exc_info=True,
                 )
-                return False
+                return self._handle_driver_failure(
+                    "register_agent_error",
+                    e,
+                )
             self._log(
                 logging.INFO,
                 "Agent hotkey registered.",
@@ -718,12 +845,15 @@ class KeyboardHotkeyManager:
                 agent_key=self.agent_key,
             )
 
-            if index > 0:
+            self._active_driver_name = "keyboard"
+            self._fallback_active = False
+
+            if self._fallback_active:
                 self._log(
                     logging.WARNING,
                     "Fallback hotkey driver activated.",
                     event="hotkeys.driver_fallback",
-                    driver=driver.name,
+                    driver=self._active_driver_name,
             )
             return True
 
@@ -735,7 +865,10 @@ class KeyboardHotkeyManager:
                 error=str(e),
                 exc_info=True,
             )
-            return False
+            return self._handle_driver_failure(
+                "register_unexpected_error",
+                e,
+            )
 
     def _unregister_hotkeys(self):
         """Desregistra as hotkeys do sistema."""
