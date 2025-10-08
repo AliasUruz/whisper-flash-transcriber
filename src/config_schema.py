@@ -168,43 +168,35 @@ class AdvancedHotkeyConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    record_key: str = "F3"
-    record_mode: str = "toggle"
-    auto_paste: bool = True
-    agent_auto_paste: bool = True
-    auto_paste_modifier: str = "auto"
-    min_record_duration: float = Field(default=0.5, ge=0.0)
-    hotkey_debounce_ms: int = Field(default=200, ge=0)
-    agent_key: str = "F4"
-    keyboard_library: str = "win32"
-    hotkey_stability_service_enabled: bool = True
+    hotkeys: dict[str, Any] = Field(default_factory=dict)
+    ai: dict[str, Any] = Field(default_factory=dict)
+    performance: dict[str, Any] = Field(default_factory=dict)
+    storage: dict[str, Any] = Field(default_factory=dict)
+    vad: dict[str, Any] = Field(default_factory=dict)
+    workflow: dict[str, Any] = Field(default_factory=dict)
+    system: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("record_key", "agent_key", mode="before")
+    @staticmethod
+    def _coerce_section(value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, Mapping):
+            return {str(key): value[key] for key in value}
+        raise ValueError("Advanced configuration sections must be mappings")
+
+    @field_validator(
+        "hotkeys",
+        "ai",
+        "performance",
+        "storage",
+        "vad",
+        "workflow",
+        "system",
+        mode="before",
+    )
     @classmethod
-    def _coerce_keys(cls, value: Any) -> str:
-        return _coerce_key(value)
-
-    @field_validator("auto_paste_modifier", mode="before")
-    @classmethod
-    def _normalize_modifier(cls, value: Any) -> str:
-        return _normalize_auto_paste_modifier(value)
-
-    @field_validator("agent_auto_paste", mode="before")
-    @classmethod
-    def _coerce_agent_auto_paste(cls, value: Any) -> bool:
-        coerced = _optional_bool(value)
-        return True if coerced is None else bool(coerced)
-
-    @field_validator("record_mode", mode="before")
-    @classmethod
-    def _normalize_record_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"toggle", "press"}:
-                return normalized
-        raise ValueError("record_mode must be 'toggle' or 'press'")
-
-
+    def _normalize_sections(cls, value: Any) -> dict[str, Any]:
+        return cls._coerce_section(value)
 class AdvancedAIConfig(BaseModel):
     """Optional AI post-processing and agent integrations."""
 
@@ -248,6 +240,55 @@ class AdvancedAIConfig(BaseModel):
             "gemini-2.5-pro",
         ]
     )
+    ui_language: str = _DEFAULT_UI_LANGUAGE
+    batch_size: int = Field(default=16, ge=1)
+    batch_size_mode: str = "auto"
+    manual_batch_size: int = Field(default=8, ge=1)
+    gpu_index: int = Field(default=0, ge=-1)
+    hotkey_stability_service_enabled: bool = True
+    use_vad: bool = False
+    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    vad_silence_duration: float = Field(default=1.0, ge=0.0)
+    vad_pre_speech_padding_ms: int = Field(default=150, ge=0)
+    vad_post_speech_padding_ms: int = Field(default=300, ge=0)
+    display_transcripts_in_terminal: bool = False
+    save_temp_recordings: bool = False
+    record_storage_mode: str = "auto"
+    record_storage_limit: int = Field(default=0, ge=0)
+    max_memory_seconds_mode: str = "auto"
+    max_memory_seconds: float = Field(default=30.0, ge=0.0)
+    min_free_ram_mb: int = Field(default=1000, ge=0)
+    auto_ram_threshold_percent: int = Field(default=10, ge=1, le=50)
+    max_parallel_downloads: int = Field(default=1, ge=1, le=8)
+    chunk_length_sec: float = Field(default=30.0, ge=0.0)
+    chunk_length_mode: str = "auto"
+    launch_at_startup: bool = False
+    clear_gpu_cache: bool = True
+    enable_torch_compile: bool = False
+    storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
+    models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
+    recordings_dir: str = _DEFAULT_RECORDINGS_DIR
+    deps_install_dir: str = _DEFAULT_DEPS_INSTALL_DIR
+    hf_home_dir: str = _DEFAULT_HF_HOME_DIR
+    asr_cache_dir: str = _DEFAULT_ASR_CACHE_DIR
+    python_packages_dir: str = _DEFAULT_PYTHON_PACKAGES_DIR
+    vad_models_dir: str = _DEFAULT_VAD_MODELS_DIR
+    hf_cache_dir: str = _DEFAULT_HF_CACHE_DIR
+    asr_model_id: str = "distil-whisper/distil-large-v3"
+    asr_backend: str = "ctranslate2"
+    asr_compute_device: str = "auto"
+    asr_ct2_compute_type: str = "int8_float16"
+    asr_ct2_cpu_threads: int = Field(default=0, ge=0)
+    asr_installed_models: list[str] = Field(default_factory=list)
+    asr_curated_catalog: list[dict[str, Any]] = Field(default_factory=list_catalog)
+    asr_curated_catalog_url: str = ""
+    asr_last_download_status: ASRDownloadStatus = Field(default_factory=ASRDownloadStatus)
+    asr_download_history: list[ASRDownloadHistoryEntry] = Field(default_factory=list)
+    asr_last_prompt_decision: ASRPromptDecision = Field(default_factory=ASRPromptDecision)
+    batch_size_specified: bool = False
+    gpu_index_specified: bool = False
+    first_run_completed: bool = False
+    advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
 
     @field_validator("text_correction_service", mode="before")
     @classmethod
@@ -279,6 +320,17 @@ class AdvancedAIConfig(BaseModel):
         if isinstance(value, (list, tuple, set)):
             return [str(item).strip() for item in value if item is not None]
         return [str(value)]
+
+
+class AdvancedHotkeyConfig(BaseModel):
+    """Advanced hotkey bindings organized by namespace."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    general: dict[str, Any] = Field(default_factory=dict)
+    agent: dict[str, Any] = Field(default_factory=dict)
+    playback: dict[str, Any] = Field(default_factory=dict)
+    overrides: dict[str, Any] = Field(default_factory=dict)
 
 
 class AdvancedPerformanceConfig(BaseModel):
@@ -548,8 +600,20 @@ class AppConfig(BaseModel):
 
     @field_validator("ui_language", mode="before")
     @classmethod
-    def _normalize_ui_language_field(cls, value: Any) -> str:
-        return _normalize_ui_language(value)
+    def _coerce_ui_language(cls, value: Any) -> str:
+        return _coerce_key(value)
+
+    @field_validator("auto_paste_modifier", mode="before")
+    @classmethod
+    def _normalize_modifier(cls, value: Any) -> str:
+        return _normalize_auto_paste_modifier(value)
+
+    @field_validator("agent_auto_paste", mode="before")
+    @classmethod
+    def _coerce_agent_auto_paste(cls, value: Any) -> bool:
+        if value is None:
+            return True
+        return bool(value)
 
     @field_validator("text_correction_service", mode="before")
     @classmethod
@@ -634,250 +698,6 @@ class AppConfig(BaseModel):
             )
         return normalized
 
-    @field_validator("batch_size_mode", mode="before")
-    @classmethod
-    def _normalize_batch_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed=_ALLOWED_BATCH_SIZE_MODES,
-                field_name="batch_size_mode",
-            )
-        raise ValueError("batch_size_mode must be a string")
-
-    @field_validator("chunk_length_mode", mode="before")
-    @classmethod
-    def _normalize_chunk_mode(cls, value: Any) -> str:
-        if isinstance(value, str):
-            return _normalize_lower(
-                value,
-                allowed=_ALLOWED_CHUNK_LENGTH_MODES,
-                field_name="chunk_length_mode",
-            )
-        raise ValueError("chunk_length_mode must be a string")
-
-    @field_validator("record_storage_mode", mode="before")
-    @classmethod
-    def _normalize_storage_mode(cls, value: Any) -> str:
-        return AdvancedStorageConfig._normalize_storage_mode(value)  # type: ignore[arg-type]
-
-    @model_validator(mode="after")
-    def _finalize(self) -> "AppConfig":
-        """Synchronize simple fields, enforce defaults, and mirror advanced sections."""
-
-        advanced = self.advanced or AdvancedConfig()
-        advanced_defaults = AdvancedConfig()
-
-        advanced_signals = [
-            advanced.ai.text_correction_enabled != advanced_defaults.ai.text_correction_enabled,
-            advanced.ai.text_correction_service != advanced_defaults.ai.text_correction_service,
-            bool(advanced.ai.openrouter_prompt),
-            advanced.ai.openrouter_timeout != advanced_defaults.ai.openrouter_timeout,
-            advanced.ai.openrouter_max_attempts != advanced_defaults.ai.openrouter_max_attempts,
-            advanced.ai.gemini_timeout != advanced_defaults.ai.gemini_timeout,
-            advanced.ai.gemini_model != advanced_defaults.ai.gemini_model,
-            advanced.ai.gemini_agent_model != advanced_defaults.ai.gemini_agent_model,
-            advanced.ai.ai_provider != advanced_defaults.ai.ai_provider,
-            advanced.ai.text_correction_timeout != advanced_defaults.ai.text_correction_timeout,
-            list(advanced.ai.gemini_model_options) != list(advanced_defaults.ai.gemini_model_options),
-            advanced.performance.batch_size_mode != advanced_defaults.performance.batch_size_mode,
-            advanced.performance.manual_batch_size != advanced_defaults.performance.manual_batch_size,
-            advanced.performance.chunk_length_mode != advanced_defaults.performance.chunk_length_mode,
-            advanced.performance.chunk_length_sec != advanced_defaults.performance.chunk_length_sec,
-            advanced.performance.max_parallel_downloads != advanced_defaults.performance.max_parallel_downloads,
-            advanced.storage.record_storage_mode != advanced_defaults.storage.record_storage_mode,
-            advanced.storage.record_storage_limit != advanced_defaults.storage.record_storage_limit,
-            advanced.storage.max_memory_seconds_mode != advanced_defaults.storage.max_memory_seconds_mode,
-            advanced.storage.max_memory_seconds != advanced_defaults.storage.max_memory_seconds,
-            advanced.storage.min_free_ram_mb != advanced_defaults.storage.min_free_ram_mb,
-            advanced.storage.auto_ram_threshold_percent != advanced_defaults.storage.auto_ram_threshold_percent,
-            advanced.storage.save_temp_recordings != advanced_defaults.storage.save_temp_recordings,
-            advanced.vad.use_vad != advanced_defaults.vad.use_vad,
-            advanced.vad.vad_threshold != advanced_defaults.vad.vad_threshold,
-            advanced.vad.vad_silence_duration != advanced_defaults.vad.vad_silence_duration,
-            advanced.vad.vad_pre_speech_padding_ms != advanced_defaults.vad.vad_pre_speech_padding_ms,
-            advanced.vad.vad_post_speech_padding_ms != advanced_defaults.vad.vad_post_speech_padding_ms,
-        ]
-
-        if any(advanced_signals):
-            self.show_advanced = True
-
-        hotkeys = advanced.hotkeys
-        if not self.show_advanced:
-            hotkeys.record_key = _coerce_key(self.record_key)
-            hotkeys.record_mode = self.record_mode
-            hotkeys.auto_paste = bool(self.auto_paste)
-            hotkeys.agent_auto_paste = (
-                True if self.agent_auto_paste is None else bool(self.agent_auto_paste)
-            )
-            hotkeys.auto_paste_modifier = self.auto_paste_modifier
-            hotkeys.min_record_duration = self.min_record_duration
-            hotkeys.hotkey_debounce_ms = self.hotkey_debounce_ms
-            hotkeys.agent_key = _coerce_key(self.agent_key)
-            hotkeys.keyboard_library = _coerce_key(self.keyboard_library)
-            hotkeys.hotkey_stability_service_enabled = bool(
-                self.hotkey_stability_service_enabled
-            )
-        else:
-            self.record_key = hotkeys.record_key
-            self.record_mode = hotkeys.record_mode
-            self.auto_paste = hotkeys.auto_paste
-            self.agent_auto_paste = hotkeys.agent_auto_paste
-            self.auto_paste_modifier = hotkeys.auto_paste_modifier
-            self.min_record_duration = hotkeys.min_record_duration
-            self.hotkey_debounce_ms = hotkeys.hotkey_debounce_ms
-            self.agent_key = hotkeys.agent_key
-            self.keyboard_library = hotkeys.keyboard_library
-            self.hotkey_stability_service_enabled = (
-                hotkeys.hotkey_stability_service_enabled
-            )
-
-        self.auto_paste = hotkeys.auto_paste
-        self.agent_auto_paste = hotkeys.agent_auto_paste
-        self.auto_paste_modifier = hotkeys.auto_paste_modifier
-        self.min_record_duration = hotkeys.min_record_duration
-        self.hotkey_debounce_ms = hotkeys.hotkey_debounce_ms
-        self.agent_key = hotkeys.agent_key
-        self.keyboard_library = hotkeys.keyboard_library
-        self.hotkey_stability_service_enabled = hotkeys.hotkey_stability_service_enabled
-
-        ai = advanced.ai
-        if not self.show_advanced:
-            ai.text_correction_enabled = bool(self.text_correction_enabled)
-            ai.text_correction_service = self.text_correction_service
-            ai.openrouter_api_key = self.openrouter_api_key
-            ai.openrouter_model = self.openrouter_model
-            ai.openrouter_timeout = self.openrouter_timeout
-            ai.openrouter_prompt = self.openrouter_prompt
-            ai.openrouter_max_attempts = self.openrouter_max_attempts
-            ai.gemini_api_key = self.gemini_api_key
-            ai.gemini_model = self.gemini_model
-            ai.gemini_agent_model = self.gemini_agent_model
-            ai.gemini_timeout = self.gemini_timeout
-            ai.gemini_prompt = self.gemini_prompt
-            ai.text_correction_timeout = self.text_correction_timeout
-            ai.ai_provider = self.ai_provider
-            ai.prompt_agentico = self.prompt_agentico
-            ai.gemini_model_options = list(self.gemini_model_options)
-        self.text_correction_enabled = ai.text_correction_enabled
-        self.text_correction_service = ai.text_correction_service
-        self.openrouter_api_key = ai.openrouter_api_key
-        self.openrouter_model = ai.openrouter_model
-        self.openrouter_timeout = ai.openrouter_timeout
-        self.openrouter_prompt = ai.openrouter_prompt
-        self.openrouter_max_attempts = ai.openrouter_max_attempts
-        self.gemini_api_key = ai.gemini_api_key
-        self.gemini_model = ai.gemini_model
-        self.gemini_agent_model = ai.gemini_agent_model
-        self.gemini_timeout = ai.gemini_timeout
-        self.gemini_prompt = ai.gemini_prompt
-        self.text_correction_timeout = ai.text_correction_timeout
-        self.ai_provider = ai.ai_provider
-        self.prompt_agentico = ai.prompt_agentico
-        self.gemini_model_options = list(ai.gemini_model_options)
-
-        performance = advanced.performance
-        if not self.show_advanced:
-            performance.batch_size = self.batch_size
-            performance.batch_size_mode = self.batch_size_mode
-            performance.manual_batch_size = self.manual_batch_size
-            performance.gpu_index = self.gpu_index
-            performance.chunk_length_sec = self.chunk_length_sec
-            performance.chunk_length_mode = self.chunk_length_mode
-            performance.clear_gpu_cache = self.clear_gpu_cache
-            performance.asr_compute_device = self.asr_compute_device
-            performance.asr_dtype = self.asr_dtype
-            performance.asr_ct2_compute_type = self.asr_ct2_compute_type
-            performance.asr_ct2_cpu_threads = self.asr_ct2_cpu_threads
-            performance.max_parallel_downloads = self.max_parallel_downloads
-        self.batch_size = performance.batch_size
-        self.batch_size_mode = performance.batch_size_mode
-        self.manual_batch_size = performance.manual_batch_size
-        self.gpu_index = performance.gpu_index
-        self.chunk_length_sec = performance.chunk_length_sec
-        self.chunk_length_mode = performance.chunk_length_mode
-        self.clear_gpu_cache = performance.clear_gpu_cache
-        self.asr_compute_device = performance.asr_compute_device
-        self.asr_dtype = performance.asr_dtype
-        self.asr_ct2_compute_type = performance.asr_ct2_compute_type
-        self.asr_ct2_cpu_threads = performance.asr_ct2_cpu_threads
-        self.max_parallel_downloads = performance.max_parallel_downloads
-
-        storage = advanced.storage
-        if not self.show_advanced:
-            storage.save_temp_recordings = self.save_temp_recordings
-            storage.record_storage_mode = self.record_storage_mode
-            storage.record_storage_limit = self.record_storage_limit
-            storage.max_memory_seconds_mode = self.max_memory_seconds_mode
-            storage.max_memory_seconds = self.max_memory_seconds
-            storage.min_free_ram_mb = self.min_free_ram_mb
-            storage.auto_ram_threshold_percent = self.auto_ram_threshold_percent
-            storage.storage_root_dir = self.storage_root_dir
-            storage.models_storage_dir = self.models_storage_dir
-            storage.recordings_dir = self.recordings_dir
-            storage.asr_cache_dir = self.asr_cache_dir
-            storage.deps_install_dir = self.deps_install_dir
-            storage.hf_home_dir = self.hf_home_dir
-            storage.transformers_cache_dir = self.transformers_cache_dir
-            storage.python_packages_dir = self.python_packages_dir
-            storage.vad_models_dir = self.vad_models_dir
-            storage.hf_cache_dir = self.hf_cache_dir
-        self.save_temp_recordings = storage.save_temp_recordings
-        self.record_storage_mode = storage.record_storage_mode
-        self.record_storage_limit = storage.record_storage_limit
-        self.max_memory_seconds_mode = storage.max_memory_seconds_mode
-        self.max_memory_seconds = storage.max_memory_seconds
-        self.min_free_ram_mb = storage.min_free_ram_mb
-        self.auto_ram_threshold_percent = storage.auto_ram_threshold_percent
-        self.storage_root_dir = storage.storage_root_dir
-        self.models_storage_dir = storage.models_storage_dir
-        self.recordings_dir = storage.recordings_dir
-        self.asr_cache_dir = storage.asr_cache_dir
-        self.deps_install_dir = storage.deps_install_dir
-        self.hf_home_dir = storage.hf_home_dir
-        self.transformers_cache_dir = storage.transformers_cache_dir
-        self.python_packages_dir = storage.python_packages_dir
-        self.vad_models_dir = storage.vad_models_dir
-        self.hf_cache_dir = storage.hf_cache_dir
-
-        vad_cfg = advanced.vad
-        if not self.show_advanced:
-            vad_cfg.use_vad = self.use_vad
-            vad_cfg.vad_threshold = self.vad_threshold
-            vad_cfg.vad_silence_duration = self.vad_silence_duration
-            vad_cfg.vad_pre_speech_padding_ms = self.vad_pre_speech_padding_ms
-            vad_cfg.vad_post_speech_padding_ms = self.vad_post_speech_padding_ms
-        self.use_vad = vad_cfg.use_vad
-        self.vad_threshold = vad_cfg.vad_threshold
-        self.vad_silence_duration = vad_cfg.vad_silence_duration
-        self.vad_pre_speech_padding_ms = vad_cfg.vad_pre_speech_padding_ms
-        self.vad_post_speech_padding_ms = vad_cfg.vad_post_speech_padding_ms
-
-        workflow = advanced.workflow
-        if not self.show_advanced:
-            workflow.display_transcripts_in_terminal = (
-                self.display_transcripts_in_terminal
-            )
-        self.display_transcripts_in_terminal = workflow.display_transcripts_in_terminal
-
-        system = advanced.system
-        if not self.show_advanced:
-            system.launch_at_startup = self.launch_at_startup
-        self.launch_at_startup = system.launch_at_startup
-
-        sound_cfg = self.sound or SoundSettings()
-        sound_cfg.enabled = self.sound_enabled
-        sound_cfg.frequency = self.sound_frequency
-        sound_cfg.duration = self.sound_duration
-        sound_cfg.volume = self.sound_volume
-        self.sound = sound_cfg
-        self.sound_enabled = sound_cfg.enabled
-        self.sound_frequency = sound_cfg.frequency
-        self.sound_duration = sound_cfg.duration
-        self.sound_volume = sound_cfg.volume
-
-        self.advanced = advanced
-        return self
 
 
 KEY_PATH_OVERRIDES: dict[str, tuple[str, ...]] = {

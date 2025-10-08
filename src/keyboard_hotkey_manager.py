@@ -567,6 +567,37 @@ class KeyboardHotkeyManager:
             self.stop()
             return False
 
+    def _stop_auxiliary_threads(self) -> None:
+        """Finaliza threads auxiliares registradas pelo gerenciador."""
+
+        entries = list(self._auxiliary_threads.items())
+        for name, payload in entries:
+            thread = payload.get("thread")
+            stop_event = payload.get("stop_event")
+            if stop_event is not None and hasattr(stop_event, "set"):
+                try:
+                    stop_event.set()
+                except Exception:
+                    self._log(
+                        logging.DEBUG,
+                        "Failed to signal auxiliary thread stop.",
+                        event="hotkeys.aux_thread_stop_signal_failed",
+                        thread=name,
+                        exc_info=True,
+                    )
+            if thread is not None and hasattr(thread, "join"):
+                try:
+                    thread.join(timeout=1.0)
+                except Exception:
+                    self._log(
+                        logging.DEBUG,
+                        "Failed to join auxiliary thread during stop.",
+                        event="hotkeys.aux_thread_join_failed",
+                        thread=name,
+                        exc_info=True,
+                    )
+        self._auxiliary_threads.clear()
+
     def stop(self):
         """Para o gerenciador de hotkeys."""
         self._stop_auxiliary_threads()
@@ -748,6 +779,7 @@ class KeyboardHotkeyManager:
 
         if agent is not None:
             self.callback_agent = agent
+
 
     def describe_persistence_state(self) -> dict[str, object]:
         """Retorna informações de diagnóstico do arquivo de hotkeys."""
