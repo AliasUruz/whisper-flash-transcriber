@@ -1,4 +1,5 @@
 import builtins
+import contextlib
 import importlib
 import json
 import os
@@ -13,7 +14,32 @@ from unittest import mock
 
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+@contextlib.contextmanager
+def isolated_config_environment(profile_dir: str, *, working_dir: str | None = None):
+    """Context manager that reloads ``src.config_manager`` with isolated paths."""
+
+    module_name = "src.config_manager"
+    previous_cwd = Path.cwd()
+    previous_profile = os.environ.get("WHISPER_FLASH_PROFILE_DIR")
+
+    try:
+        os.environ["WHISPER_FLASH_PROFILE_DIR"] = profile_dir
+        if working_dir is not None:
+            os.chdir(working_dir)
+        sys.modules.pop(module_name, None)
+        module = importlib.import_module(module_name)
+        yield module
+    finally:
+        if previous_profile is None:
+            os.environ.pop("WHISPER_FLASH_PROFILE_DIR", None)
+        else:
+            os.environ["WHISPER_FLASH_PROFILE_DIR"] = previous_profile
+        if working_dir is not None:
+            os.chdir(previous_cwd)
+        sys.modules.pop(module_name, None)
 
 if not hasattr(builtins, "Mapping"):
     builtins.Mapping = Mapping
@@ -47,6 +73,8 @@ try:
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
 except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
 

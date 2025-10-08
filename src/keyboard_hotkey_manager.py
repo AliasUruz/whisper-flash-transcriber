@@ -25,8 +25,15 @@ except Exception:  # pragma: no cover - optional dependency
 
     keyboard = _KeyboardPlaceholder()  # type: ignore[assignment]
 
+try:  # Optional dependency used only for direct keyboard hook cleanup in tests
+    import keyboard  # type: ignore[import]
+except ModuleNotFoundError:  # pragma: no cover - optional in headless environments
+    keyboard = None  # type: ignore[assignment]
+
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
-from .logging_utils import get_logger, log_context
+from .hotkey_normalization import _normalize_key_name
+from .hotkeys import BaseHotkeyDriver, build_available_drivers
+from .logging_utils import get_logger, join_thread_with_timeout, log_context
 
 LOGGER = get_logger(
     "whisper_flash_transcriber.hotkeys",
@@ -57,9 +64,18 @@ class KeyboardHotkeyManager:
         self.record_key = "f3"  # Tecla padrão
         self.agent_key = "f4"  # Tecla padrão para comando agêntico
         self.record_mode = "toggle"  # Modo padrão
-        self.hotkey_handlers = {}
-        self.debounce_window_ms: float = 200.0
-        self._last_trigger_ts: dict[str, float] = {}
+        self._drivers: list[BaseHotkeyDriver] = []
+        self._active_driver: BaseHotkeyDriver | None = None
+        self._active_driver_index: int | None = None
+        self._driver_lock = threading.Lock()
+        self._driver_failures: list[dict[str, Any]] = []
+        self.hotkey_handlers: dict[str, list[Any]] = {}
+        self._debounce_window_seconds: float = 0.0
+        self._last_event_timestamps: dict[str, float] = {}
+        self._last_trigger_ts = self._last_event_timestamps
+
+        self._auxiliary_threads: dict[str, dict[str, Any]] = {}
+        self._aux_threads_lock = threading.Lock()
 
         # Carregar configuração se existir
         self._load_config()
@@ -348,6 +364,20 @@ class KeyboardHotkeyManager:
 
     def stop(self):
         """Para o gerenciador de hotkeys."""
+        self._stop_auxiliary_threads()
+        if keyboard is not None and self.hotkey_handlers:
+            for handles in list(self.hotkey_handlers.values()):
+                for handle in handles:
+                    try:
+                        keyboard.unhook(handle)
+                    except Exception:  # pragma: no cover - defensive cleanup
+                        self._log(
+                            logging.DEBUG,
+                            "Failed to unhook keyboard handle during stop.",
+                            event="hotkeys.stop_unhook_failed",
+                            handle=str(handle),
+                        )
+            self.hotkey_handlers.clear()
         # Sempre tente remover as hotkeys, mesmo que o estado esteja incorreto
         self._unregister_hotkeys()
         self.is_running = False
@@ -422,6 +452,28 @@ class KeyboardHotkeyManager:
             )
             return False
 
+    def set_debounce_window(self, debounce_ms: float | int) -> None:
+        """Configura o período de debounce entre eventos de hotkey."""
+
+        try:
+            window_seconds = max(0.0, float(debounce_ms) / 1000.0)
+        except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+            self._log(
+                logging.WARNING,
+                "Invalid debounce window provided; ignoring update.",
+                event="hotkeys.debounce_invalid",
+                error=str(exc),
+            )
+            return
+
+        self._debounce_window_seconds = window_seconds
+        self._log(
+            logging.INFO,
+            "Hotkey debounce window updated.",
+            event="hotkeys.debounce_updated",
+            debounce_ms=int(window_seconds * 1000),
+        )
+
     def set_callbacks(self, toggle=None, start=None, stop=None, agent=None):
         """
         Define os callbacks para os eventos de hotkey.
@@ -485,53 +537,17 @@ class KeyboardHotkeyManager:
                 handle_id=handle_id,
             )
             return
-        self.hotkey_handlers.setdefault(handle_id, []).append(handle)
+        handles = self.hotkey_handlers.setdefault(handle_id, [])
+        handles.append(handle)
 
-    def set_debounce_window(self, debounce_ms: float | int | None) -> None:
-        """Configure a janela de debounce em milissegundos."""
+    def _unregister_hotkeys(self) -> None:
+        """Remove todas as hotkeys registradas pelos drivers ativos."""
 
-        previous = self.debounce_window_ms
-        try:
-            if debounce_ms is None:
-                candidate = 0.0
-            else:
-                candidate = float(debounce_ms)
-        except (TypeError, ValueError):
-            self._log(
-                logging.WARNING,
-                "Invalid debounce value provided; keeping previous window.",
-                event="hotkeys.debounce_invalid",
-                supplied=str(debounce_ms),
-                previous_ms=previous,
-            )
-            return
-
-        candidate = max(candidate, 0.0)
-        if candidate == previous:
-            return
-
-        self.debounce_window_ms = candidate
-        self._last_trigger_ts.clear()
-        self._log(
-            logging.INFO,
-            "Hotkey debounce window updated.",
-            event="hotkeys.debounce_updated",
-            debounce_ms=candidate,
-        )
-
-    def _should_process_event(self, handle_id: str) -> bool:
-        """Return ``True`` when the callback tied to ``handle_id`` must run."""
-
-        window_ms = max(self.debounce_window_ms, 0.0)
-        now = time.perf_counter()
-        if window_ms <= 0.0:
-            self._last_trigger_ts[handle_id] = now
-            return True
-
-        last_seen = self._last_trigger_ts.get(handle_id)
-        if last_seen is not None:
-            elapsed_ms = (now - last_seen) * 1000.0
-            if elapsed_ms < window_ms:
+        entries = self._driver_entries()
+        for _, driver in entries:
+            try:
+                driver.unregister()
+            except Exception as exc:  # pragma: no cover - defensive cleanup
                 self._log(
                     logging.DEBUG,
                     "Hotkey callback ignored due to debounce window.",
@@ -701,6 +717,14 @@ class KeyboardHotkeyManager:
                 record_key=self.record_key,
                 agent_key=self.agent_key,
             )
+
+            if index > 0:
+                self._log(
+                    logging.WARNING,
+                    "Fallback hotkey driver activated.",
+                    event="hotkeys.driver_fallback",
+                    driver=driver.name,
+            )
             return True
 
         except Exception as e:
@@ -778,6 +802,25 @@ class KeyboardHotkeyManager:
         if last is None or (now - last) * 1000 >= window_ms:
             self._last_trigger_ts[event] = now
             return True
+        return False
+
+    def _should_process_event(self, event_type: str) -> bool:
+        """Determine whether a hotkey event should trigger callbacks."""
+
+        window = self._debounce_window_seconds
+        now = time.perf_counter()
+        last = self._last_event_timestamps.get(event_type)
+        if window <= 0 or last is None or (now - last) >= window:
+            self._last_event_timestamps[event_type] = now
+            return True
+        self._log(
+            logging.DEBUG,
+            "Hotkey event suppressed by debounce window.",
+            event="hotkeys.debounce_suppressed",
+            event_type=event_type,
+            debounce_ms=int(window * 1000),
+            elapsed_ms=int((now - last) * 1000),
+        )
         return False
 
     def _on_toggle_key(self):
