@@ -246,54 +246,6 @@ class AdvancedAIConfig(BaseModel):
             "gemini-2.5-pro",
         ]
     )
-    ui_language: str = _DEFAULT_UI_LANGUAGE
-    batch_size: int = Field(default=16, ge=1)
-    batch_size_mode: str = "auto"
-    manual_batch_size: int = Field(default=8, ge=1)
-    gpu_index: int = Field(default=0, ge=-1)
-    hotkey_stability_service_enabled: bool = True
-    use_vad: bool = False
-    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
-    vad_silence_duration: float = Field(default=1.0, ge=0.0)
-    vad_pre_speech_padding_ms: int = Field(default=150, ge=0)
-    vad_post_speech_padding_ms: int = Field(default=300, ge=0)
-    display_transcripts_in_terminal: bool = False
-    save_temp_recordings: bool = False
-    record_storage_mode: str = "auto"
-    record_storage_limit: int = Field(default=0, ge=0)
-    max_memory_seconds_mode: str = "auto"
-    max_memory_seconds: float = Field(default=30.0, ge=0.0)
-    min_free_ram_mb: int = Field(default=1000, ge=0)
-    auto_ram_threshold_percent: int = Field(default=10, ge=1, le=50)
-    max_parallel_downloads: int = Field(default=1, ge=1, le=8)
-    chunk_length_sec: float = Field(default=30.0, ge=0.0)
-    chunk_length_mode: str = "auto"
-    launch_at_startup: bool = False
-    clear_gpu_cache: bool = True
-    enable_torch_compile: bool = False
-    storage_root_dir: str = str(_DEFAULT_STORAGE_ROOT)
-    models_storage_dir: str = _DEFAULT_MODELS_STORAGE_DIR
-    recordings_dir: str = _DEFAULT_RECORDINGS_DIR
-    deps_install_dir: str = _DEFAULT_DEPS_INSTALL_DIR
-    hf_home_dir: str = _DEFAULT_HF_HOME_DIR
-    asr_cache_dir: str = _DEFAULT_ASR_CACHE_DIR
-    python_packages_dir: str = _DEFAULT_PYTHON_PACKAGES_DIR
-    vad_models_dir: str = _DEFAULT_VAD_MODELS_DIR
-    hf_cache_dir: str = _DEFAULT_HF_CACHE_DIR
-    asr_model_id: str = "distil-whisper/distil-large-v3"
-    asr_backend: str = "ctranslate2"
-    asr_compute_device: str = "auto"
-    asr_ct2_compute_type: str = "int8_float16"
-    asr_ct2_cpu_threads: int = Field(default=0, ge=0)
-    asr_installed_models: list[str] = Field(default_factory=list)
-    asr_curated_catalog: list[dict[str, Any]] = Field(default_factory=list_catalog)
-    asr_curated_catalog_url: str = ""
-    asr_last_download_status: ASRDownloadStatus = Field(default_factory=ASRDownloadStatus)
-    asr_download_history: list[ASRDownloadHistoryEntry] = Field(default_factory=list)
-    asr_last_prompt_decision: ASRPromptDecision = Field(default_factory=ASRPromptDecision)
-    batch_size_specified: bool = False
-    gpu_index_specified: bool = False
-    first_run_completed: bool = False
 
     @field_validator("text_correction_service", mode="before")
     @classmethod
@@ -497,6 +449,7 @@ class AppConfig(BaseModel):
     agent_key: str = "F4"
     keyboard_library: str = "win32"
     hotkey_stability_service_enabled: bool = True
+    ui_language: str = _DEFAULT_UI_LANGUAGE
     text_correction_enabled: bool = False
     text_correction_service: str = "none"
     openrouter_api_key: str = ""
@@ -608,7 +561,7 @@ class AppConfig(BaseModel):
     @field_validator("ui_language", mode="before")
     @classmethod
     def _coerce_ui_language(cls, value: Any) -> str:
-        return _coerce_key(value)
+        return _normalize_ui_language(value)
 
     @field_validator("auto_paste_modifier", mode="before")
     @classmethod
