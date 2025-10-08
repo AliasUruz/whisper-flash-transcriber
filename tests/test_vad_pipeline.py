@@ -18,8 +18,30 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if not hasattr(builtins, "Mapping"):
     builtins.Mapping = Mapping
 
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+
+@contextmanager
+def isolated_config_environment(profile_dir: str, working_dir: str | None = None):
+    original_env = os.environ.get("WHISPER_FLASH_PROFILE_DIR")
+    original_cwd = os.getcwd()
+    try:
+        os.environ["WHISPER_FLASH_PROFILE_DIR"] = str(profile_dir)
+        if working_dir is not None:
+            os.chdir(working_dir)
+        if "src.config_manager" in sys.modules:
+            del sys.modules["src.config_manager"]
+        config_module = importlib.import_module("src.config_manager")
+        try:
+            yield config_module
+        finally:
+            if working_dir is not None:
+                os.chdir(original_cwd)
+    finally:
+        if original_env is None:
+            os.environ.pop("WHISPER_FLASH_PROFILE_DIR", None)
+        else:
+            os.environ["WHISPER_FLASH_PROFILE_DIR"] = original_env
+        if "src.config_manager" in sys.modules:
+            del sys.modules["src.config_manager"]
 
 try:
     from src.vad_manager import VADManager

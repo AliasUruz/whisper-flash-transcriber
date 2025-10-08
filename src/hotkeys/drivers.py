@@ -149,11 +149,10 @@ class KeyboardLibHotkeyDriver(BaseHotkeyDriver):
             keyboard.unhook(hook)
 
 
-try:  # pragma: no cover - optional dependency
+try:
     _PYNPUT_SPEC = importlib.util.find_spec("pynput.keyboard")
-except ModuleNotFoundError:  # pragma: no cover - absent dependency
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
     _PYNPUT_SPEC = None
-
 if _PYNPUT_SPEC is not None:
     try:  # pragma: no cover - optional dependency
         pynput_keyboard = importlib.import_module("pynput.keyboard")

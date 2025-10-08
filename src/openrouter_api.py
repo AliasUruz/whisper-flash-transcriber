@@ -9,6 +9,7 @@ import requests
 
 from .logging_utils import get_logger, log_context
 from .app_identity import APP_DISPLAY_NAME, APP_OFFICIAL_URL, APP_LOG_NAMESPACE
+from .retry_utils import RetryableOperationError, retry_with_backoff
 
 LOGGER = get_logger(f"{APP_LOG_NAMESPACE}.openrouter", component='OpenRouterAPI')
 
