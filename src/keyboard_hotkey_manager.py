@@ -740,6 +740,36 @@ class KeyboardHotkeyManager:
     def _unregister_hotkeys(self):
         """Desregistra as hotkeys do sistema."""
         try:
+            drivers_to_cleanup: list[BaseHotkeyDriver] = []
+            with self._driver_lock:
+                if self._active_driver is not None:
+                    drivers_to_cleanup.append(self._active_driver)
+                for driver in self._drivers:
+                    if driver is not None and driver not in drivers_to_cleanup:
+                        drivers_to_cleanup.append(driver)
+                self._active_driver = None
+                self._active_driver_index = None
+
+            for driver in drivers_to_cleanup:
+                driver_name = getattr(driver, "name", driver.__class__.__name__)
+                try:
+                    driver.unregister()
+                    self._log(
+                        logging.DEBUG,
+                        "Hotkey driver unregistered.",
+                        event="hotkeys.driver_unregister_success",
+                        driver=driver_name,
+                    )
+                except Exception as exc:  # pragma: no cover - defensive cleanup
+                    self._log(
+                        logging.ERROR,
+                        "Error while unregistering hotkey driver.",
+                        event="hotkeys.driver_unregister_error",
+                        driver=driver_name,
+                        error=str(exc),
+                        exc_info=True,
+                    )
+
             for handle_id, handles in list(self.hotkey_handlers.items()):
                 for handle in handles:
                     try:
