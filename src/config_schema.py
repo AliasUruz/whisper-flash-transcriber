@@ -117,6 +117,12 @@ def _normalize_ui_language(value: Any) -> str:
     return _SUPPORTED_UI_LANGUAGE_MAP.get(normalized, _DEFAULT_UI_LANGUAGE)
 
 
+def _build_advanced_config() -> "AdvancedConfig":
+    """Defer creation of :class:`AdvancedConfig` to the latest class binding."""
+
+    return AdvancedConfig()
+
+
 class ASRDownloadStatus(BaseModel):
     """Structured status for the last ASR download attempt."""
 
@@ -288,7 +294,6 @@ class AdvancedAIConfig(BaseModel):
     batch_size_specified: bool = False
     gpu_index_specified: bool = False
     first_run_completed: bool = False
-    advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
 
     @field_validator("text_correction_service", mode="before")
     @classmethod
@@ -487,6 +492,7 @@ class AppConfig(BaseModel):
     sound_duration: float = Field(default=0.3, ge=0.0)
     sound_volume: float = Field(default=0.5, ge=0.0)
     sound: SoundSettings = Field(default_factory=SoundSettings)
+    ui_language: str = _DEFAULT_UI_LANGUAGE
     agent_key: str = "F4"
     keyboard_library: str = "win32"
     hotkey_stability_service_enabled: bool = True
@@ -558,7 +564,7 @@ class AppConfig(BaseModel):
     asr_last_download_status: ASRDownloadStatus = Field(default_factory=ASRDownloadStatus)
     asr_download_history: list[ASRDownloadHistoryEntry] = Field(default_factory=list)
     asr_last_prompt_decision: ASRPromptDecision = Field(default_factory=ASRPromptDecision)
-    advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
+    advanced: AdvancedConfig = Field(default_factory=_build_advanced_config)
     first_run_completed: bool = False
 
     @field_validator("record_key", "agent_key", mode="before")
