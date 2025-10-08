@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +20,7 @@ from pydantic import (
 from .logging_utils import get_logger, log_context
 from .model_manager import CURATED, list_catalog, normalize_backend_label
 
-LOGGER = get_logger(__name__, component='ConfigSchema')
+LOGGER = get_logger(__name__, component="ConfigSchema")
 
 
 _DEFAULT_STORAGE_ROOT = (Path.home() / ".cache" / "whisper_flash_transcriber").expanduser()
@@ -50,6 +49,9 @@ _DEFAULT_UI_LANGUAGE = "en-US"
 
 _CURATED_MODEL_IDS = {entry["id"] for entry in CURATED}
 _ALLOWED_ASR_BACKENDS = {"ctranslate2"}
+_ALLOWED_RECORD_STORAGE_MODES = {"auto", "disk", "memory"}
+_ALLOWED_BATCH_SIZE_MODES = {"auto", "manual"}
+_ALLOWED_CHUNK_LENGTH_MODES = {"auto", "manual"}
 
 
 def _normalize_lower(value: str, *, allowed: set[str], field_name: str) -> str:
@@ -264,7 +266,6 @@ class AppConfig(BaseModel):
     min_free_ram_mb: int = Field(default=1000, ge=0)
     auto_ram_threshold_percent: int = Field(default=10, ge=1, le=50)
     max_parallel_downloads: int = Field(default=1, ge=1, le=8)
-    min_transcription_duration: float = Field(default=1.0, ge=0.0)
     chunk_length_sec: float = Field(default=30.0, ge=0.0)
     chunk_length_mode: str = "auto"
     launch_at_startup: bool = False
@@ -290,6 +291,8 @@ class AppConfig(BaseModel):
     asr_last_download_status: ASRDownloadStatus = Field(default_factory=ASRDownloadStatus)
     asr_download_history: list[ASRDownloadHistoryEntry] = Field(default_factory=list)
     asr_last_prompt_decision: ASRPromptDecision = Field(default_factory=ASRPromptDecision)
+    batch_size_specified: bool = False
+    gpu_index_specified: bool = False
     first_run_completed: bool = False
     advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
 
@@ -503,7 +506,11 @@ KEY_PATH_OVERRIDES: dict[str, tuple[str, ...]] = {
     "agent_key": ("advanced", "hotkeys", "agent_key"),
     "agent_auto_paste": ("advanced", "hotkeys", "agent_auto_paste"),
     "auto_paste_modifier": ("advanced", "hotkeys", "auto_paste_modifier"),
-    "hotkey_stability_service_enabled": ("advanced", "hotkeys", "hotkey_stability_service_enabled"),
+    "hotkey_stability_service_enabled": (
+        "advanced",
+        "hotkeys",
+        "hotkey_stability_service_enabled",
+    ),
     "keyboard_library": ("advanced", "hotkeys", "keyboard_library"),
     # Advanced AI
     "text_correction_enabled": ("advanced", "ai", "text_correction_enabled"),
@@ -519,6 +526,8 @@ KEY_PATH_OVERRIDES: dict[str, tuple[str, ...]] = {
     "gemini_prompt": ("advanced", "ai", "gemini_prompt"),
     "prompt_agentico": ("advanced", "ai", "prompt_agentico"),
     "gemini_model_options": ("advanced", "ai", "gemini_model_options"),
+    "ai_provider": ("advanced", "ai", "ai_provider"),
+    "text_correction_timeout": ("advanced", "ai", "text_correction_timeout"),
     # Advanced performance
     "batch_size": ("advanced", "performance", "batch_size"),
     "batch_size_mode": ("advanced", "performance", "batch_size_mode"),
@@ -539,7 +548,11 @@ KEY_PATH_OVERRIDES: dict[str, tuple[str, ...]] = {
     "max_memory_seconds_mode": ("advanced", "storage", "max_memory_seconds_mode"),
     "max_memory_seconds": ("advanced", "storage", "max_memory_seconds"),
     "min_free_ram_mb": ("advanced", "storage", "min_free_ram_mb"),
-    "auto_ram_threshold_percent": ("advanced", "storage", "auto_ram_threshold_percent"),
+    "auto_ram_threshold_percent": (
+        "advanced",
+        "storage",
+        "auto_ram_threshold_percent",
+    ),
     "save_temp_recordings": ("advanced", "storage", "save_temp_recordings"),
     "storage_root_dir": ("advanced", "storage", "storage_root_dir"),
     "models_storage_dir": ("advanced", "storage", "models_storage_dir"),
@@ -555,10 +568,22 @@ KEY_PATH_OVERRIDES: dict[str, tuple[str, ...]] = {
     "use_vad": ("advanced", "vad", "use_vad"),
     "vad_threshold": ("advanced", "vad", "vad_threshold"),
     "vad_silence_duration": ("advanced", "vad", "vad_silence_duration"),
-    "vad_pre_speech_padding_ms": ("advanced", "vad", "vad_pre_speech_padding_ms"),
-    "vad_post_speech_padding_ms": ("advanced", "vad", "vad_post_speech_padding_ms"),
+    "vad_pre_speech_padding_ms": (
+        "advanced",
+        "vad",
+        "vad_pre_speech_padding_ms",
+    ),
+    "vad_post_speech_padding_ms": (
+        "advanced",
+        "vad",
+        "vad_post_speech_padding_ms",
+    ),
     # Advanced workflow/system
-    "display_transcripts_in_terminal": ("advanced", "workflow", "display_transcripts_in_terminal"),
+    "display_transcripts_in_terminal": (
+        "advanced",
+        "workflow",
+        "display_transcripts_in_terminal",
+    ),
     "launch_at_startup": ("advanced", "system", "launch_at_startup"),
 }
 
@@ -607,9 +632,10 @@ def deep_merge_dict(target: dict[str, Any], updates: dict[str, Any]) -> None:
 def normalize_payload_tree(payload: dict[str, Any]) -> dict[str, Any]:
     tree: dict[str, Any] = {}
     for key, value in payload.items():
+        if value is None:
+            continue
         if key == "advanced" and isinstance(value, dict):
-            advanced_section = tree.setdefault("advanced", {})
-            deep_merge_dict(advanced_section, value)
+            deep_merge_dict(tree.setdefault("advanced", {}), value)
             continue
         path = path_for_key(key)
         set_path_value(tree, path, value)
@@ -626,62 +652,10 @@ def flatten_config_tree(config_tree: dict[str, Any]) -> dict[str, Any]:
         value = get_path_value(config_tree, path)
         if value is not None:
             flat[key] = copy.deepcopy(value)
+    sound = config_tree.get("sound")
+    if isinstance(sound, dict):
+        flat.setdefault("sound", copy.deepcopy(sound))
     return flat
-
-    @model_validator(mode="after")
-    def _enforce_simple_mode_defaults(cls, values: "AppConfig") -> "AppConfig":
-        """Clamp advanced-only fields when the simple mode is active."""
-
-        defaults = cls.model_fields
-
-        def _default(name: str) -> Any:
-            field = defaults.get(name)
-            return field.default if field is not None else None
-
-        simple_targets: dict[str, Any] = {
-            "text_correction_enabled": False,
-            "text_correction_service": "none",
-            "batch_size_mode": _default("batch_size_mode"),
-            "manual_batch_size": _default("manual_batch_size"),
-            "use_vad": _default("use_vad"),
-            "vad_threshold": _default("vad_threshold"),
-            "vad_silence_duration": _default("vad_silence_duration"),
-            "vad_pre_speech_padding_ms": _default("vad_pre_speech_padding_ms"),
-            "vad_post_speech_padding_ms": _default("vad_post_speech_padding_ms"),
-            "save_temp_recordings": _default("save_temp_recordings"),
-            "record_storage_mode": _default("record_storage_mode"),
-            "record_storage_limit": _default("record_storage_limit"),
-            "max_memory_seconds_mode": "auto",
-            "max_memory_seconds": _default("max_memory_seconds"),
-            "chunk_length_mode": "auto",
-            "chunk_length_sec": _default("chunk_length_sec"),
-        }
-
-        advanced_signals = [
-            bool(values.text_correction_enabled),
-            str(values.text_correction_service or "none").lower() not in {"", "none"},
-            bool(values.use_vad),
-            str(values.batch_size_mode or "auto").lower()
-            != str(simple_targets["batch_size_mode"] or "auto").lower(),
-            values.manual_batch_size != simple_targets["manual_batch_size"],
-            str(values.record_storage_mode or "auto").lower()
-            != str(simple_targets["record_storage_mode"] or "auto").lower(),
-            values.record_storage_limit != simple_targets["record_storage_limit"],
-            str(values.max_memory_seconds_mode or "auto").lower() not in {"auto"},
-            values.max_memory_seconds != simple_targets["max_memory_seconds"],
-            str(values.chunk_length_mode or "auto").lower() not in {"auto"},
-            values.chunk_length_sec != simple_targets["chunk_length_sec"],
-            bool(values.save_temp_recordings),
-        ]
-
-        if not values.show_advanced and any(advanced_signals):
-            values.show_advanced = True
-            return values
-
-        if not values.show_advanced:
-            for field_name, default_value in simple_targets.items():
-                setattr(values, field_name, default_value)
-        return values
 
 
 def coerce_with_defaults(payload: dict[str, Any], defaults: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -690,6 +664,7 @@ def coerce_with_defaults(payload: dict[str, Any], defaults: dict[str, Any]) -> t
     Returns the sanitized configuration dictionary and a list of warning
     messages produced while coercing invalid fields back to their defaults.
     """
+
     normalized_payload = dict(payload)
     warnings: list[str] = []
 

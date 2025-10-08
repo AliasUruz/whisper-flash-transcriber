@@ -20,6 +20,8 @@ if str(PROJECT_ROOT) not in sys.path:
 if not hasattr(builtins, "Mapping"):
     builtins.Mapping = Mapping
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 try:
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
