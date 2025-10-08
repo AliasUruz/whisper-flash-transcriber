@@ -739,6 +739,78 @@ class KeyboardHotkeyManager:
 
     def _unregister_hotkeys(self):
         """Desregistra as hotkeys do sistema."""
+
+        drivers: list[BaseHotkeyDriver] = []
+        active_driver: BaseHotkeyDriver | None = None
+        active_index: int | None = None
+
+        driver_lock = getattr(self, "_driver_lock", None)
+        if driver_lock is not None:
+            try:
+                lock_cm = driver_lock
+            except Exception:
+                lock_cm = None
+        else:
+            lock_cm = None
+
+        if lock_cm is not None:
+            with lock_cm:
+                active_driver = getattr(self, "_active_driver", None)
+                active_index = getattr(self, "_active_driver_index", None)
+                drivers = list(getattr(self, "_drivers", []))
+                try:
+                    self._active_driver = None
+                except Exception:
+                    pass
+                try:
+                    self._active_driver_index = None
+                except Exception:
+                    pass
+        else:
+            active_driver = getattr(self, "_active_driver", None)
+            active_index = getattr(self, "_active_driver_index", None)
+            if active_driver is not None:
+                drivers = [active_driver]
+            try:
+                self._active_driver = None
+            except Exception:
+                pass
+            try:
+                self._active_driver_index = None
+            except Exception:
+                pass
+
+        def _log_driver_failure(driver_obj: BaseHotkeyDriver, error: Exception) -> None:
+            self._log(
+                logging.DEBUG,
+                "Failed to unregister hotkey driver.",
+                event="hotkeys.driver_unregister_failed",
+                driver=getattr(driver_obj, "name", type(driver_obj).__name__),
+                error=str(error),
+            )
+
+        if active_driver is not None:
+            try:
+                active_driver.unregister()
+            except Exception as exc:
+                _log_driver_failure(active_driver, exc)
+            else:
+                self._log(
+                    logging.DEBUG,
+                    "Active hotkey driver unregistered.",
+                    event="hotkeys.driver_unregister_success",
+                    driver=getattr(active_driver, "name", type(active_driver).__name__),
+                    driver_index=active_index,
+                )
+
+        for driver in drivers:
+            if driver is None or driver is active_driver:
+                continue
+            try:
+                driver.unregister()
+            except Exception as exc:
+                _log_driver_failure(driver, exc)
+
         try:
             for handle_id, handles in list(self.hotkey_handlers.items()):
                 for handle in handles:
@@ -766,10 +838,8 @@ class KeyboardHotkeyManager:
                             error=str(e),
                             exc_info=True,
                         )
-                # Após processar cada entrada, garantir que não haja handles residuais
                 self.hotkey_handlers[handle_id] = []
 
-            # Limpar qualquer chave vazia restante
             self.hotkey_handlers.clear()
 
             self._log(
@@ -777,7 +847,6 @@ class KeyboardHotkeyManager:
                 "Hotkeys unregistered successfully.",
                 event="hotkeys.unregister_success",
             )
-            # Garantir que o estado reflita a ausência de hotkeys registradas
             self.is_running = False
             self._last_trigger_ts.clear()
 
