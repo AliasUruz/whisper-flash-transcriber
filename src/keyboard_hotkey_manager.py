@@ -4,6 +4,7 @@ import logging
 import shutil
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -595,40 +596,36 @@ class KeyboardHotkeyManager:
         )
 
     def _stop_auxiliary_threads(self) -> None:
-        """Signal and join auxiliary threads managed by the hotkey manager."""
+        """Stop and join any background helper threads spawned by the manager."""
 
         with self._aux_threads_lock:
-            entries = list(self._auxiliary_threads.items())
+            for name, payload in list(self._auxiliary_threads.items()):
+                thread = payload.get("thread") if isinstance(payload, Mapping) else None
+                stop_event = payload.get("stop_event") if isinstance(payload, Mapping) else None
+
+                if stop_event is not None:
+                    try:
+                        stop_event.set()
+                    except Exception:  # pragma: no cover - defensive cleanup
+                        self._log(
+                            logging.DEBUG,
+                            "Failed to signal auxiliary thread stop event.",
+                            event="hotkeys.aux_thread_stop_event_failed",
+                            name=name,
+                        )
+
+                if thread is not None:
+                    try:
+                        thread.join(timeout=1.0)
+                    except Exception:  # pragma: no cover - defensive cleanup
+                        self._log(
+                            logging.DEBUG,
+                            "Failed to join auxiliary thread.",
+                            event="hotkeys.aux_thread_join_failed",
+                            name=name,
+                        )
+
             self._auxiliary_threads.clear()
-
-        for name, payload in entries:
-            thread = payload.get("thread")
-            stop_event = payload.get("stop_event")
-            join_timeout = payload.get("join_timeout", 1.0)
-            try:
-                timeout = float(join_timeout)
-            except (TypeError, ValueError):
-                timeout = 1.0
-
-            if stop_event is not None:
-                try:
-                    stop_event.set()
-                except Exception as exc:  # pragma: no cover - defensive
-                    self._log(
-                        logging.DEBUG,
-                        "Failed to signal auxiliary thread stop event.",
-                        event="hotkeys.aux_thread_signal_failed",
-                        thread=name,
-                        error=str(exc),
-                    )
-
-            join_thread_with_timeout(
-                thread if isinstance(thread, threading.Thread) else None,
-                timeout=timeout,
-                logger=LOGGER,
-                thread_name=name,
-                event_prefix="hotkeys.aux_thread",
-            )
 
     def update_config(self, record_key=None, agent_key=None, record_mode=None):
         """

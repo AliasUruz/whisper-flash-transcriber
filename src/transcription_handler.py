@@ -1968,6 +1968,46 @@ class TranscriptionHandler:
             finally:
                 self.correction_in_progress = False
 
+        if self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY):
+            logging.info(
+                "Text correction produced a result.",
+                extra={"event": "text_correction", "status": "completed", "details": f"chars={len(processed_text)}"},
+            )
+            return processed_text
+
+        if self.transcription_future and not self.transcription_future.done():
+            logging.warning(
+                "Transcription already running. Rejecting new audio segment.",
+                extra={"event": "transcription", "status": "busy"},
+            )
+            return
+
+        backend = getattr(self, "_asr_backend", None)
+        if backend is None:
+            logging.error(
+                "ASR backend unavailable when attempting to transcribe.",
+                extra={"event": "transcription", "status": "backend_missing"},
+            )
+            return
+
+        chunk_length = self._get_effective_chunk_length()
+        batch_size = self._get_dynamic_batch_size()
+        audio_description = self._format_audio_source(audio_source)
+
+        self.transcription_cancel_event.clear()
+
+        logging.info(
+            "[ASR] transcription_start chunk_length_s=%.1f batch_size=%s agent_mode=%s audio=%s",
+            chunk_length,
+            batch_size,
+            agent_mode,
+            audio_description,
+        )
+
+        def _segment_callback(text: str, *, metadata: dict | None = None, is_final: bool = False) -> None:
+            callback = self.on_segment_transcribed_callback
+            if not callback:
+                return
             try:
                 if active_provider == SERVICE_GEMINI:
                     correction_attempted = True
