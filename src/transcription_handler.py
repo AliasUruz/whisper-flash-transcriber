@@ -1035,6 +1035,17 @@ class TranscriptionHandler:
             )
             return False
 
+        if self.transcription_future is not None and not self.transcription_future.done():
+            logging.warning(
+                "Transcription already running; rejecting new audio segment.",
+                extra={
+                    "event": "transcription.enqueue_failed",
+                    "reason": "busy",
+                    "operation_id": operation_id,
+                },
+            )
+            return False
+
         backend = getattr(self, "_asr_backend", None)
         if backend is None:
             logging.warning(
@@ -1680,10 +1691,22 @@ class TranscriptionHandler:
             if shutdown_wait:
                 executor.shutdown(wait=True, cancel_futures=True)
 
-    def _process_ai_pipeline(self, transcribed_text: str, is_agent_mode: bool) -> str:
+    def _process_ai_pipeline(
+        self,
+        transcribed_text: str,
+        is_agent_mode: bool,
+        *,
+        operation_id: str | None = None,
+        metrics: dict[str, object] | None = None,
+    ) -> str:
         """Centraliza o fluxo de pós-processamento baseado em IA."""
 
+        def _set_branch(value: str) -> None:
+            if metrics is not None:
+                metrics["ai_branch"] = value
+
         if is_agent_mode:
+            _set_branch("agent_mode")
             if not self.gemini_api or not getattr(self.gemini_api, "is_valid", False):
                 logging.warning(
                     "Agent mode requested but the Gemini client is unavailable.",
@@ -1714,13 +1737,13 @@ class TranscriptionHandler:
                 )
                 return transcribed_text
 
-        if metrics is not None:
-            metrics.setdefault("ai_branch", branch)
-
         details = {
             "agent_mode": bool(is_agent_mode),
             "has_text": bool(transcribed_text),
         }
+
+        active_provider = self._get_text_correction_service()
+        branch = self._provider_label(active_provider)
 
         with operation_context(
             "Running AI post-processing.",
@@ -1737,116 +1760,114 @@ class TranscriptionHandler:
                     "Skipping AI pipeline: empty transcript.",
                     extra={"event": "text_correction", "status": "empty", "agent_mode": is_agent_mode},
                 )
-                if metrics is not None:
-                    metrics["ai_branch"] = branch
+                _set_branch(branch)
                 return transcribed_text
 
-        if active_provider == SERVICE_OPENROUTER and not self.openrouter_api:
-            logging.warning(
-                "OpenRouter client unavailable for text correction.",
-                extra={"event": "text_correction", "provider": "openrouter", "status": "unavailable"},
-            )
-            return transcribed_text
+            if active_provider in {None, SERVICE_NONE}:
+                branch = "disabled"
+                _set_branch(branch)
+                return transcribed_text
 
-        if self._is_correction_breaker_active(active_provider):
-            remaining = max(
-                0.0,
-                self._correction_disabled_until.get(active_provider, 0.0) - time.monotonic(),
-            )
-            logging.warning(
-                "Skipping text correction for provider '%s' while breaker cooldown active (%.0fs remaining).",
-                self._provider_label(active_provider),
-                remaining,
-            )
-            return transcribed_text
+            _set_branch(branch)
 
-        processed_text = transcribed_text
-        self.correction_in_progress = True
-        correction_attempted = False
-        correction_succeeded = False
-        try:
-            if active_provider == SERVICE_GEMINI:
-                processed_text = (
-                    self._run_with_timeout(
-                        self.gemini_api.get_correction,
-                        transcribed_text,
-                        timeout=self.text_correction_timeout,
-                        description="Gemini text correction",
-                    )
-                    or transcribed_text
+            if active_provider == SERVICE_OPENROUTER and not self.openrouter_api:
+                logging.warning(
+                    "OpenRouter client unavailable for text correction.",
+                    extra={"event": "text_correction", "provider": "openrouter", "status": "unavailable"},
                 )
-            elif active_provider == SERVICE_OPENROUTER:
-                api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
-                if not api_key:
-                    logging.warning(
-                        "Agent mode requested but the Gemini client is unavailable.",
-                        extra={"event": "agent_mode_correction", "status": "unavailable"},
-                    )
-                    return transcribed_text
-                try:
-                    agent_response = client.get_agent_response(transcribed_text)
-                    return agent_response or transcribed_text
-                except Exception as exc:
-                    logging.error(
-                        "Failed to fetch response from Gemini agent: %s",
-                        exc,
-                        exc_info=True,
-                        extra={"event": "agent_mode_correction", "status": "error"},
-                    )
-                    return transcribed_text
+                return transcribed_text
 
-                model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
-                prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
-                try:
-                    self.openrouter_api.reinitialize_client(api_key=api_key, model_id=model)
-                except Exception as exc:
-                    logging.error(
-                        "Failed to reconfigure the OpenRouter client: %s",
-                        exc,
-                        exc_info=True,
-                        extra={"event": "text_correction", "provider": "openrouter", "status": "reconfigure_failed"},
-                    )
-                if prompt:
-                    processed_text = self._run_with_timeout(
-                        self.openrouter_api.correct_text_async,
-                        transcribed_text,
-                        prompt,
-                        api_key,
-                        model,
-                        timeout=self.text_correction_timeout,
-                        description="OpenRouter text correction",
+            if self._is_correction_breaker_active(active_provider):
+                remaining = max(
+                    0.0,
+                    self._correction_disabled_until.get(active_provider, 0.0) - time.monotonic(),
+                )
+                logging.warning(
+                    "Skipping text correction for provider '%s' while breaker cooldown active (%.0fs remaining).",
+                    self._provider_label(active_provider),
+                    remaining,
+                )
+                return transcribed_text
+
+            processed_text = transcribed_text
+            self.correction_in_progress = True
+            correction_attempted = False
+            correction_succeeded = False
+            try:
+                if active_provider == SERVICE_GEMINI:
+                    correction_attempted = True
+                    processed_text = (
+                        self._run_with_timeout(
+                            self.gemini_api.get_correction,
+                            transcribed_text,
+                            timeout=self.text_correction_timeout,
+                            description="Gemini text correction",
+                        )
+                        or transcribed_text
                     )
                     correction_succeeded = True
+                elif active_provider == SERVICE_OPENROUTER:
+                    correction_attempted = True
+                    api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
+                    if not api_key:
+                        logging.warning(
+                            "OpenRouter API key unavailable; skipping text correction.",
+                            extra={"event": "text_correction", "provider": "openrouter", "status": "missing_key"},
+                        )
+                        return transcribed_text
+
+                    model = self.config_manager.get(OPENROUTER_MODEL_CONFIG_KEY)
+                    prompt = self.config_manager.get(OPENROUTER_PROMPT_CONFIG_KEY)
+                    try:
+                        self.openrouter_api.reinitialize_client(api_key=api_key, model_id=model)
+                    except Exception as exc:
+                        logging.error(
+                            "Failed to reconfigure the OpenRouter client: %s",
+                            exc,
+                            exc_info=True,
+                            extra={"event": "text_correction", "provider": "openrouter", "status": "reconfigure_failed"},
+                        )
+                    if prompt:
+                        processed_text = self._run_with_timeout(
+                            self.openrouter_api.correct_text_async,
+                            transcribed_text,
+                            prompt,
+                            api_key,
+                            model,
+                            timeout=self.text_correction_timeout,
+                            description="OpenRouter text correction",
+                        )
+                    else:
+                        processed_text = self._run_with_timeout(
+                            self.openrouter_api.correct_text,
+                            transcribed_text,
+                            timeout=self.text_correction_timeout,
+                            description="OpenRouter text correction",
+                        )
+                    correction_succeeded = True
                 else:
-                    processed_text = self._run_with_timeout(
-                        self.openrouter_api.correct_text,
-                        transcribed_text,
-                        timeout=self.text_correction_timeout,
-                        description="OpenRouter text correction",
-                    )
-            else:
-                logging.error(f"Unknown AI provider: {active_provider}")
-                return transcribed_text
-        except TimeoutError:
-            logging.warning(
-                "Text correction timed out after %.2f seconds using provider '%s'. Returning raw text.",
-                float(self.text_correction_timeout or DEFAULT_TEXT_CORRECTION_TIMEOUT),
-                active_provider,
-                extra={"event": "text_correction", "provider": active_provider, "status": "timeout"},
-            )
-            processed_text = transcribed_text
-        except Exception as exc:
-            logging.error(
-                "Error while processing text with provider %s: %s",
-                active_provider,
-                exc,
-                exc_info=True,
-            )
-            processed_text = transcribed_text
-            if correction_attempted:
-                self._record_correction_failure(active_provider, exc)
-        finally:
-            self.correction_in_progress = False
+                    logging.error("Unknown AI provider: %s", active_provider)
+                    return transcribed_text
+            except TimeoutError:
+                logging.warning(
+                    "Text correction timed out after %.2f seconds using provider '%s'. Returning raw text.",
+                    float(self.text_correction_timeout or DEFAULT_TEXT_CORRECTION_TIMEOUT),
+                    active_provider,
+                    extra={"event": "text_correction", "provider": active_provider, "status": "timeout"},
+                )
+                processed_text = transcribed_text
+            except Exception as exc:
+                logging.error(
+                    "Error while processing text with provider %s: %s",
+                    active_provider,
+                    exc,
+                    exc_info=True,
+                )
+                processed_text = transcribed_text
+                if correction_attempted:
+                    self._record_correction_failure(active_provider, exc)
+            finally:
+                self.correction_in_progress = False
 
         if correction_attempted and correction_succeeded:
             self._record_correction_success(active_provider)
@@ -1856,140 +1877,8 @@ class TranscriptionHandler:
                 "Text correction produced a result.",
                 extra={"event": "text_correction", "status": "completed", "details": f"chars={len(processed_text)}"},
             )
-            return
 
-        if self.transcription_future and not self.transcription_future.done():
-            logging.warning(
-                "Transcription already running. Rejecting new audio segment.",
-                extra={"event": "transcription", "status": "busy"},
-            )
-            return
-
-        backend = getattr(self, "_asr_backend", None)
-        if backend is None:
-            logging.error(
-                "ASR backend unavailable when attempting to transcribe.",
-                extra={"event": "transcription", "status": "backend_missing"},
-            )
-            return
-
-        chunk_length = self._get_effective_chunk_length()
-        batch_size = self._get_dynamic_batch_size()
-        audio_description = self._format_audio_source(audio_source)
-
-        self.transcription_cancel_event.clear()
-
-        logging.info(
-            "[ASR] transcription_start chunk_length_s=%.1f batch_size=%s agent_mode=%s audio=%s",
-            chunk_length,
-            batch_size,
-            agent_mode,
-            audio_description,
-        )
-
-        def _segment_callback(text: str, *, metadata: dict | None = None, is_final: bool = False) -> None:
-            callback = self.on_segment_transcribed_callback
-            if not callback:
-                return
-            try:
-                callback(text, metadata=metadata, is_final=is_final)
-            except TypeError:
-                callback(text)
-
-        def _transcription_job() -> None:
-            with scoped_correlation_id(correlation_id):
-                start_time = time.perf_counter()
-                payload: dict[str, object] = {
-                    "event": "transcription_run",
-                    "chunk_length_s": float(chunk_length),
-                    "batch_size": int(batch_size),
-                    "agent_mode": bool(agent_mode),
-                    "device": self.device_in_use or "unknown",
-                }
-                had_oom = False
-                try:
-                    if self.on_segment_transcribed_callback:
-                        text, metadata = backend.stream_transcribe(
-                            audio_source,
-                            on_segment=_segment_callback,
-                            cancel_event=self.transcription_cancel_event,
-                            chunk_length_s=chunk_length,
-                            batch_size=batch_size,
-                        )
-                    else:
-                        text, metadata = backend.stream_transcribe(
-                            audio_source,
-                            cancel_event=self.transcription_cancel_event,
-                            chunk_length_s=chunk_length,
-                            batch_size=batch_size,
-                        )
-
-                    duration_s = time.perf_counter() - start_time
-                    payload["duration_ms"] = duration_s * 1000.0
-                    payload["segments"] = len(metadata or [])
-                    self._record_adaptive_metrics(
-                        inference_duration_s=duration_s,
-                        chunk_length_s=chunk_length,
-                        had_oom=False,
-                    )
-
-                    processed_text = self._process_ai_pipeline(text, agent_mode)
-                    if agent_mode:
-                        if self.on_agent_result_callback:
-                            self.on_agent_result_callback(processed_text or text)
-                    else:
-                        if self.on_transcription_result_callback:
-                            self.on_transcription_result_callback(processed_text, text)
-
-                    payload["status"] = "completed"
-                    payload["raw_text_chars"] = len(text or "")
-                    self._emit_transcription_metrics(payload)
-                    logging.info(
-                        "[ASR] transcription_complete chunk_length_s=%.1f batch_size=%s duration_ms=%.2f agent_mode=%s",
-                        chunk_length,
-                        batch_size,
-                        payload.get("duration_ms", 0.0),
-                        agent_mode,
-                    )
-                except Exception as exc:
-                    duration_s = time.perf_counter() - start_time
-                    had_oom = self._detect_oom(exc)
-                    if had_oom:
-                        self._record_adaptive_metrics(
-                            inference_duration_s=None,
-                            chunk_length_s=chunk_length,
-                            had_oom=True,
-                        )
-                    elif duration_s > 0:
-                        self._record_adaptive_metrics(
-                            inference_duration_s=duration_s,
-                            chunk_length_s=chunk_length,
-                            had_oom=False,
-                        )
-
-                    payload["status"] = "error"
-                    payload["error"] = str(exc)
-                    payload["duration_ms"] = duration_s * 1000.0
-                    self._emit_transcription_metrics(payload)
-
-                    logging.error("Transcription failed: %s", exc, exc_info=True)
-                    if had_oom:
-                        logging.warning(
-                            "OOM detected during transcription. New chunk_length_sec=%.1f batch_size=%s",
-                            self.chunk_length_sec,
-                            self.last_dynamic_batch_size,
-                        )
-                    if self.on_model_error_callback:
-                        try:
-                            self.on_model_error_callback(str(exc))
-                        except Exception:
-                            logging.debug("Failed to propagate transcription error callback.", exc_info=True)
-                finally:
-                    self.transcription_cancel_event.clear()
-
-        future = self.transcription_executor.submit(_transcription_job)
-        self.transcription_future = future
-        future.add_done_callback(lambda _f: setattr(self, "transcription_future", None))
+        return processed_text
 
     def _get_dynamic_batch_size(self) -> int:
         device_in_use = (str(self.device_in_use or "").lower())
@@ -2101,199 +1990,6 @@ class TranscriptionHandler:
             daemon=True,
             name="ModelLoadThread",
         ).start()
-
-    def transcribe_audio_segment(
-        self,
-        audio_source: str | np.ndarray,
-        agent_mode: bool,
-        *,
-        correlation_id: str | None = None,
-        operation_id: str | None = None,
-    ) -> bool:
-        """Submit a transcription job for ``audio_source``."""
-
-        if self.transcription_executor is None:
-            LOGGER.error(
-                "Transcription executor is not available.",
-                extra={"event": "transcription.enqueue", "status": "executor_missing", "operation_id": operation_id},
-            )
-            return False
-
-        if self.transcription_future is not None and not self.transcription_future.done():
-            LOGGER.warning(
-                "Transcription already running; rejecting new audio segment.",
-                extra={"event": "transcription.enqueue", "status": "busy", "operation_id": operation_id},
-            )
-            return False
-
-        backend = getattr(self, "_asr_backend", None) or getattr(self, "pipe", None)
-        if backend is None:
-            LOGGER.warning(
-                "ASR backend is not ready to receive audio.",
-                extra={"event": "transcription.enqueue", "status": "backend_unavailable", "operation_id": operation_id},
-            )
-            return False
-
-        core = getattr(self, "core_instance_ref", None)
-        state_mgr = getattr(core, "state_manager", None) if core is not None else None
-
-        formatted_source = self._format_audio_source(audio_source)
-        LOGGER.info(
-            "Submitting transcription task.",
-            extra={
-                "event": "transcription.enqueue",
-                "status": "submitted",
-                "source": formatted_source,
-                "agent_mode": agent_mode,
-                "operation_id": operation_id,
-            },
-        )
-
-        if state_mgr is not None:
-            try:
-                state_mgr.set_state(
-                    sm.StateEvent.TRANSCRIPTION_STARTED,
-                    details={
-                        "source": formatted_source,
-                        "agent_mode": agent_mode,
-                    },
-                    source="transcription_handler",
-                    operation_id=operation_id,
-                )
-            except Exception:
-                LOGGER.debug("Failed to emit TRANSCRIPTION_STARTED state.", exc_info=True)
-
-        self.transcription_cancel_event.clear()
-
-        def _segment_callback(segment_text: str, metadata: dict[str, Any] | None = None, is_final: bool | None = None):
-            if not segment_text:
-                return
-            callback = self.on_segment_transcribed_callback
-            if not callback:
-                return
-            payload = metadata or {}
-            if operation_id and (not isinstance(payload, dict) or "operation_id" not in payload):
-                try:
-                    payload = dict(payload)
-                except Exception:
-                    payload = {"data": metadata} if metadata is not None else {}
-                payload.setdefault("operation_id", operation_id)
-            try:
-                callback(
-                    segment_text,
-                    metadata=payload if isinstance(payload, dict) else None,
-                    is_final=bool(is_final),
-                    operation_id=operation_id,
-                )
-            except TypeError:
-                callback(segment_text)
-            except Exception:
-                LOGGER.debug("Segment callback raised an exception.", exc_info=True)
-
-        cancel_event = self.transcription_cancel_event
-
-        def _run_transcription() -> None:
-            with scoped_correlation_id(correlation_id, preserve_existing=True):
-                with operation_context("transcription", operation_id=operation_id) as active_operation_id:
-                    start_ts = time.perf_counter()
-                    raw_text: str = ""
-                    try:
-                        batch_size = self._get_dynamic_batch_size()
-                        chunk_length = self.chunk_length_sec
-                        transcription_kwargs = {
-                            "chunk_length_s": chunk_length,
-                            "batch_size": batch_size,
-                            "on_segment": _segment_callback,
-                            "cancel_event": cancel_event,
-                        }
-                        result: Any
-                        transcribe_fn = getattr(backend, "transcribe", None)
-                        if callable(transcribe_fn):
-                            result = transcribe_fn(audio_source, **transcription_kwargs)
-                        else:
-                            stream_fn = getattr(backend, "stream_transcribe", None)
-                            if not callable(stream_fn):
-                                raise RuntimeError("Backend does not expose a transcription method")
-                            text, _ = stream_fn(audio_source, **transcription_kwargs)
-                            result = {"text": text}
-
-                        if isinstance(result, Mapping):
-                            raw_text = str(result.get("text", "") or "")
-                        else:
-                            raw_text = str(result or "")
-
-                        processed_text = self._process_ai_pipeline(raw_text, agent_mode)
-                        duration_ms = (time.perf_counter() - start_ts) * 1000.0
-
-                        metrics_payload = {
-                            "operation_id": active_operation_id,
-                            "agent_mode": agent_mode,
-                            "duration_ms": round(duration_ms, 2),
-                            "raw_chars": len(raw_text),
-                            "processed_chars": len(processed_text or ""),
-                        }
-                        self._emit_transcription_metrics(metrics_payload)
-
-                        LOGGER.info(
-                            "Transcription task completed.",
-                            extra={
-                                "event": "transcription.complete",
-                                "duration_ms": round(duration_ms, 2),
-                                "agent_mode": agent_mode,
-                                "operation_id": active_operation_id,
-                                "chars": len(processed_text or raw_text),
-                            },
-                        )
-
-                        if agent_mode and self.on_agent_result_callback:
-                            try:
-                                self.on_agent_result_callback(
-                                    processed_text or raw_text,
-                                    operation_id=active_operation_id,
-                                )
-                            except TypeError:
-                                self.on_agent_result_callback(processed_text or raw_text)
-                        elif self.on_transcription_result_callback:
-                            try:
-                                self.on_transcription_result_callback(
-                                    processed_text,
-                                    raw_text,
-                                    operation_id=active_operation_id,
-                                )
-                            except TypeError:
-                                self.on_transcription_result_callback(processed_text, raw_text)
-                    except Exception as exc:
-                        LOGGER.error(
-                            "Transcription task failed: %s",
-                            exc,
-                            exc_info=True,
-                            extra={"event": "transcription.error", "operation_id": operation_id},
-                        )
-                        if state_mgr is not None:
-                            try:
-                                state_mgr.set_state(
-                                    sm.STATE_ERROR_TRANSCRIPTION,
-                                    details=str(exc),
-                                    source="transcription_handler",
-                                    operation_id=operation_id,
-                                )
-                            except Exception:
-                                LOGGER.debug("Failed to emit error state after transcription failure.", exc_info=True)
-                    finally:
-                        cancel_event.clear()
-
-        future = self.transcription_executor.submit(_run_transcription)
-
-        def _on_done(fut: concurrent.futures.Future[None]) -> None:
-            self.transcription_future = None
-            try:
-                fut.result()
-            except Exception:
-                LOGGER.debug("Transcription future completed with error.", exc_info=True)
-
-        future.add_done_callback(_on_done)
-        self.transcription_future = future
-        return True
 
     def is_transcription_running(self) -> bool:
         """Indica se existe tarefa de transcrição ainda não concluída."""
