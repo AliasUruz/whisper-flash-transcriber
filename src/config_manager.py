@@ -201,7 +201,7 @@ DEFAULT_CONFIG = {
     "deps_install_dir": _DEFAULT_DEPS_INSTALL_DIR,
     "hf_home_dir": _DEFAULT_HF_HOME_DIR,
     "recordings_dir": _DEFAULT_RECORDINGS_DIR,
-    "asr_model_id": "distil-whisper/distil-large-v3",
+    "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "ctranslate2",
     "asr_compute_device": "auto",
     "asr_ct2_compute_type": "int8_float16",
