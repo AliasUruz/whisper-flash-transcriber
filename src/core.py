@@ -389,6 +389,35 @@ class AppCore:
         if outcome is not None:
             self._last_onboarding_outcome = outcome
 
+    def launch_first_run_wizard(
+        self,
+        *,
+        force: bool = False,
+        reason: str = "menu",
+    ) -> dict[str, Any] | None:
+        if not self._onboarding_enabled:
+            LOGGER.info(
+                "Launch request for onboarding ignored (%s): onboarding disabled.",
+                reason,
+            )
+            return None
+
+        try:
+            snapshot = self.config_manager.describe_persistence_state()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "Unable to capture onboarding snapshot for reason '%s': %s",
+                reason,
+                exc,
+                exc_info=True,
+            )
+            return None
+
+        outcome = self._launch_onboarding(snapshot=snapshot, force=force, reason=reason)
+        if outcome is not None:
+            self._last_onboarding_outcome = outcome
+        return outcome
+
     def _launch_onboarding(
         self,
         *,
@@ -479,6 +508,15 @@ class AppCore:
 
         for warning in warnings:
             LOGGER.warning(warning)
+
+        if self.config_manager.is_first_run():
+            self.config_manager.mark_first_run_complete(persist=False)
+            try:
+                self.config_manager.save_config()
+            except ConfigPersistenceError:
+                LOGGER.exception(
+                    "Failed to persist first-run completion flag during onboarding."
+                )
 
         if updates:
             LOGGER.debug(
@@ -1528,6 +1566,19 @@ class AppCore:
         if self.hotkey_stability_service_enabled:
             # Iniciar thread de re-registro periódico
             if not self.reregister_timer_thread or not self.reregister_timer_thread.is_alive():
+                previous_label = (
+                    self.reregister_timer_thread.name
+                    if isinstance(self.reregister_timer_thread, threading.Thread)
+                    else "PeriodicHotkeyReregister"
+                )
+                self.ahk_manager.set_auxiliary_thread(
+                    "periodic_reregister",
+                    thread=None,
+                    stop_event=self.stop_reregister_event,
+                    timeout=AUXILIARY_JOIN_TIMEOUT,
+                    thread_label=previous_label,
+                )
+                self.reregister_timer_thread = None
                 self.stop_reregister_event.clear()
                 self.reregister_timer_thread = threading.Thread(
                     target=self._periodic_reregister_task, daemon=True, name="PeriodicHotkeyReregister"
@@ -1535,6 +1586,8 @@ class AppCore:
                 self.reregister_timer_thread.start()
                 self.ahk_manager.set_auxiliary_thread(
                     "periodic_reregister",
+                    stop_event=self.stop_reregister_event,
+                    timeout=AUXILIARY_JOIN_TIMEOUT,
                     thread=self.reregister_timer_thread,
                     thread_label=self.reregister_timer_thread.name,
                 )
@@ -1547,6 +1600,19 @@ class AppCore:
             
             # Iniciar thread de verificação de saúde
             if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
+                previous_label = (
+                    self.health_check_thread.name
+                    if isinstance(self.health_check_thread, threading.Thread)
+                    else "HotkeyHealthThread"
+                )
+                self.ahk_manager.set_auxiliary_thread(
+                    "health_monitor",
+                    thread=None,
+                    stop_event=self.stop_health_check_event,
+                    timeout=AUXILIARY_JOIN_TIMEOUT,
+                    thread_label=previous_label,
+                )
+                self.health_check_thread = None
                 self.stop_health_check_event.clear()
                 self.health_check_thread = threading.Thread(
                     target=self._hotkey_health_check_task, daemon=True, name="HotkeyHealthThread"
@@ -1554,6 +1620,8 @@ class AppCore:
                 self.health_check_thread.start()
                 self.ahk_manager.set_auxiliary_thread(
                     "health_monitor",
+                    stop_event=self.stop_health_check_event,
+                    timeout=AUXILIARY_JOIN_TIMEOUT,
                     thread=self.health_check_thread,
                     thread_label=self.health_check_thread.name,
                 )
@@ -2628,6 +2696,19 @@ class AppCore:
         if "hotkey_stability_service_enabled" in changed_mapped_keys:
             if self.config_manager.get("hotkey_stability_service_enabled"):
                 if not self.reregister_timer_thread or not self.reregister_timer_thread.is_alive():
+                    previous_label = (
+                        self.reregister_timer_thread.name
+                        if isinstance(self.reregister_timer_thread, threading.Thread)
+                        else "PeriodicHotkeyReregister"
+                    )
+                    self.ahk_manager.set_auxiliary_thread(
+                        "periodic_reregister",
+                        thread=None,
+                        stop_event=self.stop_reregister_event,
+                        timeout=AUXILIARY_JOIN_TIMEOUT,
+                        thread_label=previous_label,
+                    )
+                    self.reregister_timer_thread = None
                     self.stop_reregister_event.clear()
                     self.reregister_timer_thread = threading.Thread(
                         target=self._periodic_reregister_task,
@@ -2637,12 +2718,27 @@ class AppCore:
                     self.reregister_timer_thread.start()
                     self.ahk_manager.set_auxiliary_thread(
                         "periodic_reregister",
+                        stop_event=self.stop_reregister_event,
+                        timeout=AUXILIARY_JOIN_TIMEOUT,
                         thread=self.reregister_timer_thread,
                         thread_label=self.reregister_timer_thread.name,
                     )
                     LOGGER.info("Periodic hotkey re-registration thread launched via settings update.")
 
                 if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
+                    previous_label = (
+                        self.health_check_thread.name
+                        if isinstance(self.health_check_thread, threading.Thread)
+                        else "HotkeyHealthThread"
+                    )
+                    self.ahk_manager.set_auxiliary_thread(
+                        "health_monitor",
+                        thread=None,
+                        stop_event=self.stop_health_check_event,
+                        timeout=AUXILIARY_JOIN_TIMEOUT,
+                        thread_label=previous_label,
+                    )
+                    self.health_check_thread = None
                     self.stop_health_check_event.clear()
                     self.health_check_thread = threading.Thread(
                         target=self._hotkey_health_check_task,
@@ -2652,6 +2748,8 @@ class AppCore:
                     self.health_check_thread.start()
                     self.ahk_manager.set_auxiliary_thread(
                         "health_monitor",
+                        stop_event=self.stop_health_check_event,
+                        timeout=AUXILIARY_JOIN_TIMEOUT,
                         thread=self.health_check_thread,
                         thread_label=self.health_check_thread.name,
                     )
@@ -2783,22 +2881,60 @@ class AppCore:
         if key == "hotkey_stability_service_enabled":
             if value:
                 if not self.reregister_timer_thread or not self.reregister_timer_thread.is_alive():
+                    previous_label = (
+                        self.reregister_timer_thread.name
+                        if isinstance(self.reregister_timer_thread, threading.Thread)
+                        else "PeriodicHotkeyReregister"
+                    )
+                    self.ahk_manager.set_auxiliary_thread(
+                        "periodic_reregister",
+                        thread=None,
+                        stop_event=self.stop_reregister_event,
+                        timeout=AUXILIARY_JOIN_TIMEOUT,
+                        thread_label=previous_label,
+                    )
+                    self.reregister_timer_thread = None
                     self.stop_reregister_event.clear()
-                    self.reregister_timer_thread = threading.Thread(target=self._periodic_reregister_task, daemon=True, name="PeriodicHotkeyReregister")
+                    self.reregister_timer_thread = threading.Thread(
+                        target=self._periodic_reregister_task,
+                        daemon=True,
+                        name="PeriodicHotkeyReregister",
+                    )
                     self.reregister_timer_thread.start()
                     self.ahk_manager.set_auxiliary_thread(
                         "periodic_reregister",
+                        stop_event=self.stop_reregister_event,
+                        timeout=AUXILIARY_JOIN_TIMEOUT,
                         thread=self.reregister_timer_thread,
                         thread_label=self.reregister_timer_thread.name,
                     )
                     LOGGER.info("Periodic hotkey re-registration thread launched via update_setting.")
 
                 if self.ahk_running and (not self.health_check_thread or not self.health_check_thread.is_alive()):
+                    previous_label = (
+                        self.health_check_thread.name
+                        if isinstance(self.health_check_thread, threading.Thread)
+                        else "HotkeyHealthThread"
+                    )
+                    self.ahk_manager.set_auxiliary_thread(
+                        "health_monitor",
+                        thread=None,
+                        stop_event=self.stop_health_check_event,
+                        timeout=AUXILIARY_JOIN_TIMEOUT,
+                        thread_label=previous_label,
+                    )
+                    self.health_check_thread = None
                     self.stop_health_check_event.clear()
-                    self.health_check_thread = threading.Thread(target=self._hotkey_health_check_task, daemon=True, name="HotkeyHealthThread")
+                    self.health_check_thread = threading.Thread(
+                        target=self._hotkey_health_check_task,
+                        daemon=True,
+                        name="HotkeyHealthThread",
+                    )
                     self.health_check_thread.start()
                     self.ahk_manager.set_auxiliary_thread(
                         "health_monitor",
+                        stop_event=self.stop_health_check_event,
+                        timeout=AUXILIARY_JOIN_TIMEOUT,
                         thread=self.health_check_thread,
                         thread_label=self.health_check_thread.name,
                     )

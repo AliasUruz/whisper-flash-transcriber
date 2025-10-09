@@ -459,7 +459,7 @@ class AppConfig(BaseModel):
     clear_gpu_cache: bool = True
     enable_torch_compile: bool = False
     launch_at_startup: bool = False
-    asr_model_id: str = "distil-whisper/distil-large-v3"
+    asr_model_id: str = "openai/whisper-large-v3-turbo"
     asr_backend: str = "ctranslate2"
     asr_installed_models: list[str] = Field(default_factory=list)
     asr_curated_catalog: list[dict[str, Any]] = Field(default_factory=list_catalog)
