@@ -172,7 +172,7 @@ class AudioHandler:
 
         storage_mode = "memory" if self.in_memory_mode else "disk"
         thread_name = threading.current_thread().name
-        op_id = self._current_operation_id
+        op_id = getattr(self, "_current_operation_id", None)
         if op_id:
             return self._logger.bind(
                 storage=storage_mode,
