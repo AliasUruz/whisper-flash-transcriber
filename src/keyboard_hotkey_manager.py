@@ -8,31 +8,39 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-try:  # pragma: no cover - optional dependency
-    import keyboard  # type: ignore
-except Exception:  # pragma: no cover - optional dependency missing
-    keyboard = None  # type: ignore
+
+class _KeyboardPlaceholder:
+    """Lazy object that surfaces the import failure when accessed."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def __getattr__(self, name: str) -> Any:  # pragma: no cover - defensive
+        raise RuntimeError(
+            "keyboard library failed to initialize due to a runtime error"
+        ) from self._error
+
+    def __bool__(self) -> bool:  # pragma: no cover - defensive
+        return False
+
+
+_keyboard_import_error: Exception | None = None
 
 try:  # pragma: no cover - optional dependency
     import keyboard  # type: ignore[import]
-except ModuleNotFoundError:  # pragma: no cover - optional dependency
+except ModuleNotFoundError:  # pragma: no cover - optional dependency missing
     keyboard = None  # type: ignore[assignment]
+except Exception as exc:  # pragma: no cover - defensive guard
+    _keyboard_import_error = exc
+    keyboard = _KeyboardPlaceholder(exc)  # type: ignore[assignment]
+else:
+    _keyboard_import_error = None
 
-try:
-    import keyboard  # type: ignore[import-not-found]
-except Exception:  # pragma: no cover - optional dependency
-    class _KeyboardPlaceholder:
-        def __getattr__(self, name: str) -> Any:
-            raise RuntimeError(
-                "keyboard library is required for hotkey management but is not installed"
-            )
 
-    keyboard = _KeyboardPlaceholder()  # type: ignore[assignment]
+def _is_keyboard_runtime_available() -> bool:
+    """Return ``True`` when the ``keyboard`` backend can be used safely."""
 
-try:  # Optional dependency used only for direct keyboard hook cleanup in tests
-    import keyboard  # type: ignore[import]
-except ModuleNotFoundError:  # pragma: no cover - optional in headless environments
-    keyboard = None  # type: ignore[assignment]
+    return keyboard is not None and not isinstance(keyboard, _KeyboardPlaceholder)
 
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
 from .hotkey_normalization import _normalize_key_name
@@ -43,6 +51,12 @@ LOGGER = get_logger(
     "whisper_flash_transcriber.hotkeys",
     component="KeyboardHotkeyManager",
 )
+
+if _keyboard_import_error is not None:  # pragma: no cover - diagnostic path
+    LOGGER.error(
+        "Failed to import the keyboard library due to a runtime error.",
+        exc_info=_keyboard_import_error,
+    )
 
 class KeyboardHotkeyManager:
     """
@@ -237,10 +251,12 @@ class KeyboardHotkeyManager:
                     error=str(driver_exc),
                 )
 
-        try:
-            has_keyboard_driver = bool(getattr(keyboard, "add_hotkey", None))
-        except Exception:  # pragma: no cover - placeholder raised
-            has_keyboard_driver = False
+        has_keyboard_driver = False
+        if _is_keyboard_runtime_available():
+            try:
+                has_keyboard_driver = bool(getattr(keyboard, "add_hotkey", None))
+            except Exception:  # pragma: no cover - placeholder raised
+                has_keyboard_driver = False
         if has_keyboard_driver and "keyboard" not in names:
             names.insert(0, "keyboard")
         return names
@@ -434,6 +450,29 @@ class KeyboardHotkeyManager:
 
         candidate = (hotkey or self.record_key or "f3").strip()
         registration_id = None
+        if not _is_keyboard_runtime_available():
+            detail = None
+            if isinstance(keyboard, _KeyboardPlaceholder) and _keyboard_import_error is not None:
+                detail = str(_keyboard_import_error)
+            elif keyboard is None:
+                detail = "keyboard module not installed"
+            self._log(
+                logging.WARNING,
+                "Dry-run hotkey registration skipped because keyboard backend is unavailable.",
+                event="hotkeys.diagnostics.keyboard_missing",
+                hotkey=candidate,
+                error=detail,
+            )
+            return {
+                "ok": False,
+                "message": "Global hotkey diagnostics unavailable: keyboard backend missing.",
+                "details": {
+                    "hotkey": candidate,
+                    "error": detail,
+                },
+                "suggestion": "Install/enable the 'keyboard' package or run in a supported environment.",
+                "fatal": True,
+            }
         start_time = time.perf_counter()
         try:
             registration_id = keyboard.add_hotkey(
@@ -500,7 +539,7 @@ class KeyboardHotkeyManager:
                 "fatal": True,
             }
         finally:
-            if registration_id is not None:
+            if registration_id is not None and _is_keyboard_runtime_available():
                 try:
                     keyboard.remove_hotkey(registration_id)
                 except Exception as cleanup_exc:
@@ -601,7 +640,7 @@ class KeyboardHotkeyManager:
     def stop(self):
         """Para o gerenciador de hotkeys."""
         self._stop_auxiliary_threads()
-        if keyboard is not None and self.hotkey_handlers:
+        if _is_keyboard_runtime_available() and self.hotkey_handlers:
             for handles in list(self.hotkey_handlers.values()):
                 for handle in handles:
                     try:
@@ -836,6 +875,22 @@ class KeyboardHotkeyManager:
 
     def _register_hotkeys(self):
         """Registra as hotkeys no sistema."""
+        if not _is_keyboard_runtime_available():
+            error_detail = None
+            if isinstance(keyboard, _KeyboardPlaceholder) and _keyboard_import_error is not None:
+                error_detail = str(_keyboard_import_error)
+            elif keyboard is None:
+                error_detail = "keyboard module not installed"
+            self._log(
+                logging.ERROR,
+                "Keyboard backend unavailable; skipping registration.",
+                event="hotkeys.register_keyboard_missing",
+                error=error_detail,
+            )
+            return self._handle_driver_failure(
+                "keyboard_backend_unavailable",
+                error_detail,
+            )
         try:
             self._log(
                 logging.INFO,
@@ -1141,33 +1196,36 @@ class KeyboardHotkeyManager:
                         exc_info=True,
                     )
 
-            for handle_id, handles in list(self.hotkey_handlers.items()):
-                for handle in handles:
-                    try:
-                        keyboard.unhook(handle)
-                        self._log(
-                            logging.DEBUG,
-                            "Hotkey handle removed.",
-                            event="hotkeys.unregister_handle_removed",
-                            handle_id=handle_id,
-                        )
-                    except (KeyError, ValueError):
-                        self._log(
-                            logging.WARNING,
-                            "Hotkey handle already removed or invalid; skipping.",
-                            event="hotkeys.unregister_handle_missing",
-                            handle_id=handle_id,
-                        )
-                    except Exception as e:
-                        self._log(
-                            logging.ERROR,
-                            "Error while removing hotkey hook.",
-                            event="hotkeys.unregister_handle_error",
-                            handle_id=handle_id,
-                            error=str(e),
-                            exc_info=True,
-                        )
-                self.hotkey_handlers[handle_id] = []
+            if _is_keyboard_runtime_available():
+                for handle_id, handles in list(self.hotkey_handlers.items()):
+                    for handle in handles:
+                        try:
+                            keyboard.unhook(handle)
+                            self._log(
+                                logging.DEBUG,
+                                "Hotkey handle removed.",
+                                event="hotkeys.unregister_handle_removed",
+                                handle_id=handle_id,
+                            )
+                        except (KeyError, ValueError):
+                            self._log(
+                                logging.WARNING,
+                                "Hotkey handle already removed or invalid; skipping.",
+                                event="hotkeys.unregister_handle_missing",
+                                handle_id=handle_id,
+                            )
+                        except Exception as e:
+                            self._log(
+                                logging.ERROR,
+                                "Error while removing hotkey hook.",
+                                event="hotkeys.unregister_handle_error",
+                                handle_id=handle_id,
+                                error=str(e),
+                                exc_info=True,
+                            )
+                    self.hotkey_handlers[handle_id] = []
+            else:
+                self.hotkey_handlers.clear()
 
             self.hotkey_handlers.clear()
 
@@ -1322,6 +1380,20 @@ class KeyboardHotkeyManager:
         Returns:
             str: A tecla detectada ou None se nenhuma tecla for detectada
         """
+        if not _is_keyboard_runtime_available():
+            detail = None
+            if isinstance(keyboard, _KeyboardPlaceholder) and _keyboard_import_error is not None:
+                detail = str(_keyboard_import_error)
+            elif keyboard is None:
+                detail = "keyboard module not installed"
+            self._log(
+                logging.WARNING,
+                "Key detection skipped because keyboard backend is unavailable.",
+                event="hotkeys.detect_keyboard_missing",
+                timeout_seconds=timeout,
+                error=detail,
+            )
+            return None
         try:
             self._log(
                 logging.INFO,
