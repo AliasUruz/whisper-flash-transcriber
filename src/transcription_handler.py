@@ -884,8 +884,38 @@ class TranscriptionHandler:
         model_id = self.asr_model_id or "auto"
         compute_type_raw = (self.asr_ct2_compute_type or "default").lower()
 
+        runtime_recommendation: dict[str, object] | None = None
+        try:
+            runtime_recommendation = self.config_manager.get_runtime_recommendation()
+        except AttributeError:
+            runtime_recommendation = None
+
+        if not runtime_recommendation:
+            try:
+                runtime_catalog = self.config_manager.get_runtime_model_catalog()
+            except AttributeError:
+                runtime_catalog = []
+            if runtime_catalog:
+                runtime_recommendation = model_manager_module.select_recommended_model(runtime_catalog)
+
+        recommended_model_id = None
+        recommended_device = None
+        if runtime_recommendation:
+            recommended_model_id = str(runtime_recommendation.get("id") or "").strip() or None
+            recommended_device_raw = str(runtime_recommendation.get("preferred_device") or "").strip().lower()
+            requires_gpu = bool(runtime_recommendation.get("requires_gpu"))
+            if requires_gpu:
+                recommended_device = "cuda"
+            elif recommended_device_raw in {"gpu", "cuda"}:
+                recommended_device = "cuda"
+            elif recommended_device_raw == "cpu":
+                recommended_device = "cpu"
+
         if compute_device == "auto":
-            compute_device = "cuda" if _torch_cuda_available() else "cpu"
+            if recommended_device:
+                compute_device = recommended_device
+            else:
+                compute_device = "cuda" if _torch_cuda_available() else "cpu"
 
         if compute_type_raw in {"auto", "default"}:
             compute_type = "int8_float16" if compute_device.startswith("cuda") else "int8"
@@ -893,9 +923,18 @@ class TranscriptionHandler:
             compute_type = compute_type_raw
 
         default_gpu_model = "openai/whisper-large-v3-turbo"
-        default_cpu_model = "openai/whisper-large-v3-turbo"
-        if model_id in ("auto", default_gpu_model, default_cpu_model):
-            model_id = default_gpu_model if compute_device.startswith("cuda") else default_cpu_model
+        # Utilize o modelo distil curado como fallback oficial para execuções em CPU.
+        default_cpu_model = "distil-whisper/distil-large-v3"
+
+        if model_id == "auto" and recommended_model_id:
+            model_id = recommended_model_id
+        elif model_id in {"auto", default_gpu_model, default_cpu_model}:
+            if compute_device.startswith("cuda"):
+                model_id = default_gpu_model
+            elif recommended_model_id:
+                model_id = recommended_model_id
+            else:
+                model_id = default_cpu_model
 
         return backend, model_id, compute_device, compute_type
 
