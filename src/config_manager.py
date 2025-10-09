@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -729,6 +730,75 @@ class ConfigManager:
                             except Exception:
                                 logging.debug("Failed to read CUDA device properties for index %d.", idx, exc_info=True)
                                 continue
+            else:
+                # torch is not available; fall back to lighter-weight GPU probes so the
+                # application still detects CUDA-capable hardware automatically without
+                # requiring torch as a hard dependency for this diagnostic step.
+
+                def _probe_with_ctranslate2() -> tuple[bool, int, int]:
+                    ct2_spec = importlib.util.find_spec("ctranslate2")
+                    if ct2_spec is None:
+                        return False, 0, 0
+                    try:
+                        ct2_module = importlib.import_module("ctranslate2")
+                    except Exception:
+                        logging.debug("ctranslate2 import failed during hardware probing.", exc_info=True)
+                        return False, 0, 0
+
+                    get_count = getattr(ct2_module, "get_cuda_device_count", None)
+                    if not callable(get_count):
+                        return False, 0, 0
+
+                    try:
+                        count = int(get_count())
+                    except Exception:
+                        logging.debug("ctranslate2.get_cuda_device_count() failed.", exc_info=True)
+                        return False, 0, 0
+
+                    return (count > 0), max(count, 0), 0
+
+                def _probe_with_nvidia_smi() -> tuple[bool, int, int]:
+                    try:
+                        result = subprocess.run(
+                            [
+                                "nvidia-smi",
+                                "--query-gpu=memory.total",
+                                "--format=csv,noheader,nounits",
+                            ],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        )
+                    except FileNotFoundError:
+                        logging.debug("nvidia-smi not found; skipping VRAM probing.")
+                        return False, 0, 0
+                    except subprocess.CalledProcessError:
+                        logging.debug("nvidia-smi execution failed during hardware probing.", exc_info=True)
+                        return False, 0, 0
+
+                    vram_values: list[int] = []
+                    for line in result.stdout.splitlines():
+                        value = line.strip()
+                        if not value:
+                            continue
+                        try:
+                            vram_values.append(int(float(value)))
+                        except ValueError:
+                            logging.debug("Unexpected nvidia-smi VRAM value: %s", value)
+
+                    if not vram_values:
+                        return False, 0, 0
+
+                    detected_gpu_count = len(vram_values)
+                    max_detected_vram = max(vram_values)
+                    return True, detected_gpu_count, max_detected_vram
+
+                ct2_has_cuda, ct2_gpu_count, ct2_max_vram = _probe_with_ctranslate2()
+                smi_has_cuda, smi_gpu_count, smi_max_vram = _probe_with_nvidia_smi()
+
+                has_cuda = has_cuda or ct2_has_cuda or smi_has_cuda
+                gpu_count = max(gpu_count, ct2_gpu_count, smi_gpu_count)
+                max_vram_mb = max(max_vram_mb, ct2_max_vram, smi_max_vram)
 
             return HardwareProfile(
                 system_ram_mb=system_ram_mb,
