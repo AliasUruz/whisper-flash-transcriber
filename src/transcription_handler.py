@@ -796,7 +796,6 @@ class TranscriptionHandler:
         backend_value = get_config(ASR_BACKEND_CONFIG_KEY)
         model_value = get_config(ASR_MODEL_ID_CONFIG_KEY)
         device_value = get_config(ASR_COMPUTE_DEVICE_CONFIG_KEY)
-        dtype_value = get_config(ASR_DTYPE_CONFIG_KEY)
         ct2_type_value = get_config(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         ct2_threads_value = get_config(ASR_CT2_CPU_THREADS_CONFIG_KEY)
         cache_dir_value = get_config(ASR_CACHE_DIR_CONFIG_KEY)
