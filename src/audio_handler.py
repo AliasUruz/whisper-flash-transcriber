@@ -893,7 +893,6 @@ class AudioHandler:
                             reason = (
                                 f"auto: free RAM {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
                             )
-                            self._processing_thread.start()
 
                         if self._record_thread and self._record_thread.is_alive():
                             self._log.debug(
