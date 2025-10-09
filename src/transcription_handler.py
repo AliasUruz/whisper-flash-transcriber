@@ -900,11 +900,12 @@ class TranscriptionHandler:
 
         recommended_model_id = None
         recommended_device = None
+        recommendation_requires_gpu = False
         if runtime_recommendation:
             recommended_model_id = str(runtime_recommendation.get("id") or "").strip() or None
             recommended_device_raw = str(runtime_recommendation.get("preferred_device") or "").strip().lower()
-            requires_gpu = bool(runtime_recommendation.get("requires_gpu"))
-            if requires_gpu:
+            recommendation_requires_gpu = bool(runtime_recommendation.get("requires_gpu"))
+            if recommendation_requires_gpu:
                 recommended_device = "cuda"
             elif recommended_device_raw in {"gpu", "cuda"}:
                 recommended_device = "cuda"
@@ -926,12 +927,19 @@ class TranscriptionHandler:
         # Utilize o modelo distil curado como fallback oficial para execuções em CPU.
         default_cpu_model = "distil-whisper/distil-large-v3"
 
-        if model_id == "auto" and recommended_model_id:
+        recommendation_compatible = True
+        if recommended_model_id:
+            if recommendation_requires_gpu and not compute_device.startswith("cuda"):
+                recommendation_compatible = False
+            elif recommended_device == "cpu" and not compute_device.startswith("cpu"):
+                recommendation_compatible = False
+
+        if model_id == "auto" and recommended_model_id and recommendation_compatible:
             model_id = recommended_model_id
         elif model_id in {"auto", default_gpu_model, default_cpu_model}:
             if compute_device.startswith("cuda"):
                 model_id = default_gpu_model
-            elif recommended_model_id:
+            elif recommended_model_id and recommendation_compatible:
                 model_id = recommended_model_id
             else:
                 model_id = default_cpu_model
