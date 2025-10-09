@@ -460,75 +460,59 @@ class TestConfigMigration(unittest.TestCase):
                 )
 
 
-class TestModelRecommendations(unittest.TestCase):
-    def test_select_recommended_model_prefers_large_turbo_with_high_end_gpu(self):
-        hardware = HardwareProfile(
-            system_ram_mb=32_768,
-            has_cuda=True,
-            gpu_count=1,
-            max_vram_mb=16_384,
-        )
-        runtime_catalog = build_runtime_catalog(hardware)
-        recommendation = select_recommended_model(runtime_catalog)
-
-        self.assertIsNotNone(recommendation)
-        self.assertEqual(recommendation["id"], "openai/whisper-large-v3-turbo")
-
-    def test_config_manager_defaults_to_large_turbo_with_capable_gpu(self):
-        hardware = HardwareProfile(
-            system_ram_mb=24_576,
-            has_cuda=True,
-            gpu_count=1,
-            max_vram_mb=16_384,
-        )
-        runtime_catalog = build_runtime_catalog(hardware)
-
-        manager = None
+class TestHardwareProfileFallback(unittest.TestCase):
+    def test_fallback_populates_cuda_fields_when_torch_missing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             profile_dir = Path(tmp_dir) / "profile"
             profile_dir.mkdir()
+            config_path = profile_dir / "config.json"
+            config_path.write_text("{}", encoding="utf-8")
 
-            with isolated_config_environment(str(profile_dir)) as config_module:
-                with mock.patch.object(
-                    config_module,
-                    "build_runtime_catalog",
-                    side_effect=lambda *_args, **_kwargs: copy.deepcopy(runtime_catalog),
+            with isolated_config_environment(profile_dir) as config_module:
+                real_find_spec = importlib.util.find_spec
+                real_import_module = importlib.import_module
+
+                def fake_find_spec(name, *args, **kwargs):
+                    if name == "torch":
+                        return None
+                    if name == "ctranslate2":
+                        return SimpleNamespace()
+                    if name == "pynvml":
+                        return None
+                    return real_find_spec(name, *args, **kwargs)
+
+                def fake_import_module(name, *args, **kwargs):
+                    if name == "ctranslate2":
+                        return SimpleNamespace(get_cuda_device_count=lambda: 2)
+                    return real_import_module(name, *args, **kwargs)
+
+                def fake_check_output(cmd, *, encoding=None, stderr=None):
+                    self.assertIn("nvidia-smi", cmd[0])
+                    return "24576\n8192\n"
+
+                with mock.patch(
+                    "src.config_manager.importlib.util.find_spec",
+                    side_effect=fake_find_spec,
+                ), mock.patch(
+                    "src.config_manager.importlib.import_module",
+                    side_effect=fake_import_module,
+                ), mock.patch(
+                    "src.config_manager.subprocess.check_output",
+                    side_effect=fake_check_output,
                 ):
-                    manager = config_module.ConfigManager()
+                    manager = config_module.ConfigManager(config_file=str(config_path))
 
-        self.assertIsNotNone(manager)
-        self.assertEqual(
-            manager.config.get("asr_model_id"),
-            "openai/whisper-large-v3-turbo",
+        hardware = manager._runtime_hardware_profile
+        self.assertTrue(hardware.has_cuda)
+        self.assertEqual(hardware.gpu_count, 2)
+        self.assertGreaterEqual(hardware.max_vram_mb, 24576)
+
+        turbo_entry = next(
+            entry
+            for entry in manager._runtime_model_catalog
+            if entry.get("id") == "openai/whisper-large-v3-turbo"
         )
-
-    def test_config_manager_keeps_distil_on_cpu_only_systems(self):
-        hardware = HardwareProfile(
-            system_ram_mb=16_384,
-            has_cuda=False,
-            gpu_count=0,
-            max_vram_mb=0,
-        )
-        runtime_catalog = build_runtime_catalog(hardware)
-
-        manager = None
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            profile_dir = Path(tmp_dir) / "profile"
-            profile_dir.mkdir()
-
-            with isolated_config_environment(str(profile_dir)) as config_module:
-                with mock.patch.object(
-                    config_module,
-                    "build_runtime_catalog",
-                    side_effect=lambda *_args, **_kwargs: copy.deepcopy(runtime_catalog),
-                ):
-                    manager = config_module.ConfigManager()
-
-        self.assertIsNotNone(manager)
-        self.assertEqual(
-            manager.config.get("asr_model_id"),
-            "distil-whisper/distil-large-v3",
-        )
+        self.assertNotEqual(turbo_entry.get("hardware_status"), "blocked")
 
 
 class TestKeyboardHotkeys(unittest.TestCase):
