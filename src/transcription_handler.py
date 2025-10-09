@@ -2163,6 +2163,8 @@ class TranscriptionHandler:
         self.backend_resolved = backend_candidate
 
         req_backend, req_model_id, req_device, req_compute_type = self._resolve_asr_settings()
+        original_device = req_device
+        original_compute_type = req_compute_type
         logging.info(
             "Resolved ASR settings: backend=%s, model=%s, device=%s, ct2_compute_type=%s",
             req_backend,
@@ -2199,6 +2201,17 @@ class TranscriptionHandler:
 
         effective_device = "cpu"
         selected_gpu_index: int | None = None
+        effective_compute_type = req_compute_type
+
+        def _cpu_safe_compute_type(candidate: str | None) -> str:
+            if not candidate:
+                return "int8"
+            lowered = candidate.lower()
+            if lowered in {"auto", "default"}:
+                return "int8"
+            if lowered.startswith("int8") and "float16" not in lowered and "float32" not in lowered:
+                return candidate
+            return "int8"
 
         if req_device == "cpu":
             logging.info("ASR device explicitly set to CPU.")
@@ -2210,6 +2223,7 @@ class TranscriptionHandler:
                     else "No GPUs detected."
                 )
                 self._emit_device_warning(req_device, "cpu", reason)
+                effective_compute_type = _cpu_safe_compute_type(req_compute_type)
             else:
                 target_idx = requested_gpu_index
                 if target_idx is None or target_idx < 0:
@@ -2231,11 +2245,20 @@ class TranscriptionHandler:
                             f"{gpu_count} visible device(s)."
                         ),
                     )
+                    effective_compute_type = _cpu_safe_compute_type(req_compute_type)
                 else:
                     selected_gpu_index = target_idx
                     effective_device = (
                         f"cuda:{selected_gpu_index}" if selected_gpu_index is not None else "cpu"
                     )
+        else:
+            if isinstance(req_device, str):
+                effective_device = req_device
+
+        if effective_device != req_device:
+            req_device = effective_device
+        if effective_compute_type != req_compute_type:
+            req_compute_type = effective_compute_type
 
         self.device_in_use = effective_device
         self.gpu_index = selected_gpu_index if selected_gpu_index is not None else -1
@@ -2247,6 +2270,13 @@ class TranscriptionHandler:
             self.gpu_index,
         )
 
+        if effective_device.startswith("cpu") and original_device != effective_device:
+            logging.info(
+                "Adjusted ASR compute type from %s to %s due to CPU fallback.",
+                original_compute_type,
+                effective_compute_type,
+            )
+
         backend_device = effective_device
         backend_device_index = selected_gpu_index if selected_gpu_index is not None else None
         if not backend_device.startswith("cuda"):
@@ -2254,7 +2284,7 @@ class TranscriptionHandler:
 
         load_kwargs = self._build_backend_load_kwargs(
             backend_name=backend_candidate,
-            asr_ct2_compute_type=req_compute_type,
+            asr_ct2_compute_type=effective_compute_type,
             asr_cache_dir=self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY),
             backend_device=backend_device,
             backend_device_index=backend_device_index,
