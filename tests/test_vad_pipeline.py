@@ -1,5 +1,6 @@
 import builtins
 import contextlib
+import copy
 import importlib
 import json
 import os
@@ -13,6 +14,12 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+
+from src.model_manager import (
+    HardwareProfile,
+    build_runtime_catalog,
+    select_recommended_model,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -440,6 +447,77 @@ class TestConfigMigration(unittest.TestCase):
                     "record_to_memory",
                     expected_profile_config.read_text(encoding="utf-8"),
                 )
+
+
+class TestModelRecommendations(unittest.TestCase):
+    def test_select_recommended_model_prefers_large_turbo_with_high_end_gpu(self):
+        hardware = HardwareProfile(
+            system_ram_mb=32_768,
+            has_cuda=True,
+            gpu_count=1,
+            max_vram_mb=16_384,
+        )
+        runtime_catalog = build_runtime_catalog(hardware)
+        recommendation = select_recommended_model(runtime_catalog)
+
+        self.assertIsNotNone(recommendation)
+        self.assertEqual(recommendation["id"], "openai/whisper-large-v3-turbo")
+
+    def test_config_manager_defaults_to_large_turbo_with_capable_gpu(self):
+        hardware = HardwareProfile(
+            system_ram_mb=24_576,
+            has_cuda=True,
+            gpu_count=1,
+            max_vram_mb=16_384,
+        )
+        runtime_catalog = build_runtime_catalog(hardware)
+
+        manager = None
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            profile_dir = Path(tmp_dir) / "profile"
+            profile_dir.mkdir()
+
+            with isolated_config_environment(str(profile_dir)) as config_module:
+                with mock.patch.object(
+                    config_module,
+                    "build_runtime_catalog",
+                    side_effect=lambda *_args, **_kwargs: copy.deepcopy(runtime_catalog),
+                ):
+                    manager = config_module.ConfigManager()
+
+        self.assertIsNotNone(manager)
+        self.assertEqual(
+            manager.config.get("asr_model_id"),
+            "openai/whisper-large-v3-turbo",
+        )
+
+    def test_config_manager_keeps_distil_on_cpu_only_systems(self):
+        hardware = HardwareProfile(
+            system_ram_mb=16_384,
+            has_cuda=False,
+            gpu_count=0,
+            max_vram_mb=0,
+        )
+        runtime_catalog = build_runtime_catalog(hardware)
+
+        manager = None
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            profile_dir = Path(tmp_dir) / "profile"
+            profile_dir.mkdir()
+
+            with isolated_config_environment(str(profile_dir)) as config_module:
+                with mock.patch.object(
+                    config_module,
+                    "build_runtime_catalog",
+                    side_effect=lambda *_args, **_kwargs: copy.deepcopy(runtime_catalog),
+                ):
+                    manager = config_module.ConfigManager()
+
+        self.assertIsNotNone(manager)
+        self.assertEqual(
+            manager.config.get("asr_model_id"),
+            "distil-whisper/distil-large-v3",
+        )
 
 
 class TestKeyboardHotkeys(unittest.TestCase):
