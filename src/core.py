@@ -55,6 +55,7 @@ from .config_manager import (
     AUTO_PASTE_MODIFIER_CONFIG_KEY,
     UI_LANGUAGE_CONFIG_KEY,
     HOTKEY_CONFIG_FILE,
+    FIRST_RUN_COMPLETED_CONFIG_KEY,
 )
 from .audio_handler import AudioHandler
 from .action_orchestrator import ActionOrchestrator
@@ -465,6 +466,7 @@ class AppCore:
         source: str,
     ) -> dict[str, Any]:
         updates = dict(result.config_updates or {})
+        first_run_pending = self.config_manager.is_first_run()
         hotkeys = dict(result.hotkey_preferences or {})
         changed_keys: set[str] = set()
         warnings: list[str] = []
@@ -499,6 +501,13 @@ class AppCore:
                 self.register_hotkeys()
             else:
                 self._persist_hotkey_preferences(hotkeys)
+
+        if first_run_pending:
+            if FIRST_RUN_COMPLETED_CONFIG_KEY not in updates:
+                LOGGER.debug(
+                    "Marking first-run onboarding as completed after wizard execution."
+                )
+            self.config_manager.mark_first_run_complete(persist=True)
 
         download_result = None
         if result.download_request is not None:
