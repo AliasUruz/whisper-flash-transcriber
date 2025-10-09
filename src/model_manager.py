@@ -170,8 +170,8 @@ CURATED: List[Dict[str, Any]] = [
     {
         "id": "openai/whisper-large-v3-turbo",
         "backend": "ctranslate2",
-        "ui_group": "advanced",
-        "recommended_priority": 70,
+        "ui_group": "recommended",
+        "recommended_priority": 140,
         "preferred_device": "gpu",
         "requires_gpu": True,
         "min_system_ram_mb": 12000,
@@ -1232,22 +1232,42 @@ def select_recommended_model(
 ) -> Dict[str, Any] | None:
     """Return the best-fit curated entry for the current hardware."""
 
-    candidates: list[tuple[int, int, int, Dict[str, Any]]] = []
+    def _has_gpu_vram_warning(messages: list[str]) -> bool:
+        for message in messages:
+            normalized = str(message).lower()
+            if "vram" in normalized:
+                return True
+            if "gpu" in normalized and any(
+                keyword in normalized for keyword in ("requer", "required", "necessária", "necessario", "needed")
+            ):
+                return True
+        return False
+
+    candidates: list[tuple[int, int, int, int, Dict[str, Any]]] = []
     for entry in runtime_catalog:
         priority = int(entry.get("recommended_priority") or 0)
         if priority <= 0:
             continue
-        if entry.get("hardware_status") == "blocked":
+        status = str(entry.get("hardware_status") or "ok").lower()
+        if status == "blocked":
             continue
+        messages: list[str] = []
+        for field_name in ("hardware_warnings", "hardware_messages"):
+            field_value = entry.get(field_name)
+            if isinstance(field_value, list):
+                messages.extend(str(item) for item in field_value)
+        if status == "warn" and _has_gpu_vram_warning(messages):
+            continue
+        status_bonus = 1 if status == "ok" else 0
         group_bonus = 1 if entry.get("ui_group") == "recommended" else 0
         min_vram = int(entry.get("min_vram_mb") or 0)
-        candidates.append((priority, group_bonus, -min_vram, copy.deepcopy(entry)))
+        candidates.append((priority, group_bonus, status_bonus, -min_vram, copy.deepcopy(entry)))
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
-    return candidates[0][3]
+    candidates.sort(key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True)
+    return candidates[0][4]
 
 
 def find_runtime_entry(
@@ -1620,16 +1640,14 @@ def ensure_download(
         local_dir = prepared.local_dir
         if prepared.ready_path is not None:
             ready_path = prepared.ready_path
-            installed_bytes = 0
-            try:
-                installed_bytes, _ = get_installed_size(ready_path)
-            except Exception:  # pragma: no cover - metadata retrieval best effort
-                MODEL_LOGGER.debug(
-                    "Unable to compute installed size metadata for model %s at %s.",
-                    model_id,
-                    ready_path,
-                    exc_info=True,
-                )
+            installed_bytes, installed_files = get_installed_size(ready_path)
+            _emit_stage(
+                "already_present",
+                path=str(ready_path),
+                bytes_downloaded=0,
+                bytes_total=installed_bytes,
+                files=installed_files,
+            )
             try:
                 _write_install_metadata(
                     ready_path,
@@ -1653,18 +1671,11 @@ def ensure_download(
                     path=str(prepared.ready_path),
                 )
             )
-            _emit_stage(
-                "already_present",
-                path=str(ready_path),
-                bytes_on_disk=installed_bytes,
-                bytes_downloaded=installed_bytes,
-                message="Model already present",
-            )
             return ModelDownloadResult(
                 str(ready_path),
                 downloaded=False,
-                bytes_downloaded=installed_bytes,
-                duration_seconds=None,
+                bytes_downloaded=0,
+                duration_seconds=0.0,
                 target_dir=str(ready_path),
             )
 
@@ -1673,6 +1684,9 @@ def ensure_download(
 
         estimated_bytes = 0
         estimated_files = 0
+        free_bytes: int | None = None
+        required_bytes: int | None = None
+        safety_margin: int | None = None
         try:
             estimated_bytes, estimated_files = get_model_download_size(model_id)
         except Exception:  # pragma: no cover - metadata retrieval best effort
@@ -1682,6 +1696,10 @@ def ensure_download(
                 exc_info=True,
             )
         else:
+            stage_metadata: dict[str, Any] = {
+                "estimated_bytes": estimated_bytes,
+                "estimated_files": estimated_files,
+            }
             if estimated_bytes > 0:
                 try:
                     usage = shutil.disk_usage(local_dir.parent)
@@ -1691,6 +1709,13 @@ def ensure_download(
                 free_bytes = usage.free
                 safety_margin = max(int(estimated_bytes * 0.1), 256 * 1024 * 1024)
                 required_bytes = estimated_bytes + safety_margin
+                stage_metadata.update(
+                    {
+                        "free_bytes": free_bytes,
+                        "safety_margin": safety_margin,
+                        "required_bytes": required_bytes,
+                    }
+                )
                 MODEL_LOGGER.info(
                     log_context(
                         "Model download size estimated.",
@@ -1701,35 +1726,27 @@ def ensure_download(
                         free_bytes=free_bytes,
                     )
                 )
-                _emit_stage(
-                    "size_estimated",
-                    estimated_bytes=estimated_bytes,
-                    estimated_files=estimated_files,
-                    free_bytes=free_bytes,
-                    required_bytes=required_bytes,
-                    safety_margin_bytes=safety_margin,
+            _emit_stage("size_estimated", **stage_metadata)
+            if (
+                estimated_bytes > 0
+                and free_bytes is not None
+                and required_bytes is not None
+                and free_bytes < required_bytes
+            ):
+                MODEL_LOGGER.error(
+                    "Insufficient free space for model %s: required %s (with safety margin) but only %s available.",
+                    model_id,
+                    _format_bytes(required_bytes),
+                    _format_bytes(free_bytes),
                 )
-                if free_bytes < required_bytes:
-                    MODEL_LOGGER.error(
-                        "Insufficient free space for model %s: required %s (with safety margin) but only %s available.",
-                        model_id,
-                        _format_bytes(required_bytes),
-                        _format_bytes(free_bytes),
+                raise InsufficientSpaceError(
+                    (
+                        "Insufficient free space to download model %s: "
+                        "requires approximately %s (including safety margin) but only %s is available."
                     )
-                    raise InsufficientSpaceError(
-                        (
-                            "Insufficient free space to download model %s: "
-                            "requires approximately %s (including safety margin) but only %s is available."
-                        )
-                        % (model_id, _format_bytes(required_bytes), _format_bytes(free_bytes)),
-                        required_bytes=required_bytes,
-                        free_bytes=free_bytes,
-                    )
-            else:
-                _emit_stage(
-                    "size_estimated",
-                    estimated_bytes=estimated_bytes,
-                    estimated_files=estimated_files,
+                    % (model_id, _format_bytes(required_bytes), _format_bytes(free_bytes)),
+                    required_bytes=required_bytes,
+                    free_bytes=free_bytes,
                 )
 
         timeout_value: float | None = None
@@ -1799,7 +1816,12 @@ def ensure_download(
             quant_label,
             local_dir,
         )
-        _emit_stage("download_start", path=str(local_dir))
+        _emit_stage(
+            "download_start",
+            path=str(local_dir),
+            estimated_bytes=estimated_bytes,
+            estimated_files=estimated_files,
+        )
 
         try:
             _check_abort()
@@ -1852,19 +1874,12 @@ def ensure_download(
                 "Model download completed but installation is missing essential files."
             )
 
-        duration_seconds = time.perf_counter() - start_time
-        duration_ms = duration_seconds * 1000.0
-        downloaded_bytes = 0
-        installed_files = 0
-        try:
-            downloaded_bytes, installed_files = get_installed_size(local_dir)
-        except Exception:  # pragma: no cover - metadata retrieval best effort
-            MODEL_LOGGER.debug(
-                "Unable to compute installed size for model %s at %s.",
-                model_id,
-                local_dir,
-                exc_info=True,
-            )
+        elapsed_seconds = max(time.perf_counter() - start_time, 0.0)
+        duration_ms = elapsed_seconds * 1000.0
+        installed_bytes, installed_files = get_installed_size(local_dir)
+        throughput_bps = None
+        if elapsed_seconds > 0 and installed_bytes:
+            throughput_bps = installed_bytes / elapsed_seconds
         try:
             _write_install_metadata(
                 local_dir,
@@ -1876,14 +1891,13 @@ def ensure_download(
             MODEL_LOGGER.debug(
                 "Unable to persist metadata for model %s at %s", model_id, local_dir, exc_info=True
             )
-        throughput_bps = (downloaded_bytes / duration_seconds) if duration_seconds > 0 else None
         _emit_stage(
             "success",
             path=str(local_dir),
-            bytes_downloaded=downloaded_bytes,
-            duration_seconds=duration_seconds,
+            bytes_downloaded=installed_bytes,
+            files=installed_files,
+            duration_seconds=elapsed_seconds,
             throughput_bps=throughput_bps,
-            files_installed=installed_files,
         )
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
@@ -1896,8 +1910,8 @@ def ensure_download(
         return ModelDownloadResult(
             str(local_dir),
             downloaded=True,
-            bytes_downloaded=downloaded_bytes,
-            duration_seconds=duration_seconds,
+            bytes_downloaded=installed_bytes,
+            duration_seconds=elapsed_seconds,
             target_dir=str(local_dir),
         )
 

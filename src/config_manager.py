@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import shutil
+import subprocess
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -201,6 +202,9 @@ DEFAULT_CONFIG = {
     "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
     "deps_install_dir": _DEFAULT_DEPS_INSTALL_DIR,
     "hf_home_dir": _DEFAULT_HF_HOME_DIR,
+    "python_packages_dir": _DEFAULT_PYTHON_PACKAGES_DIR,
+    "vad_models_dir": _DEFAULT_VAD_MODELS_DIR,
+    "hf_cache_dir": _DEFAULT_HF_CACHE_DIR,
     "recordings_dir": _DEFAULT_RECORDINGS_DIR,
     "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "ctranslate2",
@@ -732,6 +736,75 @@ class ConfigManager:
                             except Exception:
                                 logging.debug("Failed to read CUDA device properties for index %d.", idx, exc_info=True)
                                 continue
+            else:
+                # torch is not available; fall back to lighter-weight GPU probes so the
+                # application still detects CUDA-capable hardware automatically without
+                # requiring torch as a hard dependency for this diagnostic step.
+
+                def _probe_with_ctranslate2() -> tuple[bool, int, int]:
+                    ct2_spec = importlib.util.find_spec("ctranslate2")
+                    if ct2_spec is None:
+                        return False, 0, 0
+                    try:
+                        ct2_module = importlib.import_module("ctranslate2")
+                    except Exception:
+                        logging.debug("ctranslate2 import failed during hardware probing.", exc_info=True)
+                        return False, 0, 0
+
+                    get_count = getattr(ct2_module, "get_cuda_device_count", None)
+                    if not callable(get_count):
+                        return False, 0, 0
+
+                    try:
+                        count = int(get_count())
+                    except Exception:
+                        logging.debug("ctranslate2.get_cuda_device_count() failed.", exc_info=True)
+                        return False, 0, 0
+
+                    return (count > 0), max(count, 0), 0
+
+                def _probe_with_nvidia_smi() -> tuple[bool, int, int]:
+                    try:
+                        result = subprocess.run(
+                            [
+                                "nvidia-smi",
+                                "--query-gpu=memory.total",
+                                "--format=csv,noheader,nounits",
+                            ],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        )
+                    except FileNotFoundError:
+                        logging.debug("nvidia-smi not found; skipping VRAM probing.")
+                        return False, 0, 0
+                    except subprocess.CalledProcessError:
+                        logging.debug("nvidia-smi execution failed during hardware probing.", exc_info=True)
+                        return False, 0, 0
+
+                    vram_values: list[int] = []
+                    for line in result.stdout.splitlines():
+                        value = line.strip()
+                        if not value:
+                            continue
+                        try:
+                            vram_values.append(int(float(value)))
+                        except ValueError:
+                            logging.debug("Unexpected nvidia-smi VRAM value: %s", value)
+
+                    if not vram_values:
+                        return False, 0, 0
+
+                    detected_gpu_count = len(vram_values)
+                    max_detected_vram = max(vram_values)
+                    return True, detected_gpu_count, max_detected_vram
+
+                ct2_has_cuda, ct2_gpu_count, ct2_max_vram = _probe_with_ctranslate2()
+                smi_has_cuda, smi_gpu_count, smi_max_vram = _probe_with_nvidia_smi()
+
+                has_cuda = has_cuda or ct2_has_cuda or smi_has_cuda
+                gpu_count = max(gpu_count, ct2_gpu_count, smi_gpu_count)
+                max_vram_mb = max(max_vram_mb, ct2_max_vram, smi_max_vram)
 
             def _probe_ctranslate2_gpu_count() -> int:
                 ct2_spec = importlib.util.find_spec("ctranslate2")
@@ -2148,6 +2221,118 @@ class ConfigManager:
             }
         return report
 
+    def describe_persistence_state(self) -> dict[str, object]:
+        """Retorna um snapshot detalhado dos artefatos de persistência."""
+
+        snapshot: dict[str, object] = {}
+        errors: list[str] = []
+
+        try:
+            profile_path = Path(self.profile_dir).expanduser()
+        except Exception as exc:  # pragma: no cover - defensive
+            profile_path = Path(str(self.profile_dir))
+            errors.append(f"profile_dir: {exc}")
+
+        try:
+            resolved_profile = profile_path.resolve()
+        except Exception as exc:  # pragma: no cover - defensive path resolution
+            resolved_profile = profile_path
+            errors.append(f"profile_dir.resolve: {exc}")
+
+        snapshot["profile_dir"] = str(resolved_profile)
+
+        try:
+            profile_exists = resolved_profile.exists()
+        except Exception as exc:  # pragma: no cover - defensive
+            profile_exists = False
+            errors.append(f"profile_dir.exists: {exc}")
+        snapshot["profile_dir_exists"] = profile_exists
+
+        snapshot["first_run"] = self.is_first_run()
+
+        bootstrap_snapshot = self.get_bootstrap_report()
+
+        def _build_artifact(label: str, raw_path: Path) -> dict[str, object]:
+            artifact: dict[str, object] = dict(bootstrap_snapshot.get(label, {}))
+            artifact_errors: list[str] = []
+
+            raw_entry = self._bootstrap_state.get(label)
+            if isinstance(raw_entry, Mapping):
+                for key, value in raw_entry.items():
+                    if key == "path":
+                        continue
+                    if key in artifact and artifact[key] not in (None, ""):
+                        continue
+                    if isinstance(value, (str, int, float, bool)) or value is None:
+                        artifact[key] = value
+                    else:
+                        artifact[key] = str(value)
+
+            path_obj = raw_path
+            try:
+                path_obj = raw_path.expanduser()
+            except Exception as exc:  # pragma: no cover - defensive expansion
+                artifact_errors.append(f"expanduser: {exc}")
+                path_obj = Path(str(raw_path))
+
+            try:
+                resolved = path_obj.resolve()
+            except Exception as exc:  # pragma: no cover - defensive path resolution
+                resolved = path_obj
+                artifact_errors.append(f"resolve: {exc}")
+
+            artifact["path"] = str(resolved)
+
+            try:
+                exists = resolved.is_file()
+            except Exception as exc:  # pragma: no cover - defensive existence check
+                exists = False
+                artifact_errors.append(f"exists: {exc}")
+            artifact["exists"] = exists
+
+            size_bytes: int | None = None
+            if exists:
+                try:
+                    size_bytes = resolved.stat().st_size
+                except OSError as exc:
+                    artifact_errors.append(f"stat: {exc}")
+            artifact["size_bytes"] = size_bytes
+
+            # Ensure expected keys exist even if bootstrap lacks them
+            if label in {"config", "secrets"}:
+                artifact.setdefault("created", False)
+                artifact.setdefault("verified", False)
+                artifact.setdefault("written", False)
+                artifact.setdefault("existed", artifact.get("existed", False))
+            else:
+                artifact.setdefault("created", None)
+                artifact.setdefault("verified", None)
+                artifact.setdefault("written", None)
+                artifact.setdefault("existed", exists)
+
+            if artifact_errors:
+                existing_error = artifact.get("error")
+                joined = "; ".join(str(part) for part in artifact_errors if part)
+                artifact["error"] = (
+                    f"{existing_error}; {joined}" if existing_error else joined
+                )
+
+            return artifact
+
+        config_info = _build_artifact("config", self.config_path)
+        secrets_info = _build_artifact("secrets", self.secrets_path)
+        hotkey_info = _build_artifact("hotkeys", Path(HOTKEY_CONFIG_FILE))
+
+        snapshot["config"] = config_info
+        snapshot["secrets"] = secrets_info
+        snapshot["hotkeys"] = hotkey_info
+        snapshot["bootstrap"] = bootstrap_snapshot
+
+        if errors:
+            snapshot["error"] = "; ".join(errors)
+
+        return snapshot
+
     def register_startup_diagnostics(self, report: "StartupDiagnosticsReport") -> None:
         """Attach startup diagnostics to the bootstrap state and persist the report reference."""
 
@@ -2644,6 +2829,18 @@ class ConfigManager:
 
     def set_python_packages_dir(self, value: str):
         self.config[PYTHON_PACKAGES_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_vad_models_dir(self) -> str:
+        return self.config.get(
+            VAD_MODELS_DIR_CONFIG_KEY,
+            self.default_config.get(
+                VAD_MODELS_DIR_CONFIG_KEY,
+                _DEFAULT_VAD_MODELS_DIR,
+            ),
+        )
+
+    def set_vad_models_dir(self, value: str):
+        self.config[VAD_MODELS_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
     def get_hf_home_dir(self) -> str:
         return self.config.get(
