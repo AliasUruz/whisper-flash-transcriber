@@ -228,21 +228,43 @@ class ModelDownloadController:
 
         def _on_stage(stage_id: str, metadata: dict) -> None:
             task.stage = stage_id
-            task.metadata.update(metadata or {})
+            metadata = metadata or {}
+            if not isinstance(metadata, dict):  # defensive guard
+                metadata = {"value": metadata}
+            task.metadata.update(metadata)
             message = metadata.get("message") if isinstance(metadata, dict) else None
-            if stage_id == "size_estimated" and isinstance(metadata, dict):
+            if stage_id == "size_estimated":
                 estimated_bytes = int(metadata.get("estimated_bytes") or 0)
                 if estimated_bytes:
                     task.bytes_total = estimated_bytes
-            if stage_id == "download_start":
-                task.target_dir = metadata.get("path")
-            if stage_id == "success":
-                if metadata.get("bytes_downloaded"):
-                    task.bytes_done = int(metadata.get("bytes_downloaded"))
+            elif stage_id == "download_start":
+                path_value = metadata.get("path")
+                if path_value:
+                    task.target_dir = str(path_value)
+            elif stage_id == "already_present":
+                path_value = metadata.get("path")
+                if path_value:
+                    task.target_dir = str(path_value)
+                installed_bytes = metadata.get("bytes_total")
+                if installed_bytes is None:
+                    installed_bytes = metadata.get("bytes_downloaded")
+                if isinstance(installed_bytes, (int, float)):
+                    task.bytes_total = int(installed_bytes)
+                    task.bytes_done = int(installed_bytes)
+                task.eta_seconds = 0.0
+                task.throughput_bps = None
+                if not message:
+                    message = "Model already present"
+            elif stage_id == "success":
+                bytes_downloaded = metadata.get("bytes_downloaded")
+                if isinstance(bytes_downloaded, (int, float)):
+                    task.bytes_done = int(bytes_downloaded)
                     task.bytes_total = max(task.bytes_total, task.bytes_done)
                 throughput = metadata.get("throughput_bps")
                 if isinstance(throughput, (float, int)):
                     task.throughput_bps = float(throughput)
+                if not message:
+                    message = "Download finished"
             if message:
                 task.message = str(message)
             self._publish(task)
@@ -285,14 +307,15 @@ class ModelDownloadController:
         task.result = result
         task.status = "skipped" if not result.downloaded else "completed"
         task.message = "Model already present" if task.status == "skipped" else "Download finished"
-        if result.target_dir:
+        if result.target_dir is not None:
             task.target_dir = result.target_dir
-        if result.bytes_downloaded:
-            task.bytes_done = int(result.bytes_downloaded)
+        if result.bytes_downloaded is not None:
+            task.bytes_done = max(task.bytes_done, int(result.bytes_downloaded))
             task.bytes_total = max(task.bytes_total, task.bytes_done)
-        if result.duration_seconds and result.bytes_downloaded:
+        if result.duration_seconds is not None:
             duration = max(result.duration_seconds, 1e-6)
-            task.throughput_bps = result.bytes_downloaded / duration
+            if result.bytes_downloaded is not None and duration > 0:
+                task.throughput_bps = result.bytes_downloaded / duration
         self._publish(task)
         self._finalize(task)
 
