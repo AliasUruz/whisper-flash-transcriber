@@ -846,12 +846,15 @@ class AudioHandler:
                         "requested_mode": self.record_storage_mode,
                         "vad_enabled": bool(self.use_vad),
                     },
-                ):
+                ) as operation_id:
+                    self._current_operation_id = operation_id
+
                     if not self._processing_thread or not self._processing_thread.is_alive():
                         self.audio_queue = queue.Queue()
                         self._processing_thread = threading.Thread(
                             target=self._process_audio_queue,
                             daemon=True,
+                            name="AudioProcessThread",
                         )
                         self._processing_thread.start()
 
@@ -873,6 +876,7 @@ class AudioHandler:
                             extra={"event": "audio.preflight_abort", "stage": "recording"},
                         )
                         self._session_id = None
+                        self._current_operation_id = None
                         return False
 
                     if self.record_storage_mode == "memory":
@@ -938,100 +942,83 @@ class AudioHandler:
                                     exc_info=True,
                                     extra={"event": "audio.temp_cleanup", "stage": "recording"},
                                 )
+                        self._session_id = None
+                        self._current_operation_id = None
                         return False
 
-                        self._enforce_record_storage_limit(exclude_paths=[self.temp_file_path])
+                    if self.max_memory_seconds_mode == "auto":
+                        self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
+                    else:
+                        self.current_max_memory_seconds = self.max_memory_seconds
+                    self._memory_limit_samples = int(
+                        self.current_max_memory_seconds * AUDIO_SAMPLE_RATE
+                    )
 
-                        if self.record_storage_mode == "memory":
-                            self.in_memory_mode = True
-                            reason = "configured for memory"
-                        elif self.record_storage_mode == "disk":
-                            self.in_memory_mode = False
-                            reason = "configured for disk"
+                    self._log.info(
+                        StructuredMessage(
+                            "Recording storage mode decided.",
+                            event="audio.storage_selected",
+                            in_memory=self.in_memory_mode,
+                            rationale=reason,
+                            max_buffer_seconds=self.current_max_memory_seconds,
+                        )
+                    )
+
+                    with self.storage_lock:
+                        self.is_recording = True
+                        self.start_time = time.time()
+                        self._sample_count = 0
+                        self._memory_samples = 0
+
+                        if self.in_memory_mode:
+                            self.temp_file_path = None
+                            self._sf_writer = None
+                            self._audio_frames = []
                         else:
-                            available_mb = get_available_memory_mb()
-                            if available_mb >= self.min_free_ram_mb and self.max_memory_seconds > 0:
-                                self.in_memory_mode = True
-                                reason = (
-                                    f"auto: free RAM {available_mb:.0f}MB >= {self.min_free_ram_mb}MB"
-                                )
-                            else:
-                                self.in_memory_mode = False
-                                reason = (
-                                    f"auto: free RAM {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
-                                )
-
-                        if self.max_memory_seconds_mode == "auto":
-                            self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
-                        else:
-                            self.current_max_memory_seconds = self.max_memory_seconds
-                        self._memory_limit_samples = int(self.current_max_memory_seconds * AUDIO_SAMPLE_RATE)
-
-                        self._log.info(
-                            StructuredMessage(
-                                "Recording storage mode decided.",
-                                event="audio.storage_selected",
-                                in_memory=self.in_memory_mode,
-                                rationale=reason,
-                                max_buffer_seconds=self.current_max_memory_seconds,
+                            raw_tmp = self._create_temp_wav_file()
+                            self.temp_file_path = raw_tmp.name
+                            raw_tmp.close()
+                            self._sf_writer = sf.SoundFile(
+                                self.temp_file_path,
+                                mode="w",
+                                samplerate=AUDIO_SAMPLE_RATE,
+                                channels=AUDIO_CHANNELS,
                             )
-                        )
 
-                        with self.storage_lock:
-                            self.is_recording = True
-                            self.start_time = time.time()
-                            self._sample_count = 0
-                            self._memory_samples = 0
+                    if self.use_vad and self.vad_manager:
+                        try:
+                            self.vad_manager.reset_states()
+                        except Exception:
+                            self._log.debug(
+                                "Failed to reset VAD states for new recording.",
+                                exc_info=True,
+                                extra={"event": "vad_reset_failed", "stage": "recording"},
+                            )
+                    self._log.debug(
+                        "VAD reset for new recording.",
+                        extra={"event": "vad_reset", "stage": "recording"},
+                    )
 
-                            if self.in_memory_mode:
-                                self.temp_file_path = None
-                                self._sf_writer = None
-                                self._audio_frames = []
-                            else:
-                                raw_tmp = self._create_temp_wav_file()
-                                self.temp_file_path = raw_tmp.name
-                                raw_tmp.close()
-                                self._sf_writer = sf.SoundFile(
-                                    self.temp_file_path,
-                                    mode="w",
-                                    samplerate=AUDIO_SAMPLE_RATE,
-                                    channels=AUDIO_CHANNELS,
-                                )
+                    self.state_manager.set_state(
+                        "RECORDING",
+                        operation_id=operation_id,
+                        source="audio_handler",
+                    )
 
-                        if self.use_vad and self.vad_manager:
-                            try:
-                                self.vad_manager.reset_states()
-                            except Exception:
-                                self._log.debug(
-                                    "Failed to reset VAD states for new recording.",
-                                    exc_info=True,
-                                    extra={"event": "vad_reset_failed", "stage": "recording"},
-                                )
-                        self._log.debug(
-                            "VAD reset for new recording.",
-                            extra={"event": "vad_reset", "stage": "recording"},
-                        )
+                    self._record_thread = threading.Thread(
+                        target=self._record_audio_task,
+                        daemon=True,
+                        name="AudioRecordThread",
+                    )
+                    self._record_thread.start()
 
-                        self.state_manager.set_state(
-                            "RECORDING",
-                            operation_id=operation_id,
-                            source="audio_handler",
-                        )
-
-                        self._record_thread = threading.Thread(
-                            target=self._record_audio_task,
-                            daemon=True,
-                            name="AudioRecordThread",
-                        )
-                        self._record_thread.start()
-
-                        threading.Thread(
-                            target=self._play_generated_tone_stream,
-                            kwargs={"is_start": True},
-                            daemon=True,
-                            name="StartSoundThread",
-                        ).start()
-                        return True
+                    threading.Thread(
+                        target=self._play_generated_tone_stream,
+                        kwargs={"is_start": True},
+                        daemon=True,
+                        name="StartSoundThread",
+                    ).start()
+                    return True
         except Exception:
             self._session_id = None
             self._current_operation_id = None
