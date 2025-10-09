@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from threading import Event, RLock
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 try:  # pragma: no cover - optional dependency
     from huggingface_hub import HfApi, snapshot_download
@@ -1620,6 +1620,16 @@ def ensure_download(
         local_dir = prepared.local_dir
         if prepared.ready_path is not None:
             ready_path = prepared.ready_path
+            installed_bytes = 0
+            try:
+                installed_bytes, _ = get_installed_size(ready_path)
+            except Exception:  # pragma: no cover - metadata retrieval best effort
+                MODEL_LOGGER.debug(
+                    "Unable to compute installed size metadata for model %s at %s.",
+                    model_id,
+                    ready_path,
+                    exc_info=True,
+                )
             try:
                 _write_install_metadata(
                     ready_path,
@@ -1643,7 +1653,20 @@ def ensure_download(
                     path=str(prepared.ready_path),
                 )
             )
-            return ModelDownloadResult(str(ready_path), downloaded=False)
+            _emit_stage(
+                "already_present",
+                path=str(ready_path),
+                bytes_on_disk=installed_bytes,
+                bytes_downloaded=installed_bytes,
+                message="Model already present",
+            )
+            return ModelDownloadResult(
+                str(ready_path),
+                downloaded=False,
+                bytes_downloaded=installed_bytes,
+                duration_seconds=None,
+                target_dir=str(ready_path),
+            )
 
         stale_local_dir = prepared.stale_local_dir
         local_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1678,6 +1701,14 @@ def ensure_download(
                         free_bytes=free_bytes,
                     )
                 )
+                _emit_stage(
+                    "size_estimated",
+                    estimated_bytes=estimated_bytes,
+                    estimated_files=estimated_files,
+                    free_bytes=free_bytes,
+                    required_bytes=required_bytes,
+                    safety_margin_bytes=safety_margin,
+                )
                 if free_bytes < required_bytes:
                     MODEL_LOGGER.error(
                         "Insufficient free space for model %s: required %s (with safety margin) but only %s available.",
@@ -1694,6 +1725,12 @@ def ensure_download(
                         required_bytes=required_bytes,
                         free_bytes=free_bytes,
                     )
+            else:
+                _emit_stage(
+                    "size_estimated",
+                    estimated_bytes=estimated_bytes,
+                    estimated_files=estimated_files,
+                )
 
         timeout_value: float | None = None
         deadline: float | None = None
@@ -1762,6 +1799,7 @@ def ensure_download(
             quant_label,
             local_dir,
         )
+        _emit_stage("download_start", path=str(local_dir))
 
         try:
             _check_abort()
@@ -1814,7 +1852,19 @@ def ensure_download(
                 "Model download completed but installation is missing essential files."
             )
 
-        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        duration_seconds = time.perf_counter() - start_time
+        duration_ms = duration_seconds * 1000.0
+        downloaded_bytes = 0
+        installed_files = 0
+        try:
+            downloaded_bytes, installed_files = get_installed_size(local_dir)
+        except Exception:  # pragma: no cover - metadata retrieval best effort
+            MODEL_LOGGER.debug(
+                "Unable to compute installed size for model %s at %s.",
+                model_id,
+                local_dir,
+                exc_info=True,
+            )
         try:
             _write_install_metadata(
                 local_dir,
@@ -1826,7 +1876,15 @@ def ensure_download(
             MODEL_LOGGER.debug(
                 "Unable to persist metadata for model %s at %s", model_id, local_dir, exc_info=True
             )
-        _emit_stage("already_present", path=str(ready_path))
+        throughput_bps = (downloaded_bytes / duration_seconds) if duration_seconds > 0 else None
+        _emit_stage(
+            "success",
+            path=str(local_dir),
+            bytes_downloaded=downloaded_bytes,
+            duration_seconds=duration_seconds,
+            throughput_bps=throughput_bps,
+            files_installed=installed_files,
+        )
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
             model_id,
@@ -1835,7 +1893,13 @@ def ensure_download(
             local_dir,
         )
         _invalidate_list_installed_cache(cache_dir)
-        return ModelDownloadResult(str(local_dir), downloaded=True)
+        return ModelDownloadResult(
+            str(local_dir),
+            downloaded=True,
+            bytes_downloaded=downloaded_bytes,
+            duration_seconds=duration_seconds,
+            target_dir=str(local_dir),
+        )
 
 def _make_cancellable_progress(check_abort, progress_callback: Callable[[int, int], None] | None = None):
     from tqdm.auto import tqdm
