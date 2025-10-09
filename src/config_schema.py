@@ -373,7 +373,11 @@ def _build_advanced_config() -> AdvancedConfig:
 
 
 class AppConfig(BaseModel):
-    """Normalized configuration tree consumed by :class:`ConfigManager`."""
+    """Normalized configuration tree consumed by :class:`ConfigManager`.
+
+    The default ASR model is ``openai/whisper-large-v3-turbo`` to match the
+    turbo-optimized Whisper Large v3 build distributed in the curated catalog.
+    """
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
@@ -459,6 +463,7 @@ class AppConfig(BaseModel):
     clear_gpu_cache: bool = True
     enable_torch_compile: bool = False
     launch_at_startup: bool = False
+    # Default to the turbo Whisper Large v3 variant optimized for CTranslate2.
     asr_model_id: str = "openai/whisper-large-v3-turbo"
     asr_backend: str = "ctranslate2"
     asr_installed_models: list[str] = Field(default_factory=list)
