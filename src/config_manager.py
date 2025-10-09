@@ -1985,6 +1985,118 @@ class ConfigManager:
             }
         return report
 
+    def describe_persistence_state(self) -> dict[str, object]:
+        """Retorna um snapshot detalhado dos artefatos de persistência."""
+
+        snapshot: dict[str, object] = {}
+        errors: list[str] = []
+
+        try:
+            profile_path = Path(self.profile_dir).expanduser()
+        except Exception as exc:  # pragma: no cover - defensive
+            profile_path = Path(str(self.profile_dir))
+            errors.append(f"profile_dir: {exc}")
+
+        try:
+            resolved_profile = profile_path.resolve()
+        except Exception as exc:  # pragma: no cover - defensive path resolution
+            resolved_profile = profile_path
+            errors.append(f"profile_dir.resolve: {exc}")
+
+        snapshot["profile_dir"] = str(resolved_profile)
+
+        try:
+            profile_exists = resolved_profile.exists()
+        except Exception as exc:  # pragma: no cover - defensive
+            profile_exists = False
+            errors.append(f"profile_dir.exists: {exc}")
+        snapshot["profile_dir_exists"] = profile_exists
+
+        snapshot["first_run"] = self.is_first_run()
+
+        bootstrap_snapshot = self.get_bootstrap_report()
+
+        def _build_artifact(label: str, raw_path: Path) -> dict[str, object]:
+            artifact: dict[str, object] = dict(bootstrap_snapshot.get(label, {}))
+            artifact_errors: list[str] = []
+
+            raw_entry = self._bootstrap_state.get(label)
+            if isinstance(raw_entry, Mapping):
+                for key, value in raw_entry.items():
+                    if key == "path":
+                        continue
+                    if key in artifact and artifact[key] not in (None, ""):
+                        continue
+                    if isinstance(value, (str, int, float, bool)) or value is None:
+                        artifact[key] = value
+                    else:
+                        artifact[key] = str(value)
+
+            path_obj = raw_path
+            try:
+                path_obj = raw_path.expanduser()
+            except Exception as exc:  # pragma: no cover - defensive expansion
+                artifact_errors.append(f"expanduser: {exc}")
+                path_obj = Path(str(raw_path))
+
+            try:
+                resolved = path_obj.resolve()
+            except Exception as exc:  # pragma: no cover - defensive path resolution
+                resolved = path_obj
+                artifact_errors.append(f"resolve: {exc}")
+
+            artifact["path"] = str(resolved)
+
+            try:
+                exists = resolved.is_file()
+            except Exception as exc:  # pragma: no cover - defensive existence check
+                exists = False
+                artifact_errors.append(f"exists: {exc}")
+            artifact["exists"] = exists
+
+            size_bytes: int | None = None
+            if exists:
+                try:
+                    size_bytes = resolved.stat().st_size
+                except OSError as exc:
+                    artifact_errors.append(f"stat: {exc}")
+            artifact["size_bytes"] = size_bytes
+
+            # Ensure expected keys exist even if bootstrap lacks them
+            if label in {"config", "secrets"}:
+                artifact.setdefault("created", False)
+                artifact.setdefault("verified", False)
+                artifact.setdefault("written", False)
+                artifact.setdefault("existed", artifact.get("existed", False))
+            else:
+                artifact.setdefault("created", None)
+                artifact.setdefault("verified", None)
+                artifact.setdefault("written", None)
+                artifact.setdefault("existed", exists)
+
+            if artifact_errors:
+                existing_error = artifact.get("error")
+                joined = "; ".join(str(part) for part in artifact_errors if part)
+                artifact["error"] = (
+                    f"{existing_error}; {joined}" if existing_error else joined
+                )
+
+            return artifact
+
+        config_info = _build_artifact("config", self.config_path)
+        secrets_info = _build_artifact("secrets", self.secrets_path)
+        hotkey_info = _build_artifact("hotkeys", Path(HOTKEY_CONFIG_FILE))
+
+        snapshot["config"] = config_info
+        snapshot["secrets"] = secrets_info
+        snapshot["hotkeys"] = hotkey_info
+        snapshot["bootstrap"] = bootstrap_snapshot
+
+        if errors:
+            snapshot["error"] = "; ".join(errors)
+
+        return snapshot
+
     def register_startup_diagnostics(self, report: "StartupDiagnosticsReport") -> None:
         """Attach startup diagnostics to the bootstrap state and persist the report reference."""
 
