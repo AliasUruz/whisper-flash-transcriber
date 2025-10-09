@@ -2406,7 +2406,7 @@ class ConfigManager:
             old_root_path = None
 
         derived_dirs = (
-            (MODELS_STORAGE_DIR_CONFIG_KEY, Path()),
+            (MODELS_STORAGE_DIR_CONFIG_KEY, Path("models")),
             (ASR_CACHE_DIR_CONFIG_KEY, Path("asr")),
             (RECORDINGS_DIR_CONFIG_KEY, Path("recordings")),
             (PYTHON_PACKAGES_DIR_CONFIG_KEY, Path("python_packages")),
