@@ -8,6 +8,8 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+from .. import config_manager as config_module
+
 
 @dataclass(slots=True)
 class WizardDownloadRequest:
@@ -705,6 +707,7 @@ class FirstRunWizard(ctk.CTkToplevel):
             "asr_cache_dir": self.cache_dir_var.get().strip(),
             "recordings_dir": self.recordings_dir_var.get().strip(),
             "show_advanced": self._show_advanced,
+            config_module.FIRST_RUN_COMPLETED_CONFIG_KEY: True,
         }
         return updates
 
