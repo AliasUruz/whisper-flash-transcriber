@@ -480,6 +480,15 @@ class AppCore:
         for warning in warnings:
             LOGGER.warning(warning)
 
+        if self.config_manager.is_first_run():
+            self.config_manager.mark_first_run_complete(persist=False)
+            try:
+                self.config_manager.save_config()
+            except ConfigPersistenceError:
+                LOGGER.exception(
+                    "Failed to persist first-run completion flag during onboarding."
+                )
+
         if updates:
             LOGGER.debug(
                 "Onboarding persisted %d configuration keys (%s).",
