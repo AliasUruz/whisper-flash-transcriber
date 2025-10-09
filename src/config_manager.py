@@ -204,6 +204,7 @@ DEFAULT_CONFIG = {
     "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "ctranslate2",
     "asr_compute_device": "auto",
+    "asr_dtype": "auto",
     "asr_ct2_compute_type": "int8_float16",
     "asr_cache_dir": _DEFAULT_ASR_CACHE_DIR,
     "asr_installed_models": [],
@@ -310,6 +311,7 @@ RECORDINGS_DIR_CONFIG_KEY = "recordings_dir"
 ASR_BACKEND_CONFIG_KEY = "asr_backend"
 ASR_MODEL_ID_CONFIG_KEY = "asr_model_id"
 ASR_COMPUTE_DEVICE_CONFIG_KEY = "asr_compute_device"
+ASR_DTYPE_CONFIG_KEY = "asr_dtype"
 ASR_CT2_COMPUTE_TYPE_CONFIG_KEY = "asr_ct2_compute_type"
 ASR_CT2_CPU_THREADS_CONFIG_KEY = "asr_ct2_cpu_threads"
 MODELS_STORAGE_DIR_CONFIG_KEY = "models_storage_dir"
@@ -1521,6 +1523,16 @@ class ConfigManager:
         self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(
             self.config.get(ASR_COMPUTE_DEVICE_CONFIG_KEY, self.default_config[ASR_COMPUTE_DEVICE_CONFIG_KEY])
         )
+        dtype_value = self.config.get(
+            ASR_DTYPE_CONFIG_KEY,
+            self.default_config.get(ASR_DTYPE_CONFIG_KEY, "auto"),
+        )
+        if not isinstance(dtype_value, str):
+            dtype_value = str(dtype_value)
+        dtype_value = dtype_value.strip().lower() or str(
+            self.default_config.get(ASR_DTYPE_CONFIG_KEY, "auto")
+        ).strip().lower()
+        self.config[ASR_DTYPE_CONFIG_KEY] = dtype_value
         self.config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY] = str(
             self.config.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY, self.default_config[ASR_CT2_COMPUTE_TYPE_CONFIG_KEY])
         )
@@ -2265,6 +2277,11 @@ class ConfigManager:
         value = self.config.get(key, default)
         if key == ASR_BACKEND_CONFIG_KEY:
             value = _normalize_asr_backend(value)
+        elif key == ASR_DTYPE_CONFIG_KEY:
+            if isinstance(value, str):
+                value = value.strip().lower()
+            elif value is not None:
+                value = str(value).strip().lower()
         return value
 
     def get_timeout(self, key: str, default: float | int) -> float:
@@ -2374,6 +2391,18 @@ class ConfigManager:
 
     def set_asr_compute_device(self, value: str):
         self.config[ASR_COMPUTE_DEVICE_CONFIG_KEY] = str(value)
+
+    def get_asr_dtype(self):
+        return self.get(
+            ASR_DTYPE_CONFIG_KEY,
+            str(self.default_config.get(ASR_DTYPE_CONFIG_KEY, "auto")).strip().lower(),
+        )
+
+    def set_asr_dtype(self, value: str):
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            normalized = str(self.default_config.get(ASR_DTYPE_CONFIG_KEY, "auto")).strip().lower()
+        self.config[ASR_DTYPE_CONFIG_KEY] = normalized
 
     def get_asr_ct2_compute_type(self):
         return self.config.get(
