@@ -43,6 +43,67 @@ except ImportError:
 
 LOGGER = get_logger('whisper_flash_transcriber.gemini', component='GeminiAPI')
 
+_PROMPT_TEXT_PLACEHOLDER = "{text}"
+
+
+def _merge_prompt_with_text(template: str, text: str) -> str:
+    """Safely inject ``text`` into ``template`` without ``str.format`` quirks.
+
+    The Gemini prompts historically relied on ``str.format`` to interpolate the
+    ``{text}`` placeholder. However, ``str.format`` raises when literal braces
+    are present (e.g., ``{"example"}``).
+
+    This helper mirrors the escaping semantics expected by the templates:
+
+    * Every exact ``{text}`` token is replaced by the ``text`` payload.
+    * Escaped braces (``{{`` and ``}}``) continue to be unescaped into single
+      braces, matching the behaviour of ``str.format``.
+
+    Args:
+        template: Raw template fetched from the configuration layer.
+        text: Text payload that should replace ``{text}`` tokens.
+
+    Returns:
+        Template with ``{text}`` occurrences replaced, while preserving literal
+        braces exactly as authors intended.
+    """
+
+    if not template:
+        return template
+
+    result: list[str] = []
+    index = 0
+    length = len(template)
+
+    while index < length:
+        current = template[index]
+        if current == "{":
+            if template.startswith("{{", index):
+                result.append("{")
+                index += 2
+                continue
+            if template.startswith(_PROMPT_TEXT_PLACEHOLDER, index):
+                result.append(text)
+                index += len(_PROMPT_TEXT_PLACEHOLDER)
+                continue
+            result.append("{")
+            index += 1
+            continue
+
+        if current == "}":
+            if template.startswith("}}", index):
+                result.append("}")
+                index += 2
+                continue
+            result.append("}")
+            index += 1
+            continue
+
+        result.append(current)
+        index += 1
+
+    return "".join(result)
+
 if google_api_exceptions is not None:
     GoogleAPIError = google_api_exceptions.GoogleAPIError
     GoogleAPITimeoutError = getattr(
@@ -376,6 +437,9 @@ class GeminiAPI:
         Returns:
             Texto corrigido quando a chamada é bem-sucedida; caso contrário,
             o texto original recebido.
+
+        O template configurado deve conter o marcador literal ``{text}`` para
+        indicar o ponto de inserção do conteúdo transcrito.
         """
         if not text or not self.is_valid or not self.correction_model:
             return text
@@ -387,7 +451,9 @@ class GeminiAPI:
             LOGGER.warning("Gemini correction prompt template is empty.")
             return text
 
-        full_prompt = correction_prompt_template.format(text=text)
+        # A interpolação precisa preservar chaves literais (e.g., ``{{``/``}}``),
+        # portanto evitamos ``str.format`` e utilizamos o utilitário dedicado.
+        full_prompt = _merge_prompt_with_text(correction_prompt_template, text)
         corrected_text = self._execute_request(
             full_prompt,
             self.correction_model,
@@ -420,6 +486,10 @@ class GeminiAPI:
     def correct_text_async(self, text: str, prompt: str, api_key: str) -> str:
         """Executa correção de texto em modo assíncrono utilizando um prompt customizado.
 
+        O ``prompt`` pode incluir o marcador literal ``{text}``, que será
+        substituído pelo conteúdo bruto utilizando :func:`_merge_prompt_with_text`
+        para preservar chaves literais presentes no template configurável.
+
         Returns:
             Texto corrigido quando a chamada é concluída com sucesso ou
             ``text`` caso ocorra falha.
@@ -436,7 +506,7 @@ class GeminiAPI:
                 "Async correction received API key different from configured key. Using configured client instead."
             )
 
-        full_prompt = prompt.format(text=text)
+        full_prompt = _merge_prompt_with_text(prompt, text)
         return (
             self._execute_request(
                 full_prompt,

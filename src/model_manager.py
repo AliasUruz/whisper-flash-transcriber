@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from threading import Event, RLock
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 try:  # pragma: no cover - optional dependency
     from huggingface_hub import HfApi, snapshot_download
@@ -1232,22 +1232,40 @@ def select_recommended_model(
 ) -> Dict[str, Any] | None:
     """Return the best-fit curated entry for the current hardware."""
 
-    candidates: list[tuple[int, int, int, Dict[str, Any]]] = []
+    candidates: list[tuple[int, int, int, int, Dict[str, Any]]] = []
     for entry in runtime_catalog:
         priority = int(entry.get("recommended_priority") or 0)
         if priority <= 0:
             continue
         if entry.get("hardware_status") == "blocked":
             continue
-        group_bonus = 1 if entry.get("ui_group") == "recommended" else 0
+
+        hardware = entry.get("hardware_profile") or {}
+        has_cuda = bool(hardware.get("has_cuda"))
+        available_vram = int(hardware.get("max_vram_mb") or 0)
+        requires_gpu = bool(entry.get("requires_gpu"))
         min_vram = int(entry.get("min_vram_mb") or 0)
-        candidates.append((priority, group_bonus, -min_vram, copy.deepcopy(entry)))
+        preferred_device = str(entry.get("preferred_device") or "").lower()
+
+        hardware_score = 0
+        if requires_gpu:
+            if has_cuda and (min_vram <= 0 or available_vram >= min_vram):
+                hardware_score += 200
+        elif has_cuda and preferred_device == "gpu":
+            if min_vram <= 0 or available_vram >= min_vram:
+                hardware_score += 40
+
+        total_score = priority + hardware_score
+        group_bonus = 1 if entry.get("ui_group") == "recommended" else 0
+        candidates.append(
+            (total_score, priority, group_bonus, -min_vram, copy.deepcopy(entry))
+        )
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
-    return candidates[0][3]
+    candidates.sort(key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True)
+    return candidates[0][4]
 
 
 def find_runtime_entry(

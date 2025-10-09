@@ -8,41 +8,77 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-try:  # pragma: no cover - optional dependency
-    import keyboard  # type: ignore
-except Exception:  # pragma: no cover - optional dependency missing
-    keyboard = None  # type: ignore
+
+class _KeyboardPlaceholder:
+    """Lazy object that surfaces the import failure when accessed."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def __getattr__(self, name: str) -> Any:  # pragma: no cover - defensive
+        raise RuntimeError(
+            "keyboard library failed to initialize due to a runtime error"
+        ) from self._error
+
+    def __bool__(self) -> bool:  # pragma: no cover - defensive
+        return False
+
+
+_keyboard_import_error: Exception | None = None
 
 try:  # pragma: no cover - optional dependency
     import keyboard  # type: ignore[import]
-except ModuleNotFoundError:  # pragma: no cover - optional dependency
+except ModuleNotFoundError:  # pragma: no cover - optional dependency missing
     keyboard = None  # type: ignore[assignment]
+except Exception as exc:  # pragma: no cover - defensive guard
+    _keyboard_import_error = exc
+    keyboard = _KeyboardPlaceholder(exc)  # type: ignore[assignment]
+else:
+    _keyboard_import_error = None
 
-try:
-    import keyboard  # type: ignore[import-not-found]
-except Exception:  # pragma: no cover - optional dependency
-    class _KeyboardPlaceholder:
-        def __getattr__(self, name: str) -> Any:
-            raise RuntimeError(
-                "keyboard library is required for hotkey management but is not installed"
-            )
 
-    keyboard = _KeyboardPlaceholder()  # type: ignore[assignment]
+def _is_keyboard_runtime_available() -> bool:
+    """Return ``True`` when the ``keyboard`` backend can be used safely."""
 
-try:  # Optional dependency used only for direct keyboard hook cleanup in tests
-    import keyboard  # type: ignore[import]
-except ModuleNotFoundError:  # pragma: no cover - optional in headless environments
-    keyboard = None  # type: ignore[assignment]
+    return keyboard is not None and not isinstance(keyboard, _KeyboardPlaceholder)
 
 from .config_manager import HOTKEY_CONFIG_FILE, LEGACY_HOTKEY_LOCATIONS
 from .hotkey_normalization import _normalize_key_name
 from .hotkeys import BaseHotkeyDriver, build_available_drivers
 from .logging_utils import get_logger, join_thread_with_timeout, log_context
 
+AUXILIARY_JOIN_TIMEOUT: float = 3.0
+"""Tempo máximo (em segundos) para aguardar ``join_thread_with_timeout``.
+
+Essa constante permite controlar, de maneira centralizada, o limite de tempo
+utilizado ao sincronizar threads auxiliares registradas pelo gerenciador de
+hotkeys.
+"""
+
+__all__ = ["KeyboardHotkeyManager", "AUXILIARY_JOIN_TIMEOUT"]
+
+
+def _coerce_timeout(value: Any, default: float) -> float:
+    """Convert ``value`` to ``float``; fall back to ``default`` on failure."""
+
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        return default
+    if coerced <= 0:
+        return default
+    return coerced
+
 LOGGER = get_logger(
     "whisper_flash_transcriber.hotkeys",
     component="KeyboardHotkeyManager",
 )
+
+if _keyboard_import_error is not None:  # pragma: no cover - diagnostic path
+    LOGGER.error(
+        "Failed to import the keyboard library due to a runtime error.",
+        exc_info=_keyboard_import_error,
+    )
 
 class KeyboardHotkeyManager:
     """
@@ -91,6 +127,61 @@ class KeyboardHotkeyManager:
 
         # Carregar configuração se existir
         self._load_config()
+
+    def set_auxiliary_thread(
+        self,
+        name: str,
+        *,
+        thread: threading.Thread | None = None,
+        stop_event: Any | None = None,
+        timeout: float,
+        thread_label: str,
+    ) -> None:
+        """Register or replace metadata for an auxiliary worker thread."""
+
+        metadata = {
+            "thread": thread,
+            "stop_event": stop_event,
+            "timeout": timeout,
+            "thread_label": thread_label,
+        }
+
+        with self._aux_threads_lock:
+            previous = self._auxiliary_threads.get(name)
+            self._auxiliary_threads[name] = metadata
+
+        if not isinstance(previous, Mapping):
+            return
+
+        prev_thread = previous.get("thread")
+        if not isinstance(prev_thread, threading.Thread) or prev_thread is thread:
+            return
+
+        prev_stop_event = previous.get("stop_event")
+        prev_timeout = previous.get("timeout")
+        prev_label = previous.get("thread_label")
+
+        if getattr(prev_thread, "is_alive", lambda: False)():
+            if prev_stop_event is not None and (prev_stop_event is not stop_event or thread is None):
+                try:
+                    prev_stop_event.set()
+                except Exception:  # pragma: no cover - defensive cleanup
+                    self._log(
+                        logging.DEBUG,
+                        "Failed to signal auxiliary thread stop event during replacement.",
+                        event="hotkeys.aux_thread_stop_event_failed",
+                        name=name,
+                        thread_label=prev_label,
+                    )
+
+        join_thread_with_timeout(
+            prev_thread,
+            timeout=prev_timeout or timeout,
+            logger=LOGGER,
+            thread_name=str(prev_label or name),
+            event_prefix="hotkeys.aux_thread",
+            details={"name": name},
+        )
 
     def _enumerate_available_driver_names(self) -> list[str]:
         """Enumerate hotkey driver identifiers available in the runtime."""
@@ -237,10 +328,12 @@ class KeyboardHotkeyManager:
                     error=str(driver_exc),
                 )
 
-        try:
-            has_keyboard_driver = bool(getattr(keyboard, "add_hotkey", None))
-        except Exception:  # pragma: no cover - placeholder raised
-            has_keyboard_driver = False
+        has_keyboard_driver = False
+        if _is_keyboard_runtime_available():
+            try:
+                has_keyboard_driver = bool(getattr(keyboard, "add_hotkey", None))
+            except Exception:  # pragma: no cover - placeholder raised
+                has_keyboard_driver = False
         if has_keyboard_driver and "keyboard" not in names:
             names.insert(0, "keyboard")
         return names
@@ -434,6 +527,29 @@ class KeyboardHotkeyManager:
 
         candidate = (hotkey or self.record_key or "f3").strip()
         registration_id = None
+        if not _is_keyboard_runtime_available():
+            detail = None
+            if isinstance(keyboard, _KeyboardPlaceholder) and _keyboard_import_error is not None:
+                detail = str(_keyboard_import_error)
+            elif keyboard is None:
+                detail = "keyboard module not installed"
+            self._log(
+                logging.WARNING,
+                "Dry-run hotkey registration skipped because keyboard backend is unavailable.",
+                event="hotkeys.diagnostics.keyboard_missing",
+                hotkey=candidate,
+                error=detail,
+            )
+            return {
+                "ok": False,
+                "message": "Global hotkey diagnostics unavailable: keyboard backend missing.",
+                "details": {
+                    "hotkey": candidate,
+                    "error": detail,
+                },
+                "suggestion": "Install/enable the 'keyboard' package or run in a supported environment.",
+                "fatal": True,
+            }
         start_time = time.perf_counter()
         try:
             registration_id = keyboard.add_hotkey(
@@ -500,7 +616,7 @@ class KeyboardHotkeyManager:
                 "fatal": True,
             }
         finally:
-            if registration_id is not None:
+            if registration_id is not None and _is_keyboard_runtime_available():
                 try:
                     keyboard.remove_hotkey(registration_id)
                 except Exception as cleanup_exc:
@@ -567,41 +683,10 @@ class KeyboardHotkeyManager:
             self.stop()
             return False
 
-    def _stop_auxiliary_threads(self) -> None:
-        """Finaliza threads auxiliares registradas pelo gerenciador."""
-
-        entries = list(self._auxiliary_threads.items())
-        for name, payload in entries:
-            thread = payload.get("thread")
-            stop_event = payload.get("stop_event")
-            if stop_event is not None and hasattr(stop_event, "set"):
-                try:
-                    stop_event.set()
-                except Exception:
-                    self._log(
-                        logging.DEBUG,
-                        "Failed to signal auxiliary thread stop.",
-                        event="hotkeys.aux_thread_stop_signal_failed",
-                        thread=name,
-                        exc_info=True,
-                    )
-            if thread is not None and hasattr(thread, "join"):
-                try:
-                    thread.join(timeout=1.0)
-                except Exception:
-                    self._log(
-                        logging.DEBUG,
-                        "Failed to join auxiliary thread during stop.",
-                        event="hotkeys.aux_thread_join_failed",
-                        thread=name,
-                        exc_info=True,
-                    )
-        self._auxiliary_threads.clear()
-
     def stop(self):
         """Para o gerenciador de hotkeys."""
         self._stop_auxiliary_threads()
-        if keyboard is not None and self.hotkey_handlers:
+        if _is_keyboard_runtime_available() and self.hotkey_handlers:
             for handles in list(self.hotkey_handlers.values()):
                 for handle in handles:
                     try:
@@ -630,33 +715,37 @@ class KeyboardHotkeyManager:
         """Stop and join any background helper threads spawned by the manager."""
 
         with self._aux_threads_lock:
-            for name, payload in list(self._auxiliary_threads.items()):
-                thread = payload.get("thread") if isinstance(payload, Mapping) else None
-                stop_event = payload.get("stop_event") if isinstance(payload, Mapping) else None
-
-                if stop_event is not None:
-                    try:
-                        stop_event.set()
-                    except Exception:  # pragma: no cover - defensive cleanup
-                        self._log(
-                            logging.DEBUG,
-                            "Failed to signal auxiliary thread stop event.",
-                            event="hotkeys.aux_thread_stop_event_failed",
-                            name=name,
-                        )
-
-                if thread is not None:
-                    try:
-                        thread.join(timeout=1.0)
-                    except Exception:  # pragma: no cover - defensive cleanup
-                        self._log(
-                            logging.DEBUG,
-                            "Failed to join auxiliary thread.",
-                            event="hotkeys.aux_thread_join_failed",
-                            name=name,
-                        )
-
+            entries = list(self._auxiliary_threads.items())
             self._auxiliary_threads.clear()
+
+        for name, payload in entries:
+            if not isinstance(payload, Mapping):
+                continue
+
+            stop_event = payload.get("stop_event")
+            if stop_event is not None:
+                try:
+                    stop_event.set()
+                except Exception:  # pragma: no cover - defensive cleanup
+                    self._log(
+                        logging.DEBUG,
+                        "Failed to signal auxiliary thread stop event.",
+                        event="hotkeys.aux_thread_stop_event_failed",
+                        name=name,
+                    )
+
+            thread = payload.get("thread")
+            timeout = payload.get("timeout", AUXILIARY_JOIN_TIMEOUT)
+            thread_label = payload.get("thread_label") or name
+
+            join_thread_with_timeout(
+                thread if isinstance(thread, threading.Thread) else None,
+                timeout=timeout,
+                logger=LOGGER,
+                thread_name=str(thread_label),
+                event_prefix="hotkeys.aux_thread",
+                details={"name": name},
+            )
 
     def update_config(self, record_key=None, agent_key=None, record_mode=None):
         """
@@ -836,6 +925,22 @@ class KeyboardHotkeyManager:
 
     def _register_hotkeys(self):
         """Registra as hotkeys no sistema."""
+        if not _is_keyboard_runtime_available():
+            error_detail = None
+            if isinstance(keyboard, _KeyboardPlaceholder) and _keyboard_import_error is not None:
+                error_detail = str(_keyboard_import_error)
+            elif keyboard is None:
+                error_detail = "keyboard module not installed"
+            self._log(
+                logging.ERROR,
+                "Keyboard backend unavailable; skipping registration.",
+                event="hotkeys.register_keyboard_missing",
+                error=error_detail,
+            )
+            return self._handle_driver_failure(
+                "keyboard_backend_unavailable",
+                error_detail,
+            )
         try:
             self._log(
                 logging.INFO,
@@ -1141,33 +1246,36 @@ class KeyboardHotkeyManager:
                         exc_info=True,
                     )
 
-            for handle_id, handles in list(self.hotkey_handlers.items()):
-                for handle in handles:
-                    try:
-                        keyboard.unhook(handle)
-                        self._log(
-                            logging.DEBUG,
-                            "Hotkey handle removed.",
-                            event="hotkeys.unregister_handle_removed",
-                            handle_id=handle_id,
-                        )
-                    except (KeyError, ValueError):
-                        self._log(
-                            logging.WARNING,
-                            "Hotkey handle already removed or invalid; skipping.",
-                            event="hotkeys.unregister_handle_missing",
-                            handle_id=handle_id,
-                        )
-                    except Exception as e:
-                        self._log(
-                            logging.ERROR,
-                            "Error while removing hotkey hook.",
-                            event="hotkeys.unregister_handle_error",
-                            handle_id=handle_id,
-                            error=str(e),
-                            exc_info=True,
-                        )
-                self.hotkey_handlers[handle_id] = []
+            if _is_keyboard_runtime_available():
+                for handle_id, handles in list(self.hotkey_handlers.items()):
+                    for handle in handles:
+                        try:
+                            keyboard.unhook(handle)
+                            self._log(
+                                logging.DEBUG,
+                                "Hotkey handle removed.",
+                                event="hotkeys.unregister_handle_removed",
+                                handle_id=handle_id,
+                            )
+                        except (KeyError, ValueError):
+                            self._log(
+                                logging.WARNING,
+                                "Hotkey handle already removed or invalid; skipping.",
+                                event="hotkeys.unregister_handle_missing",
+                                handle_id=handle_id,
+                            )
+                        except Exception as e:
+                            self._log(
+                                logging.ERROR,
+                                "Error while removing hotkey hook.",
+                                event="hotkeys.unregister_handle_error",
+                                handle_id=handle_id,
+                                error=str(e),
+                                exc_info=True,
+                            )
+                    self.hotkey_handlers[handle_id] = []
+            else:
+                self.hotkey_handlers.clear()
 
             self.hotkey_handlers.clear()
 
@@ -1322,6 +1430,20 @@ class KeyboardHotkeyManager:
         Returns:
             str: A tecla detectada ou None se nenhuma tecla for detectada
         """
+        if not _is_keyboard_runtime_available():
+            detail = None
+            if isinstance(keyboard, _KeyboardPlaceholder) and _keyboard_import_error is not None:
+                detail = str(_keyboard_import_error)
+            elif keyboard is None:
+                detail = "keyboard module not installed"
+            self._log(
+                logging.WARNING,
+                "Key detection skipped because keyboard backend is unavailable.",
+                event="hotkeys.detect_keyboard_missing",
+                timeout_seconds=timeout,
+                error=detail,
+            )
+            return None
         try:
             self._log(
                 logging.INFO,
