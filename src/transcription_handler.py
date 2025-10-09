@@ -28,6 +28,7 @@ from .config_manager import (
     ASR_BACKEND_CONFIG_KEY,
     ASR_MODEL_ID_CONFIG_KEY,
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
+    ASR_DTYPE_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_CACHE_DIR_CONFIG_KEY,
     MIN_TRANSCRIPTION_DURATION_CONFIG_KEY,
@@ -182,6 +183,7 @@ class TranscriptionHandler:
         self._asr_backend = None
 
         self.asr_compute_device = self.config_manager.get(ASR_COMPUTE_DEVICE_CONFIG_KEY)
+        self.asr_dtype = self.config_manager.get(ASR_DTYPE_CONFIG_KEY, "auto")
         self.asr_ct2_compute_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         self.asr_ct2_cpu_threads = self.config_manager.get(ASR_CT2_CPU_THREADS_CONFIG_KEY)
         self.asr_cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
@@ -789,6 +791,7 @@ class TranscriptionHandler:
         previous_backend = self._asr_backend_name
         previous_model_id = self._asr_model_id
         previous_device = getattr(self, "asr_compute_device", None)
+        previous_dtype = getattr(self, "asr_dtype", None)
         previous_ct2_type = getattr(self, "asr_ct2_compute_type", None)
         previous_ct2_threads = getattr(self, "asr_ct2_cpu_threads", None)
         previous_cache_dir = getattr(self, "asr_cache_dir", None)
@@ -796,7 +799,7 @@ class TranscriptionHandler:
         backend_value = get_config(ASR_BACKEND_CONFIG_KEY)
         model_value = get_config(ASR_MODEL_ID_CONFIG_KEY)
         device_value = get_config(ASR_COMPUTE_DEVICE_CONFIG_KEY)
-        dtype_value = get_config(ASR_DTYPE_CONFIG_KEY)
+        dtype_value = get_config(ASR_DTYPE_CONFIG_KEY, "auto")
         ct2_type_value = get_config(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
         ct2_threads_value = get_config(ASR_CT2_CPU_THREADS_CONFIG_KEY)
         cache_dir_value = get_config(ASR_CACHE_DIR_CONFIG_KEY)
@@ -804,6 +807,7 @@ class TranscriptionHandler:
         backend_changed = backend_value != previous_backend
         model_changed = model_value != previous_model_id
         device_changed = device_value != previous_device
+        dtype_changed = dtype_value != previous_dtype
         ct2_type_changed = ct2_type_value != previous_ct2_type
         ct2_threads_changed = ct2_threads_value != previous_ct2_threads
         cache_dir_changed = cache_dir_value != previous_cache_dir
@@ -818,6 +822,7 @@ class TranscriptionHandler:
             backend_changed
             or model_changed
             or device_changed
+            or dtype_changed
             or ct2_type_changed
             or ct2_threads_changed
             or cache_dir_changed
@@ -837,6 +842,7 @@ class TranscriptionHandler:
         self._asr_backend_name = backend_value
         self._asr_model_id = model_value
         self.asr_compute_device = device_value
+        self.asr_dtype = dtype_value
         self.asr_ct2_compute_type = ct2_type_value
         self.asr_ct2_cpu_threads = ct2_threads_value
         self.asr_cache_dir = cache_dir_value
