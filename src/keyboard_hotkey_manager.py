@@ -44,6 +44,8 @@ LOGGER = get_logger(
     component="KeyboardHotkeyManager",
 )
 
+AUXILIARY_JOIN_TIMEOUT: float = 3.0
+
 class KeyboardHotkeyManager:
     """
     Gerencia hotkeys usando a biblioteca keyboard.
@@ -91,6 +93,61 @@ class KeyboardHotkeyManager:
 
         # Carregar configuração se existir
         self._load_config()
+
+    def set_auxiliary_thread(
+        self,
+        name: str,
+        *,
+        thread: threading.Thread | None = None,
+        stop_event: Any | None = None,
+        timeout: float,
+        thread_label: str,
+    ) -> None:
+        """Register or replace metadata for an auxiliary worker thread."""
+
+        metadata = {
+            "thread": thread,
+            "stop_event": stop_event,
+            "timeout": timeout,
+            "thread_label": thread_label,
+        }
+
+        with self._aux_threads_lock:
+            previous = self._auxiliary_threads.get(name)
+            self._auxiliary_threads[name] = metadata
+
+        if not isinstance(previous, Mapping):
+            return
+
+        prev_thread = previous.get("thread")
+        if not isinstance(prev_thread, threading.Thread) or prev_thread is thread:
+            return
+
+        prev_stop_event = previous.get("stop_event")
+        prev_timeout = previous.get("timeout")
+        prev_label = previous.get("thread_label")
+
+        if getattr(prev_thread, "is_alive", lambda: False)():
+            if prev_stop_event is not None and (prev_stop_event is not stop_event or thread is None):
+                try:
+                    prev_stop_event.set()
+                except Exception:  # pragma: no cover - defensive cleanup
+                    self._log(
+                        logging.DEBUG,
+                        "Failed to signal auxiliary thread stop event during replacement.",
+                        event="hotkeys.aux_thread_stop_event_failed",
+                        name=name,
+                        thread_label=prev_label,
+                    )
+
+        join_thread_with_timeout(
+            prev_thread,
+            timeout=prev_timeout or timeout,
+            logger=LOGGER,
+            thread_name=str(prev_label or name),
+            event_prefix="hotkeys.aux_thread",
+            details={"name": name},
+        )
 
     def _enumerate_available_driver_names(self) -> list[str]:
         """Enumerate hotkey driver identifiers available in the runtime."""
@@ -567,37 +624,6 @@ class KeyboardHotkeyManager:
             self.stop()
             return False
 
-    def _stop_auxiliary_threads(self) -> None:
-        """Finaliza threads auxiliares registradas pelo gerenciador."""
-
-        entries = list(self._auxiliary_threads.items())
-        for name, payload in entries:
-            thread = payload.get("thread")
-            stop_event = payload.get("stop_event")
-            if stop_event is not None and hasattr(stop_event, "set"):
-                try:
-                    stop_event.set()
-                except Exception:
-                    self._log(
-                        logging.DEBUG,
-                        "Failed to signal auxiliary thread stop.",
-                        event="hotkeys.aux_thread_stop_signal_failed",
-                        thread=name,
-                        exc_info=True,
-                    )
-            if thread is not None and hasattr(thread, "join"):
-                try:
-                    thread.join(timeout=1.0)
-                except Exception:
-                    self._log(
-                        logging.DEBUG,
-                        "Failed to join auxiliary thread during stop.",
-                        event="hotkeys.aux_thread_join_failed",
-                        thread=name,
-                        exc_info=True,
-                    )
-        self._auxiliary_threads.clear()
-
     def stop(self):
         """Para o gerenciador de hotkeys."""
         self._stop_auxiliary_threads()
@@ -630,33 +656,37 @@ class KeyboardHotkeyManager:
         """Stop and join any background helper threads spawned by the manager."""
 
         with self._aux_threads_lock:
-            for name, payload in list(self._auxiliary_threads.items()):
-                thread = payload.get("thread") if isinstance(payload, Mapping) else None
-                stop_event = payload.get("stop_event") if isinstance(payload, Mapping) else None
-
-                if stop_event is not None:
-                    try:
-                        stop_event.set()
-                    except Exception:  # pragma: no cover - defensive cleanup
-                        self._log(
-                            logging.DEBUG,
-                            "Failed to signal auxiliary thread stop event.",
-                            event="hotkeys.aux_thread_stop_event_failed",
-                            name=name,
-                        )
-
-                if thread is not None:
-                    try:
-                        thread.join(timeout=1.0)
-                    except Exception:  # pragma: no cover - defensive cleanup
-                        self._log(
-                            logging.DEBUG,
-                            "Failed to join auxiliary thread.",
-                            event="hotkeys.aux_thread_join_failed",
-                            name=name,
-                        )
-
+            entries = list(self._auxiliary_threads.items())
             self._auxiliary_threads.clear()
+
+        for name, payload in entries:
+            if not isinstance(payload, Mapping):
+                continue
+
+            stop_event = payload.get("stop_event")
+            if stop_event is not None:
+                try:
+                    stop_event.set()
+                except Exception:  # pragma: no cover - defensive cleanup
+                    self._log(
+                        logging.DEBUG,
+                        "Failed to signal auxiliary thread stop event.",
+                        event="hotkeys.aux_thread_stop_event_failed",
+                        name=name,
+                    )
+
+            thread = payload.get("thread")
+            timeout = payload.get("timeout", AUXILIARY_JOIN_TIMEOUT)
+            thread_label = payload.get("thread_label") or name
+
+            join_thread_with_timeout(
+                thread if isinstance(thread, threading.Thread) else None,
+                timeout=timeout,
+                logger=LOGGER,
+                thread_name=str(thread_label),
+                event_prefix="hotkeys.aux_thread",
+                details={"name": name},
+            )
 
     def update_config(self, record_key=None, agent_key=None, record_mode=None):
         """
