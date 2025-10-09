@@ -898,6 +898,14 @@ class AudioHandler:
                                 f"auto: free RAM {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
                             )
 
+                        if self._record_thread and self._record_thread.is_alive():
+                            self._log.debug(
+                                "Waiting for the previous recording thread to finish.",
+                                extra={"event": "record_thread_join", "stage": "recording"},
+                            )
+                            self._stop_event.set()
+                            self._record_thread.join(timeout=2)
+
                     if not self.state_manager.transition_if(
                         sm.STATE_IDLE,
                         sm.StateEvent.AUDIO_RECORDING_STARTED,
