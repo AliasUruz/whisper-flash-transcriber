@@ -926,6 +926,10 @@ class AudioHandler:
                     if not self.state_manager.transition_if(
                         sm.STATE_IDLE,
                         sm.StateEvent.AUDIO_RECORDING_STARTED,
+                        details={
+                            "operation_id": operation_id,
+                            "session_id": session_id,
+                        },
                         source="audio_handler",
                     ):
                         self._log.debug(
@@ -996,12 +1000,6 @@ class AudioHandler:
                     self._log.debug(
                         "VAD reset for new recording.",
                         extra={"event": "vad_reset", "stage": "recording"},
-                    )
-
-                    self.state_manager.set_state(
-                        "RECORDING",
-                        operation_id=operation_id,
-                        source="audio_handler",
                     )
 
                     self._record_thread = threading.Thread(
