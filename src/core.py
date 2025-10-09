@@ -389,6 +389,35 @@ class AppCore:
         if outcome is not None:
             self._last_onboarding_outcome = outcome
 
+    def launch_first_run_wizard(
+        self,
+        *,
+        force: bool = False,
+        reason: str = "menu",
+    ) -> dict[str, Any] | None:
+        if not self._onboarding_enabled:
+            LOGGER.info(
+                "Launch request for onboarding ignored (%s): onboarding disabled.",
+                reason,
+            )
+            return None
+
+        try:
+            snapshot = self.config_manager.describe_persistence_state()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "Unable to capture onboarding snapshot for reason '%s': %s",
+                reason,
+                exc,
+                exc_info=True,
+            )
+            return None
+
+        outcome = self._launch_onboarding(snapshot=snapshot, force=force, reason=reason)
+        if outcome is not None:
+            self._last_onboarding_outcome = outcome
+        return outcome
+
     def _launch_onboarding(
         self,
         *,
