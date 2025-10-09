@@ -66,6 +66,8 @@ LOGGER = get_logger(
     component="KeyboardHotkeyManager",
 )
 
+AUXILIARY_JOIN_TIMEOUT: float = 3.0
+
 class KeyboardHotkeyManager:
     """
     Gerencia hotkeys usando a biblioteca keyboard.
@@ -119,124 +121,54 @@ class KeyboardHotkeyManager:
         name: str,
         *,
         thread: threading.Thread | None = None,
-        stop_event: threading.Event | None = None,
-        timeout: float | None = None,
-        thread_label: str | None = None,
+        stop_event: Any | None = None,
+        timeout: float,
+        thread_label: str,
     ) -> None:
-        """Registrar ou atualizar metadados sobre uma *auxiliary thread*.
+        """Register or replace metadata for an auxiliary worker thread."""
 
-        Args:
-            name: Identificador lógico da thread auxiliar.
-            thread: Instância da thread a ser controlada.
-            stop_event: Evento usado para sinalizar encerramento.
-            timeout: Tempo máximo para aguardar o ``join`` da thread.
-            thread_label: Rótulo amigável usado nos logs.
-        """
+        metadata = {
+            "thread": thread,
+            "stop_event": stop_event,
+            "timeout": timeout,
+            "thread_label": thread_label,
+        }
 
-        if not name:
-            raise ValueError("Auxiliary thread name must be a non-empty string")
-
-        resolved_timeout = _coerce_timeout(
-            timeout if timeout is not None else AUXILIARY_JOIN_TIMEOUT,
-            AUXILIARY_JOIN_TIMEOUT,
-        )
-
-        previous_entry: Mapping[str, Any] | None = None
         with self._aux_threads_lock:
-            existing = self._auxiliary_threads.get(name)
-            if isinstance(existing, Mapping):
-                previous_entry = existing
+            previous = self._auxiliary_threads.get(name)
+            self._auxiliary_threads[name] = metadata
 
-            existing_thread = (
-                existing.get("thread") if isinstance(existing, Mapping) else None
-            )
-            existing_stop_event = (
-                existing.get("stop_event") if isinstance(existing, Mapping) else None
-            )
-            existing_timeout = (
-                existing.get("timeout") if isinstance(existing, Mapping) else None
-            )
-            existing_label = (
-                existing.get("thread_label") if isinstance(existing, Mapping) else None
-            )
+        if not isinstance(previous, Mapping):
+            return
 
-            merged_thread = thread or existing_thread
-            merged_stop_event = stop_event or existing_stop_event
-            merged_timeout = _coerce_timeout(
-                resolved_timeout if timeout is not None else existing_timeout,
-                AUXILIARY_JOIN_TIMEOUT,
-            )
+        prev_thread = previous.get("thread")
+        if not isinstance(prev_thread, threading.Thread) or prev_thread is thread:
+            return
 
-            if thread_label is None:
-                if isinstance(thread, threading.Thread) and thread.name:
-                    effective_label = thread.name
-                elif isinstance(existing_label, str) and existing_label:
-                    effective_label = existing_label
-                else:
-                    effective_label = name
-            else:
-                effective_label = thread_label
+        prev_stop_event = previous.get("stop_event")
+        prev_timeout = previous.get("timeout")
+        prev_label = previous.get("thread_label")
 
-            self._auxiliary_threads[name] = {
-                "thread": merged_thread,
-                "stop_event": merged_stop_event,
-                "timeout": merged_timeout,
-                "thread_label": effective_label,
-            }
-
-        stored_label = effective_label
-        stored_thread = merged_thread
-        stored_stop_event = merged_stop_event
-        stored_timeout = merged_timeout
-
-        if previous_entry is not None and isinstance(previous_entry, Mapping):
-            previous_thread = previous_entry.get("thread")
-            previous_stop_event = previous_entry.get("stop_event")
-            previous_label = (
-                previous_entry.get("thread_label") or name
-                if isinstance(previous_entry.get("thread_label"), str)
-                else name
-            )
-            previous_timeout = _coerce_timeout(
-                previous_entry.get("timeout"), AUXILIARY_JOIN_TIMEOUT
-            )
-
-            if (
-                previous_stop_event is not None
-                and previous_stop_event is not stored_stop_event
-            ):
+        if getattr(prev_thread, "is_alive", lambda: False)():
+            if prev_stop_event is not None and (prev_stop_event is not stop_event or thread is None):
                 try:
-                    previous_stop_event.set()
+                    prev_stop_event.set()
                 except Exception:  # pragma: no cover - defensive cleanup
                     self._log(
                         logging.DEBUG,
-                        "Failed to signal previous auxiliary thread stop event.",
-                        event="hotkeys.aux_thread.previous_stop_event_failed",
+                        "Failed to signal auxiliary thread stop event during replacement.",
+                        event="hotkeys.aux_thread_stop_event_failed",
                         name=name,
+                        thread_label=prev_label,
                     )
 
-            if (
-                isinstance(previous_thread, threading.Thread)
-                and previous_thread is not stored_thread
-            ):
-                join_thread_with_timeout(
-                    previous_thread,
-                    timeout=previous_timeout,
-                    logger=LOGGER,
-                    thread_name=str(previous_label),
-                    event_prefix="hotkeys.aux_thread",
-                    details={"name": name, "action": "replace"},
-                )
-
-        self._log(
-            logging.DEBUG,
-            "Auxiliary thread metadata updated.",
-            event="hotkeys.aux_thread.set",
-            name=name,
-            has_thread=isinstance(stored_thread, threading.Thread),
-            has_stop_event=stored_stop_event is not None,
-            timeout_seconds=stored_timeout,
-            thread_label=stored_label,
+        join_thread_with_timeout(
+            prev_thread,
+            timeout=prev_timeout or timeout,
+            logger=LOGGER,
+            thread_name=str(prev_label or name),
+            event_prefix="hotkeys.aux_thread",
+            details={"name": name},
         )
 
     def _enumerate_available_driver_names(self) -> list[str]:
@@ -754,12 +686,6 @@ class KeyboardHotkeyManager:
                 continue
 
             stop_event = payload.get("stop_event")
-            thread = payload.get("thread")
-            timeout = _coerce_timeout(
-                payload.get("timeout"), AUXILIARY_JOIN_TIMEOUT
-            )
-            label = payload.get("thread_label") or name
-
             if stop_event is not None:
                 try:
                     stop_event.set()
@@ -767,17 +693,21 @@ class KeyboardHotkeyManager:
                     self._log(
                         logging.DEBUG,
                         "Failed to signal auxiliary thread stop event.",
-                        event="hotkeys.aux_thread.stop_event_failed",
+                        event="hotkeys.aux_thread_stop_event_failed",
                         name=name,
                     )
+
+            thread = payload.get("thread")
+            timeout = payload.get("timeout", AUXILIARY_JOIN_TIMEOUT)
+            thread_label = payload.get("thread_label") or name
 
             join_thread_with_timeout(
                 thread if isinstance(thread, threading.Thread) else None,
                 timeout=timeout,
                 logger=LOGGER,
-                thread_name=str(label),
+                thread_name=str(thread_label),
                 event_prefix="hotkeys.aux_thread",
-                details={"name": name, "action": "stop"},
+                details={"name": name},
             )
 
     def update_config(self, record_key=None, agent_key=None, record_mode=None):
