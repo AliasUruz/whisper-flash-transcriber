@@ -170,8 +170,8 @@ CURATED: List[Dict[str, Any]] = [
     {
         "id": "openai/whisper-large-v3-turbo",
         "backend": "ctranslate2",
-        "ui_group": "advanced",
-        "recommended_priority": 70,
+        "ui_group": "recommended",
+        "recommended_priority": 140,
         "preferred_device": "gpu",
         "requires_gpu": True,
         "min_system_ram_mb": 12000,
@@ -1232,22 +1232,42 @@ def select_recommended_model(
 ) -> Dict[str, Any] | None:
     """Return the best-fit curated entry for the current hardware."""
 
-    candidates: list[tuple[int, int, int, Dict[str, Any]]] = []
+    def _has_gpu_vram_warning(messages: list[str]) -> bool:
+        for message in messages:
+            normalized = str(message).lower()
+            if "vram" in normalized:
+                return True
+            if "gpu" in normalized and any(
+                keyword in normalized for keyword in ("requer", "required", "necessária", "necessario", "needed")
+            ):
+                return True
+        return False
+
+    candidates: list[tuple[int, int, int, int, Dict[str, Any]]] = []
     for entry in runtime_catalog:
         priority = int(entry.get("recommended_priority") or 0)
         if priority <= 0:
             continue
-        if entry.get("hardware_status") == "blocked":
+        status = str(entry.get("hardware_status") or "ok").lower()
+        if status == "blocked":
             continue
+        messages: list[str] = []
+        for field_name in ("hardware_warnings", "hardware_messages"):
+            field_value = entry.get(field_name)
+            if isinstance(field_value, list):
+                messages.extend(str(item) for item in field_value)
+        if status == "warn" and _has_gpu_vram_warning(messages):
+            continue
+        status_bonus = 1 if status == "ok" else 0
         group_bonus = 1 if entry.get("ui_group") == "recommended" else 0
         min_vram = int(entry.get("min_vram_mb") or 0)
-        candidates.append((priority, group_bonus, -min_vram, copy.deepcopy(entry)))
+        candidates.append((priority, group_bonus, status_bonus, -min_vram, copy.deepcopy(entry)))
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
-    return candidates[0][3]
+    candidates.sort(key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True)
+    return candidates[0][4]
 
 
 def find_runtime_entry(

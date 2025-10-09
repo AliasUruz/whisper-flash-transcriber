@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -72,11 +73,21 @@ def isolated_config_environment(profile_dir: str, working_dir: str | None = None
 try:
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
+    from src.model_manager import (
+        HardwareProfile,
+        build_runtime_catalog,
+        select_recommended_model,
+    )
 except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
     if PROJECT_ROOT not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
+    from src.model_manager import (
+        HardwareProfile,
+        build_runtime_catalog,
+        select_recommended_model,
+    )
 
 
 @contextmanager
@@ -518,6 +529,71 @@ class TestKeyboardHotkeys(unittest.TestCase):
         )
         self.assertIn("record:press", manager.hotkey_handlers)
         self.assertNotIn("handle-1", manager.hotkey_handlers["record:press"])
+
+
+class TestModelRecommendations(unittest.TestCase):
+    LARGE_TURBO_ID = "openai/whisper-large-v3-turbo"
+
+    def test_select_recommended_model_prefers_large_turbo_with_high_end_gpu(self):
+        hardware = HardwareProfile(
+            system_ram_mb=32768,
+            has_cuda=True,
+            gpu_count=1,
+            max_vram_mb=12288,
+        )
+        runtime_catalog = build_runtime_catalog(hardware)
+        recommended = select_recommended_model(runtime_catalog)
+
+        self.assertIsNotNone(recommended)
+        assert recommended is not None  # for type checkers
+        self.assertEqual(recommended["id"], self.LARGE_TURBO_ID)
+        self.assertEqual(recommended.get("ui_group"), "recommended")
+        self.assertEqual(recommended.get("hardware_status"), "ok")
+
+    def test_apply_runtime_overrides_auto_selects_large_turbo_on_gpu(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with isolated_config_environment(tmp_dir) as config_module:
+                original_import_module = importlib.import_module
+                original_find_spec = importlib.util.find_spec
+
+                fake_cuda = SimpleNamespace(
+                    is_available=lambda: True,
+                    device_count=lambda: 1,
+                    get_device_properties=lambda _: SimpleNamespace(
+                        total_memory=13 * 1024 * 1024 * 1024
+                    ),
+                )
+
+                def fake_find_spec(name: str, package: str | None = None):
+                    if name == "torch":
+                        return object()
+                    return original_find_spec(name, package)
+
+                def fake_import_module(name: str, package: str | None = None):
+                    if name == "torch":
+                        return SimpleNamespace(cuda=fake_cuda)
+                    return original_import_module(name, package)
+
+                with mock.patch("importlib.util.find_spec", side_effect=fake_find_spec):
+                    with mock.patch(
+                        "importlib.import_module",
+                        side_effect=fake_import_module,
+                    ):
+                        with mock.patch(
+                            "src.config_manager.get_total_memory_mb",
+                            return_value=32768,
+                        ):
+                            manager = config_module.ConfigManager()
+
+                recommendation = manager._runtime_recommendation
+                self.assertIsNotNone(recommendation)
+                assert recommendation is not None  # for type checkers
+                self.assertEqual(recommendation["id"], self.LARGE_TURBO_ID)
+                self.assertTrue(recommendation.get("auto_applied"))
+                self.assertEqual(
+                    manager.config[config_module.ASR_MODEL_ID_CONFIG_KEY],
+                    self.LARGE_TURBO_ID,
+                )
 
 
 if __name__ == "__main__":
