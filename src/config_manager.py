@@ -201,6 +201,9 @@ DEFAULT_CONFIG = {
     "models_storage_dir": _DEFAULT_MODELS_STORAGE_DIR,
     "deps_install_dir": _DEFAULT_DEPS_INSTALL_DIR,
     "hf_home_dir": _DEFAULT_HF_HOME_DIR,
+    "python_packages_dir": _DEFAULT_PYTHON_PACKAGES_DIR,
+    "vad_models_dir": _DEFAULT_VAD_MODELS_DIR,
+    "hf_cache_dir": _DEFAULT_HF_CACHE_DIR,
     "recordings_dir": _DEFAULT_RECORDINGS_DIR,
     "asr_model_id": "openai/whisper-large-v3-turbo",
     "asr_backend": "ctranslate2",
@@ -2675,6 +2678,18 @@ class ConfigManager:
 
     def set_python_packages_dir(self, value: str):
         self.config[PYTHON_PACKAGES_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
+
+    def get_vad_models_dir(self) -> str:
+        return self.config.get(
+            VAD_MODELS_DIR_CONFIG_KEY,
+            self.default_config.get(
+                VAD_MODELS_DIR_CONFIG_KEY,
+                _DEFAULT_VAD_MODELS_DIR,
+            ),
+        )
+
+    def set_vad_models_dir(self, value: str):
+        self.config[VAD_MODELS_DIR_CONFIG_KEY] = os.path.expanduser(str(value))
 
     def get_hf_home_dir(self) -> str:
         return self.config.get(

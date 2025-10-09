@@ -47,6 +47,9 @@ from .config_manager import (
     ASR_CACHE_DIR_CONFIG_KEY,
     RECORDINGS_DIR_CONFIG_KEY,
     DEPS_INSTALL_DIR_CONFIG_KEY,
+    PYTHON_PACKAGES_DIR_CONFIG_KEY,
+    VAD_MODELS_DIR_CONFIG_KEY,
+    HF_CACHE_DIR_CONFIG_KEY,
     GPU_INDEX_CONFIG_KEY,
     BATCH_SIZE_MODE_CONFIG_KEY,
     MANUAL_BATCH_SIZE_CONFIG_KEY,
@@ -1724,6 +1727,49 @@ class UIManager:
                 except Exception:
                     pass
 
+        defaults_map: Mapping[str, Any] = {}
+        if isinstance(getattr(self.config_manager, "default_config", None), Mapping):
+            defaults_map = self.config_manager.default_config
+        fallback_map: Mapping[str, Any] = (
+            DEFAULT_CONFIG if isinstance(DEFAULT_CONFIG, Mapping) else {}
+        )
+
+        def _default_value(key: str, fallback: Any = None) -> Any:
+            if key in defaults_map:
+                return defaults_map[key]
+            if key in fallback_map:
+                return fallback_map.get(key, fallback)
+            return fallback
+
+        default_backend = _default_value(ASR_BACKEND_CONFIG_KEY, "")
+        default_ct2_compute_type = _default_value(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY, "")
+        default_asr_cache_dir = _default_value(
+            ASR_CACHE_DIR_CONFIG_KEY, self.config_manager.get_asr_cache_dir()
+        )
+        default_storage_root = _default_value(
+            STORAGE_ROOT_DIR_CONFIG_KEY, self.config_manager.get_storage_root_dir()
+        )
+        default_recordings_dir = _default_value(
+            RECORDINGS_DIR_CONFIG_KEY, self.config_manager.get_recordings_dir()
+        )
+        default_python_packages_dir = _default_value(
+            PYTHON_PACKAGES_DIR_CONFIG_KEY,
+            self.config_manager.get_python_packages_dir(),
+        )
+        default_vad_models_dir = _default_value(
+            VAD_MODELS_DIR_CONFIG_KEY,
+            self.config_manager.get_vad_models_dir(),
+        )
+        default_hf_cache_dir = _default_value(
+            HF_CACHE_DIR_CONFIG_KEY, self.config_manager.get_hf_cache_dir()
+        )
+        default_models_storage_dir = _default_value(
+            "models_storage_dir", self.config_manager.get_models_storage_dir()
+        )
+        default_max_parallel_downloads = str(
+            _default_value("max_parallel_downloads", 1)
+        )
+
         _set_var("asr_model_id_var", default_model_id)
         _set_var("asr_model_display_var", default_display)
         model_menu = self._get_settings_var("asr_model_menu")
@@ -1733,45 +1779,47 @@ class UIManager:
             except Exception:
                 pass
 
-        _set_var("asr_backend_var", DEFAULT_CONFIG["asr_backend"])
+        _set_var("asr_backend_var", default_backend)
         backend_menu = self._get_settings_var("asr_backend_menu")
         if backend_menu is not None:
             try:
-                backend_menu.set(DEFAULT_CONFIG["asr_backend"])
+                backend_menu.set(default_backend)
             except Exception:
                 pass
 
-        _set_var("asr_ct2_compute_type_var", DEFAULT_CONFIG["asr_ct2_compute_type"])
+        _set_var("asr_ct2_compute_type_var", default_ct2_compute_type)
         ct2_menu = self._get_settings_var("asr_ct2_menu")
         if ct2_menu is not None:
             try:
-                ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
+                ct2_menu.set(default_ct2_compute_type)
             except Exception:
                 pass
 
-        _set_var("max_parallel_downloads_var", str(DEFAULT_CONFIG.get("max_parallel_downloads", 1)))
+        _set_var("max_parallel_downloads_var", default_max_parallel_downloads)
 
-        _set_var("asr_cache_dir_var", DEFAULT_CONFIG["asr_cache_dir"])
-        _set_var("storage_root_dir_var", DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
-        _set_var("recordings_dir_var", DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
-        _set_var("python_packages_dir_var", DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
-        _set_var("vad_models_dir_var", DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
-        _set_var("hf_cache_dir_var", DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
+        _set_var("asr_cache_dir_var", default_asr_cache_dir)
+        _set_var("storage_root_dir_var", default_storage_root)
+        _set_var("recordings_dir_var", default_recordings_dir)
+        _set_var("python_packages_dir_var", default_python_packages_dir)
+        _set_var("vad_models_dir_var", default_vad_models_dir)
+        _set_var("hf_cache_dir_var", default_hf_cache_dir)
 
         self.config_manager.set_asr_model_id(default_model_id)
-        self.config_manager.set_asr_backend(DEFAULT_CONFIG["asr_backend"])
-        self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
-        self.config_manager.set_models_storage_dir(DEFAULT_CONFIG["models_storage_dir"])
-        self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
-        self.config_manager.set_storage_root_dir(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
-        self.config_manager.set_recordings_dir(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
-        self.config_manager.set_python_packages_dir(DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
-        self.config_manager.set_vad_models_dir(DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
-        self.config_manager.set_hf_cache_dir(DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
+        self.config_manager.set_asr_backend(default_backend)
+        self.config_manager.set_asr_ct2_compute_type(default_ct2_compute_type)
+        self.config_manager.set_models_storage_dir(default_models_storage_dir)
+        self.config_manager.set_asr_cache_dir(default_asr_cache_dir)
+        self.config_manager.set_storage_root_dir(default_storage_root)
+        self.config_manager.set_recordings_dir(default_recordings_dir)
+        self.config_manager.set_python_packages_dir(default_python_packages_dir)
+        self.config_manager.set_vad_models_dir(default_vad_models_dir)
+        self.config_manager.set_hf_cache_dir(default_hf_cache_dir)
         self.config_manager.save_config()
 
         backend_var = self._get_settings_var("asr_backend_var")
-        backend_choice = backend_var.get() if backend_var is not None else DEFAULT_CONFIG["asr_backend"]
+        backend_choice = (
+            backend_var.get() if backend_var is not None else default_backend
+        )
         self._on_backend_change(backend_choice)
         self._update_model_info(default_model_id)
         self._update_install_button_state()
@@ -2726,25 +2774,83 @@ class UIManager:
         _update_model_info(asr_model_id_var.get())
 
         def _reset_asr() -> None:
-            default_model_id = DEFAULT_CONFIG["asr_model_id"]
+            defaults_map: Mapping[str, Any] = {}
+            if isinstance(getattr(self.config_manager, "default_config", None), Mapping):
+                defaults_map = self.config_manager.default_config
+            fallback_map: Mapping[str, Any] = (
+                DEFAULT_CONFIG if isinstance(DEFAULT_CONFIG, Mapping) else {}
+            )
+
+            def _default_value(key: str, fallback: Any = None) -> Any:
+                if key in defaults_map:
+                    return defaults_map[key]
+                if key in fallback_map:
+                    return fallback_map.get(key, fallback)
+                return fallback
+
+            default_model_id = _default_value(ASR_MODEL_ID_CONFIG_KEY, "")
             display_value = id_to_display.get(default_model_id, default_model_id)
+            default_backend = _default_value(ASR_BACKEND_CONFIG_KEY, asr_backend_var.get())
+            default_ct2_compute_type = _default_value(
+                ASR_CT2_COMPUTE_TYPE_CONFIG_KEY, asr_ct2_compute_type_var.get()
+            )
+            default_asr_cache_dir = _default_value(
+                ASR_CACHE_DIR_CONFIG_KEY, self.config_manager.get_asr_cache_dir()
+            )
+            default_storage_root = _default_value(
+                STORAGE_ROOT_DIR_CONFIG_KEY, self.config_manager.get_storage_root_dir()
+            )
+            default_recordings_dir = _default_value(
+                RECORDINGS_DIR_CONFIG_KEY, self.config_manager.get_recordings_dir()
+            )
+            default_python_packages_dir = _default_value(
+                PYTHON_PACKAGES_DIR_CONFIG_KEY,
+                self.config_manager.get_python_packages_dir(),
+            )
+            default_vad_models_dir = _default_value(
+                VAD_MODELS_DIR_CONFIG_KEY,
+                self.config_manager.get_vad_models_dir(),
+            )
+            default_hf_cache_dir = _default_value(
+                HF_CACHE_DIR_CONFIG_KEY, self.config_manager.get_hf_cache_dir()
+            )
+
             asr_model_id_var.set(default_model_id)
             asr_model_display_var.set(display_value)
-            asr_backend_var.set(DEFAULT_CONFIG["asr_backend"])
-            asr_backend_menu.set(DEFAULT_CONFIG["asr_backend"])
-            asr_ct2_compute_type_var.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
-            asr_ct2_menu.set(DEFAULT_CONFIG["asr_ct2_compute_type"])
-            asr_cache_dir_var.set(DEFAULT_CONFIG["asr_cache_dir"])
-            storage_root_dir_var.set(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
-            recordings_dir_var.set(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
+            asr_backend_var.set(default_backend)
+            try:
+                asr_backend_menu.set(default_backend)
+            except Exception:
+                pass
+            asr_ct2_compute_type_var.set(default_ct2_compute_type)
+            try:
+                asr_ct2_menu.set(default_ct2_compute_type)
+            except Exception:
+                pass
+            asr_cache_dir_var.set(default_asr_cache_dir)
+            storage_root_dir_var.set(default_storage_root)
+            recordings_dir_var.set(default_recordings_dir)
+
+            for var_name, value in (
+                ("python_packages_dir_var", default_python_packages_dir),
+                ("vad_models_dir_var", default_vad_models_dir),
+                ("hf_cache_dir_var", default_hf_cache_dir),
+            ):
+                var = self._get_settings_var(var_name)
+                if var is not None:
+                    try:
+                        var.set(value)
+                    except Exception:
+                        pass
+
             _handle_model_choice(default_model_id)
-            self.config_manager.set_asr_ct2_compute_type(DEFAULT_CONFIG["asr_ct2_compute_type"])
-            self.config_manager.set_asr_cache_dir(DEFAULT_CONFIG["asr_cache_dir"])
-            self.config_manager.set_storage_root_dir(DEFAULT_CONFIG[STORAGE_ROOT_DIR_CONFIG_KEY])
-            self.config_manager.set_recordings_dir(DEFAULT_CONFIG[RECORDINGS_DIR_CONFIG_KEY])
-            self.config_manager.set_python_packages_dir(DEFAULT_CONFIG[PYTHON_PACKAGES_DIR_CONFIG_KEY])
-            self.config_manager.set_vad_models_dir(DEFAULT_CONFIG[VAD_MODELS_DIR_CONFIG_KEY])
-            self.config_manager.set_hf_cache_dir(DEFAULT_CONFIG[HF_CACHE_DIR_CONFIG_KEY])
+            self.config_manager.set_asr_ct2_compute_type(default_ct2_compute_type)
+            self.config_manager.set_asr_cache_dir(default_asr_cache_dir)
+            self.config_manager.set_storage_root_dir(default_storage_root)
+            self.config_manager.set_recordings_dir(default_recordings_dir)
+            self.config_manager.set_python_packages_dir(default_python_packages_dir)
+            self.config_manager.set_vad_models_dir(default_vad_models_dir)
+            self.config_manager.set_hf_cache_dir(default_hf_cache_dir)
             self.config_manager.save_config()
 
         reset_asr_button = ctk.CTkButton(
