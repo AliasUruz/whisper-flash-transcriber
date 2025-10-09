@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -440,6 +441,61 @@ class TestConfigMigration(unittest.TestCase):
                     "record_to_memory",
                     expected_profile_config.read_text(encoding="utf-8"),
                 )
+
+
+class TestHardwareProfileFallback(unittest.TestCase):
+    def test_fallback_populates_cuda_fields_when_torch_missing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            profile_dir = Path(tmp_dir) / "profile"
+            profile_dir.mkdir()
+            config_path = profile_dir / "config.json"
+            config_path.write_text("{}", encoding="utf-8")
+
+            with isolated_config_environment(profile_dir) as config_module:
+                real_find_spec = importlib.util.find_spec
+                real_import_module = importlib.import_module
+
+                def fake_find_spec(name, *args, **kwargs):
+                    if name == "torch":
+                        return None
+                    if name == "ctranslate2":
+                        return SimpleNamespace()
+                    if name == "pynvml":
+                        return None
+                    return real_find_spec(name, *args, **kwargs)
+
+                def fake_import_module(name, *args, **kwargs):
+                    if name == "ctranslate2":
+                        return SimpleNamespace(get_cuda_device_count=lambda: 2)
+                    return real_import_module(name, *args, **kwargs)
+
+                def fake_check_output(cmd, *, encoding=None, stderr=None):
+                    self.assertIn("nvidia-smi", cmd[0])
+                    return "24576\n8192\n"
+
+                with mock.patch(
+                    "src.config_manager.importlib.util.find_spec",
+                    side_effect=fake_find_spec,
+                ), mock.patch(
+                    "src.config_manager.importlib.import_module",
+                    side_effect=fake_import_module,
+                ), mock.patch(
+                    "src.config_manager.subprocess.check_output",
+                    side_effect=fake_check_output,
+                ):
+                    manager = config_module.ConfigManager(config_file=str(config_path))
+
+        hardware = manager._runtime_hardware_profile
+        self.assertTrue(hardware.has_cuda)
+        self.assertEqual(hardware.gpu_count, 2)
+        self.assertGreaterEqual(hardware.max_vram_mb, 24576)
+
+        turbo_entry = next(
+            entry
+            for entry in manager._runtime_model_catalog
+            if entry.get("id") == "openai/whisper-large-v3-turbo"
+        )
+        self.assertNotEqual(turbo_entry.get("hardware_status"), "blocked")
 
 
 class TestKeyboardHotkeys(unittest.TestCase):

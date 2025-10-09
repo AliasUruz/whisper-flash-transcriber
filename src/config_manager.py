@@ -5,6 +5,7 @@ import importlib.util
 import json
 import logging
 import os
+import subprocess
 import shutil
 import time
 from collections.abc import Mapping
@@ -731,6 +732,156 @@ class ConfigManager:
                             except Exception:
                                 logging.debug("Failed to read CUDA device properties for index %d.", idx, exc_info=True)
                                 continue
+
+            def _probe_ctranslate2_gpu_count() -> int:
+                ct2_spec = importlib.util.find_spec("ctranslate2")
+                if ct2_spec is None:
+                    return 0
+                try:
+                    ct2_mod = importlib.import_module("ctranslate2")
+                except Exception:
+                    logging.debug(
+                        "ctranslate2 import failed during hardware probing.",
+                        exc_info=True,
+                    )
+                    return 0
+                get_count = getattr(ct2_mod, "get_cuda_device_count", None)
+                if not callable(get_count):
+                    return 0
+                try:
+                    return int(get_count())
+                except Exception:
+                    logging.debug(
+                        "ctranslate2.get_cuda_device_count() failed.",
+                        exc_info=True,
+                    )
+                    return 0
+
+            def _probe_nvml() -> tuple[int, int]:
+                nvml_spec = importlib.util.find_spec("pynvml")
+                if nvml_spec is None:
+                    return (0, 0)
+                try:
+                    nvml_mod = importlib.import_module("pynvml")
+                except Exception:
+                    logging.debug("pynvml import failed during hardware probing.", exc_info=True)
+                    return (0, 0)
+
+                init_fn = getattr(nvml_mod, "nvmlInit", None)
+                shutdown_fn = getattr(nvml_mod, "nvmlShutdown", None)
+                if not callable(init_fn):
+                    logging.debug("pynvml.nvmlInit is not callable; skipping NVML probe.")
+                    return (0, 0)
+
+                try:
+                    init_fn()
+                except Exception:
+                    logging.debug("pynvml.nvmlInit() failed.", exc_info=True)
+                    return (0, 0)
+
+                shutdown_required = callable(shutdown_fn)
+                max_vram_bytes = 0
+                try:
+                    get_count_fn = getattr(nvml_mod, "nvmlDeviceGetCount", None)
+                    count = int(get_count_fn()) if callable(get_count_fn) else 0
+                except Exception:
+                    logging.debug("pynvml.nvmlDeviceGetCount() failed.", exc_info=True)
+                    count = 0
+
+                if count > 0:
+                    get_handle_fn = getattr(nvml_mod, "nvmlDeviceGetHandleByIndex", None)
+                    get_memory_fn = getattr(nvml_mod, "nvmlDeviceGetMemoryInfo", None)
+                    if not callable(get_handle_fn) or not callable(get_memory_fn):
+                        logging.debug("NVML memory probes are unavailable; skipping VRAM enumeration.")
+                    else:
+                        for idx in range(count):
+                            try:
+                                handle = get_handle_fn(idx)
+                                info = get_memory_fn(handle)
+                                total = getattr(info, "total", 0)
+                                if total:
+                                    max_vram_bytes = max(max_vram_bytes, int(total))
+                            except Exception:
+                                logging.debug(
+                                    "Failed to query NVML memory info for device %d.",
+                                    idx,
+                                    exc_info=True,
+                                )
+
+                try:
+                    if shutdown_required:
+                        shutdown_fn()
+                except Exception:
+                    logging.debug("pynvml.nvmlShutdown() failed.", exc_info=True)
+
+                max_vram_mb_value = int(max_vram_bytes // (1024 * 1024)) if max_vram_bytes else 0
+                return (count, max_vram_mb_value)
+
+            def _probe_nvidia_smi() -> tuple[int, int]:
+                try:
+                    output = subprocess.check_output(
+                        [
+                            "nvidia-smi",
+                            "--query-gpu=memory.total",
+                            "--format=csv,noheader,nounits",
+                        ],
+                        encoding="utf-8",
+                        stderr=subprocess.STDOUT,
+                    )
+                except FileNotFoundError:
+                    logging.debug("nvidia-smi command not available during hardware probing.", exc_info=True)
+                    return (0, 0)
+                except subprocess.CalledProcessError:
+                    logging.debug("nvidia-smi query failed during hardware probing.", exc_info=True)
+                    return (0, 0)
+                except Exception:
+                    logging.debug("Unexpected error while invoking nvidia-smi.", exc_info=True)
+                    return (0, 0)
+
+                values: list[int] = []
+                for raw_line in output.splitlines():
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        # ``nvidia-smi`` may emit decimals when units are forced; coerce to int safely.
+                        values.append(int(float(line)))
+                    except Exception:
+                        logging.debug(
+                            "Unable to parse nvidia-smi memory output '%s'.",
+                            line,
+                            exc_info=True,
+                        )
+
+                if not values:
+                    return (0, 0)
+
+                return (len(values), max(values))
+
+            def _probe_cuda_fallback() -> tuple[int, int]:
+                detected_gpu_count = 0
+                detected_max_vram_mb = 0
+
+                nvml_count, nvml_vram = _probe_nvml()
+                detected_gpu_count = max(detected_gpu_count, nvml_count)
+                detected_max_vram_mb = max(detected_max_vram_mb, nvml_vram)
+
+                smi_count, smi_vram = _probe_nvidia_smi()
+                detected_gpu_count = max(detected_gpu_count, smi_count)
+                detected_max_vram_mb = max(detected_max_vram_mb, smi_vram)
+
+                ct2_count = _probe_ctranslate2_gpu_count()
+                detected_gpu_count = max(detected_gpu_count, ct2_count)
+
+                return detected_gpu_count, detected_max_vram_mb
+
+            if torch_mod is None or not has_cuda or gpu_count <= 0 or max_vram_mb <= 0:
+                fallback_count, fallback_vram = _probe_cuda_fallback()
+                if fallback_count > 0:
+                    has_cuda = True
+                    gpu_count = max(gpu_count, fallback_count)
+                if fallback_vram > 0:
+                    max_vram_mb = max(max_vram_mb, fallback_vram)
 
             return HardwareProfile(
                 system_ram_mb=system_ram_mb,
