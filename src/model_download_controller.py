@@ -229,42 +229,42 @@ class ModelDownloadController:
         def _on_stage(stage_id: str, metadata: dict) -> None:
             task.stage = stage_id
             metadata = metadata or {}
-            if isinstance(metadata, dict):
-                task.metadata.update(metadata)
-            else:  # pragma: no cover - defensive
-                metadata = {}
+            if not isinstance(metadata, dict):  # defensive guard
+                metadata = {"value": metadata}
+            task.metadata.update(metadata)
             message = metadata.get("message") if isinstance(metadata, dict) else None
-
             if stage_id == "size_estimated":
                 estimated_bytes = int(metadata.get("estimated_bytes") or 0)
                 if estimated_bytes:
-                    task.bytes_total = max(task.bytes_total, estimated_bytes)
+                    task.bytes_total = estimated_bytes
             elif stage_id == "download_start":
-                path = metadata.get("path")
-                if isinstance(path, str):
-                    task.target_dir = path
-            elif stage_id in {"success", "already_present"}:
+                path_value = metadata.get("path")
+                if path_value:
+                    task.target_dir = str(path_value)
+            elif stage_id == "already_present":
+                path_value = metadata.get("path")
+                if path_value:
+                    task.target_dir = str(path_value)
+                installed_bytes = metadata.get("bytes_total")
+                if installed_bytes is None:
+                    installed_bytes = metadata.get("bytes_downloaded")
+                if isinstance(installed_bytes, (int, float)):
+                    task.bytes_total = int(installed_bytes)
+                    task.bytes_done = int(installed_bytes)
+                task.eta_seconds = 0.0
+                task.throughput_bps = None
+                if not message:
+                    message = "Model already present"
+            elif stage_id == "success":
                 bytes_downloaded = metadata.get("bytes_downloaded")
                 if isinstance(bytes_downloaded, (int, float)):
-                    task.bytes_done = max(task.bytes_done, int(bytes_downloaded))
+                    task.bytes_done = int(bytes_downloaded)
                     task.bytes_total = max(task.bytes_total, task.bytes_done)
-                path = metadata.get("path")
-                if isinstance(path, str):
-                    task.target_dir = path
-                if stage_id == "success":
-                    throughput = metadata.get("throughput_bps")
-                    if isinstance(throughput, (float, int)):
-                        task.throughput_bps = float(throughput)
-                    elif task.bytes_done and isinstance(metadata.get("duration_seconds"), (int, float)):
-                        duration = float(metadata["duration_seconds"]) or 0.0
-                        if duration > 0:
-                            task.throughput_bps = task.bytes_done / duration
-                    if message is None:
-                        message = "Download finished"
-                else:  # already_present
-                    if message is None:
-                        message = "Model already present"
-
+                throughput = metadata.get("throughput_bps")
+                if isinstance(throughput, (float, int)):
+                    task.throughput_bps = float(throughput)
+                if not message:
+                    message = "Download finished"
             if message:
                 task.message = str(message)
             self._publish(task)
@@ -312,13 +312,10 @@ class ModelDownloadController:
         if result.bytes_downloaded is not None:
             task.bytes_done = max(task.bytes_done, int(result.bytes_downloaded))
             task.bytes_total = max(task.bytes_total, task.bytes_done)
-        if (
-            result.duration_seconds is not None
-            and result.duration_seconds > 0
-            and result.bytes_downloaded is not None
-        ):
-            duration = float(result.duration_seconds)
-            task.throughput_bps = result.bytes_downloaded / duration
+        if result.duration_seconds is not None:
+            duration = max(result.duration_seconds, 1e-6)
+            if result.bytes_downloaded is not None and duration > 0:
+                task.throughput_bps = result.bytes_downloaded / duration
         self._publish(task)
         self._finalize(task)
 
