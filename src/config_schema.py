@@ -366,6 +366,12 @@ class AdvancedConfig(BaseModel):
     system: AdvancedSystemConfig = Field(default_factory=AdvancedSystemConfig)
 
 
+def _build_advanced_config() -> AdvancedConfig:
+    """Return a freshly instantiated :class:`AdvancedConfig` tree."""
+
+    return AdvancedConfig()
+
+
 class AppConfig(BaseModel):
     """Normalized configuration tree consumed by :class:`ConfigManager`."""
 
