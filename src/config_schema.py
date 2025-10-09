@@ -367,7 +367,7 @@ class AdvancedConfig(BaseModel):
 
 
 def _build_advanced_config() -> AdvancedConfig:
-    """Return a fresh :class:`AdvancedConfig` tree."""
+    """Return a freshly instantiated :class:`AdvancedConfig` tree."""
 
     return AdvancedConfig()
 

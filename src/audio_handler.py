@@ -129,6 +129,7 @@ class AudioHandler:
         self.storage_root_dir: Path | None = None
         self.recordings_dir: Path | None = None
         self._session_id: str | None = None
+        self._current_operation_id: str | None = None
         self._last_start_failure: dict[str, Any] | None = None
 
         # Dedicated queue and thread for audio processing
@@ -185,6 +186,12 @@ class AudioHandler:
         """Return structured information about the last start failure, if any."""
 
         return self._last_start_failure
+
+    @property
+    def current_operation_id(self) -> str | None:
+        """Expose the active recording operation identifier, if any."""
+
+        return self._current_operation_id
 
     def _resolve_default_input_device(self) -> tuple[str, int | None, str | None]:
         """Return the default input device label, index and lookup error (if any)."""
@@ -898,13 +905,23 @@ class AudioHandler:
                                 f"auto: free RAM {available_mb:.0f}MB < {self.min_free_ram_mb}MB"
                             )
 
-                        if self._record_thread and self._record_thread.is_alive():
-                            self._log.debug(
-                                "Waiting for the previous recording thread to finish.",
-                                extra={"event": "record_thread_join", "stage": "recording"},
-                            )
-                            self._stop_event.set()
-                            self._record_thread.join(timeout=2)
+                    if self.max_memory_seconds_mode == "auto":
+                        self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
+                    else:
+                        self.current_max_memory_seconds = self.max_memory_seconds
+                    self._memory_limit_samples = int(
+                        self.current_max_memory_seconds * AUDIO_SAMPLE_RATE
+                    )
+
+                    self._log.info(
+                        StructuredMessage(
+                            "Recording storage mode decided.",
+                            event="audio.storage_selected",
+                            in_memory=self.in_memory_mode,
+                            rationale=reason,
+                            max_buffer_seconds=self.current_max_memory_seconds,
+                        )
+                    )
 
                     if not self.state_manager.transition_if(
                         sm.STATE_IDLE,
@@ -942,27 +959,9 @@ class AudioHandler:
                                     exc_info=True,
                                     extra={"event": "audio.temp_cleanup", "stage": "recording"},
                                 )
-                        self._session_id = None
                         self._current_operation_id = None
+                        self._session_id = None
                         return False
-
-                    if self.max_memory_seconds_mode == "auto":
-                        self.current_max_memory_seconds = self._calculate_auto_memory_seconds()
-                    else:
-                        self.current_max_memory_seconds = self.max_memory_seconds
-                    self._memory_limit_samples = int(
-                        self.current_max_memory_seconds * AUDIO_SAMPLE_RATE
-                    )
-
-                    self._log.info(
-                        StructuredMessage(
-                            "Recording storage mode decided.",
-                            event="audio.storage_selected",
-                            in_memory=self.in_memory_mode,
-                            rationale=reason,
-                            max_buffer_seconds=self.current_max_memory_seconds,
-                        )
-                    )
 
                     with self.storage_lock:
                         self.is_recording = True
