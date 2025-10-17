@@ -65,7 +65,7 @@ from .keyboard_hotkey_manager import (
     KeyboardHotkeyManager,
 )  # Assumindo que está na raiz
 from .gemini_api import GeminiAPI # Adicionado para correção de texto
-from .model_download_controller import ModelDownloadController
+from .model_download_controller import DownloadTask, ModelDownloadController
 from . import model_manager as model_manager_module
 from .onboarding.first_run_wizard import (
     DownloadProgressPanel,
