@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 
@@ -652,11 +652,95 @@ class TestModelRecommendations(unittest.TestCase):
                 assert recommendation is not None  # for type checkers
                 self.assertEqual(recommendation["id"], self.LARGE_TURBO_ID)
                 self.assertTrue(recommendation.get("auto_applied"))
-                self.assertEqual(
-                    manager.config[config_module.ASR_MODEL_ID_CONFIG_KEY],
-                    self.LARGE_TURBO_ID,
+        self.assertEqual(
+            manager.config[config_module.ASR_MODEL_ID_CONFIG_KEY],
+            self.LARGE_TURBO_ID,
+        )
+
+
+class TestCoreModuleImport(unittest.TestCase):
+    def test_core_import_succeeds_with_minimal_dependencies(self):
+        module_name = "src.core"
+
+        fake_messagebox = SimpleNamespace(
+            showinfo=mock.Mock(),
+            showerror=mock.Mock(),
+            showwarning=mock.Mock(),
+            askyesno=mock.Mock(return_value=False),
+        )
+
+        fake_tk = ModuleType("tkinter")
+        fake_tk.messagebox = fake_messagebox
+
+        fake_sounddevice = ModuleType("sounddevice")
+
+        class _DummyStream:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        fake_sounddevice.query_devices = mock.Mock(return_value={})
+        fake_sounddevice.check_input_settings = mock.Mock(return_value=None)
+        fake_sounddevice.InputStream = _DummyStream
+        fake_sounddevice.OutputStream = _DummyStream
+        fake_sounddevice.sleep = mock.Mock(return_value=None)
+        fake_sounddevice.PortAudioError = type("PortAudioError", (Exception,), {})
+        fake_sounddevice.CallbackStop = type("CallbackStop", (Exception,), {})
+
+        fake_wizard = ModuleType("src.onboarding.first_run_wizard")
+
+        class _DownloadProgressPanel:  # pragma: no cover - simple stub
+            def __init__(self, *args, **kwargs):
+                pass
+
+        class _FirstRunWizard:  # pragma: no cover - simple stub
+            def __init__(self, *args, **kwargs):
+                pass
+
+        class _WizardResult:  # pragma: no cover - simple stub
+            def __init__(self, *args, **kwargs):
+                self.config_updates = {}
+                self.hotkey_preferences = {}
+                self.download_request = None
+
+        fake_wizard.DownloadProgressPanel = _DownloadProgressPanel
+        fake_wizard.FirstRunWizard = _FirstRunWizard
+        fake_wizard.WizardResult = _WizardResult
+
+        original_core = sys.modules.pop(module_name, None)
+
+        try:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(
+                    mock.patch.dict(
+                        sys.modules,
+                        {
+                            "tkinter": fake_tk,
+                            "tkinter.messagebox": fake_messagebox,
+                            "sounddevice": fake_sounddevice,
+                            "src.onboarding.first_run_wizard": fake_wizard,
+                        },
+                    )
                 )
 
+                module = importlib.import_module(module_name)
+
+            self.assertIsNotNone(module)
+        finally:
+            sys.modules.pop(module_name, None)
+            if original_core is not None:
+                sys.modules[module_name] = original_core
 
 if __name__ == "__main__":
     unittest.main()
