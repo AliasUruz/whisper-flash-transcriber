@@ -1,30 +1,81 @@
-# .github/workflows/codex-automation.yml (Versão 7.0: Job Híbrido Único e Otimizado)
+# .github/workflows/codex-automation.yml (Versão 8.0: Arquitetura de 2 Jobs - Otimista + Faxineiro)
 
 name: 'Codex Automation'
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.base_ref || 'scheduled-run' }}
-  cancel-in-progress: true
-
 on:
+  # Gatilho para o "Faxineiro" (roda a cada 15 minutos)
   schedule:
     - cron: '*/15 * * * *'
   
+  # Gatilho para o "Otimista" (roda em atividade de PR)
   pull_request_target:
-    types: [opened, labeled, reopened, synchronize]
+    types: [opened, reopened, synchronize] # Removido 'labeled' para reduzir o "ruído" de gatilhos
     branches: [ 'stable', 'alpha' ]
 
 jobs:
-  process_queue:
-    name: 'Process Merge Queue'
+  #############################################################
+  # Job 1: O Otimista (Tentativa de Merge Imediato e Paralelo)
+  #############################################################
+  optimistic_merge:
+    name: 'Attempt Immediate Merge'
+    # Só roda em eventos de PR e se tiver a label 'codex'.
+    if: github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'codex')
     
-    timeout-minutes: 10
-    
-    if: |
-      github.event_name == 'schedule' ||
-      (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'codex'))
-      
     runs-on: ubuntu-latest
+    # FILA POR PR: Permite que múltiplos PRs rodem em paralelo sem se cancelarem.
+    concurrency:
+      group: ${{ github.workflow }}-optimistic-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+      
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: 'Checkout Base Branch'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          token: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
+          fetch-depth: 0
+
+      - name: 'Configure Git User'
+        run: |
+          git config user.name "Codex Merge Bot"
+          git config user.email "actions-bot@github.com"
+
+      - name: 'Fetch, Merge, and Push Single PR'
+        env:
+          GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euxo pipefail
+          echo "Optimistic merge attempt for PR #${PR_NUMBER}..."
+          git fetch origin "refs/pull/${PR_NUMBER}/head":pr_branch
+          
+          if git merge pr_branch --no-ff -m "Merge pull request #${PR_NUMBER}" -X theirs; then
+              echo "✅ Optimistic merge successful for PR #${PR_NUMBER}."
+              git push origin "${{ github.base_ref }}"
+          else
+              echo "❌ Optimistic merge failed. The scheduled job will retry."
+              gh pr comment $PR_NUMBER --body "🚨 Tentativa de merge imediato falhou. O merge será tentado novamente no próximo ciclo agendado."
+              exit 1
+          fi
+
+  #############################################################
+  # Job 2: O Faxineiro (Processador de Fila Agendado e Ordenado)
+  #############################################################
+  scheduled_queue_processor:
+    name: 'Process Full Queue (Scheduled)'
+    # Só roda no evento de 'schedule'.
+    if: github.event_name == 'schedule'
+    
+    runs-on: ubuntu-latest
+    # FILA ÚNICA: Garante que apenas um "faxineiro" rode por vez.
+    concurrency:
+      group: ${{ github.workflow }}-janitor
+      cancel-in-progress: true
+      
     permissions:
       contents: write
       pull-requests: write
@@ -41,54 +92,34 @@ jobs:
           git config user.name "Codex Merge Bot"
           git config user.email "actions-bot@github.com"
 
-      - name: 'Smartly Process PRs'
+      - name: 'List, Sort, and Process Full Queue'
         env:
           GH_TOKEN: ${{ secrets.CODEX_WORKFLOW_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_BRANCH: ${{ github.base_ref }}
         run: |
           set -euxo pipefail
-          echo "Processing started, triggered by: $EVENT_NAME"
-
-          # --- LÓGICA INTELIGENTE ---
-          # Se o gatilho for um PR, processa apenas ele.
-          if [[ "$EVENT_NAME" == "pull_request_target" ]]; then
-            echo "--- Processing single PR #${PR_NUMBER} into ${BASE_BRANCH} ---"
+          echo "Scheduled queue processing started..."
+          for BASE_BRANCH in stable alpha; do
+            echo ">>> Processing queue for branch: $BASE_BRANCH"
             git checkout "$BASE_BRANCH"
             git reset --hard "origin/$BASE_BRANCH"
-            git fetch origin "refs/pull/${PR_NUMBER}/head":pr_branch
             
-            if git merge pr_branch --no-ff -m "Merge pull request #${PR_NUMBER}" -X theirs; then
-                echo "✅ Merge successful for PR #${PR_NUMBER}."
-                git push origin "$BASE_BRANCH"
-            else
-                echo "❌ Merge failed for PR #${PR_NUMBER}."
-                gh pr comment $PR_NUMBER --body "🚨 **Merge Automático Falhou** 🚨 Um conflito foi detectado que não pôde ser resolvido. Será tentado novamente no próximo ciclo agendado."
-                exit 1
-            fi
-          
-          # Se o gatilho for agendado, processa a fila inteira.
-          else
-            for branch in stable alpha; do
-              echo ">>> Processing full queue for branch: $branch"
-              git checkout "$branch"
-              git reset --hard "origin/$branch"
-              
-              gh pr list --label "codex" --state "open" --base "$branch" --json number,headRefName --jq '.[] | .number' | while read -r num; do
-                  echo "--- Processing queued PR #${num} into ${branch} ---"
-                  git checkout "$branch"
-                  git reset --hard "origin/$branch"
-                  git fetch origin "refs/pull/${num}/head":pr_branch
-                  
-                  if git merge pr_branch --no-ff -m "Merge pull request #${num}" -X theirs; then
-                      echo "✅ Queued merge successful for PR #${num}."
-                      git push origin "$branch"
-                  else
-                      echo "❌ Queued merge failed for PR #${num}. Will retry next cycle."
-                      continue
-                  fi
-              done
+            # Lista, ORDENA PELO NÚMERO (mais antigo primeiro) e processa
+            gh pr list --label "codex" --state "open" --base "$BASE_BRANCH" --json number,headRefName \
+            | jq -c '. | sort_by(.number) | .[]' | while read -r pr_json; do
+                PR_NUM=$(echo "$pr_json" | jq -r '.number')
+                
+                echo "--- Processing PR #${PR_NUM} into ${BASE_BRANCH} ---"
+                git fetch origin "refs/pull/${PR_NUM}/head":pr_branch
+                git checkout "$BASE_BRANCH"
+                git reset --hard "origin/$BASE_BRANCH"
+
+                if git merge pr_branch --no-ff -m "Merge pull request #${PR_NUM}" -X theirs; then
+                    echo "✅ Scheduled merge successful for PR #${PR_NUM}."
+                    git push origin "$BASE_BRANCH"
+                else
+                    echo "❌ Scheduled merge failed for PR #${PR_NUM}. It will be retried in the next cycle."
+                    continue
+                fi
             done
-          fi
-          echo "Processing finished."
+          done
+          echo "Scheduled queue processing finished."

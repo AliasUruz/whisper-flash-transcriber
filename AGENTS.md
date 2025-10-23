@@ -4,7 +4,19 @@
 
 ---
 
-## 1. Core Directives & User Preferences
+## 1. Project Philosophy
+
+The Whisper Flash Transcriber is guided by a set of core principles that inform its design, architecture, and development. Understanding these principles is essential for making contributions that align with the project's goals.
+
+- **Performance and Efficiency:** The application prioritizes speed and low resource consumption. This is achieved through the use of the CTranslate2 backend for the Whisper model, careful thread management to avoid blocking the UI, and efficient memory usage.
+- **User-Centric Design:** The primary goal is to provide a seamless and unobtrusive user experience. The application is designed to be driven by global hotkeys and to run as a lightweight system tray utility, minimizing interruptions to the user's workflow.
+- **Modularity and Maintainability:** The codebase is organized into distinct, loosely-coupled modules with clear responsibilities. This modular architecture, centered around the `AppCore` orchestrator and a `StateManager` for event handling, makes the system easier to understand, debug, and extend.
+- **Configurability and Control:** Users are given a high degree of control over the application's behavior. A comprehensive configuration system (`config.json`, `secrets.json`) allows for fine-tuning of everything from hotkeys and ASR models to performance settings and UI language.
+- **Robustness and Stability:** The application is designed to be resilient. This includes features like the hotkey stability service, graceful error handling, and a well-defined model management lifecycle to ensure that the application remains reliable even when encountering issues like network failures or invalid configurations.
+
+---
+
+## 2. Core Directives & User Preferences
 
 This section outlines the fundamental rules and user-mandated instructions that all agents must follow.
 
@@ -19,7 +31,7 @@ This section outlines the fundamental rules and user-mandated instructions that 
 
 ---
 
-## 2. Quick Technical Sheet
+## 3. Quick Technical Sheet
 
 - **Target System**: Windows 10+ (Desktop). Partial compatibility via WSL2 for CLI-only usage.
 - **Primary Language**: Python 3.11+ (tested up to 3.13.2).
@@ -45,7 +57,7 @@ This section outlines the fundamental rules and user-mandated instructions that 
 
 ---
 
-## 3. High-Level Architecture
+## 4. High-Level Architecture
 
 The application is orchestrated by a central `AppCore` class, which acts as the main coordinator.
 
@@ -84,16 +96,16 @@ UI Thread -> UIManager (manages tray icon + settings window)
 
 ---
 
-## 4. Operational Workflows
+## 5. Operational Workflows
 
-### 4.1 Application Initialization
+### 5.1 Application Initialization
 1.  `main.py` sets up environment variables, logging, and CUDA diagnostics.
 2.  It creates a hidden root Tk window, registers an `atexit` handler, and patches `tk.Variable.__del__` to prevent shutdown errors.
 3.  It instantiates `AppCore` and `UIManager`, linking them via `app_core.ui_manager`.
 4.  `AppCore` synchronizes settings, checks the model cache, and triggers a model download or background loading via `TranscriptionHandler`.
 5.  `UIManager` builds the system tray icon, its dynamic menus, and associated event listeners.
 
-### 4.2 Capture and Transcription Flow
+### 5.2 Capture and Transcription Flow
 1.  A global hotkey press is detected by `KeyboardHotkeyManager`, which calls `AppCore.toggle_recording()`.
 2.  `AudioHandler` starts capturing audio, deciding between RAM or disk storage, and applying VAD if enabled.
 3.  When recording stops, the audio segment is passed to `ActionOrchestrator`, which triggers `TranscriptionHandler.transcribe_audio_segment()`.
@@ -101,26 +113,26 @@ UI Thread -> UIManager (manages tray icon + settings window)
 5.  **Optional AI Pipeline**: The result can be routed to Agent Mode (Gemini) or Text Correction (Gemini/OpenRouter). The system gracefully falls back to the raw text if the API call fails.
 6.  `ActionOrchestrator` copies the final text to the clipboard, performs an auto-paste if enabled, and signals the final state `TRANSCRIPTION_COMPLETED`.
 
-### 4.3 State and UI Synchronization
+### 5.3 State and UI Synchronization
 - Every significant event flows through `StateManager.set_state(event, details, source)`.
-- A `StateEvent` maps to a specific application state (e.g., `IDLE`, `RECORDING`, `TRANSCRIBING`, `ERROR_*`). See Section 6 for the full map.
+- A `StateEvent` maps to a specific application state (e.g., `IDLE`, `RECORDING`, `TRANSCRIBING`, `ERROR_*`). See Section 7 for the full map.
 - `UIManager` is a passive listener; it reacts to state notifications to update the tray icon color, tooltips, and windows, but does not initiate core logic.
 
-### 4.4 Graceful Shutdown
+### 5.4 Graceful Shutdown
 1.  `AppCore.shutdown()` sets the `shutting_down` flag, cancels any ongoing downloads, and signals the hotkey and health threads to terminate.
 2.  It gracefully shuts down `KeyboardHotkeyManager`, `TranscriptionHandler` (clearing the executor and GPU cache), and `AudioHandler`.
 3.  Finally, it stops the system tray icon and terminates the `Tk.mainloop()`.
 
 ---
 
-## 5. Configuration, Secrets, and Variables
+## 6. Configuration, Secrets, and Variables
 
-### 5.1 Configuration Sources
+### 6.1 Configuration Sources
 - **`config.json`**: Contains non-sensitive user preferences like hotkeys, ASR backend choice, and feature flags.
 - **`secrets.json`**: Stores sensitive API keys (`gemini_api_key`, `openrouter_api_key`). This file is in `.gitignore`.
 - **`ConfigManager`**: The sole authority for accessing and modifying settings. It uses `config_schema.AppConfig` for validation.
 
-### 5.2 Key Configuration Options
+### 6.2 Key Configuration Options
 | Key | Type | Impact |
 | --- | --- | --- |
 | `record_key`, `record_mode` | string | Defines the capture hotkeys (toggle vs. press-to-record). Directly used by `KeyboardHotkeyManager`. |
@@ -132,22 +144,22 @@ UI Thread -> UIManager (manages tray icon + settings window)
 | `hotkey_stability_service_enabled` | bool | Enables background threads to ensure hotkeys remain registered and functional. |
 | `launch_at_startup` | bool | Uses `utils.autostart` to create or remove a shortcut in the Windows startup folder. |
 
-### 5.3 Writing to Configuration
+### 6.3 Writing to Configuration
 - **Always** use `ConfigManager` methods (`set_*`, `save_config`) to mutate and persist settings.
 - The `save_config` method automatically separates secrets into `secrets.json`.
 
-### 5.4 UI Variables
+### 6.4 UI Variables
 - Refer to `docs/ui_vars.md` for a complete mapping of `ctk.*Var` instances to their corresponding UI widgets and configuration keys.
 - When adding new controls, align them with `ConfigManager` and update this documentation.
 
 ---
 
-## 6. State Management (`StateManager`)
+## 7. State Management (`StateManager`)
 
-### 6.1 Primary States
+### 7.1 Primary States
 `IDLE`, `LOADING_MODEL`, `RECORDING`, `TRANSCRIBING`, `ERROR_MODEL`, `ERROR_AUDIO`, `ERROR_TRANSCRIPTION`, `ERROR_SETTINGS`.
 
-### 6.2 Common Events and Sources
+### 7.2 Common Events and Sources
 | Event (`StateEvent`) | Emitter | Resulting State | Notes |
 | --- | --- | --- | --- |
 | `MODEL_MISSING`, `MODEL_CACHE_INVALID` | `AppCore` | `ERROR_MODEL` | Triggered by cache validation failures or a missing model. |
@@ -158,16 +170,16 @@ UI Thread -> UIManager (manages tray icon + settings window)
 | `TRANSCRIPTION_STARTED/COMPLETED` | `TranscriptionHandler` | `TRANSCRIBING`/`IDLE` | Indicates ASR processing is active. |
 | `AUDIO_ERROR`, `MODEL_LOADING_FAILED`, `SETTINGS_*` | Various Components | Corresponding `ERROR_*` states. | |
 
-### 6.3 Best Practices
+### 7.3 Best Practices
 - Always use `StateManager.set_state` (or a `StateEvent`) to signal a status change that should be visible to the user.
 - Avoid manipulating the UI directly from core logic; let `UIManager` react to state changes.
 - When adding new events, update the `STATE_FOR_EVENT` and `EVENT_DEFAULT_DETAILS` maps in `StateManager`.
 
 ---
 
-## 7. Dependencies and Environment
+## 8. Dependencies and Environment
 
-### 7.1 `requirements*.txt` Files
+### 8.1 `requirements*.txt` Files
 | File | Usage | Notes |
 | --- | --- | --- |
 | `requirements.txt` | Core application dependencies (CPU execution). | Version adjustments should follow the plan in `plans/2025-09-24-dependency-remediation.md`. |
@@ -175,16 +187,16 @@ UI Thread -> UIManager (manages tray icon + settings window)
 | `requirements-extras.txt` | Opt-in automation and AI helpers. | Contains `google-generativeai`, `onnxruntime`, `playwright`, and dataset tooling. Install only when the workflow requires them. |
 | `requirements-test.txt` | Development and testing. | Includes `pytest`, `flake8`, and other developer tools. |
 
-### 7.2 General Rules
+### 8.2 General Rules
 - Always use isolated `venv` environments to prevent conflicts.
 - Update dependencies cautiously and always run the `pytest` suite after any change.
 - For GPU-enabled Torch, document the need for the extra index URL (`https://download.pytorch.org/whl/torch_stable.html`) in the main `README.md`.
 
 ---
 
-## 8. Daily Operations
+## 9. Daily Operations
 
-### 8.1 Basic Commands
+### 9.1 Basic Commands
 ```powershell
 # Activate the virtual environment
 .\.venv\Scripts\activate
@@ -196,12 +208,12 @@ python src/main.py
 pytest
 ```
 
-### 8.2 Logs and Metrics
+### 9.2 Logs and Metrics
 - Logging is configured via `logging_utils.setup_logging` to output to both a file and stdout.
 - Look for common prefixes like `[METRIC] stage=*` for performance and status messages.
 - The logging level can be adjusted via the `LOGGER_LEVEL` environment variable (see `logging_utils`).
 
-### 8.3 Artifact Locations
+### 9.3 Artifact Locations
 | Item | Location |
 | --- | --- |
 | Rotating log files | `logs/` directory (configuration is in the logger setup). |
@@ -210,7 +222,7 @@ pytest
 
 ---
 
-## 9. Quick Troubleshooting Guide
+## 10. Quick Troubleshooting Guide
 
 | Symptom | Likely Cause | Suggested Action |
 | --- | --- | --- |
@@ -222,37 +234,37 @@ pytest
 
 ---
 
-## 10. Extending and Customizing
+## 11. Extending and Customizing
 
-### 10.1 Adding a New ASR Backend
+### 11.1 Adding a New ASR Backend
 1.  Create a new adapter module in `src/asr/`. Follow the class and method signature of `backend_faster_whisper.py`.
 2.  Update `asr_backends.py` and `model_manager.CURATED` with the new backend ID and its associated models.
 3.  Update `config_schema.AppConfig` to accept the new backend identifier as a valid value.
 4.  Add tests for the new backend and document its existence in `AGENTS.md` and `README.md`.
 
-### 10.2 Adding a New AI Correction Provider
+### 11.2 Adding a New AI Correction Provider
 1.  Create a new API wrapper class (e.g., `src/<provider>_api.py`).
 2.  Integrate it into `TranscriptionHandler`'s `_process_ai_pipeline` method.
 3.  Expose its configuration options in `ConfigManager`, `config_schema`, and the UI if applicable.
 4.  Update `StateManager` and `ActionOrchestrator` as needed to handle new states or outcomes.
 
-### 10.3 Adding New Hotkeys
+### 11.3 Adding New Hotkeys
 1.  Extend `KeyboardHotkeyManager` with a new callback method.
 2.  Update `AppCore` to handle the event triggered by the new hotkey.
 3.  Expose the hotkey configuration in the UI and save it via `ConfigManager`.
 
 ---
 
-## 11. Essential Checklists
+## 12. Essential Checklists
 
-### 11.1 Pre-Commit Checklist
+### 12.1 Pre-Commit Checklist
 - [ ] Run `python -m compileall src` to check for syntax errors.
 - [ ] Execute `pytest` and ensure all tests pass.
 - [ ] Update relevant documentation (`AGENTS.md`, `README.md`, `docs/`).
 - [ ] If the change is significant, create a plan or note in the `plans/` directory.
 - [ ] Verify that `config.json` and `secrets.json` have not been accidentally staged for commit.
 
-### 11.2 Pre-Release Checklist
+### 12.2 Pre-Release Checklist
 - [ ] Run `pip install -r requirements.txt` in a clean environment.
 - [ ] Test the full end-to-end flow: model download, recording, transcription, and AI correction (if enabled).
 - [ ] Verify hotkey integration on a target Windows system (check for permissions issues, antivirus conflicts).
@@ -260,21 +272,21 @@ pytest
 
 ---
 
-## 12. Appendices
+## 13. Appendices
 
-### 12.1 Helper Scripts
+### 13.1 Helper Scripts
 | Script | Location | Description |
 | --- | --- | --- |
 | `processa_fila.sh` | Root | Legacy helper script for batch processing on Linux/WSL. Review before use. |
 | `Run Whisper.bat` | `src/` | A Windows batch shortcut to start the application (maintained for compatibility). |
 
-### 12.2 Relevant External Documents
+### 13.2 Relevant External Documents
 - `docs/model-loading-flow.md`: Detailed breakdown of the model download and loading lifecycle.
 - `docs/ui_vars.md`: Complete mapping of UI variables to config keys.
 - `docs/changelog.md`: A history of significant changes.
 - `plans/2025-09-24-dependency-remediation.md`: The current plan for dependency adjustments.
 
-### 12.3 Quick Glossary
+### 13.3 Quick Glossary
 | Term | Meaning |
 | --- | --- |
 | **ASR** | Automatic Speech Recognition. |

@@ -299,10 +299,10 @@ class AppCore:
 
             if ready_path is None:
                 MODEL_LOGGER.warning(
-                    "ASR model not found locally; waiting for user confirmation before downloading.",
+                    "ASR model not found locally. The first-run wizard will prompt for installation.",
                 )
                 self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                self._prompt_model_install(model_id, backend, cache_dir, ct2_type)
+                # self._prompt_model_install(model_id, backend, cache_dir, ct2_type) # DEPRECATED: Onboarding wizard handles this.
                 start_loading = False
 
             if start_loading:
@@ -441,8 +441,19 @@ class AppCore:
             return None
 
         self._onboarding_active = True
+        wizard_result = None  # Ensure result is defined
         try:
+            LOGGER.info(
+                "Launching the first-run setup wizard. The application will pause until the wizard is completed in the GUI."
+            )
             wizard_result = self._run_onboarding_wizard(snapshot=snapshot, force=force)
+        except Exception as e:
+            LOGGER.error("The first-run setup wizard failed to launch or crashed: %s", e, exc_info=True)
+            messagebox.showerror(
+                "Fatal Error",
+                f"The first-run setup wizard failed to launch and the application cannot continue.\n\nError: {e}",
+            )
+            self.shutdown()
         finally:
             self._onboarding_active = False
 

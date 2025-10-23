@@ -229,11 +229,24 @@ Document any deviations or failures inside the `plans/` folder so future operato
 
 ## Architecture Overview
 
-- **`main.py`:** Application entry point that initializes `AppCore` and the user interface.
-- **`core.py`:** Coordinates modules and maintains global application state.
-- **`ui_manager.py`:** Manages the GUI, settings window, and system tray icon.
-- **`audio_handler.py`:** Captures audio from the microphone and routes it to storage.
-- **`transcription_handler.py`:** Loads Whisper models and performs speech recognition.
-- **`config_manager.py`:** Loads and persists user configuration.
+The application follows a modular and event-driven architecture centered around a core orchestrator. This design promotes a clean separation of concerns, making the system easier to maintain and extend.
 
-For detailed developer notes and diagrams, review the files under the `docs/` directory.
+- **`main.py` (Entry Point):** Bootstraps the application by setting up logging, initializing the main components, and starting the UI event loop.
+
+- **`src/core.py` (`AppCore`):** The heart of the application. It acts as a central coordinator that initializes and connects all other major components. It manages the application's lifecycle, handles state transitions, and orchestrates the overall workflow from audio capture to transcription.
+
+- **`src/ui_manager.py` (`UIManager`):** Responsible for all aspects of the user interface. This includes the system tray icon, its context menu, the main settings window (built with `customtkinter`), and any dialogs. It operates reactively, updating the UI based on state changes broadcast by the `StateManager`.
+
+- **`src/state_manager.py` (`StateManager`):** A lightweight event bus that manages the application's state. It allows different components to communicate and stay synchronized without being tightly coupled. Components can subscribe to state changes (e.g., `IDLE`, `RECORDING`, `TRANSCRIBING`) and react accordingly.
+
+- **`src/config_manager.py` (`ConfigManager`):** Manages all user-facing and internal configurations. It handles loading and saving settings from `config.json` and `secrets.json`, provides default values, and validates the configuration schema.
+
+- **`src/audio_handler.py` (`AudioHandler`):** Manages audio input. It is responsible for detecting audio devices, capturing audio from the microphone, and applying Voice Activity Detection (VAD) to filter out silence.
+
+- **`src/transcription_handler.py` (`TranscriptionHandler`):** Handles the core speech-to-text process. It loads the selected Whisper ASR model (via the CTranslate2 backend), runs the transcription in a separate thread to avoid blocking the UI, and manages the model cache.
+
+- **`src/action_orchestrator.py` (`ActionOrchestrator`):** Coordinates the post-transcription workflow. After receiving the transcribed text, it determines whether to copy it to the clipboard, automatically paste it into the active window, or trigger an advanced action (like Agent Mode).
+
+- **`src/keyboard_hotkey_manager.py` (`KeyboardHotkeyManager`):** Manages global hotkeys. It listens for key presses to trigger actions like starting/stopping a recording, and it includes stability features to ensure hotkeys remain registered.
+
+For more in-depth technical details, architectural diagrams, and operational workflows, please refer to the `AGENTS.md` document and the supplementary documentation in the `docs/` directory.
