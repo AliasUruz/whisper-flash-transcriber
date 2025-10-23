@@ -1116,10 +1116,10 @@ class TranscriptionHandler:
         backend = getattr(self, "_asr_backend", None)
         if backend is None:
             logging.warning(
-                "ASR backend not ready. Rejecting audio segment.",
+                "ASR backend still loading; postponing transcription request.",
                 extra={
                     "event": "transcription.enqueue_failed",
-                    "reason": "backend_unavailable",
+                    "reason": "backend_loading",
                     "operation_id": operation_id,
                 },
             )
@@ -1127,17 +1127,27 @@ class TranscriptionHandler:
             state_mgr = getattr(core, "state_manager", None) if core is not None else None
             if state_mgr is not None:
                 try:
-                    state_mgr.set_state(
-                        sm.StateEvent.MODEL_LOADING_FAILED,
-                        details={
-                            "message": "ASR backend unavailable during transcription request",
-                            "operation_id": operation_id,
-                        },
-                        source="transcription_handler",
-                        operation_id=operation_id,
-                    )
+                    current_state = state_mgr.get_current_state()
                 except Exception:
-                    logging.debug("Failed to propagate backend-unavailable state.", exc_info=True)
+                    logging.debug("Failed to read current application state.", exc_info=True)
+                else:
+                    if current_state != sm.STATE_LOADING_MODEL:
+                        try:
+                            state_mgr.transition_if(
+                                expected_state=current_state,
+                                event=sm.STATE_LOADING_MODEL,
+                                details={
+                                    "message": "ASR backend still loading; transcription deferred",
+                                    "operation_id": operation_id,
+                                },
+                                source="transcription_handler",
+                                operation_id=operation_id,
+                            )
+                        except Exception:
+                            logging.debug(
+                                "Failed to reinforce loading state while backend initializes.",
+                                exc_info=True,
+                            )
             return False
 
         self.transcription_cancel_event.clear()
