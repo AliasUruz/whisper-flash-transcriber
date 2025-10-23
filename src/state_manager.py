@@ -276,9 +276,24 @@ class StateManager:
                     state=mapped_state,
                     event_name=event_obj.name if event_obj else None,
                     source=source,
+                    operation_id=operation_id,
                 )
             )
             return None
+
+        operation_id: str | None = None
+        if isinstance(detail_payload, Mapping):
+            raw_operation_id = detail_payload.get("operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    operation_id = candidate
+        elif hasattr(detail_payload, "operation_id"):
+            raw_operation_id = getattr(detail_payload, "operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    operation_id = candidate
 
         notification = StateNotification(
             event=event_obj,
@@ -301,6 +316,7 @@ class StateManager:
         mapped_state: str,
         message: str | None,
         source: str | None,
+        operation_id: str | None = None,
     ) -> None:
         origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
         log_fields = {
@@ -357,6 +373,7 @@ class StateManager:
             mapped_state=mapped_state,
             message=message,
             source=source,
+            operation_id=operation_id,
         )
 
     def _normalize_expected_states(
@@ -457,6 +474,7 @@ class StateManager:
             mapped_state=mapped_state,
             message=message,
             source=source,
+            operation_id=operation_id,
         )
         return True
 
