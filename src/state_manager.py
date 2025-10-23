@@ -341,17 +341,21 @@ class StateManager:
     def _resolve_operation_id(
         self, explicit_operation_id: str | None, detail_payload: object | None
     ) -> str | None:
-        resolved = self._normalize_operation_id(explicit_operation_id)
-        if resolved is not None:
-            return resolved
-
         if isinstance(detail_payload, Mapping):
-            return self._normalize_operation_id(detail_payload.get("operation_id"))
+            detail_resolved = self._normalize_operation_id(
+                detail_payload.get("operation_id")
+            )
+        elif hasattr(detail_payload, "operation_id"):
+            detail_resolved = self._normalize_operation_id(
+                getattr(detail_payload, "operation_id")
+            )
+        else:
+            detail_resolved = None
 
-        if hasattr(detail_payload, "operation_id"):
-            return self._normalize_operation_id(getattr(detail_payload, "operation_id"))
+        if detail_resolved is not None:
+            return detail_resolved
 
-        return None
+        return self._normalize_operation_id(explicit_operation_id)
 
     def _derive_detail_signature(self, details: object | None) -> object | None:
         """Build a hashable representation of ``details`` for deduplication."""
@@ -362,12 +366,7 @@ class StateManager:
         if isinstance(details, Mapping):
             return (
                 "mapping",
-                tuple(
-                    sorted(
-                        (key, self._derive_detail_signature(value))
-                        for key, value in details.items()
-                    )
-                ),
+                self._normalize_mapping_signature(details.items()),
             )
 
         if isinstance(details, (list, tuple)):
@@ -377,9 +376,11 @@ class StateManager:
             )
 
         if isinstance(details, (set, frozenset)):
+            normalized = [self._derive_detail_signature(value) for value in details]
+            normalized.sort(key=self._signature_sort_key)
             return (
                 type(details).__name__,
-                tuple(sorted(self._derive_detail_signature(value) for value in details)),
+                tuple(normalized),
             )
 
         if is_dataclass(details):
@@ -400,18 +401,32 @@ class StateManager:
                 return (
                     "object",
                     type(details).__name__,
-                    tuple(
-                        sorted(
-                            (key, self._derive_detail_signature(value))
-                            for key, value in vars(details).items()
-                        )
-                    ),
+                    self._normalize_mapping_signature(vars(details).items()),
                 )
             except TypeError:
                 # Objects without a normal ``vars`` mapping fall through to repr.
                 pass
 
         return ("repr", repr(details))
+
+    @staticmethod
+    def _signature_sort_key(signature: object) -> str:
+        try:
+            return repr(signature)
+        except Exception:
+            return f"<{type(signature).__name__}:{id(signature)}>"
+
+    def _normalize_mapping_signature(
+        self, items: Iterable[tuple[object, object]]
+    ) -> tuple[tuple[object, object], ...]:
+        normalized: list[tuple[object, object]] = []
+        for key, value in items:
+            key_signature = self._derive_detail_signature(key)
+            value_signature = self._derive_detail_signature(value)
+            normalized.append((key_signature, value_signature))
+
+        normalized.sort(key=lambda item: self._signature_sort_key(item[0]))
+        return tuple(normalized)
 
     def _emit_transition(
         self,
