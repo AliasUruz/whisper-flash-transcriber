@@ -281,19 +281,19 @@ class StateManager:
             )
             return None
 
-        operation_id: str | None = None
-        if isinstance(detail_payload, Mapping):
+        candidate_operation_id = (operation_id.strip() if isinstance(operation_id, str) else None)
+        if not candidate_operation_id and isinstance(detail_payload, Mapping):
             raw_operation_id = detail_payload.get("operation_id")
             if isinstance(raw_operation_id, str):
                 candidate = raw_operation_id.strip()
                 if candidate:
-                    operation_id = candidate
-        elif hasattr(detail_payload, "operation_id"):
+                    candidate_operation_id = candidate
+        elif (not candidate_operation_id) and hasattr(detail_payload, "operation_id"):
             raw_operation_id = getattr(detail_payload, "operation_id")
             if isinstance(raw_operation_id, str):
                 candidate = raw_operation_id.strip()
                 if candidate:
-                    operation_id = candidate
+                    candidate_operation_id = candidate
 
         notification = StateNotification(
             event=event_obj,
@@ -301,7 +301,7 @@ class StateManager:
             previous_state=previous_state,
             details=detail_payload if detail_payload is not None else message,
             source=source,
-            operation_id=operation_id,
+            operation_id=candidate_operation_id,
         )
         self._current_state = mapped_state
         self._last_notification = notification
