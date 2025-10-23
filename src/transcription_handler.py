@@ -17,7 +17,10 @@ try:  # pragma: no cover - biblioteca opcional
 except Exception:  # pragma: no cover
     from .asr.backends import make_backend  # type: ignore
 
-from .openrouter_api import OpenRouterAPI # Assumindo que está na raiz ou em path acessível
+try:  # pragma: no cover - dependência opcional
+    from .openrouter_api import OpenRouterAPI  # type: ignore
+except Exception:  # pragma: no cover - módulo ausente ou inválido
+    OpenRouterAPI = None  # type: ignore[assignment]
 from .audio_handler import AUDIO_SAMPLE_RATE
 from pathlib import Path
 
@@ -544,7 +547,18 @@ class TranscriptionHandler:
         # ...
         self.openrouter_client = None
         self.openrouter_api = None
-        if self.text_correction_enabled and self.text_correction_service == SERVICE_OPENROUTER and self.openrouter_api_key and OpenRouterAPI:
+
+        if OpenRouterAPI is None:
+            if self.text_correction_enabled and self.text_correction_service == SERVICE_OPENROUTER:
+                LOGGER.warning(
+                    log_context(
+                        "OpenRouterAPI dependency unavailable; skipping client initialization.",
+                        event="transcription.openrouter.dependency_missing",
+                    )
+                )
+            return
+
+        if self.text_correction_enabled and self.text_correction_service == SERVICE_OPENROUTER and self.openrouter_api_key:
             try:
                 openrouter_timeout = self.config_manager.get_timeout(
                     OPENROUTER_TIMEOUT_CONFIG_KEY,
