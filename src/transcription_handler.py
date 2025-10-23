@@ -1120,6 +1120,7 @@ class TranscriptionHandler:
                             "operation_id": operation_id,
                         },
                         source="transcription_handler",
+                        operation_id=operation_id,
                     )
                 except Exception:
                     logging.debug("Failed to propagate backend-unavailable state.", exc_info=True)
@@ -1207,6 +1208,7 @@ class TranscriptionHandler:
                     sm.StateEvent.TRANSCRIPTION_STARTED,
                     details=details,
                     source="transcription_handler",
+                    operation_id=operation_id,
                 )
             except Exception:
                 logging.debug("Failed to emit TRANSCRIPTION_STARTED state.", exc_info=True)
@@ -1285,6 +1287,7 @@ class TranscriptionHandler:
                         sm.STATE_ERROR_TRANSCRIPTION,
                         details={"message": str(exc)},
                         source="transcription_handler",
+                        operation_id=operation_id,
                     )
                 except Exception:
                     logging.debug("Failed to emit TRANSCRIPTION error state.", exc_info=True)
