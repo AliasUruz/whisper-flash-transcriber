@@ -21,6 +21,7 @@ from src.model_manager import (
     build_runtime_catalog,
     select_recommended_model,
 )
+from src import state_manager as sm
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -741,6 +742,28 @@ class TestCoreModuleImport(unittest.TestCase):
             sys.modules.pop(module_name, None)
             if original_core is not None:
                 sys.modules[module_name] = original_core
+
+class TestStateManagerOperationIdPropagation(unittest.TestCase):
+    def test_set_state_propagates_operation_id(self):
+        manager = sm.StateManager(sm.STATE_IDLE)
+        notifications: list[sm.StateNotification] = []
+        manager.subscribe(notifications.append)
+
+        manager.set_state(
+            sm.StateEvent.MODEL_DOWNLOAD_STARTED,
+            details={"message": "Starting download"},
+            source="unit-test",
+            operation_id="test-op-123",
+        )
+
+        self.assertEqual(manager.get_current_state(), sm.STATE_LOADING_MODEL)
+        self.assertEqual(len(notifications), 1)
+
+        notification = notifications[0]
+        self.assertEqual(notification.operation_id, "test-op-123")
+        self.assertEqual(notification.state, sm.STATE_LOADING_MODEL)
+        self.assertEqual(notification.previous_state, sm.STATE_IDLE)
+
 
 if __name__ == "__main__":
     unittest.main()
