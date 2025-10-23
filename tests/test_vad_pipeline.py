@@ -765,5 +765,52 @@ class TestStateManagerOperationIdPropagation(unittest.TestCase):
         self.assertEqual(notification.previous_state, sm.STATE_IDLE)
 
 
+class TestStateManagerDuplicateSuppression(unittest.TestCase):
+    def _create_manager(self) -> tuple[sm.StateManager, list[sm.StateNotification]]:
+        manager = sm.StateManager(sm.STATE_IDLE)
+        notifications: list[sm.StateNotification] = []
+        manager.subscribe(notifications.append)
+        return manager, notifications
+
+    def test_transitions_with_different_details_are_not_suppressed(self):
+        manager, notifications = self._create_manager()
+
+        manager.set_state(
+            sm.StateEvent.MODEL_DOWNLOAD_PROGRESS,
+            details={"message": "progress", "percent": 0.1},
+            operation_id="download-1",
+        )
+        manager.set_state(
+            sm.StateEvent.MODEL_DOWNLOAD_PROGRESS,
+            details={"message": "progress", "percent": 0.5},
+            operation_id="download-1",
+        )
+
+        self.assertEqual(manager.get_current_state(), sm.STATE_LOADING_MODEL)
+        self.assertEqual(len(notifications), 2)
+        self.assertListEqual(
+            [notification.details["percent"] for notification in notifications],
+            [0.1, 0.5],
+        )
+
+    def test_identical_details_are_still_suppressed(self):
+        manager, notifications = self._create_manager()
+
+        manager.set_state(
+            sm.StateEvent.MODEL_DOWNLOAD_PROGRESS,
+            details={"message": "progress", "percent": 0.3},
+            operation_id="download-2",
+        )
+        manager.set_state(
+            sm.StateEvent.MODEL_DOWNLOAD_PROGRESS,
+            details={"percent": 0.3, "message": "progress"},
+            operation_id="download-2",
+        )
+
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[0].details["percent"], 0.3)
+        self.assertEqual(notifications[0].state, sm.STATE_LOADING_MODEL)
+
+
 if __name__ == "__main__":
     unittest.main()
