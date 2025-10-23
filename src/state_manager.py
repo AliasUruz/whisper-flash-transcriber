@@ -285,6 +285,25 @@ class StateManager:
         last_operation_id = (
             self._last_notification.operation_id if self._last_notification else None
         )
+
+        resolved_operation_id: str | None = None
+        if isinstance(operation_id, str):
+            candidate = operation_id.strip()
+            if candidate:
+                resolved_operation_id = candidate
+        if isinstance(detail_payload, Mapping):
+            raw_operation_id = detail_payload.get("operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    resolved_operation_id = candidate
+        elif hasattr(detail_payload, "operation_id"):
+            raw_operation_id = getattr(detail_payload, "operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    resolved_operation_id = candidate
+
         if (
             last_event == event_obj
             and last_state == mapped_state
