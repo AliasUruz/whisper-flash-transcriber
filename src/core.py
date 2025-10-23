@@ -886,8 +886,10 @@ class AppCore:
                 "task_id": task.task_id,
                 "model_id": model_id,
                 "backend": normalized_backend,
+                "operation_id": task.task_id,
             },
             source="model_download",
+            operation_id=task.task_id,
         )
         return task
 
@@ -938,6 +940,7 @@ class AppCore:
             "model_id": task.model_id,
             "backend": task.backend,
             "status": task.status,
+            "operation_id": task.task_id,
         }
 
         if task.status == "error":
@@ -945,6 +948,7 @@ class AppCore:
                 sm.StateEvent.MODEL_DOWNLOAD_FAILED,
                 details=message_details,
                 source="model_download",
+                operation_id=task.task_id,
             )
             if self.main_tk_root is not None:
                 self.main_tk_root.after(
@@ -956,6 +960,7 @@ class AppCore:
                 sm.StateEvent.MODEL_DOWNLOAD_CANCELLED,
                 details=message_details,
                 source="model_download",
+                operation_id=task.task_id,
             )
             if self.main_tk_root is not None:
                 self.main_tk_root.after(
