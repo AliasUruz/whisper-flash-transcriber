@@ -300,30 +300,29 @@ class StateManager:
             self._last_notification.operation_id if self._last_notification else None
         )
 
-        def _normalize_operation_id(raw_value: object | None) -> str | None:
-            if isinstance(raw_value, str):
-                candidate = raw_value.strip()
-                if candidate:
-                    return candidate
-            return None
-
-        effective_operation_id = _normalize_operation_id(operation_id)
-
+        normalized_operation_id: str | None = None
         if isinstance(detail_payload, Mapping):
             raw_operation_id = detail_payload.get("operation_id")
-            override = _normalize_operation_id(raw_operation_id)
-            if override is not None:
-                effective_operation_id = override
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    normalized_operation_id = candidate
         elif hasattr(detail_payload, "operation_id"):
             raw_operation_id = getattr(detail_payload, "operation_id")
-            override = _normalize_operation_id(raw_operation_id)
-            if override is not None:
-                effective_operation_id = override
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    normalized_operation_id = candidate
+
+        if isinstance(operation_id, str):
+            candidate = operation_id.strip()
+            if candidate:
+                normalized_operation_id = candidate
 
         if (
             last_event == event_obj
             and last_state == mapped_state
-            and last_operation_id == effective_operation_id
+            and last_operation_id == normalized_operation_id
         ):
             self._logger.debug(
                 log_context(
@@ -332,7 +331,7 @@ class StateManager:
                     state=mapped_state,
                     event_name=event_obj.name if event_obj else None,
                     source=source,
-                    operation_id=effective_operation_id,
+                    operation_id=normalized_operation_id,
                 )
             )
             return None
@@ -343,7 +342,7 @@ class StateManager:
             previous_state=previous_state,
             details=detail_payload if detail_payload is not None else message,
             source=source,
-            operation_id=effective_operation_id,
+            operation_id=normalized_operation_id,
         )
         self._current_state = mapped_state
         self._last_notification = notification

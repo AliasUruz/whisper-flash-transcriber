@@ -3010,39 +3010,90 @@ class AppCore:
         # ...
         import glob
         import os
-        removed_count = 0
+
         LOGGER.info("Running startup audio file cleanup...")
+
+        try:
+            save_temp_recordings = bool(
+                self.config_manager.get(SAVE_TEMP_RECORDINGS_CONFIG_KEY)
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Startup cleanup could not read '%s': %s. Falling back to deletion of temporary files only.",
+                SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+                exc,
+            )
+            save_temp_recordings = False
+
         try:
             recordings_dir_value = self.config_manager.get(RECORDINGS_DIR_CONFIG_KEY)
             try:
                 recordings_path = Path(str(recordings_dir_value)).expanduser()
             except Exception:
+                LOGGER.debug(
+                    "Cleanup (startup): failed to resolve recordings directory from '%s'; using working directory.",
+                    recordings_dir_value,
+                    exc_info=True,
+                )
                 recordings_path = Path.cwd()
+
             if not recordings_path.exists():
                 LOGGER.debug(
                     "Cleanup (startup): recordings directory '%s' does not exist.",
                     recordings_path,
                 )
                 return
+
+            if save_temp_recordings:
+                LOGGER.debug(
+                    "Startup cleanup skipped deletion because '%s' is enabled; enforcing storage quota instead.",
+                    SAVE_TEMP_RECORDINGS_CONFIG_KEY,
+                )
+                quota_enforcer = getattr(
+                    getattr(self, "audio_handler", None),
+                    "_enforce_record_storage_limit",
+                    None,
+                )
+                if callable(quota_enforcer):
+                    try:
+                        quota_enforcer()
+                    except Exception:
+                        LOGGER.warning(
+                            "Startup cleanup failed to enforce recording storage quota.",
+                            exc_info=True,
+                        )
+                return
+
+            removed_count = 0
             patterns = [
-                recordings_path / pattern for pattern in ("temp_recording_*.wav", "recording_*.wav")
+                recordings_path / pattern
+                for pattern in ("temp_recording_*.wav", "recording_*.wav")
             ]
             files_to_check: list[str] = []
             for pattern in patterns:
                 files_to_check.extend(str(path) for path in glob.glob(str(pattern)))
+
             for f in files_to_check:
                 try:
                     os.remove(f)
-                    LOGGER.info(f"Deleted old audio file: {f}")
+                    LOGGER.info("Deleted old audio file: %s", f)
                     removed_count += 1
-                except OSError as e:
-                    LOGGER.warning(f"Could not delete old audio file '{f}': {e}")
+                except OSError as exc:
+                    LOGGER.warning(
+                        "Could not delete old audio file '%s': %s",
+                        f,
+                        exc,
+                    )
+
             if removed_count > 0:
-                LOGGER.info(f"Cleanup (startup): {removed_count} old audio file(s) removed.")
+                LOGGER.info(
+                    "Cleanup (startup): %d old audio file(s) removed.",
+                    removed_count,
+                )
             else:
                 LOGGER.debug("Cleanup (startup): No old audio files found.")
-        except Exception as e:
-            LOGGER.error(f"Error during startup audio file cleanup: {e}")
+        except Exception:
+            LOGGER.error("Error during startup audio file cleanup.", exc_info=True)
 
     def _delete_temp_audio_file(self):
         path = getattr(self.audio_handler, "temp_file_path", None)
