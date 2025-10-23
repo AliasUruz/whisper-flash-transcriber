@@ -273,6 +273,7 @@ class AppCore:
         self._active_recording_correlation_id: str | None = None
         self._recording_started_at: float | None = None
         self._onboarding_active = False
+        self._initial_onboarding_scheduled = False
         self._active_recording_operation_id: str | None = None
 
         # Inicializar atributos dependentes da configuração antes de acionar o fluxo de modelo
@@ -364,7 +365,7 @@ class AppCore:
 
         self.model_download_timeout = self._resolve_model_download_timeout()
         if self._onboarding_enabled:
-            self._maybe_run_initial_onboarding()
+            self.schedule_initial_onboarding()
         else:
             LOGGER.debug(
                 "Initial onboarding disabled for this session; skipping wizard launch."
@@ -389,6 +390,47 @@ class AppCore:
         outcome = self._launch_onboarding(snapshot=snapshot, force=True, reason="startup")
         if outcome is not None:
             self._last_onboarding_outcome = outcome
+
+    def schedule_initial_onboarding(self) -> None:
+        """Schedule the first-run onboarding wizard on the Tk event loop."""
+
+        if not self._onboarding_enabled:
+            LOGGER.debug(
+                "Initial onboarding scheduling ignored: onboarding disabled for this session."
+            )
+            return
+
+        if self._initial_onboarding_scheduled:
+            LOGGER.debug(
+                "Initial onboarding already scheduled; ignoring duplicate request."
+            )
+            return
+
+        if self._onboarding_active:
+            LOGGER.info(
+                "Initial onboarding launch request ignored: wizard already active."
+            )
+            return
+
+        if not hasattr(self.main_tk_root, "after_idle"):
+            LOGGER.warning(
+                "Unable to schedule onboarding: Tk root does not expose 'after_idle'."
+            )
+            return
+
+        def _execute_onboarding() -> None:
+            try:
+                self._maybe_run_initial_onboarding()
+            finally:
+                self._initial_onboarding_scheduled = False
+
+        self._initial_onboarding_scheduled = True
+        LOGGER.info("Scheduling initial onboarding wizard for first run via Tk idle queue.")
+        try:
+            self.main_tk_root.after_idle(_execute_onboarding)
+        except Exception:
+            LOGGER.exception("Failed to schedule onboarding via Tk 'after_idle'.")
+            self._initial_onboarding_scheduled = False
 
     def launch_first_run_wizard(
         self,
