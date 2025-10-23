@@ -594,6 +594,81 @@ class TestKeyboardHotkeys(unittest.TestCase):
         self.assertNotIn("handle-1", manager.hotkey_handlers["record:press"])
 
 
+class TestKeyboardHotkeyManagerLifecycle(unittest.TestCase):
+    def setUp(self):
+        self.keyboard_mock = mock.Mock()
+        self.keyboard_patch = mock.patch(
+            "src.keyboard_hotkey_manager.keyboard",
+            self.keyboard_mock,
+        )
+        self.keyboard_patch.start()
+        self.addCleanup(self.keyboard_patch.stop)
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.config_path = Path(self.temp_dir.name) / "hotkeys.json"
+
+    def _make_manager(self) -> KeyboardHotkeyManager:
+        return KeyboardHotkeyManager(config_file=self.config_path)
+
+    def test_start_stop_roundtrip_unregisters_drivers(self):
+        manager = self._make_manager()
+        fake_driver = mock.Mock()
+        fake_driver.name = "mock-driver"
+
+        def register_side_effect():
+            manager._drivers = [fake_driver]
+            manager._active_driver = fake_driver
+            manager._active_driver_index = 0
+            manager.hotkey_handlers = {"record": ["handle-1"]}
+            return True
+
+        with mock.patch.object(
+            manager,
+            "_probe_available_driver_names",
+            return_value=["mock-driver"],
+        ), mock.patch.object(
+            manager,
+            "_resolve_primary_driver_name",
+            return_value="mock-driver",
+        ), mock.patch.object(
+            manager,
+            "_determine_fallback",
+            return_value=False,
+        ), mock.patch.object(
+            manager,
+            "_register_hotkeys",
+            side_effect=register_side_effect,
+        ):
+            self.assertTrue(manager.start())
+
+        self.assertTrue(manager.is_running)
+
+        manager.stop()
+
+        fake_driver.unregister.assert_called()
+        self.assertEqual(
+            self.keyboard_mock.unhook.call_args_list,
+            [mock.call("handle-1")],
+        )
+        self.assertFalse(manager.is_running)
+        self.assertEqual(manager.hotkey_handlers, {})
+
+    def test_unregister_hotkeys_failure_is_reported(self):
+        manager = self._make_manager()
+        failing_driver = mock.Mock()
+        failing_driver.name = "broken-driver"
+        failing_driver.unregister.side_effect = RuntimeError("boom")
+        manager._drivers = [failing_driver]
+        manager._active_driver = failing_driver
+        manager._active_driver_index = 0
+
+        result = manager._unregister_hotkeys()
+
+        self.assertFalse(result)
+        failing_driver.unregister.assert_called_once()
+
+
 class TestModelRecommendations(unittest.TestCase):
     LARGE_TURBO_ID = "openai/whisper-large-v3-turbo"
 

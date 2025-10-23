@@ -902,27 +902,6 @@ class KeyboardHotkeyManager:
         handles = self.hotkey_handlers.setdefault(handle_id, [])
         handles.append(handle)
 
-    def _unregister_hotkeys(self) -> None:
-        """Remove todas as hotkeys registradas pelos drivers ativos."""
-
-        entries = self._driver_entries()
-        for _, driver in entries:
-            try:
-                driver.unregister()
-            except Exception as exc:  # pragma: no cover - defensive cleanup
-                self._log(
-                    logging.DEBUG,
-                    "Hotkey callback ignored due to debounce window.",
-                    event="hotkeys.debounce_skipped",
-                    handle_id=handle_id,
-                    elapsed_ms=round(elapsed_ms, 3),
-                    debounce_ms=window_ms,
-                )
-                return False
-
-        self._last_trigger_ts[handle_id] = now
-        return True
-
     def _register_hotkeys(self):
         """Registra as hotkeys no sistema."""
         if not _is_keyboard_runtime_available():
@@ -1141,160 +1120,88 @@ class KeyboardHotkeyManager:
                 e,
             )
 
-    def _unregister_hotkeys(self):
+    def _unregister_hotkeys(self) -> bool:
         """Desregistra as hotkeys do sistema."""
 
-        drivers: list[BaseHotkeyDriver] = []
-        active_driver: BaseHotkeyDriver | None = None
-        active_index: int | None = None
+        # Nota histórica: versões anteriores tentavam acessar variáveis inexistentes
+        # (``handle_id``, ``elapsed_ms``) durante a remoção, mascarando falhas reais.
+        # O fluxo agora se limita a registrar problemas ao desregistrar drivers e hooks.
 
-        driver_lock = getattr(self, "_driver_lock", None)
-        if driver_lock is not None:
-            try:
-                lock_cm = driver_lock
-            except Exception:
-                lock_cm = None
-        else:
-            lock_cm = None
+        success = True
 
-        if lock_cm is not None:
-            with lock_cm:
-                active_driver = getattr(self, "_active_driver", None)
-                active_index = getattr(self, "_active_driver_index", None)
-                drivers = list(getattr(self, "_drivers", []))
-                try:
-                    self._active_driver = None
-                except Exception:
-                    pass
-                try:
-                    self._active_driver_index = None
-                except Exception:
-                    pass
-        else:
+        drivers_to_cleanup: list[tuple[str, BaseHotkeyDriver]] = []
+        with self._driver_lock:
             active_driver = getattr(self, "_active_driver", None)
             active_index = getattr(self, "_active_driver_index", None)
-            if active_driver is not None:
-                drivers = [active_driver]
-            try:
-                self._active_driver = None
-            except Exception:
-                pass
-            try:
-                self._active_driver_index = None
-            except Exception:
-                pass
 
-        def _log_driver_failure(driver_obj: BaseHotkeyDriver, error: Exception) -> None:
-            self._log(
-                logging.DEBUG,
-                "Failed to unregister hotkey driver.",
-                event="hotkeys.driver_unregister_failed",
-                driver=getattr(driver_obj, "name", type(driver_obj).__name__),
-                error=str(error),
-            )
+            if isinstance(active_index, int) and active_driver is not None:
+                drivers_to_cleanup.append((f"active[{active_index}]", active_driver))
 
-        if active_driver is not None:
+            for idx, driver in enumerate(getattr(self, "_drivers", [])):
+                if driver is None or driver is active_driver:
+                    continue
+                drivers_to_cleanup.append((f"pool[{idx}]", driver))
+
+            self._active_driver = None
+            self._active_driver_index = None
+
+        for origin, driver in drivers_to_cleanup:
+            driver_name = getattr(driver, "name", driver.__class__.__name__)
             try:
-                active_driver.unregister()
-            except Exception as exc:
-                _log_driver_failure(active_driver, exc)
+                driver.unregister()
+            except Exception as exc:  # pragma: no cover - defensive cleanup
+                success = False
+                self._log(
+                    logging.ERROR,
+                    "Failed to unregister hotkey driver.",
+                    event="hotkeys.driver_unregister_error",
+                    driver=driver_name,
+                    origin=origin,
+                    error=str(exc),
+                    exc_info=True,
+                )
             else:
                 self._log(
                     logging.DEBUG,
-                    "Active hotkey driver unregistered.",
+                    "Hotkey driver unregistered.",
                     event="hotkeys.driver_unregister_success",
-                    driver=getattr(active_driver, "name", type(active_driver).__name__),
-                    driver_index=active_index,
+                    driver=driver_name,
+                    origin=origin,
                 )
 
-        for driver in drivers:
-            if driver is None or driver is active_driver:
-                continue
-            try:
-                driver.unregister()
-            except Exception as exc:
-                _log_driver_failure(driver, exc)
-
-        try:
-            drivers_to_cleanup: list[BaseHotkeyDriver] = []
-            with self._driver_lock:
-                if self._active_driver is not None:
-                    drivers_to_cleanup.append(self._active_driver)
-                for driver in self._drivers:
-                    if driver is not None and driver not in drivers_to_cleanup:
-                        drivers_to_cleanup.append(driver)
-                self._active_driver = None
-                self._active_driver_index = None
-
-            for driver in drivers_to_cleanup:
-                driver_name = getattr(driver, "name", driver.__class__.__name__)
-                try:
-                    driver.unregister()
-                    self._log(
-                        logging.DEBUG,
-                        "Hotkey driver unregistered.",
-                        event="hotkeys.driver_unregister_success",
-                        driver=driver_name,
-                    )
-                except Exception as exc:  # pragma: no cover - defensive cleanup
-                    self._log(
-                        logging.ERROR,
-                        "Error while unregistering hotkey driver.",
-                        event="hotkeys.driver_unregister_error",
-                        driver=driver_name,
-                        error=str(exc),
-                        exc_info=True,
-                    )
-
-            if _is_keyboard_runtime_available():
-                for handle_id, handles in list(self.hotkey_handlers.items()):
-                    for handle in handles:
-                        try:
-                            keyboard.unhook(handle)
-                            self._log(
-                                logging.DEBUG,
-                                "Hotkey handle removed.",
-                                event="hotkeys.unregister_handle_removed",
-                                handle_id=handle_id,
-                            )
-                        except (KeyError, ValueError):
-                            self._log(
-                                logging.WARNING,
-                                "Hotkey handle already removed or invalid; skipping.",
-                                event="hotkeys.unregister_handle_missing",
-                                handle_id=handle_id,
-                            )
-                        except Exception as e:
-                            self._log(
-                                logging.ERROR,
-                                "Error while removing hotkey hook.",
-                                event="hotkeys.unregister_handle_error",
-                                handle_id=handle_id,
-                                error=str(e),
-                                exc_info=True,
-                            )
-                    self.hotkey_handlers[handle_id] = []
-            else:
-                self.hotkey_handlers.clear()
-
+        if _is_keyboard_runtime_available():
+            for handle_id, handles in list(self.hotkey_handlers.items()):
+                for handle in handles:
+                    try:
+                        keyboard.unhook(handle)
+                        self._log(
+                            logging.DEBUG,
+                            "Hotkey handle removed.",
+                            event="hotkeys.unregister_handle_removed",
+                            handle_id=handle_id,
+                        )
+                    except (KeyError, ValueError):
+                        self._log(
+                            logging.WARNING,
+                            "Hotkey handle already removed or invalid; skipping.",
+                            event="hotkeys.unregister_handle_missing",
+                            handle_id=handle_id,
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive cleanup
+                        success = False
+                        self._log(
+                            logging.ERROR,
+                            "Error while removing hotkey hook.",
+                            event="hotkeys.unregister_handle_error",
+                            handle_id=handle_id,
+                            error=str(exc),
+                            exc_info=True,
+                        )
+                self.hotkey_handlers[handle_id] = []
+        elif self.hotkey_handlers:
             self.hotkey_handlers.clear()
 
-            self._log(
-                logging.INFO,
-                "Hotkeys unregistered successfully.",
-                event="hotkeys.unregister_success",
-            )
-            self.is_running = False
-            self._last_trigger_ts.clear()
-
-        except Exception as e:
-            self._log(
-                logging.ERROR,
-                "Error while unregistering hotkeys.",
-                event="hotkeys.unregister_error",
-                error=str(e),
-                exc_info=True,
-            )
+        return success
 
     def _should_process_event(self, event_type: str) -> bool:
         """Determine whether a hotkey event should trigger callbacks."""
