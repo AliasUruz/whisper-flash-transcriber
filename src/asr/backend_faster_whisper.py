@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import inspect
+from dataclasses import is_dataclass, replace
 from pathlib import Path
 from threading import Event
 from typing import Any, Callable, Iterator
@@ -20,6 +22,8 @@ class FasterWhisperBackend:
         self.device = device
         self.device_index = _coerce_device_index(device_index)
         self.model = None
+        self._transcribe_signature_info: dict[str, Any] | None = None
+        self._last_requested_batch_size: int | None = None
 
     def load(self, ct2_compute_type: str = "default", cache_dir: str | None = None, **kwargs) -> None:
         """Load the WhisperModel with the given compute type."""
@@ -153,7 +157,8 @@ class FasterWhisperBackend:
         chunk_length = _coerce_chunk_length(kwargs.pop("chunk_length_s", None))
         if chunk_length is not None:
             kwargs["chunk_length"] = chunk_length
-        kwargs.pop("batch_size", None)
+
+        batch_size = kwargs.pop("batch_size", None)
         sanitized_segments = _sanitize_language_detection_segments(
             kwargs.get("language_detection_segments")
         )
@@ -163,6 +168,19 @@ class FasterWhisperBackend:
             computed_segments = _segments_from_chunk_length(kwargs.get("chunk_length"))
             if computed_segments is not None:
                 kwargs["language_detection_segments"] = computed_segments
+
+        if batch_size is not None:
+            info = self._ensure_transcribe_signature()
+            if info["accepts_batch_size"]:
+                kwargs["batch_size"] = batch_size
+            elif info["decode_option_param"] is not None:
+                option_key = info["decode_option_param"]
+                kwargs[option_key] = _inject_batch_size_into_decode_options(
+                    kwargs.get(option_key), batch_size
+                )
+            else:
+                self._transcribe_signature_info = info
+            self._last_requested_batch_size = batch_size
 
         segment_iterator, _ = self.model.transcribe(audio, **kwargs)
         iterator: Iterator[Any] = iter(segment_iterator)
@@ -215,6 +233,14 @@ class FasterWhisperBackend:
     def unload(self) -> None:
         """Release model resources."""
         self.model = None
+
+    def _ensure_transcribe_signature(self) -> dict[str, Any]:
+        cached = getattr(self, "_transcribe_signature_info", None)
+        if cached is not None:
+            return cached
+        info = _describe_transcribe_signature(getattr(self.model, "transcribe", None))
+        self._transcribe_signature_info = info
+        return info
 
 
 def _has_cuda() -> bool:
@@ -381,3 +407,83 @@ def _looks_like_ct2_installation(path: Path) -> bool:
         if has_config and has_weights:
             return True
     return has_config and has_weights
+
+
+def _describe_transcribe_signature(transcribe: Callable[..., Any] | None) -> dict[str, Any]:
+    info = {
+        "accepts_batch_size": False,
+        "decode_option_param": None,
+    }
+    if transcribe is None:
+        return info
+    try:
+        signature = inspect.signature(transcribe)
+    except (TypeError, ValueError):
+        return info
+
+    parameters = signature.parameters
+    if "batch_size" in parameters:
+        info["accepts_batch_size"] = True
+
+    for candidate in (
+        "decode_options",
+        "decoding_options",
+        "decoder_options",
+        "transcription_options",
+    ):
+        if candidate in parameters:
+            info["decode_option_param"] = candidate
+            break
+    return info
+
+
+def _inject_batch_size_into_decode_options(options: Any, batch_size: int) -> Any:
+    if options is None:
+        factory = _resolve_decode_options_factory()
+        if factory is None:
+            return {"batch_size": batch_size}
+        try:
+            return factory(batch_size=batch_size)
+        except TypeError:
+            # Fallback to dictionary if signature mismatch.
+            return {"batch_size": batch_size}
+
+    if isinstance(options, dict):
+        updated = dict(options)
+        updated["batch_size"] = batch_size
+        return updated
+
+    if is_dataclass(options):
+        try:
+            return replace(options, batch_size=batch_size)
+        except TypeError:
+            pass
+
+    if hasattr(options, "batch_size"):
+        try:
+            setattr(options, "batch_size", batch_size)
+            return options
+        except Exception:
+            pass
+
+    return options
+
+
+def _resolve_decode_options_factory() -> Callable[..., Any] | None:
+    candidates = (
+        "DecodingOptions",
+        "DecodeOptions",
+        "DecoderOptions",
+        "TranscriptionOptions",
+    )
+    for name in candidates:
+        try:
+            module = __import__("faster_whisper.transcribe", fromlist=[name])
+            factory = getattr(module, name, None)
+        except Exception:
+            factory = None
+        if factory is None:
+            continue
+        if callable(factory):
+            return factory
+    return None
