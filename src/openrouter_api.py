@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 
@@ -276,6 +276,84 @@ class OpenRouterAPI:
 
         return result
 
+    def _normalize_message_content(self, content: Any) -> tuple[str, int]:
+        """Extrai segmentos textuais de ``content`` e devolve o texto normalizado."""
+
+        segments: list[str] = []
+
+        def _collect(value: Any) -> None:
+            if value is None:
+                return
+            if isinstance(value, str):
+                segments.append(value)
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    _collect(item)
+                return
+            if isinstance(value, dict):
+                # Campos mais comuns retornados pelo OpenRouter
+                for key in ("text", "content", "value", "message"):
+                    if key in value:
+                        _collect(value[key])
+                return
+
+        _collect(content)
+        normalized = "".join(segments).strip()
+        return normalized, len(segments)
+
+    def _extract_text_from_result(
+        self,
+        result: dict[str, Any],
+        *,
+        attempt_number: int,
+        total_attempts: int,
+    ) -> str:
+        """Obtém o conteúdo textual do primeiro ``choice`` retornado pela API."""
+
+        choices = result.get("choices")
+        if not isinstance(choices, list) or not choices:
+            LOGGER.error(
+                "OpenRouter API returned payload without choices (attempt %s/%s): %s",
+                attempt_number,
+                total_attempts,
+                result,
+            )
+            raise RetryableOperationError(
+                "OpenRouter API returned an unexpected payload without choices.",
+                retryable=True,
+            )
+
+        for idx, choice in enumerate(choices):
+            message = choice.get("message") if isinstance(choice, dict) else None
+            content: Any | None = None
+            if isinstance(message, dict):
+                content = message.get("content")
+            if content is None and isinstance(choice, dict):
+                content = choice.get("content")
+
+            text, segments = self._normalize_message_content(content)
+            LOGGER.debug(
+                "OpenRouter message content extracted (attempt %s/%s, choice=%s, segments=%s).",
+                attempt_number,
+                total_attempts,
+                idx,
+                segments,
+            )
+            if segments > 0 or content is not None:
+                return text
+
+        LOGGER.error(
+            "OpenRouter API response did not contain textual content (attempt %s/%s): %s",
+            attempt_number,
+            total_attempts,
+            result,
+        )
+        raise RetryableOperationError(
+            "OpenRouter API response did not contain textual content.",
+            retryable=True,
+        )
+
     def correct_text(
         self,
         text: str,
@@ -293,11 +371,12 @@ class OpenRouterAPI:
         Returns:
             str: Texto corrigido ou original caso falhe.
         """
-        if not text or not text.strip():
+        normalized_input = text.strip() if isinstance(text, str) else ""
+        if not normalized_input:
             LOGGER.warning(
                 "Empty text provided to OpenRouter API; skipping correction"
             )
-            return text
+            return normalized_input
 
         # Create the prompt for the model
         system_message = (
@@ -316,7 +395,7 @@ class OpenRouterAPI:
                 {"role": "system", "content": system_message},
                 {
                     "role": "user",
-                    "content": f"Please correct this transcribed text: {text}",
+                    "content": f"Please correct this transcribed text: {normalized_input}",
                 }
             ],
             "temperature": 0.0,
@@ -337,22 +416,22 @@ class OpenRouterAPI:
                 attempt_number,
                 total_attempts,
             )
-            if result is not None and result.get("choices"):
-                return result["choices"][0]["message"]["content"]
+            if not isinstance(result, dict):
+                LOGGER.error(
+                    "Unexpected non-dict response from OpenRouter API (attempt %s/%s): %r",
+                    attempt_number,
+                    total_attempts,
+                    result,
+                )
+                raise RetryableOperationError(
+                    "OpenRouter API returned an unexpected payload type.",
+                    retryable=True,
+                )
 
-            LOGGER.error(
-                "Unexpected response format from OpenRouter API: %s",
+            return self._extract_text_from_result(
                 result,
-            )
-            LOGGER.debug(
-                "OpenRouter unexpected response payload (attempt %s/%s): %s",
-                attempt_number,
-                total_attempts,
-                json.dumps(result, ensure_ascii=False),
-            )
-            raise RetryableOperationError(
-                "OpenRouter API returned an unexpected payload.",
-                retryable=True,
+                attempt_number=attempt_number,
+                total_attempts=total_attempts,
             )
 
         try:
@@ -371,14 +450,14 @@ class OpenRouterAPI:
                 "Failed to correct text with OpenRouter API, returning original text (operation_id=%s)",
                 operation_id,
             )
-            return text
+            return normalized_input
         except Exception:
             LOGGER.error(
                 "OpenRouter correction failed with unexpected error after retries (operation_id=%s)",
                 operation_id,
                 exc_info=True,
             )
-            return text
+            return normalized_input
 
         LOGGER.info(
             log_context(
@@ -388,7 +467,9 @@ class OpenRouterAPI:
                 operation_id=operation_id,
             )
         )
-        if corrected_text != text:
+        corrected_text = corrected_text.strip()
+
+        if corrected_text != normalized_input:
             LOGGER.info("OpenRouter API made corrections to the text")
         else:
             LOGGER.info("OpenRouter API returned text unchanged")
@@ -409,14 +490,15 @@ class OpenRouterAPI:
         """
         self.reinitialize_client(api_key=api_key, model_id=model)
 
-        if not text or not text.strip():
+        normalized_input = text.strip() if isinstance(text, str) else ""
+        if not normalized_input:
             LOGGER.warning(
                 "Empty text provided to OpenRouter API; skipping correction"
             )
-            return text
+            return normalized_input
 
         system_message = prompt.replace("{text}", "").strip()
-        user_message = text
+        user_message = normalized_input
 
         payload = {
             "model": self.model_id,
@@ -439,26 +521,25 @@ class OpenRouterAPI:
                 attempt_number,
                 total_attempts,
             )
-            if result is not None and result.get("choices"):
-                return result["choices"][0]["message"]["content"]
-
-            LOGGER.error(
-                "Unexpected response format from OpenRouter API: %s",
+            if not isinstance(result, dict):
+                LOGGER.error(
+                    "Unexpected non-dict response from OpenRouter API (attempt %s/%s): %r",
+                    attempt_number,
+                    total_attempts,
+                    result,
+                )
+                raise RetryableOperationError(
+                    "OpenRouter API returned an unexpected payload type.",
+                    retryable=True,
+                )
+            return self._extract_text_from_result(
                 result,
-            )
-            LOGGER.debug(
-                "OpenRouter unexpected response payload (attempt %s/%s): %s",
-                attempt_number,
-                total_attempts,
-                json.dumps(result, ensure_ascii=False),
-            )
-            raise RetryableOperationError(
-                "OpenRouter API returned an unexpected payload.",
-                retryable=True,
+                attempt_number=attempt_number,
+                total_attempts=total_attempts,
             )
 
         try:
-            return retry_with_backoff(
+            corrected_text = retry_with_backoff(
                 _invoke_async,
                 max_attempts=attempts,
                 base_delay=self.retry_base_delay,
@@ -473,10 +554,12 @@ class OpenRouterAPI:
                 "Failed to correct text with OpenRouter API, returning original text (operation_id=%s)",
                 operation_id,
             )
+            return normalized_input
         except Exception:
             LOGGER.error(
                 "OpenRouter async correction failed with unexpected error after retries (operation_id=%s)",
                 operation_id,
                 exc_info=True,
             )
-        return text
+            return normalized_input
+        return corrected_text.strip()

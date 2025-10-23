@@ -178,15 +178,18 @@ class StateManager:
     def _notify_subscribers(self, notification: StateNotification):
         """Notifies all subscribers of a state change."""
         event_name = notification.event.name if notification.event else None
+        log_details_payload = {
+            "state": notification.state,
+            "event_name": event_name,
+        }
+        if notification.operation_id is not None:
+            log_details_payload["operation_id"] = notification.operation_id
+
         with log_duration(
             self._logger,
             "Dispatching state notification.",
             event="state.notification_dispatch",
-            details={
-                "state": notification.state,
-                "event_name": event_name,
-                "operation_id": notification.operation_id,
-            },
+            details=log_details_payload,
         ) as log_details:
             log_details["subscriber_count"] = len(self._subscribers)
             had_errors = False
@@ -253,11 +256,19 @@ class StateManager:
         detail_payload: object | None,
         message: str | None,
         source: str | None,
+        operation_id: str | None,
     ) -> tuple[StateNotification, str] | None:
         previous_state = self._current_state
         last_event = self._last_notification.event if self._last_notification else None
         last_state = self._last_notification.state if self._last_notification else None
-        if last_event == event_obj and last_state == mapped_state:
+        last_operation_id = (
+            self._last_notification.operation_id if self._last_notification else None
+        )
+        if (
+            last_event == event_obj
+            and last_state == mapped_state
+            and last_operation_id == operation_id
+        ):
             self._logger.debug(
                 log_context(
                     "Duplicate state notification suppressed.",
@@ -265,9 +276,24 @@ class StateManager:
                     state=mapped_state,
                     event_name=event_obj.name if event_obj else None,
                     source=source,
+                    operation_id=operation_id,
                 )
             )
             return None
+
+        operation_id: str | None = None
+        if isinstance(detail_payload, Mapping):
+            raw_operation_id = detail_payload.get("operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    operation_id = candidate
+        elif hasattr(detail_payload, "operation_id"):
+            raw_operation_id = getattr(detail_payload, "operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    operation_id = candidate
 
         notification = StateNotification(
             event=event_obj,
@@ -275,6 +301,7 @@ class StateManager:
             previous_state=previous_state,
             details=detail_payload if detail_payload is not None else message,
             source=source,
+            operation_id=operation_id,
         )
         self._current_state = mapped_state
         self._last_notification = notification
@@ -289,18 +316,23 @@ class StateManager:
         mapped_state: str,
         message: str | None,
         source: str | None,
+        operation_id: str | None = None,
     ) -> None:
         origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
+        log_fields = {
+            "previous_state": previous_state,
+            "current_state": mapped_state,
+            "origin": origin_label,
+            "message": message,
+            "source": source,
+        }
+        if notification.operation_id is not None:
+            log_fields["operation_id"] = notification.operation_id
         self._logger.info(
             log_context(
                 "Application state transitioned.",
                 event="state.transition",
-                previous_state=previous_state,
-                current_state=mapped_state,
-                origin=origin_label,
-                message=message,
-                source=source,
-                operation_id=operation_id,
+                **log_fields,
             )
         )
         self._notify_subscribers(notification)
@@ -311,8 +343,13 @@ class StateManager:
         *,
         details: object | None = None,
         source: str | None = None,
+        operation_id: str | None = None,
     ):
-        """Applies a state transition and notifies subscribers."""
+        """Applies a state transition and notifies subscribers.
+
+        When ``operation_id`` is provided it is attached to the resulting
+        :class:`StateNotification` and emitted log records.
+        """
 
         event_obj, mapped_state, message, detail_payload = self._resolve_transition(event, details)
 
@@ -323,6 +360,7 @@ class StateManager:
                 detail_payload=detail_payload,
                 message=message,
                 source=source,
+                operation_id=operation_id,
             )
             if result is None:
                 return
@@ -335,6 +373,7 @@ class StateManager:
             mapped_state=mapped_state,
             message=message,
             source=source,
+            operation_id=operation_id,
         )
 
     def _normalize_expected_states(
@@ -383,6 +422,7 @@ class StateManager:
         *,
         details: object | None = None,
         source: str | None = None,
+        operation_id: str | None = None,
     ) -> bool:
         """Conditionally apply a transition when the current state matches ``expected_state``.
 
@@ -391,6 +431,9 @@ class StateManager:
         transcription workers). By guarding the transition with the expected
         current state we avoid reverting a newer state and reduce race-condition
         windows when coordinating long-running operations.
+
+        When ``operation_id`` is provided it is attached to the resulting
+        :class:`StateNotification` and emitted log records.
         """
 
         event_obj, mapped_state, message, detail_payload = self._resolve_transition(event, details)
@@ -408,6 +451,7 @@ class StateManager:
                         requested_state=mapped_state,
                         requested_event=event_obj.name if event_obj else None,
                         source=source,
+                        operation_id=operation_id,
                     )
                 )
                 return False
@@ -418,6 +462,7 @@ class StateManager:
                 detail_payload=detail_payload,
                 message=message,
                 source=source,
+                operation_id=operation_id,
             )
             if result is None:
                 return True
@@ -430,6 +475,7 @@ class StateManager:
             mapped_state=mapped_state,
             message=message,
             source=source,
+            operation_id=operation_id,
         )
         return True
 
