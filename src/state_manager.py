@@ -437,6 +437,7 @@ class StateManager:
                         requested_state=mapped_state,
                         requested_event=event_obj.name if event_obj else None,
                         source=source,
+                        operation_id=operation_id,
                     )
                 )
                 return False

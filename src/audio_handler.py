@@ -753,11 +753,17 @@ class AudioHandler:
             except sd.PortAudioError as e:
                 self._log.error(f"PortAudio error during recording: {e}", exc_info=True)
                 self.is_recording = False
-                self.state_manager.set_state(sm.STATE_ERROR_AUDIO)
+                self.state_manager.set_state(
+                    sm.STATE_ERROR_AUDIO,
+                    operation_id=self._current_operation_id,
+                )
             except Exception as e:
                 self._log.error(f"Error in audio recording thread: {e}", exc_info=True)
                 self.is_recording = False
-                self.state_manager.set_state(sm.STATE_ERROR_AUDIO)
+                self.state_manager.set_state(
+                    sm.STATE_ERROR_AUDIO,
+                    operation_id=self._current_operation_id,
+                )
             finally:
                 if self.audio_stream is not None:
                     self._close_input_stream()
