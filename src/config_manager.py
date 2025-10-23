@@ -8,13 +8,14 @@ import os
 import subprocess
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox
-from typing import Any, List, Mapping, TYPE_CHECKING
+from typing import Any, Callable, List, Mapping, TYPE_CHECKING
 
 import requests
 
@@ -479,6 +480,7 @@ class ConfigManager:
         self._secrets_hash = None
         self._invalid_timeout_cache: dict[str, Any] = {}
         self._invalid_retry_cache: dict[str, Any] = {}
+        self._catalog_update_lock = threading.Lock()
         self._config_existed_on_boot = config_existed
         self._bootstrap_state: dict[str, dict[str, Any]] = {
             "config": {
@@ -505,10 +507,10 @@ class ConfigManager:
         self._runtime_hardware_profile: HardwareProfile | None = None
         self._runtime_model_catalog: list[dict[str, Any]] = []
         self._runtime_recommendation: dict[str, Any] | None = None
+        self._catalog_refresh_lock = threading.Lock()
+        self._catalog_refresh_thread: threading.Thread | None = None
+        self._catalog_refresh_listeners: list[Callable[[str, Mapping[str, Any]], None]] = []
         self.load_config()
-        url = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
-        if url:
-            self.update_asr_curated_catalog_from_url(url)
 
     def _compute_hash(self, data) -> str:
         """Gera um hash SHA256 determinístico para o dicionário informado."""
@@ -1894,6 +1896,11 @@ class ConfigManager:
             for key, value in self.config.items()
             if previous_config.get(key) != value
         }
+        if ASR_CURATED_CATALOG_URL_CONFIG_KEY in changed_keys:
+            try:
+                self.refresh_curated_catalog_async(reason="apply_updates")
+            except Exception:  # pragma: no cover - defensive guard
+                LOGGER.debug("Failed to schedule catalog refresh via apply_updates.", exc_info=True)
         return changed_keys, warnings
 
     def build_simple_mode_reset_payload(self) -> dict[str, Any]:
@@ -2666,6 +2673,159 @@ class ConfigManager:
                 self._invalid_retry_cache.pop(key, None)
             return attempts
 
+    def register_catalog_refresh_listener(
+        self, callback: Callable[[str, Mapping[str, Any]], None]
+    ) -> None:
+        """Registra um observador para eventos de atualização do catálogo curado."""
+
+        if not callable(callback):
+            return
+        with self._catalog_refresh_lock:
+            if callback not in self._catalog_refresh_listeners:
+                self._catalog_refresh_listeners.append(callback)
+
+    def _emit_catalog_refresh_event(self, phase: str, payload: Mapping[str, Any]) -> None:
+        listeners: list[Callable[[str, Mapping[str, Any]], None]]
+        with self._catalog_refresh_lock:
+            listeners = list(self._catalog_refresh_listeners)
+        for callback in listeners:
+            try:
+                callback(phase, payload)
+            except Exception:  # pragma: no cover - observadores externos
+                LOGGER.debug(
+                    "Catalog refresh listener failed during '%s'.",
+                    phase,
+                    exc_info=True,
+                )
+
+    def refresh_curated_catalog_async(
+        self,
+        *,
+        url: str | None = None,
+        timeout: float | int | None = None,
+        reason: str = "manual",
+        timeout_strategy: str = "fixed",
+    ) -> bool:
+        """Agenda uma atualização assíncrona do catálogo curado de modelos."""
+
+        configured_url = url if url is not None else self.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
+        target_url = str(configured_url or "").strip()
+        if not target_url:
+            LOGGER.debug(
+                StructuredMessage(
+                    "Skipping curated catalog refresh because no URL is configured.",
+                    event="config.catalog.refresh_skipped",
+                    details={"reason": reason},
+                )
+            )
+            return False
+
+        try:
+            timeout_value = float(timeout) if timeout is not None else 10.0
+        except (TypeError, ValueError):
+            timeout_value = 10.0
+        if timeout_value <= 0:
+            timeout_value = 10.0
+
+        operation_id = f"catalog_refresh_{time.time_ns()}"
+
+        def _runner() -> None:
+            start_time = time.perf_counter()
+            success = False
+            error_message: str | None = None
+            try:
+                success = self.update_asr_curated_catalog_from_url(target_url, timeout=timeout_value)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                error_message = str(exc)
+                LOGGER.error(
+                    StructuredMessage(
+                        "Curated catalog refresh encountered an unexpected error.",
+                        event="config.catalog.refresh_failed",
+                        details={
+                            "url": target_url,
+                            "timeout_seconds": timeout_value,
+                            "timeout_strategy": timeout_strategy,
+                            "operation_id": operation_id,
+                            "error": error_message,
+                        },
+                    ),
+                    exc_info=True,
+                )
+            finally:
+                duration = time.perf_counter() - start_time
+                result_payload = {
+                    "url": target_url,
+                    "timeout_seconds": timeout_value,
+                    "timeout_strategy": timeout_strategy,
+                    "reason": reason,
+                    "operation_id": operation_id,
+                    "success": bool(success),
+                    "duration_seconds": round(duration, 3),
+                }
+                if error_message:
+                    result_payload["error"] = error_message
+
+                if error_message:
+                    level = logging.ERROR
+                    headline = "Curated catalog refresh failed."
+                elif success:
+                    level = logging.INFO
+                    headline = "Curated catalog refresh completed successfully."
+                else:
+                    level = logging.WARNING
+                    headline = "Curated catalog refresh finished without updates."
+
+                LOGGER.log(
+                    level,
+                    StructuredMessage(
+                        headline,
+                        event="config.catalog.refresh_done",
+                        details=result_payload,
+                    ),
+                )
+                self._emit_catalog_refresh_event("done", result_payload)
+                with self._catalog_refresh_lock:
+                    self._catalog_refresh_thread = None
+
+        with self._catalog_refresh_lock:
+            if self._catalog_refresh_thread and self._catalog_refresh_thread.is_alive():
+                LOGGER.debug(
+                    StructuredMessage(
+                        "Curated catalog refresh request ignored because another refresh is in flight.",
+                        event="config.catalog.refresh_skipped",
+                        details={
+                            "url": target_url,
+                            "reason": "inflight",
+                            "operation_id": operation_id,
+                        },
+                    )
+                )
+                return False
+            thread = threading.Thread(
+                target=_runner,
+                name="CuratedCatalogRefresh",
+                daemon=True,
+            )
+            self._catalog_refresh_thread = thread
+
+        start_payload = {
+            "url": target_url,
+            "timeout_seconds": timeout_value,
+            "timeout_strategy": timeout_strategy,
+            "reason": reason,
+            "operation_id": operation_id,
+        }
+        LOGGER.info(
+            StructuredMessage(
+                "Scheduling curated catalog refresh in the background.",
+                event="config.catalog.refresh_start",
+                details=start_payload,
+            )
+        )
+        self._emit_catalog_refresh_event("start", start_payload)
+        thread.start()
+        return True
+
     def set(self, key, value):
         if key == ASR_BACKEND_CONFIG_KEY:
             value = _normalize_asr_backend(value)
@@ -3200,10 +3360,24 @@ class ConfigManager:
         return normalized
 
     def get_asr_curated_catalog(self):
-        return self.config.get(
-            ASR_CURATED_CATALOG_CONFIG_KEY,
-            self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
-        )
+        with self._catalog_update_lock:
+            catalog = self.config.get(
+                ASR_CURATED_CATALOG_CONFIG_KEY,
+                self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
+            )
+            if not isinstance(catalog, list):
+                catalog = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
+            return copy.deepcopy(catalog)
+
+    def get_asr_curated_catalog_url(self) -> str:
+        """Return the configured remote source for the curated catalog."""
+
+        raw_value = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
+        if isinstance(raw_value, str):
+            return raw_value.strip()
+        if raw_value is None:
+            return ""
+        return str(raw_value).strip()
 
     def get_max_parallel_downloads(self) -> int:
         value = self.config.get("max_parallel_downloads", self.default_config.get("max_parallel_downloads", 1))
@@ -3224,11 +3398,25 @@ class ConfigManager:
 
     def set_asr_curated_catalog(self, value: list):
         if isinstance(value, list):
-            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = value
+            normalized = value
         else:
-            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = self.default_config[
-                ASR_CURATED_CATALOG_CONFIG_KEY
-            ]
+            normalized = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
+        with self._catalog_update_lock:
+            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = copy.deepcopy(normalized)
+
+    def bootstrap_curated_catalog(self, *, timeout: int = 10) -> bool:
+        """Refresh the curated ASR catalog from the configured remote source."""
+
+        url = self.get_asr_curated_catalog_url()
+        if not url:
+            LOGGER.debug(
+                log_context(
+                    "Skipping curated catalog bootstrap because no URL is configured.",
+                    event="config.catalog.bootstrap.skipped",
+                )
+            )
+            return False
+        return self.update_asr_curated_catalog_from_url(url, timeout=timeout)
 
     def get_runtime_model_catalog(self) -> list[dict[str, Any]]:
         return copy.deepcopy(self._runtime_model_catalog)
@@ -3239,29 +3427,56 @@ class ConfigManager:
     def get_runtime_hardware_profile(self) -> HardwareProfile | None:
         return self._runtime_hardware_profile
 
-    def update_asr_curated_catalog_from_url(self, url: str, timeout: int = 10) -> bool:
+    def update_asr_curated_catalog_from_url(
+        self,
+        url: str,
+        timeout: tuple[float, float] | float = (3.0, 3.0),
+    ) -> bool:
         """Carrega um catálogo curado de modelos de ASR a partir de ``url``.
 
         O JSON recebido deve ser uma lista de dicionários contendo pelo menos o
         campo ``model_id``. Caso os dados sejam válidos, o catálogo interno é
-        atualizado e salvo no arquivo de configuração.
+        atualizado e salvo no arquivo de configuração. Em caso de qualquer
+        falha de rede, parse ou persistência, o catálogo atual é preservado sem
+        tentar reescrever o arquivo de configuração para evitar perda de estado.
 
         :param url: Endereço da fonte externa.
-        :param timeout: Tempo máximo de espera para a requisição em segundos.
+        :param timeout: Timeout (conexão, leitura) utilizado na requisição.
         :return: ``True`` se o catálogo foi atualizado com sucesso.
         """
 
+        if isinstance(timeout, (int, float)):
+            timeout_tuple: tuple[float, float] = (float(timeout), float(timeout))
+        else:
+            connect, read = timeout
+            timeout_tuple = (float(connect), float(read))
+
         try:
-            response = requests.get(url, timeout=timeout)
+            response = requests.get(url, timeout=timeout_tuple)
             response.raise_for_status()
-            data = response.json()
-            is_list = isinstance(data, list)
-            all_have_ids = all(
-                isinstance(item, dict) and "model_id" in item
-                for item in data
+        except requests.RequestException as exc:
+            LOGGER.warning(
+                StructuredMessage(
+                    "Unable to refresh curated ASR catalog; keeping existing entries.",
+                    event="config.asr_catalog.fetch_failed",
+                    details={
+                        "url": url,
+                        "timeout_connect": timeout_tuple[0],
+                        "timeout_read": timeout_tuple[1],
+                        "reason": str(exc),
+                    },
+                )
             )
             if is_list and all_have_ids:
                 self.set_asr_curated_catalog(data)
+                LOGGER.info(
+                    log_context(
+                        "Curated ASR catalog updated from remote source.",
+                        event="config.catalog.bootstrap.success",
+                        url=url,
+                        entries=len(data),
+                    )
+                )
                 try:
                     self.save_config()
                 except Exception:

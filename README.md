@@ -189,6 +189,18 @@ When a model install is required, the core service performs a deterministic sequ
 
 These safeguards ensure that repeated launches avoid redundant downloads and that any failure is actionable without inspecting the filesystem manually.
 
+### Curated model catalog refresh
+
+After initialization the configuration manager schedules a background refresh of the curated model catalog. The network call runs on its own thread, keeping the tray icon, hotkeys, and onboarding flow fully responsive. Structured log events `config.catalog.refresh_start` and `config.catalog.refresh_done` capture the source URL, timeout strategy, and operation identifier so you can trace latency spikes or retry loops directly from the logs. The tray tooltip surfaces matching status: when the refresh starts it announces that the catalog is being updated in the background, and on completion it either confirms success or warns that the bundled catalog remains active.
+
+If a network failure or malformed payload prevents the refresh from completing, you will observe:
+
+- A `config.catalog.refresh_done` entry with `success=false` and the associated error details in `logs/app.log`.
+- A tray tooltip indicating that the local catalog is still in use while the update retried asynchronously.
+- The settings catalog retaining the previous entries until connectivity is restored.
+
+Editing `asr_curated_catalog_url` from the advanced settings or onboarding wizard reuses the same non-blocking workflow, so administrators can trigger manual refreshes without freezing the UI.
+
 ### Storage relocation workflow
 
 Changing the storage root inside **Settings** immediately evaluates whether the previous base directory differs from the new target. When the user has not overridden the model cache or recordings directories, the configuration manager automatically moves the existing folders, skipping migration if the destination already hosts data. Every move operation is logged with structured metadata so audits can confirm where heavy assets live after the change.

@@ -737,6 +737,15 @@ def main(argv: list[str] | None = None) -> int:
         app_core_instance.flush_pending_ui_notifications()
         ui_manager_instance.on_exit_app = on_exit_app_enhanced
 
+        main_tk_root.after(0, app_core_instance.schedule_initial_onboarding)
+        LOGGER.info(
+            StructuredMessage(
+                "Initial onboarding scheduled on Tkinter event loop.",
+                event="bootstrap.onboarding_scheduled",
+                onboarding_enabled=app_core_instance.onboarding_enabled,
+            )
+        )
+
         if diagnostics_report.has_fatal_errors:
             fatal_summary = "\n\n".join(
                 diagnostics_report.user_friendly_summary(include_success=False)
