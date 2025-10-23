@@ -36,6 +36,7 @@ from .config_manager import (
     ASR_MODEL_ID_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
+    ASR_CURATED_CATALOG_URL_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     MODELS_STORAGE_DIR_CONFIG_KEY,
     DEPS_INSTALL_DIR_CONFIG_KEY,
@@ -145,6 +146,14 @@ class AppCore:
 
         # --- Módulos ---
         self.config_manager = config_manager or ConfigManager()
+        self.config_manager.register_catalog_refresh_listener(self._handle_catalog_refresh_event)
+        try:
+            self.config_manager.refresh_curated_catalog_async(reason="bootstrap")
+        except Exception:  # pragma: no cover - defensive logging only
+            LOGGER.debug(
+                "Unable to schedule curated catalog refresh during bootstrap.",
+                exc_info=True,
+            )
         self.is_running_as_admin = _detect_admin_privileges()
         self.dependency_audit_result: DependencyAuditResult | None = None
         self._dependency_audit_failure_message: str | None = None
@@ -1547,6 +1556,27 @@ class AppCore:
         )
         self._queue_tooltip_update(tooltip)
 
+    def _handle_catalog_refresh_event(self, phase: str, payload: Mapping[str, Any]) -> None:
+        """Apresenta notificações amigáveis durante a atualização do catálogo curado."""
+
+        context: Mapping[str, Any] = payload or {}
+        if phase == "start":
+            self._queue_tooltip_update(
+                "Atualizando catálogo curado em segundo plano. A aplicação permanece disponível."
+            )
+            return
+        if phase != "done":
+            return
+
+        success = bool(context.get("success"))
+        if success:
+            message = "Catálogo curado atualizado a partir da fonte remota."
+        else:
+            message = (
+                "Não foi possível atualizar o catálogo curado remoto; a lista local continua ativa."
+            )
+        self._queue_tooltip_update(message)
+
     def _queue_tooltip_update(self, message: str) -> None:
         if not message:
             return
@@ -2934,6 +2964,14 @@ class AppCore:
         if key in {ASR_BACKEND_CONFIG_KEY, ASR_MODEL_ID_CONFIG_KEY, "asr_model"}:
             self.config_manager.reset_last_model_prompt_decision()
         self.config_manager.save_config()
+        if key == ASR_CURATED_CATALOG_URL_CONFIG_KEY:
+            try:
+                self.config_manager.refresh_curated_catalog_async(reason="update_setting")
+            except Exception:  # pragma: no cover - defensive logging only
+                LOGGER.debug(
+                    "Unable to schedule curated catalog refresh after update_setting.",
+                    exc_info=True,
+                )
         LOGGER.info(f"Configuration '{key}' updated to: {value}")
 
         # Re-aplicar configurações aos atributos do AppCore
