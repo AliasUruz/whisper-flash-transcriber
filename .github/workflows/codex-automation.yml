@@ -1,4 +1,4 @@
-# .github/workflows/codex-automation.yml (Versão 8.0: Arquitetura de 2 Jobs - Otimista + Faxineiro)
+# .github/workflows/codex-automation.yml (Versão 9.0: Gatilho 'labeled' Corrigido)
 
 name: 'Codex Automation'
 
@@ -9,20 +9,22 @@ on:
   
   # Gatilho para o "Otimista" (roda em atividade de PR)
   pull_request_target:
-    types: [opened, reopened, synchronize] # Removido 'labeled' para reduzir o "ruído" de gatilhos
+    # CORREÇÃO: Removemos 'opened' e adicionamos 'labeled'.
+    # Isso elimina a "condição de corrida" e os jobs pulados.
+    types: [labeled, reopened, synchronize]
     branches: [ 'stable', 'alpha' ]
 
 jobs:
   #############################################################
-  # Job 1: O Otimista (Tentativa de Merge Imediato e Paralelo)
+  # Job 1: O Otimista (Tentativa de Merge Imediato)
   #############################################################
   optimistic_merge:
     name: 'Attempt Immediate Merge'
-    # Só roda em eventos de PR e se tiver a label 'codex'.
+    # Esta condição agora será sempre verdadeira, pois o workflow só roda 
+    # DEPOIS que a label é adicionada (ou em um 'synchronize'/'reopened').
     if: github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'codex')
     
     runs-on: ubuntu-latest
-    # FILA POR PR: Permite que múltiplos PRs rodem em paralelo sem se cancelarem.
     concurrency:
       group: ${{ github.workflow }}-optimistic-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -67,11 +69,9 @@ jobs:
   #############################################################
   scheduled_queue_processor:
     name: 'Process Full Queue (Scheduled)'
-    # Só roda no evento de 'schedule'.
     if: github.event_name == 'schedule'
     
     runs-on: ubuntu-latest
-    # FILA ÚNICA: Garante que apenas um "faxineiro" rode por vez.
     concurrency:
       group: ${{ github.workflow }}-janitor
       cancel-in-progress: true
