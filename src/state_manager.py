@@ -2,7 +2,7 @@
 This file will contain the StateManager class and related state management logic.
 """
 from threading import RLock
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict, is_dataclass
 from enum import Enum, auto, unique
 from collections.abc import Callable, Iterable, Mapping
 
@@ -150,6 +150,7 @@ class StateManager:
         self.main_tk_root = main_tk_root
         self._current_state = initial_state
         self._last_notification: StateNotification | None = None
+        self._last_detail_signature: object | None = None
         self._state_lock = RLock()
         self._subscribers: list[Callable[[StateNotification], None]] = []
         self._logger = LOGGER.bind(manager_id=f"state-{id(self):x}")
@@ -258,20 +259,16 @@ class StateManager:
         source: str | None,
         operation_id: str | None,
     ) -> tuple[StateNotification, str] | None:
-        operation_identifier: str | None = operation_id
-        if isinstance(detail_payload, Mapping):
-            raw_operation_id = detail_payload.get("operation_id")
-            if isinstance(raw_operation_id, str):
-                candidate = raw_operation_id.strip()
-                if candidate and operation_identifier is None:
-                    operation_identifier = candidate
-        elif hasattr(detail_payload, "operation_id"):
-            raw_operation_id = getattr(detail_payload, "operation_id")
-            if isinstance(raw_operation_id, str):
-                candidate = raw_operation_id.strip()
-                if candidate and operation_identifier is None:
-                    operation_identifier = candidate
+        """Apply a transition while ``_state_lock`` is held.
 
+        The method updates the tracked state and returns the generated
+        :class:`StateNotification` alongside the previous state. When the
+        incoming request would produce the same event, mapped state, resolved
+        ``operation_id`` (explicit argument or derived from ``details``) and
+        normalized detail payload (including message fallbacks) as the most
+        recent notification, it suppresses the transition and returns ``None``
+        instead of emitting a duplicate notification.
+        """
         previous_state = self._current_state
 
         resolved_operation_id: str | None = None
@@ -299,30 +296,14 @@ class StateManager:
         last_operation_id = (
             self._last_notification.operation_id if self._last_notification else None
         )
-
-        normalized_operation_id: str | None = None
-        if isinstance(detail_payload, Mapping):
-            raw_operation_id = detail_payload.get("operation_id")
-            if isinstance(raw_operation_id, str):
-                candidate = raw_operation_id.strip()
-                if candidate:
-                    normalized_operation_id = candidate
-        elif hasattr(detail_payload, "operation_id"):
-            raw_operation_id = getattr(detail_payload, "operation_id")
-            if isinstance(raw_operation_id, str):
-                candidate = raw_operation_id.strip()
-                if candidate:
-                    normalized_operation_id = candidate
-
-        if isinstance(operation_id, str):
-            candidate = operation_id.strip()
-            if candidate:
-                normalized_operation_id = candidate
-
+        detail_value = detail_payload if detail_payload is not None else message
+        detail_signature = self._derive_detail_signature(detail_value)
+        resolved_operation_id = self._resolve_operation_id(operation_id, detail_payload)
         if (
             last_event == event_obj
             and last_state == mapped_state
-            and last_operation_id == normalized_operation_id
+            and last_operation_id == resolved_operation_id
+            and self._last_detail_signature == detail_signature
         ):
             self._logger.debug(
                 log_context(
@@ -331,7 +312,7 @@ class StateManager:
                     state=mapped_state,
                     event_name=event_obj.name if event_obj else None,
                     source=source,
-                    operation_id=normalized_operation_id,
+                    operation_id=resolved_operation_id,
                 )
             )
             return None
@@ -342,11 +323,95 @@ class StateManager:
             previous_state=previous_state,
             details=detail_payload if detail_payload is not None else message,
             source=source,
-            operation_id=normalized_operation_id,
+            operation_id=resolved_operation_id,
         )
         self._current_state = mapped_state
         self._last_notification = notification
+        self._last_detail_signature = detail_signature
         return notification, previous_state
+
+    @staticmethod
+    def _normalize_operation_id(candidate: object | None) -> str | None:
+        if isinstance(candidate, str):
+            normalized = candidate.strip()
+            if normalized:
+                return normalized
+        return None
+
+    def _resolve_operation_id(
+        self, explicit_operation_id: str | None, detail_payload: object | None
+    ) -> str | None:
+        resolved = self._normalize_operation_id(explicit_operation_id)
+        if resolved is not None:
+            return resolved
+
+        if isinstance(detail_payload, Mapping):
+            return self._normalize_operation_id(detail_payload.get("operation_id"))
+
+        if hasattr(detail_payload, "operation_id"):
+            return self._normalize_operation_id(getattr(detail_payload, "operation_id"))
+
+        return None
+
+    def _derive_detail_signature(self, details: object | None) -> object | None:
+        """Build a hashable representation of ``details`` for deduplication."""
+
+        if details is None:
+            return None
+
+        if isinstance(details, Mapping):
+            return (
+                "mapping",
+                tuple(
+                    sorted(
+                        (key, self._derive_detail_signature(value))
+                        for key, value in details.items()
+                    )
+                ),
+            )
+
+        if isinstance(details, (list, tuple)):
+            return (
+                type(details).__name__,
+                tuple(self._derive_detail_signature(value) for value in details),
+            )
+
+        if isinstance(details, (set, frozenset)):
+            return (
+                type(details).__name__,
+                tuple(sorted(self._derive_detail_signature(value) for value in details)),
+            )
+
+        if is_dataclass(details):
+            return (
+                "dataclass",
+                type(details).__name__,
+                self._derive_detail_signature(asdict(details)),
+            )
+
+        if isinstance(details, bytes):
+            return ("bytes", details)
+
+        if isinstance(details, (str, int, float, bool)):
+            return ("scalar", details)
+
+        if hasattr(details, "__dict__"):
+            try:
+                return (
+                    "object",
+                    type(details).__name__,
+                    tuple(
+                        sorted(
+                            (key, self._derive_detail_signature(value))
+                            for key, value in vars(details).items()
+                        )
+                    ),
+                )
+            except TypeError:
+                # Objects without a normal ``vars`` mapping fall through to repr.
+                pass
+
+        return ("repr", repr(details))
 
     def _emit_transition(
         self,
