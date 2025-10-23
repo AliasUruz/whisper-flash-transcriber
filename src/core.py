@@ -486,12 +486,6 @@ class AppCore:
             LOGGER.debug(
                 "Initial onboarding disabled for this session; skipping wizard launch."
             )
-            return
-
-        LOGGER.debug(
-            "Processing scheduled initial onboarding check on the Tkinter loop."
-        )
-        self._maybe_run_initial_onboarding()
 
     def _maybe_run_initial_onboarding(self) -> None:
         try:
