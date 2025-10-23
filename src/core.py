@@ -363,12 +363,26 @@ class AppCore:
         self._apply_initial_config_to_core_attributes()
 
         self.model_download_timeout = self._resolve_model_download_timeout()
-        if self._onboarding_enabled:
-            self._maybe_run_initial_onboarding()
-        else:
+
+    @property
+    def onboarding_enabled(self) -> bool:
+        """Expose whether onboarding workflows are active for this session."""
+
+        return self._onboarding_enabled
+
+    def schedule_initial_onboarding(self) -> None:
+        """Execute the deferred onboarding check on the UI thread."""
+
+        if not self._onboarding_enabled:
             LOGGER.debug(
                 "Initial onboarding disabled for this session; skipping wizard launch."
             )
+            return
+
+        LOGGER.debug(
+            "Processing scheduled initial onboarding check on the Tkinter loop."
+        )
+        self._maybe_run_initial_onboarding()
 
     def _maybe_run_initial_onboarding(self) -> None:
         try:
