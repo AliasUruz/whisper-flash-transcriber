@@ -931,6 +931,7 @@ class AudioHandler:
                             "session_id": session_id,
                         },
                         source="audio_handler",
+                        operation_id=operation_id,
                     ):
                         self._log.debug(
                             "Recording start aborted: state guard rejected transition.",
@@ -1114,6 +1115,7 @@ class AudioHandler:
                         (sm.STATE_RECORDING, sm.STATE_IDLE),
                         sm.StateEvent.AUDIO_RECORDING_STOPPED,
                         source="audio_handler",
+                        operation_id=operation_id,
                     )
                     return False
 
@@ -1145,6 +1147,7 @@ class AudioHandler:
                         (sm.STATE_RECORDING, sm.STATE_IDLE),
                         sm.StateEvent.AUDIO_RECORDING_STOPPED,
                         source="audio_handler",
+                        operation_id=operation_id,
                     )
                     return False
 
