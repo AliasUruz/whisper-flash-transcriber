@@ -300,31 +300,30 @@ class StateManager:
             self._last_notification.operation_id if self._last_notification else None
         )
 
-        explicit_operation_id: str | None
-        if isinstance(operation_id, str):
-            stripped = operation_id.strip()
-            explicit_operation_id = stripped or None
-        else:
-            explicit_operation_id = None
-
-        effective_operation_id: str | None = explicit_operation_id
-        if effective_operation_id is None:
-            if isinstance(detail_payload, Mapping):
-                raw_operation_id = detail_payload.get("operation_id")
-            elif hasattr(detail_payload, "operation_id"):
-                raw_operation_id = getattr(detail_payload, "operation_id")
-            else:
-                raw_operation_id = None
-
-            if isinstance(raw_operation_id, str):
-                candidate = raw_operation_id.strip()
+        def _normalize_operation_id(raw_value: object | None) -> str | None:
+            if isinstance(raw_value, str):
+                candidate = raw_value.strip()
                 if candidate:
-                    effective_operation_id = candidate
+                    return candidate
+            return None
+
+        effective_operation_id = _normalize_operation_id(operation_id)
+
+        if isinstance(detail_payload, Mapping):
+            raw_operation_id = detail_payload.get("operation_id")
+            override = _normalize_operation_id(raw_operation_id)
+            if override is not None:
+                effective_operation_id = override
+        elif hasattr(detail_payload, "operation_id"):
+            raw_operation_id = getattr(detail_payload, "operation_id")
+            override = _normalize_operation_id(raw_operation_id)
+            if override is not None:
+                effective_operation_id = override
 
         if (
             last_event == event_obj
             and last_state == mapped_state
-            and last_operation_id == operation_identifier
+            and last_operation_id == effective_operation_id
         ):
             self._logger.debug(
                 log_context(
@@ -333,7 +332,7 @@ class StateManager:
                     state=mapped_state,
                     event_name=event_obj.name if event_obj else None,
                     source=source,
-                    operation_id=operation_identifier,
+                    operation_id=effective_operation_id,
                 )
             )
             return None
@@ -344,7 +343,7 @@ class StateManager:
             previous_state=previous_state,
             details=detail_payload if detail_payload is not None else message,
             source=source,
-            operation_id=operation_identifier,
+            operation_id=effective_operation_id,
         )
         self._current_state = mapped_state
         self._last_notification = notification
@@ -359,7 +358,6 @@ class StateManager:
         mapped_state: str,
         message: str | None,
         source: str | None,
-        operation_id: str | None = None,
     ) -> None:
         origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
         log_fields = {
@@ -416,7 +414,6 @@ class StateManager:
             mapped_state=mapped_state,
             message=message,
             source=source,
-            operation_id=notification.operation_id,
         )
 
     def _normalize_expected_states(
@@ -518,7 +515,6 @@ class StateManager:
             mapped_state=mapped_state,
             message=message,
             source=source,
-            operation_id=notification.operation_id,
         )
         return True
 

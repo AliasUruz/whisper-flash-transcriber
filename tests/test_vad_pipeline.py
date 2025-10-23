@@ -819,7 +819,7 @@ class TestCoreModuleImport(unittest.TestCase):
                 sys.modules[module_name] = original_core
 
 class TestStateManagerOperationIdPropagation(unittest.TestCase):
-    def test_set_state_propagates_operation_id(self):
+    def test_set_state_uses_explicit_argument_when_payload_missing(self):
         manager = sm.StateManager(sm.STATE_IDLE)
         notifications: list[sm.StateNotification] = []
         manager.subscribe(notifications.append)
@@ -838,6 +838,58 @@ class TestStateManagerOperationIdPropagation(unittest.TestCase):
         self.assertEqual(notification.operation_id, "test-op-123")
         self.assertEqual(notification.state, sm.STATE_LOADING_MODEL)
         self.assertEqual(notification.previous_state, sm.STATE_IDLE)
+
+    def test_set_state_payload_operation_id_overrides_argument(self):
+        manager = sm.StateManager(sm.STATE_IDLE)
+        notifications: list[sm.StateNotification] = []
+        manager.subscribe(notifications.append)
+
+        manager.set_state(
+            sm.StateEvent.MODEL_DOWNLOAD_STARTED,
+            details={"message": "Starting download", "operation_id": "payload-op"},
+            source="unit-test",
+            operation_id="argument-op",
+        )
+
+        self.assertEqual(manager.get_current_state(), sm.STATE_LOADING_MODEL)
+        self.assertEqual(len(notifications), 1)
+        notification = notifications[0]
+        self.assertEqual(notification.operation_id, "payload-op")
+
+    def test_transition_if_respects_operation_id_precedence(self):
+        manager = sm.StateManager(sm.STATE_IDLE)
+        notifications: list[sm.StateNotification] = []
+        manager.subscribe(notifications.append)
+
+        transitioned = manager.transition_if(
+            sm.STATE_IDLE,
+            sm.StateEvent.MODEL_DOWNLOAD_STARTED,
+            details={"message": "Starting download"},
+            source="unit-test",
+            operation_id="transition-op",
+        )
+
+        self.assertTrue(transitioned)
+        self.assertEqual(manager.get_current_state(), sm.STATE_LOADING_MODEL)
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[-1].operation_id, "transition-op")
+
+        notifications.clear()
+        manager.set_state(sm.StateEvent.MODEL_READY, source="unit-test")
+        notifications.clear()
+
+        transitioned = manager.transition_if(
+            sm.STATE_IDLE,
+            sm.StateEvent.MODEL_DOWNLOAD_STARTED,
+            details={"message": "Starting download", "operation_id": "payload-op"},
+            source="unit-test",
+            operation_id="argument-op",
+        )
+
+        self.assertTrue(transitioned)
+        self.assertEqual(manager.get_current_state(), sm.STATE_LOADING_MODEL)
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[-1].operation_id, "payload-op")
 
 
 if __name__ == "__main__":
