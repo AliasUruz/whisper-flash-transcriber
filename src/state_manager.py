@@ -258,6 +258,20 @@ class StateManager:
         source: str | None,
         operation_id: str | None,
     ) -> tuple[StateNotification, str] | None:
+        operation_identifier: str | None = operation_id
+        if isinstance(detail_payload, Mapping):
+            raw_operation_id = detail_payload.get("operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate and operation_identifier is None:
+                    operation_identifier = candidate
+        elif hasattr(detail_payload, "operation_id"):
+            raw_operation_id = getattr(detail_payload, "operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate and operation_identifier is None:
+                    operation_identifier = candidate
+
         previous_state = self._current_state
         last_event = self._last_notification.event if self._last_notification else None
         last_state = self._last_notification.state if self._last_notification else None
@@ -267,7 +281,7 @@ class StateManager:
         if (
             last_event == event_obj
             and last_state == mapped_state
-            and last_operation_id == operation_id
+            and last_operation_id == operation_identifier
         ):
             self._logger.debug(
                 log_context(
@@ -276,24 +290,10 @@ class StateManager:
                     state=mapped_state,
                     event_name=event_obj.name if event_obj else None,
                     source=source,
-                    operation_id=operation_id,
+                    operation_id=operation_identifier,
                 )
             )
             return None
-
-        operation_id: str | None = None
-        if isinstance(detail_payload, Mapping):
-            raw_operation_id = detail_payload.get("operation_id")
-            if isinstance(raw_operation_id, str):
-                candidate = raw_operation_id.strip()
-                if candidate:
-                    operation_id = candidate
-        elif hasattr(detail_payload, "operation_id"):
-            raw_operation_id = getattr(detail_payload, "operation_id")
-            if isinstance(raw_operation_id, str):
-                candidate = raw_operation_id.strip()
-                if candidate:
-                    operation_id = candidate
 
         notification = StateNotification(
             event=event_obj,
@@ -301,7 +301,7 @@ class StateManager:
             previous_state=previous_state,
             details=detail_payload if detail_payload is not None else message,
             source=source,
-            operation_id=operation_id,
+            operation_id=operation_identifier,
         )
         self._current_state = mapped_state
         self._last_notification = notification

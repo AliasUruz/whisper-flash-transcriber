@@ -42,6 +42,7 @@ class DownloadTask:
     metadata: Dict[str, object] = field(default_factory=dict)
     result: Optional[model_manager.ModelDownloadResult] = None
     error: Optional[BaseException] = None
+    emission_sequence: int = 0
 
     def snapshot(self) -> dict:
         percent = None
@@ -322,6 +323,9 @@ class ModelDownloadController:
     def _publish(self, task: DownloadTask, message: Optional[str] = None) -> None:
         if message:
             task.message = message
+        task.emission_sequence += 1
+        stable_operation_id = task.task_id
+        emission_operation_id = f"{stable_operation_id}:{task.emission_sequence}"
         with self._lock:
             details = task.snapshot()
             try:
@@ -329,6 +333,7 @@ class ModelDownloadController:
             except ValueError:
                 queue_position = None
             details["queue_position"] = queue_position
+            details["operation_id"] = stable_operation_id
             tasks_snapshot = [
                 self._tasks[tid].snapshot()
                 for tid in self._task_order
@@ -342,6 +347,7 @@ class ModelDownloadController:
                 "tasks": tasks_snapshot,
             },
             source="model_download",
+            operation_id=emission_operation_id,
         )
 
     def _finalize(self, task: DownloadTask) -> None:
