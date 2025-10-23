@@ -132,9 +132,12 @@ class AppCore:
         self.keyboard_lock = RLock()
         self.agent_mode_lock = RLock() # Adicionado para o modo agente
         self.model_prompt_lock = RLock()
+        self._catalog_refresh_lock = RLock()
         self._key_detection_thread: threading.Thread | None = None
         self._key_detection_target: str | None = None
         self._key_detection_previous_value: str | None = None
+        self._catalog_refresh_thread: threading.Thread | None = None
+        self._catalog_refresh_scheduled = False
 
         # --- Callbacks para UI (definidos externamente pelo UIManager) ---
         self.state_update_callback: StateUpdateCallback | None = None
@@ -210,6 +213,110 @@ class AppCore:
         )
         self._tracked_download_tasks: set[str] = set()
         self._auto_reload_tasks: set[str] = set()
+
+        self._schedule_curated_catalog_refresh()
+
+    def _schedule_curated_catalog_refresh(self, delay_ms: int = 2000) -> None:
+        """Trigger the curated catalog refresh once the UI loop is stable."""
+
+        if self._catalog_refresh_scheduled:
+            return
+        self._catalog_refresh_scheduled = True
+        after_callable = getattr(self.main_tk_root, "after", None)
+        if callable(after_callable):
+            try:
+                after_callable(delay_ms, self._launch_curated_catalog_refresh_worker)
+                return
+            except Exception as exc:  # pragma: no cover - defensive path
+                LOGGER.warning(
+                    log_context(
+                        "Failed to schedule curated catalog refresh via Tk loop; running immediately.",
+                        event="catalog.refresh.schedule_failed",
+                        error=str(exc),
+                    ),
+                    exc_info=True,
+                )
+        self._launch_curated_catalog_refresh_worker()
+
+    def _launch_curated_catalog_refresh_worker(self) -> None:
+        """Start a background thread that updates the curated ASR catalog."""
+
+        url = self.config_manager.get_asr_curated_catalog_url()
+        if not url:
+            LOGGER.debug(
+                log_context(
+                    "No curated catalog URL configured; skipping background refresh.",
+                    event="catalog.refresh.no_url",
+                )
+            )
+            return
+
+        with self._catalog_refresh_lock:
+            if (
+                self._catalog_refresh_thread is not None
+                and self._catalog_refresh_thread.is_alive()
+            ):
+                LOGGER.debug(
+                    log_context(
+                        "Curated catalog refresh already running; ignoring duplicate request.",
+                        event="catalog.refresh.already_running",
+                    )
+                )
+                return
+
+            def _worker() -> None:
+                LOGGER.debug(
+                    log_context(
+                        "Background curated catalog refresh started.",
+                        event="catalog.refresh.worker_start",
+                        url=url,
+                    )
+                )
+                try:
+                    success = self.config_manager.bootstrap_curated_catalog(timeout=15)
+                except Exception as exc:  # pragma: no cover - defensive path
+                    LOGGER.error(
+                        log_context(
+                            "Unexpected error while refreshing curated catalog.",
+                            event="catalog.refresh.worker_exception",
+                            url=url,
+                            error=str(exc),
+                        ),
+                        exc_info=True,
+                    )
+                    self.config_manager.record_runtime_notice(
+                        f"Failed to refresh curated ASR catalog: {exc}",
+                        category="curated_catalog",
+                        details={"url": url},
+                    )
+                else:
+                    if success:
+                        LOGGER.info(
+                            log_context(
+                                "Curated ASR catalog refreshed in background.",
+                                event="catalog.refresh.worker_success",
+                                url=url,
+                            )
+                        )
+                    else:
+                        LOGGER.warning(
+                            log_context(
+                                "Curated ASR catalog refresh completed without updates.",
+                                event="catalog.refresh.worker_noop",
+                                url=url,
+                            )
+                        )
+                finally:
+                    with self._catalog_refresh_lock:
+                        self._catalog_refresh_thread = None
+
+            thread = threading.Thread(
+                target=_worker,
+                name="CuratedCatalogRefresh",
+                daemon=True,
+            )
+            self._catalog_refresh_thread = thread
+            thread.start()
 
         self._running_with_elevated_privileges = self._detect_admin_privileges()
         if self._running_with_elevated_privileges:
