@@ -2028,6 +2028,22 @@ class TranscriptionHandler:
 
     def _get_dynamic_batch_size(self) -> int:
         device_in_use = (str(self.device_in_use or "").lower())
+
+        if self.batch_size_mode == "manual":
+            manual_value = self._sanitize_manual_batch_size()
+            logging.info(
+                "Manual batch size mode selected; using %s on device '%s'.",
+                manual_value,
+                device_in_use or "unknown",
+                extra={
+                    "event": "batch_size",
+                    "status": "manual",
+                    "device": device_in_use or "cpu",
+                },
+            )
+            self.last_dynamic_batch_size = manual_value
+            return manual_value
+
         if not (_torch_cuda_available() and device_in_use.startswith("cuda")):
             logging.info(
                 "GPU unavailable or not selected; using CPU batch size (4).",
@@ -2035,14 +2051,6 @@ class TranscriptionHandler:
             )
             self.last_dynamic_batch_size = 4
             return 4
-
-        if self.batch_size_mode == "manual":
-            logging.info(
-                f"Manual batch size mode selected. Using configured value: {self.manual_batch_size}",
-                extra={"event": "batch_size", "status": "manual"},
-            )
-            self.last_dynamic_batch_size = self.manual_batch_size
-            return self.manual_batch_size
 
         # Lógica para modo "auto" (dinâmico)
         resolved_index = self.gpu_index if isinstance(self.gpu_index, int) else 0
@@ -2070,6 +2078,43 @@ class TranscriptionHandler:
             extra={"event": "batch_size", "status": "auto", "base": base_value},
         )
         return final_value
+
+    def _sanitize_manual_batch_size(self) -> int:
+        raw_value = self.manual_batch_size
+        min_value = 1
+
+        try:
+            sanitized = int(raw_value)
+        except (TypeError, ValueError):
+            sanitized = None
+
+        if sanitized is None:
+            logging.warning(
+                "Invalid manual batch size '%s'; falling back to minimum (%s).",
+                raw_value,
+                min_value,
+                extra={"event": "batch_size", "status": "manual_invalid"},
+            )
+            sanitized = min_value
+        elif sanitized < min_value:
+            logging.warning(
+                "Manual batch size below minimum (%s). Using %s instead.",
+                sanitized,
+                min_value,
+                extra={"event": "batch_size", "status": "manual_clamped"},
+            )
+            sanitized = min_value
+
+        if sanitized != raw_value:
+            try:
+                self.manual_batch_size = int(sanitized)
+            except Exception:
+                self.manual_batch_size = sanitized
+        else:
+            self.manual_batch_size = sanitized
+
+        self.last_dynamic_batch_size = sanitized
+        return sanitized
 
     def _emit_device_warning(self, preferred: str, actual: str, reason: str, *, level: str = "warning") -> None:
         """Registra e propaga avisos de fallback de dispositivo."""
