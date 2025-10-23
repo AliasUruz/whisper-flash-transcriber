@@ -178,15 +178,18 @@ class StateManager:
     def _notify_subscribers(self, notification: StateNotification):
         """Notifies all subscribers of a state change."""
         event_name = notification.event.name if notification.event else None
+        log_details_payload = {
+            "state": notification.state,
+            "event_name": event_name,
+        }
+        if notification.operation_id is not None:
+            log_details_payload["operation_id"] = notification.operation_id
+
         with log_duration(
             self._logger,
             "Dispatching state notification.",
             event="state.notification_dispatch",
-            details={
-                "state": notification.state,
-                "event_name": event_name,
-                "operation_id": notification.operation_id,
-            },
+            details=log_details_payload,
         ) as log_details:
             log_details["subscriber_count"] = len(self._subscribers)
             had_errors = False
@@ -316,21 +319,20 @@ class StateManager:
         operation_id: str | None = None,
     ) -> None:
         origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
-        resolved_operation_id = operation_id or notification.operation_id
-        log_payload = {
-            "event": "state.transition",
+        log_fields = {
             "previous_state": previous_state,
             "current_state": mapped_state,
             "origin": origin_label,
             "message": message,
             "source": source,
         }
-        if resolved_operation_id:
-            log_payload["operation_id"] = resolved_operation_id
+        if notification.operation_id is not None:
+            log_fields["operation_id"] = notification.operation_id
         self._logger.info(
             log_context(
                 "Application state transitioned.",
-                **log_payload,
+                event="state.transition",
+                **log_fields,
             )
         )
         self._notify_subscribers(notification)
@@ -345,11 +347,8 @@ class StateManager:
     ):
         """Applies a state transition and notifies subscribers.
 
-        Args:
-            event: Event or legacy state string describing the transition.
-            details: Optional payload with additional context for subscribers.
-            source: Optional label describing who triggered the transition.
-            operation_id: Optional identifier used to correlate related events.
+        When ``operation_id`` is provided it is attached to the resulting
+        :class:`StateNotification` and emitted log records.
         """
 
         event_obj, mapped_state, message, detail_payload = self._resolve_transition(event, details)
@@ -433,12 +432,8 @@ class StateManager:
         current state we avoid reverting a newer state and reduce race-condition
         windows when coordinating long-running operations.
 
-        Args:
-            expected_state: State(s) that must match for the transition to apply.
-            event: Event or legacy state string describing the transition.
-            details: Optional payload with additional context for subscribers.
-            source: Optional label describing who triggered the transition.
-            operation_id: Optional identifier used to correlate related events.
+        When ``operation_id`` is provided it is attached to the resulting
+        :class:`StateNotification` and emitted log records.
         """
 
         event_obj, mapped_state, message, detail_payload = self._resolve_transition(event, details)
