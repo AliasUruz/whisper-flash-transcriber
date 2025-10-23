@@ -3239,38 +3239,124 @@ class ConfigManager:
     def get_runtime_hardware_profile(self) -> HardwareProfile | None:
         return self._runtime_hardware_profile
 
-    def update_asr_curated_catalog_from_url(self, url: str, timeout: int = 10) -> bool:
+    def update_asr_curated_catalog_from_url(
+        self,
+        url: str,
+        timeout: tuple[float, float] | float = (3.0, 3.0),
+    ) -> bool:
         """Carrega um catálogo curado de modelos de ASR a partir de ``url``.
 
         O JSON recebido deve ser uma lista de dicionários contendo pelo menos o
         campo ``model_id``. Caso os dados sejam válidos, o catálogo interno é
-        atualizado e salvo no arquivo de configuração.
+        atualizado e salvo no arquivo de configuração. Em caso de qualquer
+        falha de rede, parse ou persistência, o catálogo atual é preservado sem
+        tentar reescrever o arquivo de configuração para evitar perda de estado.
 
         :param url: Endereço da fonte externa.
-        :param timeout: Tempo máximo de espera para a requisição em segundos.
+        :param timeout: Timeout (conexão, leitura) utilizado na requisição.
         :return: ``True`` se o catálogo foi atualizado com sucesso.
         """
 
+        if isinstance(timeout, (int, float)):
+            timeout_tuple: tuple[float, float] = (float(timeout), float(timeout))
+        else:
+            connect, read = timeout
+            timeout_tuple = (float(connect), float(read))
+
         try:
-            response = requests.get(url, timeout=timeout)
+            response = requests.get(url, timeout=timeout_tuple)
             response.raise_for_status()
-            data = response.json()
-            is_list = isinstance(data, list)
-            all_have_ids = all(
-                isinstance(item, dict) and "model_id" in item
-                for item in data
+        except requests.RequestException as exc:
+            LOGGER.warning(
+                StructuredMessage(
+                    "Unable to refresh curated ASR catalog; keeping existing entries.",
+                    event="config.asr_catalog.fetch_failed",
+                    details={
+                        "url": url,
+                        "timeout_connect": timeout_tuple[0],
+                        "timeout_read": timeout_tuple[1],
+                        "reason": str(exc),
+                    },
+                )
             )
-            if is_list and all_have_ids:
-                self.set_asr_curated_catalog(data)
-                try:
-                    self.save_config()
-                except Exception:
-                    logging.warning("Falha ao salvar config após atualizar catálogo curado.")
-                return True
-            logging.warning("Formato inválido de catálogo obtido de %s", url)
-        except Exception as e:
-            logging.error("Erro ao atualizar catálogo curado de %s: %s", url, e)
-        return False
+            return False
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            LOGGER.warning(
+                StructuredMessage(
+                    "Invalid JSON received for curated ASR catalog; retaining previous configuration.",
+                    event="config.asr_catalog.invalid_json",
+                    details={
+                        "url": url,
+                        "reason": str(exc),
+                    },
+                )
+            )
+            return False
+
+        is_list = isinstance(data, list)
+        all_have_ids = all(isinstance(item, dict) and "model_id" in item for item in data)
+        if not (is_list and all_have_ids):
+            LOGGER.warning(
+                StructuredMessage(
+                    "Curated ASR catalog payload missing required structure; preserving previous catalog.",
+                    event="config.asr_catalog.invalid_payload",
+                    details={
+                        "url": url,
+                        "is_list": is_list,
+                        "items": len(data) if is_list else None,
+                    },
+                )
+            )
+            return False
+
+        current_catalog = self.get_asr_curated_catalog()
+        if data == current_catalog:
+            LOGGER.info(
+                StructuredMessage(
+                    "Curated ASR catalog already up-to-date; no persistence required.",
+                    event="config.asr_catalog.no_changes",
+                    details={
+                        "url": url,
+                        "items": len(data),
+                    },
+                )
+            )
+            return False
+
+        self.set_asr_curated_catalog(data)
+        try:
+            self.save_config()
+        except Exception as exc:  # pragma: no cover - defensive path
+            self.set_asr_curated_catalog(current_catalog)
+            LOGGER.error(
+                StructuredMessage(
+                    "Failed to persist curated ASR catalog; previous catalog restored.",
+                    event="config.asr_catalog.persist_failed",
+                    details={
+                        "url": url,
+                        "reason": str(exc),
+                    },
+                ),
+                exc_info=True,
+            )
+            return False
+
+        LOGGER.info(
+            StructuredMessage(
+                "Curated ASR catalog refreshed from remote source.",
+                event="config.asr_catalog.updated",
+                details={
+                    "url": url,
+                    "items": len(data),
+                    "timeout_connect": timeout_tuple[0],
+                    "timeout_read": timeout_tuple[1],
+                },
+            )
+        )
+        return True
 
     def get_use_vad(self):
         return self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])
