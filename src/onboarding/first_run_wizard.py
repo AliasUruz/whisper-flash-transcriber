@@ -4,12 +4,75 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-import customtkinter as ctk
+import logging
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+import customtkinter as ctk
+
 from .. import config_manager as config_module
 
+
+_LOGGER = logging.getLogger(__name__)
+_UI_WAIT_TIMEOUT_SECONDS = 5.0
+_UI_WAIT_POLL_INTERVAL_MS = 50
+
+
+def _wait_on_tk(
+    widget: tk.Misc,
+    condition: Callable[[], bool],
+    *,
+    description: str,
+    timeout: float = _UI_WAIT_TIMEOUT_SECONDS,
+    reset_on_activity: bool = False,
+) -> bool:
+    """Wait for a Tk condition while manually pumping the event queue."""
+
+    minimum_timeout = max(timeout, 0.1)
+    deadline = time.monotonic() + minimum_timeout
+    sentinel_triggered = False
+
+    def mark_progress() -> None:
+        nonlocal sentinel_triggered
+        sentinel_triggered = True
+
+    while True:
+        try:
+            if condition():
+                return True
+        except Exception as exc:  # pragma: no cover - defensive
+            _LOGGER.warning("Falha ao avaliar condição '%s': %s", description, exc)
+            return False
+
+        if time.monotonic() >= deadline:
+            _LOGGER.warning(
+                "Timeout aguardando %s; o loop Tk pode estar inativo ou bloqueado.",
+                description,
+            )
+            return False
+
+        try:
+            sentinel_triggered = False
+            widget.after(_UI_WAIT_POLL_INTERVAL_MS, mark_progress)
+            widget.after(_UI_WAIT_POLL_INTERVAL_MS)
+            widget.update_idletasks()
+            widget.update()
+        except tk.TclError as exc:
+            try:
+                if condition():
+                    return True
+            except Exception:  # pragma: no cover - defensive
+                pass
+            _LOGGER.warning(
+                "Erro ao processar eventos do Tk enquanto aguardava %s: %s",
+                description,
+                exc,
+            )
+            return False
+
+        if sentinel_triggered and reset_on_activity:
+            deadline = time.monotonic() + minimum_timeout
 
 @dataclass(slots=True)
 class WizardDownloadRequest:
@@ -84,12 +147,58 @@ class DownloadProgressPanel(ctk.CTkToplevel):
         self.deiconify()
         self.update_idletasks()
         self.geometry(self._center_geometry(460, 210))
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_force()
+        if not self._wait_for_visibility():
+            return
+        try:
+            self.grab_set()
+        except tk.TclError as exc:
+            _LOGGER.warning("Não foi possível aplicar grab no painel de progresso: %s", exc)
+        try:
+            self.focus_force()
+        except tk.TclError:
+            pass
 
     def wait_until_closed(self) -> None:
-        self.wait_window()
+        if not self._wait_for_closure():
+            _LOGGER.warning(
+                "Encerramento do painel de progresso excedeu o tempo limite; liberando recursos manualmente.",
+            )
+            try:
+                self.grab_release()
+            except Exception:
+                pass
+            try:
+                if self.winfo_exists():
+                    self.destroy()
+            except Exception:
+                pass
+
+    def _wait_for_visibility(self) -> bool:
+        def is_visible() -> bool:
+            try:
+                return bool(self.winfo_exists()) and bool(self.winfo_viewable())
+            except tk.TclError:
+                return False
+
+        return _wait_on_tk(
+            self,
+            is_visible,
+            description="a janela de progresso ficar visível",
+        )
+
+    def _wait_for_closure(self) -> bool:
+        def is_closed() -> bool:
+            try:
+                return not bool(self.winfo_exists())
+            except tk.TclError:
+                return True
+
+        return _wait_on_tk(
+            self,
+            is_closed,
+            description="o fechamento da janela de progresso",
+            reset_on_activity=True,
+        )
 
     def _center_geometry(self, width: int, height: int) -> str:
         try:
@@ -211,13 +320,39 @@ class FirstRunWizard(ctk.CTkToplevel):
     # Public API
     # ------------------------------------------------------------------
     def run(self) -> WizardResult | None:
+        """Exibe o assistente e aguarda seu encerramento.
+
+        As esperas internas para exibição e fechamento usam verificações
+        periódicas baseadas em ``after``/``update`` com timeout curto. Caso o
+        loop do Tk não esteja ativo e o assistente não consiga abrir ou
+        finalizar dentro do limite, um aviso é registrado e ``None`` é
+        retornado, permitindo que o chamador informe o usuário e evite deadlocks
+        futuros.
+        """
+
         self.deiconify()
         self.update_idletasks()
         self.geometry(self._center_geometry())
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_force()
-        self.wait_window()
+
+        if not self._wait_for_visibility():
+            _LOGGER.warning("Assistente de primeira execução não ficou visível; abortando exibição.")
+            self._safe_destroy()
+            return None
+
+        try:
+            self.grab_set()
+        except tk.TclError as exc:
+            _LOGGER.warning("Não foi possível aplicar grab ao assistente: %s", exc)
+        try:
+            self.focus_force()
+        except tk.TclError:
+            pass
+
+        if not self._wait_for_closure():
+            _LOGGER.warning("Assistente de primeira execução não encerrou dentro do tempo limite.")
+            self._safe_destroy()
+            return None
+
         return self._result
 
     # ------------------------------------------------------------------
@@ -239,6 +374,44 @@ class FirstRunWizard(ctk.CTkToplevel):
             x = (screen_w - width) // 2
             y = (screen_h - height) // 2
         return f"{width}x{height}+{x}+{y}"
+
+    def _wait_for_visibility(self) -> bool:
+        def is_visible() -> bool:
+            try:
+                return bool(self.winfo_exists()) and bool(self.winfo_viewable())
+            except tk.TclError:
+                return False
+
+        return _wait_on_tk(
+            self,
+            is_visible,
+            description="o assistente ficar visível",
+        )
+
+    def _wait_for_closure(self) -> bool:
+        def is_closed() -> bool:
+            try:
+                return not bool(self.winfo_exists())
+            except tk.TclError:
+                return True
+
+        return _wait_on_tk(
+            self,
+            is_closed,
+            description="o encerramento do assistente",
+            reset_on_activity=True,
+        )
+
+    def _safe_destroy(self) -> None:
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        try:
+            if self.winfo_exists():
+                self.destroy()
+        except Exception:
+            pass
 
     def _build_variables(self) -> None:
         cfg = self._config_snapshot
