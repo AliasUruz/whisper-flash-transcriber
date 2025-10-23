@@ -8,6 +8,7 @@ import os
 import subprocess
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -479,6 +480,7 @@ class ConfigManager:
         self._secrets_hash = None
         self._invalid_timeout_cache: dict[str, Any] = {}
         self._invalid_retry_cache: dict[str, Any] = {}
+        self._catalog_update_lock = threading.Lock()
         self._config_existed_on_boot = config_existed
         self._bootstrap_state: dict[str, dict[str, Any]] = {
             "config": {
@@ -506,9 +508,6 @@ class ConfigManager:
         self._runtime_model_catalog: list[dict[str, Any]] = []
         self._runtime_recommendation: dict[str, Any] | None = None
         self.load_config()
-        url = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
-        if url:
-            self.update_asr_curated_catalog_from_url(url)
 
     def _compute_hash(self, data) -> str:
         """Gera um hash SHA256 determinístico para o dicionário informado."""
@@ -3200,10 +3199,24 @@ class ConfigManager:
         return normalized
 
     def get_asr_curated_catalog(self):
-        return self.config.get(
-            ASR_CURATED_CATALOG_CONFIG_KEY,
-            self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
-        )
+        with self._catalog_update_lock:
+            catalog = self.config.get(
+                ASR_CURATED_CATALOG_CONFIG_KEY,
+                self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY],
+            )
+            if not isinstance(catalog, list):
+                catalog = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
+            return copy.deepcopy(catalog)
+
+    def get_asr_curated_catalog_url(self) -> str:
+        """Return the configured remote source for the curated catalog."""
+
+        raw_value = self.config.get(ASR_CURATED_CATALOG_URL_CONFIG_KEY, "")
+        if isinstance(raw_value, str):
+            return raw_value.strip()
+        if raw_value is None:
+            return ""
+        return str(raw_value).strip()
 
     def get_max_parallel_downloads(self) -> int:
         value = self.config.get("max_parallel_downloads", self.default_config.get("max_parallel_downloads", 1))
@@ -3224,11 +3237,25 @@ class ConfigManager:
 
     def set_asr_curated_catalog(self, value: list):
         if isinstance(value, list):
-            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = value
+            normalized = value
         else:
-            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = self.default_config[
-                ASR_CURATED_CATALOG_CONFIG_KEY
-            ]
+            normalized = self.default_config[ASR_CURATED_CATALOG_CONFIG_KEY]
+        with self._catalog_update_lock:
+            self.config[ASR_CURATED_CATALOG_CONFIG_KEY] = copy.deepcopy(normalized)
+
+    def bootstrap_curated_catalog(self, *, timeout: int = 10) -> bool:
+        """Refresh the curated ASR catalog from the configured remote source."""
+
+        url = self.get_asr_curated_catalog_url()
+        if not url:
+            LOGGER.debug(
+                log_context(
+                    "Skipping curated catalog bootstrap because no URL is configured.",
+                    event="config.catalog.bootstrap.skipped",
+                )
+            )
+            return False
+        return self.update_asr_curated_catalog_from_url(url, timeout=timeout)
 
     def get_runtime_model_catalog(self) -> list[dict[str, Any]]:
         return copy.deepcopy(self._runtime_model_catalog)
@@ -3262,6 +3289,14 @@ class ConfigManager:
             )
             if is_list and all_have_ids:
                 self.set_asr_curated_catalog(data)
+                LOGGER.info(
+                    log_context(
+                        "Curated ASR catalog updated from remote source.",
+                        event="config.catalog.bootstrap.success",
+                        url=url,
+                        entries=len(data),
+                    )
+                )
                 try:
                     self.save_config()
                 except Exception:
