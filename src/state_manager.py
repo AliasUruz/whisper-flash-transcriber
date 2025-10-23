@@ -269,12 +269,27 @@ class StateManager:
             )
             return None
 
+        operation_id: str | None = None
+        if isinstance(detail_payload, Mapping):
+            raw_operation_id = detail_payload.get("operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    operation_id = candidate
+        elif hasattr(detail_payload, "operation_id"):
+            raw_operation_id = getattr(detail_payload, "operation_id")
+            if isinstance(raw_operation_id, str):
+                candidate = raw_operation_id.strip()
+                if candidate:
+                    operation_id = candidate
+
         notification = StateNotification(
             event=event_obj,
             state=mapped_state,
             previous_state=previous_state,
             details=detail_payload if detail_payload is not None else message,
             source=source,
+            operation_id=operation_id,
         )
         self._current_state = mapped_state
         self._last_notification = notification
@@ -289,18 +304,24 @@ class StateManager:
         mapped_state: str,
         message: str | None,
         source: str | None,
+        operation_id: str | None = None,
     ) -> None:
         origin_label = event_obj.name if event_obj else f"STATE:{mapped_state}"
+        resolved_operation_id = operation_id or notification.operation_id
+        log_payload = {
+            "event": "state.transition",
+            "previous_state": previous_state,
+            "current_state": mapped_state,
+            "origin": origin_label,
+            "message": message,
+            "source": source,
+        }
+        if resolved_operation_id:
+            log_payload["operation_id"] = resolved_operation_id
         self._logger.info(
             log_context(
                 "Application state transitioned.",
-                event="state.transition",
-                previous_state=previous_state,
-                current_state=mapped_state,
-                origin=origin_label,
-                message=message,
-                source=source,
-                operation_id=operation_id,
+                **log_payload,
             )
         )
         self._notify_subscribers(notification)
