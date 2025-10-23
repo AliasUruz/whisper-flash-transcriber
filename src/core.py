@@ -440,6 +440,12 @@ class AppCore:
         return self._dependency_audit_failure_message
 
     @property
+    def onboarding_enabled(self) -> bool:
+        """Return True when onboarding workflows are enabled for this session."""
+
+        return self._onboarding_enabled
+
+    @property
     def ui_manager(self):
         return self._ui_manager
 
@@ -480,7 +486,7 @@ class AppCore:
         self._apply_initial_config_to_core_attributes()
 
         self.model_download_timeout = self._resolve_model_download_timeout()
-        if self._onboarding_enabled:
+        if self.onboarding_enabled:
             self.schedule_initial_onboarding()
         else:
             LOGGER.debug(
@@ -510,7 +516,7 @@ class AppCore:
     def schedule_initial_onboarding(self) -> None:
         """Schedule the first-run onboarding wizard on the Tk event loop."""
 
-        if not self._onboarding_enabled:
+        if not self.onboarding_enabled:
             LOGGER.debug(
                 "Initial onboarding scheduling ignored: onboarding disabled for this session."
             )
@@ -554,7 +560,7 @@ class AppCore:
         force: bool = False,
         reason: str = "menu",
     ) -> dict[str, Any] | None:
-        if not self._onboarding_enabled:
+        if not self.onboarding_enabled:
             LOGGER.info(
                 "Launch request for onboarding ignored (%s): onboarding disabled.",
                 reason,
