@@ -1835,6 +1835,8 @@ class TranscriptionHandler:
                     self._record_correction_failure(SERVICE_GEMINI, exc)
                     return transcribed_text
 
+                if isinstance(agent_response, str):
+                    agent_response = agent_response.strip()
                 if isinstance(agent_response, str) and agent_response:
                     metrics["ai_status"] = "success"
                     metrics["ai_result_chars"] = len(agent_response)
@@ -1911,10 +1913,17 @@ class TranscriptionHandler:
                         timeout=self.text_correction_timeout,
                         description="Gemini text correction",
                     )
+                    if isinstance(result, str):
+                        result = result.strip()
                     if isinstance(result, str) and result:
                         processed_text = result
                         correction_succeeded = True
                     else:
+                        if not isinstance(result, str):
+                            logging.warning(
+                                "Gemini text correction returned non-string payload: %r",
+                                type(result).__name__,
+                            )
                         processed_text = transcribed_text
                 elif active_provider == SERVICE_OPENROUTER:
                     api_key = self.config_manager.get_api_key(SERVICE_OPENROUTER)
@@ -1965,10 +1974,17 @@ class TranscriptionHandler:
                             description="OpenRouter text correction",
                         )
 
+                    if isinstance(result, str):
+                        result = result.strip()
                     if isinstance(result, str) and result:
                         processed_text = result
                         correction_succeeded = True
                     else:
+                        if not isinstance(result, str):
+                            logging.warning(
+                                "OpenRouter text correction returned non-string payload: %r",
+                                type(result).__name__,
+                            )
                         processed_text = transcribed_text
                 else:
                     metrics["ai_status"] = "unknown_provider"
