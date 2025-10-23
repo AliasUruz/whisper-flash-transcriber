@@ -36,6 +36,7 @@ from .config_manager import (
     ASR_MODEL_ID_CONFIG_KEY,
     ASR_CT2_COMPUTE_TYPE_CONFIG_KEY,
     ASR_COMPUTE_DEVICE_CONFIG_KEY,
+    ASR_CURATED_CATALOG_URL_CONFIG_KEY,
     ASR_CT2_CPU_THREADS_CONFIG_KEY,
     MODELS_STORAGE_DIR_CONFIG_KEY,
     DEPS_INSTALL_DIR_CONFIG_KEY,
@@ -132,9 +133,12 @@ class AppCore:
         self.keyboard_lock = RLock()
         self.agent_mode_lock = RLock() # Adicionado para o modo agente
         self.model_prompt_lock = RLock()
+        self._catalog_refresh_lock = RLock()
         self._key_detection_thread: threading.Thread | None = None
         self._key_detection_target: str | None = None
         self._key_detection_previous_value: str | None = None
+        self._catalog_refresh_thread: threading.Thread | None = None
+        self._catalog_refresh_scheduled = False
 
         # --- Callbacks para UI (definidos externamente pelo UIManager) ---
         self.state_update_callback: StateUpdateCallback | None = None
@@ -142,6 +146,14 @@ class AppCore:
 
         # --- Módulos ---
         self.config_manager = config_manager or ConfigManager()
+        self.config_manager.register_catalog_refresh_listener(self._handle_catalog_refresh_event)
+        try:
+            self.config_manager.refresh_curated_catalog_async(reason="bootstrap")
+        except Exception:  # pragma: no cover - defensive logging only
+            LOGGER.debug(
+                "Unable to schedule curated catalog refresh during bootstrap.",
+                exc_info=True,
+            )
         self.is_running_as_admin = _detect_admin_privileges()
         self.dependency_audit_result: DependencyAuditResult | None = None
         self._dependency_audit_failure_message: str | None = None
@@ -211,6 +223,110 @@ class AppCore:
         self._tracked_download_tasks: set[str] = set()
         self._auto_reload_tasks: set[str] = set()
 
+        self._schedule_curated_catalog_refresh()
+
+    def _schedule_curated_catalog_refresh(self, delay_ms: int = 2000) -> None:
+        """Trigger the curated catalog refresh once the UI loop is stable."""
+
+        if self._catalog_refresh_scheduled:
+            return
+        self._catalog_refresh_scheduled = True
+        after_callable = getattr(self.main_tk_root, "after", None)
+        if callable(after_callable):
+            try:
+                after_callable(delay_ms, self._launch_curated_catalog_refresh_worker)
+                return
+            except Exception as exc:  # pragma: no cover - defensive path
+                LOGGER.warning(
+                    log_context(
+                        "Failed to schedule curated catalog refresh via Tk loop; running immediately.",
+                        event="catalog.refresh.schedule_failed",
+                        error=str(exc),
+                    ),
+                    exc_info=True,
+                )
+        self._launch_curated_catalog_refresh_worker()
+
+    def _launch_curated_catalog_refresh_worker(self) -> None:
+        """Start a background thread that updates the curated ASR catalog."""
+
+        url = self.config_manager.get_asr_curated_catalog_url()
+        if not url:
+            LOGGER.debug(
+                log_context(
+                    "No curated catalog URL configured; skipping background refresh.",
+                    event="catalog.refresh.no_url",
+                )
+            )
+            return
+
+        with self._catalog_refresh_lock:
+            if (
+                self._catalog_refresh_thread is not None
+                and self._catalog_refresh_thread.is_alive()
+            ):
+                LOGGER.debug(
+                    log_context(
+                        "Curated catalog refresh already running; ignoring duplicate request.",
+                        event="catalog.refresh.already_running",
+                    )
+                )
+                return
+
+            def _worker() -> None:
+                LOGGER.debug(
+                    log_context(
+                        "Background curated catalog refresh started.",
+                        event="catalog.refresh.worker_start",
+                        url=url,
+                    )
+                )
+                try:
+                    success = self.config_manager.bootstrap_curated_catalog(timeout=15)
+                except Exception as exc:  # pragma: no cover - defensive path
+                    LOGGER.error(
+                        log_context(
+                            "Unexpected error while refreshing curated catalog.",
+                            event="catalog.refresh.worker_exception",
+                            url=url,
+                            error=str(exc),
+                        ),
+                        exc_info=True,
+                    )
+                    self.config_manager.record_runtime_notice(
+                        f"Failed to refresh curated ASR catalog: {exc}",
+                        category="curated_catalog",
+                        details={"url": url},
+                    )
+                else:
+                    if success:
+                        LOGGER.info(
+                            log_context(
+                                "Curated ASR catalog refreshed in background.",
+                                event="catalog.refresh.worker_success",
+                                url=url,
+                            )
+                        )
+                    else:
+                        LOGGER.warning(
+                            log_context(
+                                "Curated ASR catalog refresh completed without updates.",
+                                event="catalog.refresh.worker_noop",
+                                url=url,
+                            )
+                        )
+                finally:
+                    with self._catalog_refresh_lock:
+                        self._catalog_refresh_thread = None
+
+            thread = threading.Thread(
+                target=_worker,
+                name="CuratedCatalogRefresh",
+                daemon=True,
+            )
+            self._catalog_refresh_thread = thread
+            thread.start()
+
         self._running_with_elevated_privileges = self._detect_admin_privileges()
         if self._running_with_elevated_privileges:
             LOGGER.debug(
@@ -273,6 +389,7 @@ class AppCore:
         self._active_recording_correlation_id: str | None = None
         self._recording_started_at: float | None = None
         self._onboarding_active = False
+        self._initial_onboarding_scheduled = False
         self._active_recording_operation_id: str | None = None
 
         # Inicializar atributos dependentes da configuração antes de acionar o fluxo de modelo
@@ -364,11 +481,17 @@ class AppCore:
 
         self.model_download_timeout = self._resolve_model_download_timeout()
         if self._onboarding_enabled:
-            self._maybe_run_initial_onboarding()
+            self.schedule_initial_onboarding()
         else:
             LOGGER.debug(
                 "Initial onboarding disabled for this session; skipping wizard launch."
             )
+            return
+
+        LOGGER.debug(
+            "Processing scheduled initial onboarding check on the Tkinter loop."
+        )
+        self._maybe_run_initial_onboarding()
 
     def _maybe_run_initial_onboarding(self) -> None:
         try:
@@ -389,6 +512,47 @@ class AppCore:
         outcome = self._launch_onboarding(snapshot=snapshot, force=True, reason="startup")
         if outcome is not None:
             self._last_onboarding_outcome = outcome
+
+    def schedule_initial_onboarding(self) -> None:
+        """Schedule the first-run onboarding wizard on the Tk event loop."""
+
+        if not self._onboarding_enabled:
+            LOGGER.debug(
+                "Initial onboarding scheduling ignored: onboarding disabled for this session."
+            )
+            return
+
+        if self._initial_onboarding_scheduled:
+            LOGGER.debug(
+                "Initial onboarding already scheduled; ignoring duplicate request."
+            )
+            return
+
+        if self._onboarding_active:
+            LOGGER.info(
+                "Initial onboarding launch request ignored: wizard already active."
+            )
+            return
+
+        if not hasattr(self.main_tk_root, "after_idle"):
+            LOGGER.warning(
+                "Unable to schedule onboarding: Tk root does not expose 'after_idle'."
+            )
+            return
+
+        def _execute_onboarding() -> None:
+            try:
+                self._maybe_run_initial_onboarding()
+            finally:
+                self._initial_onboarding_scheduled = False
+
+        self._initial_onboarding_scheduled = True
+        LOGGER.info("Scheduling initial onboarding wizard for first run via Tk idle queue.")
+        try:
+            self.main_tk_root.after_idle(_execute_onboarding)
+        except Exception:
+            LOGGER.exception("Failed to schedule onboarding via Tk 'after_idle'.")
+            self._initial_onboarding_scheduled = False
 
     def launch_first_run_wizard(
         self,
@@ -1425,6 +1589,27 @@ class AppCore:
             else f"{APP_DISPLAY_NAME} - verifique o cache de modelos ASR ({cache_repr})"
         )
         self._queue_tooltip_update(tooltip)
+
+    def _handle_catalog_refresh_event(self, phase: str, payload: Mapping[str, Any]) -> None:
+        """Apresenta notificações amigáveis durante a atualização do catálogo curado."""
+
+        context: Mapping[str, Any] = payload or {}
+        if phase == "start":
+            self._queue_tooltip_update(
+                "Atualizando catálogo curado em segundo plano. A aplicação permanece disponível."
+            )
+            return
+        if phase != "done":
+            return
+
+        success = bool(context.get("success"))
+        if success:
+            message = "Catálogo curado atualizado a partir da fonte remota."
+        else:
+            message = (
+                "Não foi possível atualizar o catálogo curado remoto; a lista local continua ativa."
+            )
+        self._queue_tooltip_update(message)
 
     def _queue_tooltip_update(self, message: str) -> None:
         if not message:
@@ -2813,6 +2998,14 @@ class AppCore:
         if key in {ASR_BACKEND_CONFIG_KEY, ASR_MODEL_ID_CONFIG_KEY, "asr_model"}:
             self.config_manager.reset_last_model_prompt_decision()
         self.config_manager.save_config()
+        if key == ASR_CURATED_CATALOG_URL_CONFIG_KEY:
+            try:
+                self.config_manager.refresh_curated_catalog_async(reason="update_setting")
+            except Exception:  # pragma: no cover - defensive logging only
+                LOGGER.debug(
+                    "Unable to schedule curated catalog refresh after update_setting.",
+                    exc_info=True,
+                )
         LOGGER.info(f"Configuration '{key}' updated to: {value}")
 
         # Re-aplicar configurações aos atributos do AppCore
