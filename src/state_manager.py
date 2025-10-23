@@ -259,6 +259,27 @@ class StateManager:
         operation_id: str | None,
     ) -> tuple[StateNotification, str] | None:
         previous_state = self._current_state
+
+        resolved_operation_id: str | None = None
+        if isinstance(operation_id, str):
+            candidate = operation_id.strip()
+            if candidate:
+                resolved_operation_id = candidate
+
+        if resolved_operation_id is None:
+            if isinstance(detail_payload, Mapping):
+                raw_operation_id = detail_payload.get("operation_id")
+                if isinstance(raw_operation_id, str):
+                    candidate = raw_operation_id.strip()
+                    if candidate:
+                        resolved_operation_id = candidate
+            elif hasattr(detail_payload, "operation_id"):
+                raw_operation_id = getattr(detail_payload, "operation_id")
+                if isinstance(raw_operation_id, str):
+                    candidate = raw_operation_id.strip()
+                    if candidate:
+                        resolved_operation_id = candidate
+
         last_event = self._last_notification.event if self._last_notification else None
         last_state = self._last_notification.state if self._last_notification else None
         last_operation_id = (

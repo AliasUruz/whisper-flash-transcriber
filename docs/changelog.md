@@ -1,5 +1,9 @@
 # Changelog
 
+## 2025-02-15
+- Hardened the hotkey teardown path to avoid referencing stale debounce
+  variables, ensuring driver failures during unregister are logged cleanly.
+
 ## 2025-02-14
 - Replaced the invalid `torch==2.7.1` pin with the Windows-compatible `torch==2.5.1` CPU wheel and clarified GPU installation steps.
 - Removed the conflicting `pydantic==2.7.1` constraint, keeping `pydantic>=2.9,<3` as the single policy across the project.
