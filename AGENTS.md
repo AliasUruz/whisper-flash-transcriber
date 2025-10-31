@@ -234,6 +234,7 @@ pytest
 | Audio errors (overflow) | High system latency or insufficient resources. | Adjust `chunk_length_sec` in settings, enable disk storage mode, and inspect logs for `Audio input overflow` messages. |
 | Crash on exit | Resources not cleaned up properly. | Ensure `AppCore.shutdown()` is called (via Tray Icon -> Exit), and review for any lingering threads. |
 | Travamento durante o bootstrap | Diagnósticos de dependência ou preflight pendentes. | Consulte os marcadores `bootstrap.step.*` no terminal/log e, para investigação, rode `python src/main.py --skip-bootstrap` (documentando o desvio em `plans/`). |
+| Ambiente Windows inconsistente | Python incorreto, módulos ausentes ou diretórios inacessíveis. | Execute `pwsh -File scripts/diagnostics.ps1` para gerar um relatório e anexá-lo ao suporte antes de repetir a inicialização. |
 
 ---
 

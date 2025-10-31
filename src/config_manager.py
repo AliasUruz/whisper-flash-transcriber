@@ -510,6 +510,7 @@ class ConfigManager:
         self._catalog_refresh_lock = threading.Lock()
         self._catalog_refresh_thread: threading.Thread | None = None
         self._catalog_refresh_listeners: list[Callable[[str, Mapping[str, Any]], None]] = []
+        self._runtime_notices: list[dict[str, Any]] = []
         self.load_config()
 
     def _compute_hash(self, data) -> str:

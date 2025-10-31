@@ -223,6 +223,13 @@ The application registers global shortcuts using the [`keyboard`](https://github
 
 ## Troubleshooting
 
+- **Executar diagnóstico rápido no Windows**  
+  Há um utilitário PowerShell em `scripts/diagnostics.ps1` que verifica Python, módulos críticos, diretórios de perfil e lista os últimos logs:
+  ```powershell
+  pwsh -File scripts/diagnostics.ps1
+  ```
+  Ele aceita parâmetros como `-UseVenv`, `-SkipPythonImports` ou `-SkipLogTail` para adaptar a execução. Anexe o output ao abrir issues.
+
 - **Aplicativo fica “travado” nos primeiros logs do terminal**  
   O bootstrap agora emite marcadores `bootstrap.step.*` para cada fase crítica. A última mensagem registrada indica onde ocorreu a parada. Se quiser apenas confirmar que o `Tk` e a bandeja continuam funcionais, execute:
   ```bash

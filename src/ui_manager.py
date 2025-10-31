@@ -233,9 +233,6 @@ class UIManager:
 
         # Controle interno para atualizar a tooltip durante a gravação
         self.recording_timer_thread = None
-
-    def _should_warn_about_elevation(self) -> bool:
-        return self._is_windows and not self.is_running_as_admin
         self.stop_recording_timer_event = threading.Event()
 
         # Controle interno para atualizar a tooltip durante a transcrição
@@ -245,6 +242,19 @@ class UIManager:
         # Contexto do último estado recebido (para tooltips dinâmicas)
         self._last_state_notification: Any = None
         self._state_context_suffix: str = ""
+
+        # Componentes da janela do auditor de dependências
+        self._dependency_audit_window = None
+        self._dependency_audit_summary_label = None
+        self._dependency_audit_timestamp_label = None
+        self._dependency_audit_content = None
+        self._dependency_audit_copy_all_btn = None
+        self._dependency_audit_commands: list[str] = []
+        self._dependency_audit_docs_path = None
+        self._dependency_audit_presented = False
+
+    def _should_warn_about_elevation(self) -> bool:
+        return self._is_windows and not self.is_running_as_admin
 
     # ------------------------------------------------------------------
     # Utilidades para gerenciamento da janela de configurações
@@ -1951,6 +1961,11 @@ class UIManager:
             docs_button.pack(side="right")
 
             self._dependency_audit_window = audit_window
+
+            # Registrar o caminho padrão da documentação sempre que a janela é criada.
+            project_root = Path(__file__).resolve().parent.parent
+            docs_candidate = project_root / "docs" / "dependency-audit.md"
+            self._dependency_audit_docs_path = docs_candidate if docs_candidate.exists() else None
         else:
             audit_window = self._dependency_audit_window
             try:
@@ -2146,13 +2161,36 @@ class UIManager:
 
     def _open_dependency_audit_docs(self) -> None:
         doc_path = self._dependency_audit_docs_path
+        if doc_path is None:
+            logging.warning("Dependency audit documentation path not configured.")
+            messagebox.showinfo(
+                APP_DISPLAY_NAME,
+                "O guia de remediação de dependências não está disponível neste ambiente.",
+            )
+            return
+
         try:
             resolved = doc_path.resolve(strict=True)
         except FileNotFoundError:
             logging.warning("Dependency audit documentation not found at %s", doc_path)
             self.show_status_tooltip("Arquivo de documentação não encontrado.")
             return
-        webbrowser.open(resolved.as_uri())
+        except Exception:
+            logging.debug("Dependency audit documentation path unavailable.", exc_info=True)
+            messagebox.showwarning(
+                APP_DISPLAY_NAME,
+                "Não foi possível localizar o arquivo de documentação de dependências.",
+            )
+            return
+
+        try:
+            webbrowser.open(resolved.as_uri())
+        except Exception:
+            logging.debug("Failed to open dependency audit documentation.", exc_info=True)
+            messagebox.showwarning(
+                APP_DISPLAY_NAME,
+                "Não foi possível abrir a documentação de dependências.",
+            )
 
     def _close_dependency_audit_window(self) -> None:
         window = self._dependency_audit_window

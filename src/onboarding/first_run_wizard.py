@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from .. import config_manager as config_module
+from ..localization import choose_translation
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -100,14 +101,21 @@ class DownloadProgressPanel(ctk.CTkToplevel):
         self,
         master: tk.Misc,
         *,
-        title: str = "Download de Modelo",
-        message: str = "Preparando download do modelo...",
-        cancel_label: str = "Cancelar",
+        language: str | None = None,
+        title: str | None = None,
+        message: str | None = None,
+        cancel_label: str | None = None,
         on_cancel: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
+        self._language = language
         self.withdraw()
-        self.title(title)
+        resolved_title = title or choose_translation(
+            language,
+            pt_br="Download de Modelo",
+            en_us="Model Download",
+        )
+        self.title(resolved_title)
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._handle_close if on_cancel is None else self._handle_cancel)
 
@@ -116,7 +124,12 @@ class DownloadProgressPanel(ctk.CTkToplevel):
 
         self.columnconfigure(0, weight=1)
 
-        self._message_var = tk.StringVar(value=message)
+        resolved_message = message or choose_translation(
+            language,
+            pt_br="Preparando download do modelo...",
+            en_us="Preparing model download...",
+        )
+        self._message_var = tk.StringVar(value=resolved_message)
         self._status_var = tk.StringVar(value="")
 
         header = ctk.CTkLabel(self, textvariable=self._message_var, wraplength=420, justify="left")
@@ -133,9 +146,17 @@ class DownloadProgressPanel(ctk.CTkToplevel):
         button_frame.grid(row=3, column=0, sticky="ew", padx=16, pady=(8, 16))
         button_frame.columnconfigure(0, weight=1)
 
+        close_label = cancel_label
+        if close_label is None:
+            close_label = choose_translation(
+                language,
+                pt_br="Cancelar" if on_cancel is not None else "Fechar",
+                en_us="Cancel" if on_cancel is not None else "Close",
+            )
+
         self._action_button = ctk.CTkButton(
             button_frame,
-            text="Fechar" if on_cancel is None else cancel_label,
+            text=close_label,
             command=self._handle_close if on_cancel is None else self._handle_cancel,
             width=110,
         )
@@ -208,6 +229,8 @@ class DownloadProgressPanel(ctk.CTkToplevel):
             py = parent.winfo_rooty()
             pw = parent.winfo_width()
             ph = parent.winfo_height()
+            if pw <= 1 or ph <= 1:
+                raise ValueError("Parent window has no visible size.")
             x = px + (pw - width) // 2
             y = py + (ph - height) // 2
         except Exception:
@@ -215,6 +238,8 @@ class DownloadProgressPanel(ctk.CTkToplevel):
             screen_h = self.winfo_screenheight()
             x = (screen_w - width) // 2
             y = (screen_h - height) // 2
+        x = max(x, 0)
+        y = max(y, 0)
         return f"{width}x{height}+{x}+{y}"
 
     def update_message(self, message: str) -> None:
@@ -226,17 +251,23 @@ class DownloadProgressPanel(ctk.CTkToplevel):
     def mark_success(self, message: str) -> None:
         self._progress.stop()
         self._status_var.set(message)
-        self._finalize_buttons("Fechar")
+        self._finalize_buttons(
+            choose_translation(self._language, pt_br="Fechar", en_us="Close")
+        )
 
     def mark_error(self, message: str) -> None:
         self._progress.stop()
         self._status_var.set(message)
-        self._finalize_buttons("Fechar")
+        self._finalize_buttons(
+            choose_translation(self._language, pt_br="Fechar", en_us="Close")
+        )
 
     def mark_cancelled(self, message: str) -> None:
         self._progress.stop()
         self._status_var.set(message)
-        self._finalize_buttons("Fechar")
+        self._finalize_buttons(
+            choose_translation(self._language, pt_br="Fechar", en_us="Close")
+        )
 
     def close_after(self, delay_ms: int = 0) -> None:
         if delay_ms <= 0:
@@ -264,7 +295,13 @@ class DownloadProgressPanel(ctk.CTkToplevel):
             self._cancel_callback()
         except Exception:
             pass
-        self._status_var.set("Cancelando download...")
+        self._status_var.set(
+            choose_translation(
+                self._language,
+                pt_br="Cancelando download...",
+                en_us="Cancelling download...",
+            )
+        )
 
     def _handle_close(self) -> None:
         if self._finished:
@@ -289,10 +326,13 @@ class FirstRunWizard(ctk.CTkToplevel):
         hotkey_defaults: Mapping[str, str],
         profile_dir: str | None = None,
         recommended_models: Sequence[Mapping[str, Any]] | None = None,
+        language: str | None = None,
     ) -> None:
         super().__init__(master)
+        self._language = language
+        self._ = lambda pt, en: choose_translation(self._language, pt_br=pt, en_us=en)
         self.withdraw()
-        self.title("Assistente de Primeira Execução")
+        self.title(self._("Assistente de Primeira Execução", "First Run Assistant"))
         self.minsize(640, 540)
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
@@ -366,6 +406,8 @@ class FirstRunWizard(ctk.CTkToplevel):
             py = parent.winfo_rooty()
             pw = parent.winfo_width()
             ph = parent.winfo_height()
+            if pw <= 1 or ph <= 1:
+                raise ValueError("Parent window has no visible size.")
             x = px + (pw - width) // 2
             y = py + (ph - height) // 2
         except Exception:
@@ -373,6 +415,8 @@ class FirstRunWizard(ctk.CTkToplevel):
             screen_h = self.winfo_screenheight()
             x = (screen_w - width) // 2
             y = (screen_h - height) // 2
+        x = max(x, 0)
+        y = max(y, 0)
         return f"{width}x{height}+{x}+{y}"
 
     def _wait_for_visibility(self) -> bool:
@@ -485,16 +529,36 @@ class FirstRunWizard(ctk.CTkToplevel):
         nav_frame.grid(row=2, column=0, sticky="ew", pady=(16, 0))
         nav_frame.columnconfigure(0, weight=1)
 
-        self._back_button = ctk.CTkButton(nav_frame, text="Voltar", command=self._on_back, width=100)
+        self._back_button = ctk.CTkButton(
+            nav_frame,
+            text=self._("Voltar", "Back"),
+            command=self._on_back,
+            width=100,
+        )
         self._back_button.grid(row=0, column=0, sticky="w")
 
-        self._next_button = ctk.CTkButton(nav_frame, text="Avançar", command=self._on_next, width=110)
+        self._next_button = ctk.CTkButton(
+            nav_frame,
+            text=self._("Avançar", "Next"),
+            command=self._on_next,
+            width=110,
+        )
         self._next_button.grid(row=0, column=0)
 
-        self._finish_button = ctk.CTkButton(nav_frame, text="Concluir", command=self._on_finish, width=110)
+        self._finish_button = ctk.CTkButton(
+            nav_frame,
+            text=self._("Concluir", "Finish"),
+            command=self._on_finish,
+            width=110,
+        )
         self._finish_button.grid(row=0, column=0)
 
-        self._cancel_button = ctk.CTkButton(nav_frame, text="Cancelar", command=self._on_cancel, width=110)
+        self._cancel_button = ctk.CTkButton(
+            nav_frame,
+            text=self._("Cancelar", "Cancel"),
+            command=self._on_cancel,
+            width=110,
+        )
         self._cancel_button.grid(row=0, column=1, sticky="e")
 
     def _build_steps(self) -> None:
@@ -557,21 +621,32 @@ class FirstRunWizard(ctk.CTkToplevel):
         for i in range(2):
             form.columnconfigure(i, weight=1)
 
-        ctk.CTkLabel(form, text="Tecla para iniciar/parar gravação:").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
+        ctk.CTkLabel(
+            form,
+            text=self._("Tecla para iniciar/parar gravação:", "Recording hotkey:"),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 12), pady=8)
         record_entry = ctk.CTkEntry(form, textvariable=self.record_key_var)
         record_entry.grid(row=0, column=1, sticky="ew", pady=8)
 
-        ctk.CTkLabel(form, text="Tecla para o comando agêntico:").grid(row=1, column=0, sticky="w", padx=(0, 12), pady=8)
+        ctk.CTkLabel(
+            form,
+            text=self._("Tecla para o comando agêntico:", "Agent command hotkey:"),
+        ).grid(row=1, column=0, sticky="w", padx=(0, 12), pady=8)
         agent_entry = ctk.CTkEntry(form, textvariable=self.agent_key_var)
         agent_entry.grid(row=1, column=1, sticky="ew", pady=8)
 
-        ctk.CTkLabel(form, text="Modo de gravação:").grid(row=2, column=0, sticky="w", padx=(0, 12), pady=8)
+        ctk.CTkLabel(
+            form,
+            text=self._("Modo de gravação:", "Recording mode:"),
+        ).grid(row=2, column=0, sticky="w", padx=(0, 12), pady=8)
         mode_menu = ctk.CTkOptionMenu(form, variable=self.record_mode_var, values=["toggle", "press"])
         mode_menu.grid(row=2, column=1, sticky="w", pady=8)
 
-        hint = (
+        hint = self._(
             "Use valores aceitos pela biblioteca de hotkeys (ex.: 'f3', 'ctrl+alt+s').\n"
-            "No modo 'press', a gravação fica ativa enquanto a tecla estiver pressionada."
+            "No modo 'press', a gravação fica ativa enquanto a tecla estiver pressionada.",
+            "Use values accepted by the hotkey library (e.g. 'f3', 'ctrl+alt+s').\n"
+            "In 'press' mode, recording stays active while the key is held.",
         )
         ctk.CTkLabel(frame, text=hint, justify="left", wraplength=600).pack(anchor="w", padx=16, pady=(8, 16))
 

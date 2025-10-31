@@ -17,4 +17,5 @@
 ## 2025-10-27
 - Added `--skip-bootstrap` to bypass preflight and dependency audits during troubleshooting sessions.
 - Instrumented bootstrap with `bootstrap.step.*` markers to pinpoint initialization stalls in logs.
-- Expanded README/AGENTS documentation with updated startup guidance, tray behaviour, and troubleshooting playbooks.
+- Added `scripts/diagnostics.ps1` to collect environment checks on Windows before launching.
+- Expanded README/AGENTS documentation com novas orientações de startup, comportamento de bandeja e playbooks de troubleshooting.

@@ -824,7 +824,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-        if diagnostics_report.has_fatal_errors:
+        if diagnostics_report and diagnostics_report.has_fatal_errors:
             fatal_summary = "\n\n".join(
                 diagnostics_report.user_friendly_summary(include_success=False)
             )

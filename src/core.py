@@ -82,6 +82,7 @@ from .logging_utils import (
 )
 from .app_identity import APP_DISPLAY_NAME, APP_LOG_NAMESPACE
 from .utils.dependency_audit import DependencyAuditResult, audit_environment
+from .localization import choose_translation
 
 if TYPE_CHECKING:
     from .startup_diagnostics import StartupDiagnosticsReport
@@ -225,6 +226,156 @@ class AppCore:
 
         self._schedule_curated_catalog_refresh()
 
+        self._running_with_elevated_privileges = self._detect_admin_privileges()
+        if self._running_with_elevated_privileges:
+            LOGGER.debug(
+                "Core detected elevated privileges; prioritizing keyboard-based paste automation."
+            )
+
+        self.startup_diagnostics: "StartupDiagnosticsReport | None" = startup_diagnostics
+        if self.startup_diagnostics is not None:
+            diagnostics = self.startup_diagnostics
+            LOGGER.info(
+                StructuredMessage(
+                    "Startup diagnostics attached to core instance.",
+                    event="core.diagnostics.attached",
+                    has_errors=diagnostics.has_errors,
+                    has_warnings=diagnostics.has_warnings,
+                    has_fatal_errors=diagnostics.has_fatal_errors,
+                )
+            )
+
+        # Sincronizar modelos ASR já presentes no disco no início da aplicação
+        try:
+            self._refresh_installed_models("__init__", raise_errors=True)
+        except OSError:
+            messagebox.showerror(
+                "Configuration",
+                "Invalid cache directory. Please review your settings.",
+            )
+        except Exception as e:
+            LOGGER.warning(
+                "AppCore[__init__]: failed to synchronize installed models: %r",
+                e,
+                exc_info=True,
+            )
+
+        self.audio_handler = AudioHandler(
+            config_manager=self.config_manager,
+            state_manager=self.state_manager,
+            on_audio_segment_ready_callback=self.action_orchestrator.on_audio_segment_ready,
+        )
+        self.gemini_api = GeminiAPI(self.config_manager)
+        self.transcription_handler = TranscriptionHandler(
+            config_manager=self.config_manager,
+            gemini_api_client=self.gemini_api,
+            on_model_ready_callback=self._on_model_loaded,
+            on_model_error_callback=self._on_model_load_failed,
+            on_transcription_result_callback=self.action_orchestrator.handle_transcription_result,
+            on_agent_result_callback=self.action_orchestrator.handle_agent_result,
+            on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
+            is_state_transcribing_fn=self.is_state_transcribing,
+        )
+        self.transcription_handler.core_instance_ref = self
+        # Expõe referência do núcleo ao handler
+        self.action_orchestrator.bind_transcription_handler(self.transcription_handler)
+
+        self._ui_manager = None  # Será setado externamente pelo main.py
+        # --- Estado da Aplicação ---
+        self.shutting_down = False
+        self.full_transcription = ""  # Acumula transcrição completa
+        self.model_prompt_active = False
+        self._active_recording_correlation_id: str | None = None
+        self._recording_started_at: float | None = None
+        self._onboarding_active = False
+        self._initial_onboarding_scheduled = False
+        self._active_recording_operation_id: str | None = None
+
+        # Inicializar atributos dependentes da configuração antes de acionar o fluxo de modelo
+        self._apply_initial_config_to_core_attributes()
+
+        self.model_download_timeout = self._resolve_model_download_timeout()
+        try:
+            cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
+            model_id = self.asr_model_id
+            backend = self.asr_backend
+
+            if not cache_dir:
+                raise OSError("Invalid cache directory.")
+
+            cache_root = Path(cache_dir)
+
+            start_loading = True
+            ready_path = model_manager_module.ensure_local_installation(
+                cache_root,
+                backend,
+                model_id,
+            )
+
+            if ready_path is None:
+                MODEL_LOGGER.warning(
+                    "ASR model not found locally. The first-run wizard will prompt for installation.",
+                )
+                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
+                start_loading = False
+
+            if start_loading:
+                self._start_model_loading_with_synced_config()
+        except OSError:
+            messagebox.showerror("Error", "Invalid cache directory.")
+            self.state_manager.set_state(
+                sm.StateEvent.MODEL_CACHE_INVALID,
+                details=f"Invalid cache directory reported during init: {cache_dir}",
+                source="init",
+            )
+
+        self._cleanup_old_audio_files_on_startup()
+        atexit.register(self.shutdown)
+
+    def _record_download_status(
+        self,
+        status: str,
+        model_id: str,
+        backend: str,
+        *,
+        message: str = "",
+        details: str = "",
+        target_dir: str | None = None,
+        bytes_downloaded: int | None = None,
+        throughput_bps: float | None = None,
+        duration_seconds: float | None = None,
+        task_id: str | None = None,
+    ) -> None:
+        """Persist the latest download status and keep the history updated."""
+
+        try:
+            self.config_manager.record_model_download_status(
+                status=status,
+                model_id=model_id,
+                backend=backend,
+                message=message,
+                details=details,
+                target_dir=target_dir or "",
+                bytes_downloaded=bytes_downloaded,
+                throughput_bytes_per_sec=throughput_bps,
+                duration_seconds=duration_seconds,
+                task_id=task_id,
+                save=False,
+            )
+        except Exception:  # pragma: no cover - diagnostics only
+            LOGGER.warning(
+                "Failed to record model download status.",
+                exc_info=True,
+            )
+        else:
+            try:
+                self.config_manager.save_config()
+            except Exception:  # pragma: no cover - diagnostics only
+                LOGGER.warning(
+                    "Unable to persist updated model download status to disk.",
+                    exc_info=True,
+                )
+
     def _schedule_curated_catalog_refresh(self, delay_ms: int = 2000) -> None:
         """Trigger the curated catalog refresh once the UI loop is stable."""
 
@@ -326,114 +477,6 @@ class AppCore:
             )
             self._catalog_refresh_thread = thread
             thread.start()
-
-        self._running_with_elevated_privileges = self._detect_admin_privileges()
-        if self._running_with_elevated_privileges:
-            LOGGER.debug(
-                "Core detected elevated privileges; prioritizing keyboard-based paste automation."
-            )
-
-        self.startup_diagnostics: "StartupDiagnosticsReport | None" = startup_diagnostics
-        if self.startup_diagnostics is not None:
-            diagnostics = self.startup_diagnostics
-            LOGGER.info(
-                StructuredMessage(
-                    "Startup diagnostics attached to core instance.",
-                    event="core.diagnostics.attached",
-                    has_errors=diagnostics.has_errors,
-                    has_warnings=diagnostics.has_warnings,
-                    has_fatal_errors=diagnostics.has_fatal_errors,
-                )
-            )
-
-        # Sincronizar modelos ASR já presentes no disco no início da aplicação
-        try:
-            self._refresh_installed_models("__init__", raise_errors=True)
-        except OSError:
-            messagebox.showerror(
-                "Configuration",
-                "Invalid cache directory. Please review your settings.",
-            )
-        except Exception as e:
-            LOGGER.warning(
-                "AppCore[__init__]: failed to synchronize installed models: %r",
-                e,
-                exc_info=True,
-            )
-
-        self.audio_handler = AudioHandler(
-            config_manager=self.config_manager,
-            state_manager=self.state_manager,
-            on_audio_segment_ready_callback=self.action_orchestrator.on_audio_segment_ready,
-        )
-        self.gemini_api = GeminiAPI(self.config_manager)
-        self.transcription_handler = TranscriptionHandler(
-            config_manager=self.config_manager,
-            gemini_api_client=self.gemini_api,
-            on_model_ready_callback=self._on_model_loaded,
-            on_model_error_callback=self._on_model_load_failed,
-            on_transcription_result_callback=self.action_orchestrator.handle_transcription_result,
-            on_agent_result_callback=self.action_orchestrator.handle_agent_result,
-            on_segment_transcribed_callback=self._on_segment_transcribed_for_ui,
-            is_state_transcribing_fn=self.is_state_transcribing,
-        )
-        self.transcription_handler.core_instance_ref = self
-        # Expõe referência do núcleo ao handler
-        self.action_orchestrator.bind_transcription_handler(self.transcription_handler)
-
-        self._ui_manager = None # Será setado externamente pelo main.py
-        # --- Estado da Aplicação ---
-        self.shutting_down = False
-        self.full_transcription = "" # Acumula transcrição completa
-        self.model_prompt_active = False
-        self._active_recording_correlation_id: str | None = None
-        self._recording_started_at: float | None = None
-        self._onboarding_active = False
-        self._initial_onboarding_scheduled = False
-        self._active_recording_operation_id: str | None = None
-
-        # Inicializar atributos dependentes da configuração antes de acionar o fluxo de modelo
-        self._apply_initial_config_to_core_attributes()
-
-        self.model_download_timeout = self._resolve_model_download_timeout()
-        try:
-            cache_dir = self.config_manager.get(ASR_CACHE_DIR_CONFIG_KEY)
-            model_id = self.asr_model_id
-            backend = self.asr_backend
-            ct2_type = self.config_manager.get(ASR_CT2_COMPUTE_TYPE_CONFIG_KEY)
-
-            if not cache_dir:
-                raise OSError("Invalid cache directory.")
-
-            cache_root = Path(cache_dir)
-
-            start_loading = True
-            ready_path = model_manager_module.ensure_local_installation(
-                cache_root,
-                backend,
-                model_id,
-            )
-
-            if ready_path is None:
-                MODEL_LOGGER.warning(
-                    "ASR model not found locally. The first-run wizard will prompt for installation.",
-                )
-                self.state_manager.set_state(sm.STATE_ERROR_MODEL)
-                # self._prompt_model_install(model_id, backend, cache_dir, ct2_type) # DEPRECATED: Onboarding wizard handles this.
-                start_loading = False
-
-            if start_loading:
-                self._start_model_loading_with_synced_config()
-        except OSError:
-            messagebox.showerror("Error", "Invalid cache directory.")
-            self.state_manager.set_state(
-                sm.StateEvent.MODEL_CACHE_INVALID,
-                details=f"Invalid cache directory reported during init: {cache_dir}",
-                source="init",
-            )
-
-        self._cleanup_old_audio_files_on_startup()
-        atexit.register(self.shutdown)
 
     @property
     def dependency_audit_failure_message(self) -> str | None:
@@ -660,6 +703,7 @@ class AppCore:
             hotkey_defaults=hotkey_defaults,
             profile_dir=str(profile_dir) if profile_dir else None,
             recommended_models=catalog,
+            language=self.config_manager.get(UI_LANGUAGE_CONFIG_KEY),
         )
         return wizard.run()
 
@@ -1227,10 +1271,20 @@ class AppCore:
         reason: str = "manual",
     ) -> dict[str, Any]:
         cancel_event = threading.Event()
+        language = self.config_manager.get(UI_LANGUAGE_CONFIG_KEY) or "en-US"
         panel = DownloadProgressPanel(
             self.main_tk_root,
-            title="Download de Modelo",
-            message=f"Preparando download do modelo '{model_id}'.",
+            language=language,
+            title=choose_translation(
+                language,
+                pt_br="Download de Modelo",
+                en_us="Model Download",
+            ),
+            message=choose_translation(
+                language,
+                pt_br=f"Preparando download do modelo '{model_id}'.",
+                en_us=f"Preparing download for model '{model_id}'.",
+            ),
             on_cancel=cancel_event.set,
         )
 
@@ -1238,7 +1292,14 @@ class AppCore:
 
         def _worker() -> None:
             self.main_tk_root.after(
-                0, lambda: panel.update_status("Iniciando download do modelo...")
+                0,
+                lambda: panel.update_status(
+                    choose_translation(
+                        language,
+                        pt_br="Iniciando download do modelo...",
+                        en_us="Starting model download...",
+                    )
+                ),
             )
             try:
                 self.download_model_and_reload(
@@ -1253,7 +1314,12 @@ class AppCore:
                 result["error"] = exc
 
                 def _mark_cancelled() -> None:
-                    message = str(exc).strip() or "Download cancelado."
+                    default_message = choose_translation(
+                        language,
+                        pt_br="Download cancelado.",
+                        en_us="Download cancelled.",
+                    )
+                    message = str(exc).strip() or default_message
                     panel.mark_cancelled(message)
 
                 self.main_tk_root.after(0, _mark_cancelled)
@@ -1261,15 +1327,27 @@ class AppCore:
                 result["status"] = "error"
                 result["error"] = exc
 
-                def _mark_error() -> None:
-                    panel.mark_error(f"Erro durante o download: {exc}")
+                error_message = choose_translation(
+                    language,
+                    pt_br=f"Erro durante o download: {exc}",
+                    en_us=f"Error while downloading: {exc}",
+                )
+
+                def _mark_error(msg=error_message) -> None:
+                    panel.mark_error(msg)
 
                 self.main_tk_root.after(0, _mark_error)
             else:
                 result["status"] = "success"
 
                 def _mark_success() -> None:
-                    panel.mark_success("Download concluído com sucesso.")
+                    panel.mark_success(
+                        choose_translation(
+                            language,
+                            pt_br="Download concluído com sucesso.",
+                            en_us="Download completed successfully.",
+                        )
+                    )
                     panel.close_after(1200)
 
                 self.main_tk_root.after(0, _mark_success)
@@ -1630,8 +1708,13 @@ class AppCore:
         if self._dependency_audit_event_sent:
             return
         message: str | None = None
-        if self.dependency_audit_result is not None:
-            message = self.dependency_audit_result.summary_message()
+        result = self.dependency_audit_result
+        if result is not None:
+            if not result.has_issues():
+                # Nada para reportar; evita sobrescrever o estado atual (ex. ERROR_MODEL).
+                self._dependency_audit_event_sent = True
+                return
+            message = result.summary_message()
         elif self._dependency_audit_failure_message:
             message = self._dependency_audit_failure_message
         if not message:
@@ -1653,13 +1736,17 @@ class AppCore:
         ui_manager = getattr(self, "_ui_manager", None)
         if ui_manager is None or not hasattr(ui_manager, "present_dependency_audit"):
             return
-        if self.dependency_audit_result is None and not self._dependency_audit_failure_message:
+        result = self.dependency_audit_result
+        if result is None and not self._dependency_audit_failure_message:
+            return
+        if result is not None and not result.has_issues():
+            self._dependency_audit_presented_to_ui = True
             return
 
         def _invoke() -> None:
             try:
                 ui_manager.present_dependency_audit(
-                    self.dependency_audit_result,
+                    result,
                     error_message=self._dependency_audit_failure_message,
                 )
             except Exception:  # pragma: no cover - defensivo
