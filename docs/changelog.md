@@ -13,3 +13,8 @@
 - Stabilized the Silero VAD pipeline with shape validation, float32 normalization, and JSON logging to `logs/vad_failure.jsonl`.
 - Stripped ANSI escape sequences from console output and disabled transformer progress colors by default.
 - Simplified the ASR settings panel with a `Show advanced` toggle that hides backend and quantization options until requested.
+
+## 2025-10-27
+- Added `--skip-bootstrap` to bypass preflight and dependency audits during troubleshooting sessions.
+- Instrumented bootstrap with `bootstrap.step.*` markers to pinpoint initialization stalls in logs.
+- Expanded README/AGENTS documentation with updated startup guidance, tray behaviour, and troubleshooting playbooks.

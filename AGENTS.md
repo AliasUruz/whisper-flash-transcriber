@@ -104,6 +104,8 @@ UI Thread -> UIManager (manages tray icon + settings window)
 3.  It instantiates `AppCore` and `UIManager`, linking them via `app_core.ui_manager`.
 4.  `AppCore` synchronizes settings, checks the model cache, and triggers a model download or background loading via `TranscriptionHandler`.
 5.  `UIManager` builds the system tray icon, its dynamic menus, and associated event listeners.
+6.  Cada etapa crítica da rotina acima emite logs `bootstrap.step.*` (por exemplo, `bootstrap.step.app_core.ready`). Use esses marcadores para localizar travamentos durante a inicialização.
+7.  Para diagnóstico rápido é possível iniciar com `python src/main.py --skip-bootstrap`, o que suprime `run_startup_preflight` e o auditor de dependências. Documente o uso desse modo no diretório `plans/` antes de aplicá-lo em ambientes de produção.
 
 ### 5.2 Capture and Transcription Flow
 1.  A global hotkey press is detected by `KeyboardHotkeyManager`, which calls `AppCore.toggle_recording()`.
@@ -231,6 +233,7 @@ pytest
 | AI corrections are ignored | Missing API keys or the service is unavailable. | Validate `secrets.json`, check the logs for Gemini/OpenRouter API errors. The system should fall back to raw text. |
 | Audio errors (overflow) | High system latency or insufficient resources. | Adjust `chunk_length_sec` in settings, enable disk storage mode, and inspect logs for `Audio input overflow` messages. |
 | Crash on exit | Resources not cleaned up properly. | Ensure `AppCore.shutdown()` is called (via Tray Icon -> Exit), and review for any lingering threads. |
+| Travamento durante o bootstrap | Diagnósticos de dependência ou preflight pendentes. | Consulte os marcadores `bootstrap.step.*` no terminal/log e, para investigação, rode `python src/main.py --skip-bootstrap` (documentando o desvio em `plans/`). |
 
 ---
 

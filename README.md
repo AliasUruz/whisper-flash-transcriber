@@ -56,6 +56,14 @@ If you want CUDA-enabled PyTorch or advanced quantisation backends, install the 
 pip install -r requirements-optional.txt -c constraints.txt
 ```
 
+### First launch
+
+```bash
+python src/main.py
+```
+
+Quando o terminal exibir `ui.mainloop.start`, a aplicação já estará rodando como ícone de bandeja. Procure o logotipo do Whisper Flash Transcriber na área de notificação do Windows e use as hotkeys configuradas para iniciar uma captura.
+
 ## Configuration layout
 `ConfigManager` keeps the canonical configuration at `~/.cache/whisper_flash_transcriber/config.json`. The schema is intentionally split between a minimal surface and a documented advanced tree.
 
@@ -212,6 +220,18 @@ Voice Activity Detection now exposes pre- and post-speech padding in millisecond
 ### Windows permissions and global hotkeys
 
 The application registers global shortcuts using the [`keyboard`](https://github.com/boppreh/keyboard) library. Key suppression is intentionally disabled so that hotkeys work without elevated privileges on Windows. If you customize the code to block the underlying key events system-wide, make sure to run the application as an administrator to satisfy the library requirements.
+
+## Troubleshooting
+
+- **Aplicativo fica “travado” nos primeiros logs do terminal**  
+  O bootstrap agora emite marcadores `bootstrap.step.*` para cada fase crítica. A última mensagem registrada indica onde ocorreu a parada. Se quiser apenas confirmar que o `Tk` e a bandeja continuam funcionais, execute:
+  ```bash
+  python src/main.py --skip-bootstrap
+  ```
+  Esse modo pula as verificações de preflight e a auditoria de dependências. Use-o apenas para diagnóstico rápido e, em seguida, resolva a causa raiz observando `logs/whisper-flash-transcriber.log`.
+
+- **Auditoria de dependências muito lenta ou ruidosa**  
+  Falhas e recomendações ficam registradas tanto nos logs quanto na UI (quando habilitado). Certifique-se de que os arquivos `requirements*.txt` existam e removam entradas obsoletas. Caso precise desabilitar a auditoria temporariamente para investigar outra falha, utilize o modo `--skip-bootstrap` e registre o desvio no diretório `plans/`.
 
 ## Testing and validation
 
