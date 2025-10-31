@@ -154,6 +154,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Run without initializing the Tk UI or system tray icon.",
     )
+    parser.add_argument(
+        "--skip-bootstrap",
+        action="store_true",
+        help="Skip preflight checks and startup diagnostics (useful for troubleshooting).",
+    )
     return parser.parse_args(argv)
 
 
@@ -573,6 +578,7 @@ def run_startup_preflight(config_manager, *, hotkey_config_path: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     headless = bool(args.headless)
+    skip_bootstrap = bool(getattr(args, "skip_bootstrap", False))
     setup_logging()
     install_exception_hooks(logger=LOGGER)
     LOGGER.debug(
@@ -616,9 +622,27 @@ def main(argv: list[str] | None = None) -> int:
             run_startup_diagnostics,
         )
 
+        LOGGER.info(
+            StructuredMessage(
+                "Initializing ConfigManager.",
+                event="bootstrap.step.config_manager.init",
+            )
+        )
         config_manager = ConfigManager()
+        LOGGER.info(
+            StructuredMessage(
+                "ConfigManager ready.",
+                event="bootstrap.step.config_manager.ready",
+            )
+        )
         dependency_installer = DependencyInstaller(
             config_manager.get_python_packages_dir()
+        )
+        LOGGER.info(
+            StructuredMessage(
+                "DependencyInstaller created.",
+                event="bootstrap.step.dependency_installer.init",
+            )
         )
         dependency_installer.ensure_in_sys_path()
         for note in dependency_installer.environment_notes:
@@ -629,6 +653,12 @@ def main(argv: list[str] | None = None) -> int:
                     note=note,
                 )
             )
+        LOGGER.info(
+            StructuredMessage(
+                "DependencyInstaller path ensured.",
+                event="bootstrap.step.dependency_installer.ready",
+            )
+        )
 
         hf_cache_dir = config_manager.get_hf_cache_dir()
         try:
@@ -647,23 +677,41 @@ def main(argv: list[str] | None = None) -> int:
                 exc_info=True,
             )
 
-        run_startup_preflight(config_manager, hotkey_config_path=HOTKEY_CONFIG_PATH)
-        diagnostics_report = run_startup_diagnostics(
-            config_manager,
-            hotkey_config_path=HOTKEY_CONFIG_PATH,
-        )
-
-        if args.diagnostics:
-            print(format_report_for_console(diagnostics_report))
-            exit_code = 1 if diagnostics_report.has_errors else 0
-            LOGGER.info(
+        if args.diagnostics and skip_bootstrap:
+            LOGGER.error(
                 StructuredMessage(
-                    "Diagnostics-only execution completed.",
-                    event="bootstrap.diagnostics_only_complete",
-                    exit_code=exit_code,
+                    "Cannot combine diagnostics mode with bootstrap skipping.",
+                    event="bootstrap.invalid_args",
                 )
             )
-            return exit_code
+            return 2
+
+        diagnostics_report = None
+        if skip_bootstrap:
+            LOGGER.warning(
+                StructuredMessage(
+                    "Bootstrap preflight and diagnostics skipped via command-line flag.",
+                    event="bootstrap.skipped",
+                )
+            )
+        else:
+            run_startup_preflight(config_manager, hotkey_config_path=HOTKEY_CONFIG_PATH)
+            diagnostics_report = run_startup_diagnostics(
+                config_manager,
+                hotkey_config_path=HOTKEY_CONFIG_PATH,
+            )
+
+            if args.diagnostics:
+                print(format_report_for_console(diagnostics_report))
+                exit_code = 1 if diagnostics_report.has_errors else 0
+                LOGGER.info(
+                    StructuredMessage(
+                        "Diagnostics-only execution completed.",
+                        event="bootstrap.diagnostics_only_complete",
+                        exit_code=exit_code,
+                    )
+                )
+                return exit_code
 
         main_tk_root: tk.Tk | None = None
         app_core_instance = None
@@ -692,10 +740,22 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
+        LOGGER.info(
+            StructuredMessage(
+                "Creating Tk root window.",
+                event="bootstrap.step.tk.init",
+            )
+        )
         main_tk_root = tk.Tk()
         main_tk_root.withdraw()
         main_tk_root.title("Whisper Flash Transcriber")
         main_tk_root.protocol("WM_DELETE_WINDOW", on_exit_app_enhanced)
+        LOGGER.info(
+            StructuredMessage(
+                "Tk root window ready.",
+                event="bootstrap.step.tk.ready",
+            )
+        )
 
         icon_path = ICON_PATH
         if not os.path.exists(icon_path):
@@ -718,6 +778,12 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
 
+        LOGGER.info(
+            StructuredMessage(
+                "Instantiating AppCore.",
+                event="bootstrap.step.app_core.init",
+            )
+        )
         app_core_instance = AppCore(
             main_tk_root,
             config_manager=config_manager,
@@ -725,12 +791,24 @@ def main(argv: list[str] | None = None) -> int:
             startup_diagnostics=diagnostics_report,
             enable_onboarding=not headless,
         )
+        LOGGER.info(
+            StructuredMessage(
+                "AppCore ready.",
+                event="bootstrap.step.app_core.ready",
+            )
+        )
         ui_manager_instance = UIManager(
             main_tk_root,
             app_core_instance.config_manager,
             app_core_instance,
             model_manager=app_core_instance.model_manager,
             is_running_as_admin=app_core_instance.is_running_as_admin,
+        )
+        LOGGER.info(
+            StructuredMessage(
+                "UIManager ready.",
+                event="bootstrap.step.ui_manager.ready",
+            )
         )
         app_core_instance.ui_manager = ui_manager_instance
         ui_manager_instance.setup_tray_icon()
