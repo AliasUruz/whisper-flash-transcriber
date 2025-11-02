@@ -3636,6 +3636,8 @@ class UIManager:
                                 if val == text_correction_service_var.get()), "None")
                 )
 
+                register_advanced_block = self._register_advanced_block
+
                 mode_initial = self._resolve_initial_value(
                     "record_mode",
                     var_name="record_mode",
@@ -4577,7 +4579,7 @@ class UIManager:
 
                 correction_timeout_frame = ctk.CTkFrame(ai_frame)
                 correction_timeout_frame.pack(fill="x", pady=5)
-                _register_advanced(correction_timeout_frame, fill="x", pady=5)
+                register_advanced_block(correction_timeout_frame, fill="x", pady=5)
                 ctk.CTkLabel(
                     correction_timeout_frame,
                     text="Tempo limite da correção (s):",
