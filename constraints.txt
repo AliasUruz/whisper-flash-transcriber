@@ -27,7 +27,7 @@ huggingface_hub<0.26
 accelerate<0.34
 datasets<4
 torch<2.6
-bitsandbytes<0.44
+bitsandbytes<0.46
 
 # Tooling
 pytest<9

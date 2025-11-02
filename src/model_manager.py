@@ -109,6 +109,21 @@ class HardwareProfile:
         }
 
 
+@dataclass(frozen=True)
+class CT2QuantizationResolution:
+    """Result of resolving a CTranslate2 quantization request."""
+
+    requested: str | None
+    normalized: str
+    resolved: str
+    revision: str | None
+    fallback_reason: str | None = None
+
+    @property
+    def fallback_applied(self) -> bool:
+        return self.fallback_reason is not None
+
+
 class DownloadCancelledError(Exception):
     """Raised when a model download is cancelled or aborted."""
 
@@ -717,6 +732,37 @@ def _resolve_ct2_quantization(
         quant_label = "default"
 
     return quant_label, None
+
+
+def resolve_ct2_quantization(
+    model_id: str, requested_quant: str | None
+) -> CT2QuantizationResolution:
+    """Resolve requested CT2 quantization into an actionable configuration."""
+
+    sanitized_requested: str | None
+    if requested_quant is None:
+        sanitized_requested = None
+    else:
+        sanitized_requested = str(requested_quant).strip() or None
+
+    normalized, rejected = _normalize_ct2_quant_label(sanitized_requested)
+    resolved, revision = _resolve_ct2_quantization(model_id, sanitized_requested)
+
+    fallback_reason: str | None = None
+    if rejected is not None:
+        fallback_reason = "unsupported"
+    if normalized != resolved:
+        fallback_reason = fallback_reason or "missing_revision"
+
+    resolved_compute_type = resolved if resolved != "default" else "float16"
+
+    return CT2QuantizationResolution(
+        requested=sanitized_requested,
+        normalized=normalized,
+        resolved=resolved_compute_type,
+        revision=revision,
+        fallback_reason=fallback_reason,
+    )
 
 
 _CACHE_TTL_SECONDS = 60.0
@@ -1593,15 +1639,21 @@ def ensure_download(
 
     cache_dir = Path(cache_dir)
 
+    quant_label: str | None = None
+    requested_quant_label: str | None = None
+    quant_revision: str | None = None
+
     def _emit_stage(stage_id: str, **metadata) -> None:
         if on_stage_change is None:
             return
         payload = {
             "model_id": model_id,
             "backend": backend,
-            "quant": quant,
+            "quant": quant_label,
             "target_dir": str(cache_dir),
         }
+        if requested_quant_label and requested_quant_label != quant_label:
+            payload["requested_quant"] = requested_quant_label
         payload.update(metadata)
         try:
             on_stage_change(stage_id, payload)
@@ -1633,7 +1685,29 @@ def ensure_download(
     storage_backend = backend_storage_name(backend_label or backend)
     backend_label = backend_label or normalize_backend_label(storage_backend) or storage_backend
 
-    quant_label = _normalize_quant_label(quant if backend_label == "ctranslate2" else None)
+    if backend_label == "ctranslate2":
+        resolution = resolve_ct2_quantization(model_id, quant)
+        quant_label = resolution.resolved
+        quant_revision = resolution.revision
+        requested_quant_label = (
+            resolution.requested or resolution.normalized or ""
+        ) or None
+        if resolution.fallback_applied and requested_quant_label:
+            reason_label = (
+                "unsupported_quantization"
+                if resolution.fallback_reason == "unsupported"
+                else "missing_quantization_branch"
+            )
+            MODEL_LOGGER.info(
+                "Falling back to %s weights for %s because quantization '%s' is unavailable (%s).",
+                quant_label,
+                model_id,
+                requested_quant_label,
+                reason_label,
+            )
+    else:
+        quant_label = _normalize_quant_label(None)
+        requested_quant_label = None
 
     with _temporary_environ(environment):
         prepared = _prepare_local_installation(cache_dir, backend_label, model_id)
@@ -1789,9 +1863,7 @@ def ensure_download(
         if cancel_event is not None or deadline is not None:
             progress_class = _make_cancellable_progress(_check_abort)
 
-        revision = None
-        if storage_backend == "ct2" and quant_label != "default":
-            revision = quant_label
+        revision = quant_revision if storage_backend == "ct2" else None
 
         download_kwargs = {
             "repo_id": model_id,

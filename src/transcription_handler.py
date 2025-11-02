@@ -937,6 +937,30 @@ class TranscriptionHandler:
         else:
             compute_type = compute_type_raw
 
+        if backend == "ctranslate2":
+            try:
+                quant_resolution = model_manager_module.resolve_ct2_quantization(
+                    model_id, compute_type
+                )
+            except Exception:
+                logging.debug(
+                    "Unable to validate CT2 quantization availability for %s.",
+                    model_id,
+                    exc_info=True,
+                )
+            else:
+                if (
+                    quant_resolution.fallback_applied
+                    and quant_resolution.resolved != compute_type
+                ):
+                    logging.warning(
+                        "Requested compute type %s for model %s is not available; using %s instead.",
+                        compute_type,
+                        model_id,
+                        quant_resolution.resolved,
+                    )
+                compute_type = quant_resolution.resolved
+
         default_gpu_model = "openai/whisper-large-v3-turbo"
         # Utilize o modelo distil curado como fallback oficial para execuções em CPU.
         default_cpu_model = "distil-whisper/distil-large-v3"

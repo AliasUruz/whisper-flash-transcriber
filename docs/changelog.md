@@ -1,5 +1,15 @@
 # Changelog
 
+## 2025-10-29
+- Corrigido o registro da seção avançada na janela de configurações para que o
+  painel de IA obedeça ao alternador "Mostrar avançado" sem gerar conflitos de
+  ordenação entre frames.
+- Atualizado o requisito opcional de `bitsandbytes` para restringir a instalação
+  a Linux x86_64 e alinhar o intervalo suportado (`>=0.45,<0.46`).
+- Implementado fallback automático para `float16` quando a quantização
+  solicitada no Hugging Face não possui branch disponível, evitando falhas de
+  download e carga do backend.
+
 ## 2025-02-15
 - Hardened the hotkey teardown path to avoid referencing stale debounce
   variables, ensuring driver failures during unregister are logged cleanly.
