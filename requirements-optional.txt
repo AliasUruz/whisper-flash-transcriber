@@ -1,4 +1,4 @@
 # Optional GPU optimizations
 # bitsandbytes publishes wheels only for Linux (and WSL/conda environments).
 # The environment marker prevents pip from attempting an install on Windows.
-bitsandbytes>=0.43.0 ; platform_system != "Windows"
+bitsandbytes>=0.43.0; platform_system != "Windows"
