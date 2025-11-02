@@ -63,6 +63,7 @@ from .config_manager import (
     VAD_POST_SPEECH_PADDING_MS_CONFIG_KEY,
     DEFAULT_CONFIG,
     SIMPLE_MODE_RESET_KEYS,
+    UI_LANGUAGE_CONFIG_KEY,
 )
 from . import state_manager as sm
 
@@ -72,6 +73,7 @@ from .logging_utils import StructuredMessage, get_log_directory
 from .state_manager import StateEvent
 from .utils.dependency_audit import DependencyAuditResult, DependencyIssue
 from .app_identity import APP_DISPLAY_NAME, APP_ID
+from .localization import choose_translation
 
 # Importar get_available_devices_for_ui (pode ser movido para um utils ou ficar aqui)
 # Por enquanto, vamos assumir que está disponível globalmente ou será movido para cá.
@@ -3609,6 +3611,10 @@ class UIManager:
                 self._set_settings_meta("_advanced_callbacks", [])
                 service_values_allowed = {SERVICE_NONE, SERVICE_OPENROUTER, SERVICE_GEMINI}
                 self._set_settings_meta("service_values_allowed", service_values_allowed)
+                ui_language_value = self.config_manager.get(UI_LANGUAGE_CONFIG_KEY, None)
+                ui_language = (
+                    str(ui_language_value) if ui_language_value is not None else None
+                )
 
                 # Variables (adjust to use self.config_manager.get)
                 auto_paste_var = ctk.BooleanVar(value=self.config_manager.get("auto_paste"))
@@ -4550,22 +4556,48 @@ class UIManager:
 
                 # --- Text Correction (AI Services) Section ---
                 ai_frame = ctk.CTkFrame(scrollable_frame, fg_color="transparent")
-                ctk.CTkLabel(ai_frame, text="Correção de Texto (Serviços de IA)", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), anchor="w")
+                ctk.CTkLabel(
+                    ai_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.title",
+                        default="Correção de Texto (Serviços de IA)",
+                    ),
+                    font=ctk.CTkFont(weight="bold"),
+                ).pack(pady=(5, 10), anchor="w")
 
                 text_correction_frame = ctk.CTkFrame(ai_frame)
                 text_correction_frame.pack(fill="x", pady=5)
                 correction_switch = ctk.CTkSwitch(
                     text_correction_frame,
-                    text="Ativar Correção de Texto",
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.toggle",
+                        default="Ativar Correção de Texto",
+                    ),
                     variable=text_correction_enabled_var,
                     command=self._update_text_correction_fields,
                 )
                 correction_switch.pack(side="left", padx=5)
-                Tooltip(correction_switch, "Usa um serviço de IA para refinar o texto.")
+                Tooltip(
+                    correction_switch,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.toggle.tooltip",
+                        default="Usa um serviço de IA para refinar o texto.",
+                    ),
+                )
 
                 service_frame = ctk.CTkFrame(ai_frame)
                 service_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(service_frame, text="Serviço:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(
+                    service_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.service.label",
+                        default="Serviço:",
+                    ),
+                ).pack(side="left", padx=(5, 10))
                 service_menu = ctk.CTkOptionMenu(
                     service_frame,
                     variable=text_correction_service_label_var,
@@ -4574,7 +4606,14 @@ class UIManager:
                 )
                 service_menu.pack(side="left", padx=5)
                 self._set_settings_var("service_menu", service_menu)
-                Tooltip(service_menu, "Selecione o serviço de correção de texto.")
+                Tooltip(
+                    service_menu,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.service.tooltip",
+                        default="Selecione o serviço de correção de texto.",
+                    ),
+                )
                 service_menu.set(text_correction_service_label_var.get())
 
                 correction_timeout_frame = ctk.CTkFrame(ai_frame)
@@ -4582,7 +4621,11 @@ class UIManager:
                 register_advanced_block(correction_timeout_frame, fill="x", pady=5)
                 ctk.CTkLabel(
                     correction_timeout_frame,
-                    text="Tempo limite da correção (s):",
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.timeout.label",
+                        default="Tempo limite da correção (s):",
+                    ),
                 ).pack(side="left", padx=(5, 10))
                 text_correction_timeout_entry = ctk.CTkEntry(
                     correction_timeout_frame,
@@ -4593,38 +4636,123 @@ class UIManager:
                 self._set_settings_var("text_correction_timeout_entry", text_correction_timeout_entry)
                 Tooltip(
                     text_correction_timeout_entry,
-                    "Tempo máximo para aguardar a correção antes de usar o texto bruto.",
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.timeout.tooltip",
+                        default="Tempo máximo para aguardar a correção antes de usar o texto bruto.",
+                    ),
                 )
 
                 # --- OpenRouter Settings ---
                 openrouter_frame = ctk.CTkFrame(ai_frame)
                 openrouter_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(openrouter_frame, text="Chave OpenRouter:").pack(side="left", padx=(5, 10))
-                openrouter_key_entry = ctk.CTkEntry(openrouter_frame, textvariable=openrouter_api_key_var, show="*", width=250)
+                ctk.CTkLabel(
+                    openrouter_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.openrouter.api_key.label",
+                        default="Chave OpenRouter:",
+                    ),
+                ).pack(side="left", padx=(5, 10))
+                openrouter_key_entry = ctk.CTkEntry(
+                    openrouter_frame,
+                    textvariable=openrouter_api_key_var,
+                    show="*",
+                    width=250,
+                )
                 openrouter_key_entry.pack(side="left", padx=5)
                 self._set_settings_var("openrouter_key_entry", openrouter_key_entry)
-                Tooltip(openrouter_key_entry, "Chave da API OpenRouter.")
-                ctk.CTkLabel(openrouter_frame, text="Modelo OpenRouter:").pack(side="left", padx=(5, 10))
-                openrouter_model_entry = ctk.CTkEntry(openrouter_frame, textvariable=openrouter_model_var, width=200)
+                Tooltip(
+                    openrouter_key_entry,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.openrouter.api_key.tooltip",
+                        default="Chave da API OpenRouter.",
+                    ),
+                )
+                ctk.CTkLabel(
+                    openrouter_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.openrouter.model.label",
+                        default="Modelo OpenRouter:",
+                    ),
+                ).pack(side="left", padx=(5, 10))
+                openrouter_model_entry = ctk.CTkEntry(
+                    openrouter_frame,
+                    textvariable=openrouter_model_var,
+                    width=200,
+                )
                 openrouter_model_entry.pack(side="left", padx=5)
                 self._set_settings_var("openrouter_model_entry", openrouter_model_entry)
-                Tooltip(openrouter_model_entry, "Modelo utilizado no OpenRouter.")
+                Tooltip(
+                    openrouter_model_entry,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.openrouter.model.tooltip",
+                        default="Modelo utilizado no OpenRouter.",
+                    ),
+                )
 
                 # --- Gemini Settings ---
                 gemini_frame = ctk.CTkFrame(ai_frame)
                 gemini_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(gemini_frame, text="Chave Gemini:").pack(side="left", padx=(5, 10))
-                gemini_key_entry = ctk.CTkEntry(gemini_frame, textvariable=gemini_api_key_var, show="*", width=250)
+                ctk.CTkLabel(
+                    gemini_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.gemini.api_key.label",
+                        default="Chave Gemini:",
+                    ),
+                ).pack(side="left", padx=(5, 10))
+                gemini_key_entry = ctk.CTkEntry(
+                    gemini_frame,
+                    textvariable=gemini_api_key_var,
+                    show="*",
+                    width=250,
+                )
                 gemini_key_entry.pack(side="left", padx=5)
                 self._set_settings_var("gemini_key_entry", gemini_key_entry)
-                Tooltip(gemini_key_entry, "Chave da API Gemini.")
-                ctk.CTkLabel(gemini_frame, text="Modelo Gemini:").pack(side="left", padx=(5, 10))
-                gemini_model_menu = ctk.CTkOptionMenu(gemini_frame, variable=gemini_model_var, values=gemini_model_options)
+                Tooltip(
+                    gemini_key_entry,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.gemini.api_key.tooltip",
+                        default="Chave da API Gemini.",
+                    ),
+                )
+                ctk.CTkLabel(
+                    gemini_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.gemini.model.label",
+                        default="Modelo Gemini:",
+                    ),
+                ).pack(side="left", padx=(5, 10))
+                gemini_model_menu = ctk.CTkOptionMenu(
+                    gemini_frame,
+                    variable=gemini_model_var,
+                    values=gemini_model_options,
+                )
                 gemini_model_menu.pack(side="left", padx=5)
                 self._set_settings_var("gemini_model_menu", gemini_model_menu)
-                Tooltip(gemini_model_menu, "Modelo utilizado nas requisições Gemini.")
+                Tooltip(
+                    gemini_model_menu,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.gemini.model.tooltip",
+                        default="Modelo utilizado nas requisições Gemini.",
+                    ),
+                )
 
-                ctk.CTkLabel(gemini_frame, text="Modelo do Agente:").pack(side="left", padx=(5, 10))
+                ctk.CTkLabel(
+                    gemini_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.gemini.agent_model.label",
+                        default="Modelo do Agente:",
+                    ),
+                ).pack(side="left", padx=(5, 10))
                 agent_model_menu = ctk.CTkOptionMenu(
                     gemini_frame,
                     variable=agent_model_var,
@@ -4632,31 +4760,92 @@ class UIManager:
                 )
                 agent_model_menu.pack(side="left", padx=5)
                 self._set_settings_var("agent_model_menu", agent_model_menu)
-                Tooltip(agent_model_menu, "Modelo dedicado às ações do modo agente.")
+                Tooltip(
+                    agent_model_menu,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.gemini.agent_model.tooltip",
+                        default="Modelo dedicado às ações do modo agente.",
+                    ),
+                )
 
                 # --- Gemini Prompt ---
                 gemini_prompt_frame = ctk.CTkFrame(ai_frame)
                 gemini_prompt_frame.pack(fill="x", pady=5)
-                ctk.CTkLabel(gemini_prompt_frame, text="Prompt de Correção (Gemini):").pack(anchor="w", pady=(5,0))
-                gemini_prompt_correction_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=100, wrap="word")
+                ctk.CTkLabel(
+                    gemini_prompt_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.gemini.prompt.label",
+                        default="Prompt de Correção (Gemini):",
+                    ),
+                ).pack(anchor="w", pady=(5, 0))
+                gemini_prompt_correction_textbox = ctk.CTkTextbox(
+                    gemini_prompt_frame,
+                    height=100,
+                    wrap="word",
+                )
                 gemini_prompt_correction_textbox.pack(fill="x", expand=True, pady=5)
                 gemini_prompt_correction_textbox.insert("1.0", gemini_prompt_initial)
                 self._set_settings_var("gemini_prompt_correction_textbox", gemini_prompt_correction_textbox)
-                Tooltip(gemini_prompt_correction_textbox, "Prompt usado para refinar o texto.")
+                Tooltip(
+                    gemini_prompt_correction_textbox,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.gemini.prompt.tooltip",
+                        default="Prompt usado para refinar o texto.",
+                    ),
+                )
 
-                ctk.CTkLabel(gemini_prompt_frame, text="Prompt do Modo Agente:").pack(anchor="w", pady=(5,0))
-                agentico_prompt_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
+                ctk.CTkLabel(
+                    gemini_prompt_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.agent_prompt.label",
+                        default="Prompt do Modo Agente:",
+                    ),
+                ).pack(anchor="w", pady=(5, 0))
+                agentico_prompt_textbox = ctk.CTkTextbox(
+                    gemini_prompt_frame,
+                    height=60,
+                    wrap="word",
+                )
                 agentico_prompt_textbox.pack(fill="x", expand=True, pady=5)
                 agentico_prompt_textbox.insert("1.0", agent_prompt_initial)
                 self._set_settings_var("agentico_prompt_textbox", agentico_prompt_textbox)
-                Tooltip(agentico_prompt_textbox, "Prompt executado no modo agente.")
+                Tooltip(
+                    agentico_prompt_textbox,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.agent_prompt.tooltip",
+                        default="Prompt executado no modo agente.",
+                    ),
+                )
 
-                ctk.CTkLabel(gemini_prompt_frame, text="Modelos Gemini (um por linha):").pack(anchor="w", pady=(5,0))
-                gemini_models_textbox = ctk.CTkTextbox(gemini_prompt_frame, height=60, wrap="word")
+                ctk.CTkLabel(
+                    gemini_prompt_frame,
+                    text=choose_translation(
+                        ui_language,
+                        "settings.text_correction.model_list.label",
+                        default="Modelos Gemini (um por linha):",
+                    ),
+                ).pack(anchor="w", pady=(5, 0))
+                gemini_models_textbox = ctk.CTkTextbox(
+                    gemini_prompt_frame,
+                    height=60,
+                    wrap="word",
+                )
                 gemini_models_textbox.pack(fill="x", expand=True, pady=5)
                 gemini_models_textbox.insert("1.0", "\n".join(gemini_model_options))
                 self._set_settings_var("gemini_models_textbox", gemini_models_textbox)
-                Tooltip(gemini_models_textbox, "Lista de modelos para tentativa, um por linha.")
+                Tooltip(
+                    gemini_models_textbox,
+                    choose_translation(
+                        ui_language,
+                        "settings.text_correction.model_list.tooltip",
+                        default="Lista de modelos para tentativa, um por linha.",
+                    ),
+                )
 
                 self._register_advanced_block(ai_frame, fill="x", padx=10, pady=5)
 
