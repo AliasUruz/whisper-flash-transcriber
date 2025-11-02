@@ -4641,7 +4641,9 @@ class UIManager:
 
                 correction_timeout_frame = ctk.CTkFrame(ai_frame)
                 correction_timeout_frame.pack(fill="x", pady=5)
-                register_advanced_block(correction_timeout_frame, fill="x", pady=5)
+                self._register_advanced_block(
+                    correction_timeout_frame, fill="x", pady=5
+                )
                 ctk.CTkLabel(
                     correction_timeout_frame,
                     text=choose_translation(
