@@ -18,9 +18,15 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 try:  # pragma: no cover - optional dependency
     from huggingface_hub import HfApi, snapshot_download
+    from huggingface_hub.utils import RevisionNotFoundError
 except Exception:  # pragma: no cover - allow runtime fallback
     HfApi = None  # type: ignore[assignment]
     snapshot_download = None  # type: ignore[assignment]
+
+    class RevisionNotFoundError(RuntimeError):  # type: ignore[override]
+        """Fallback revision error when ``huggingface_hub`` is unavailable."""
+
+        pass
 
 from .logging_utils import get_logger, log_context
 from .app_identity import APP_LOG_NAMESPACE
@@ -89,6 +95,9 @@ class ModelDownloadResult:
     bytes_downloaded: Optional[int] = None
     duration_seconds: Optional[float] = None
     target_dir: Optional[str] = None
+    quantization: Optional[str] = None
+    fallback_applied: bool = False
+    requested_quantization: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -1593,15 +1602,28 @@ def ensure_download(
 
     cache_dir = Path(cache_dir)
 
+    requested_quant_label: str | None = None
+    quant_stage_label: str | None = None
+    fallback_triggered = False
+    fallback_summary: str | None = None
+    fallback_details: dict[str, str] | None = None
+
     def _emit_stage(stage_id: str, **metadata) -> None:
         if on_stage_change is None:
             return
         payload = {
             "model_id": model_id,
             "backend": backend,
-            "quant": quant,
+            "quant": requested_quant_label or quant,
             "target_dir": str(cache_dir),
         }
+        if requested_quant_label is not None:
+            payload.setdefault("requested_quant", requested_quant_label)
+        if quant_stage_label is not None:
+            payload.setdefault("effective_quant", quant_stage_label)
+        if fallback_summary:
+            payload.setdefault("fallback_message", fallback_summary)
+        payload.setdefault("fallback_applied", fallback_triggered)
         payload.update(metadata)
         try:
             on_stage_change(stage_id, payload)
@@ -1634,6 +1656,8 @@ def ensure_download(
     backend_label = backend_label or normalize_backend_label(storage_backend) or storage_backend
 
     quant_label = _normalize_quant_label(quant if backend_label == "ctranslate2" else None)
+    requested_quant_label = quant_label
+    quant_stage_label = quant_label
 
     with _temporary_environ(environment):
         prepared = _prepare_local_installation(cache_dir, backend_label, model_id)
@@ -1647,13 +1671,16 @@ def ensure_download(
                 bytes_downloaded=0,
                 bytes_total=installed_bytes,
                 files=installed_files,
+                effective_quant=quant_stage_label,
+                requested_quant=requested_quant_label,
+                fallback_applied=fallback_triggered,
             )
             try:
                 _write_install_metadata(
                     ready_path,
                     model_id=model_id,
                     backend_label=backend_label,
-                    quant_label=quant_label,
+                    quant_label=quant_stage_label or quant_label,
                 )
             except Exception:  # pragma: no cover - metadata persistence best effort
                 MODEL_LOGGER.debug(
@@ -1677,6 +1704,9 @@ def ensure_download(
                 bytes_downloaded=0,
                 duration_seconds=0.0,
                 target_dir=str(ready_path),
+                quantization=quant_stage_label,
+                fallback_applied=fallback_triggered,
+                requested_quantization=requested_quant_label,
             )
 
         stale_local_dir = prepared.stale_local_dir
@@ -1826,7 +1856,51 @@ def ensure_download(
         try:
             _check_abort()
             if storage_backend in {"ct2", "faster-whisper"}:
-                _snapshot_download(**download_kwargs)
+                try:
+                    _snapshot_download(**download_kwargs)
+                except RevisionNotFoundError as revision_exc:
+                    quant_lower = (quant_label or "").strip().lower()
+                    if quant_lower and quant_lower != "float16":
+                        fallback_source = quant_label
+                        fallback_target = "float16"
+                        fallback_triggered = True
+                        quant_label = fallback_target
+                        quant_stage_label = quant_label
+                        fallback_summary = (
+                            f"Quantização '{fallback_source}' indisponível para {model_id}; "
+                            f"alternando automaticamente para '{fallback_target}'."
+                        )
+                        fallback_details = {
+                            "previous_quant": fallback_source,
+                            "effective_quant": quant_stage_label or fallback_target,
+                            "message": fallback_summary,
+                        }
+                        logging.warning(fallback_summary)
+                        MODEL_LOGGER.warning(
+                            "Quantized revision missing; retrying with float16: model=%s requested=%s",
+                            model_id,
+                            fallback_source,
+                        )
+                        _cleanup_partial("revision_not_found")
+                        download_kwargs["revision"] = fallback_target
+                        _emit_stage(
+                            "quantization_fallback",
+                            message=fallback_summary,
+                            previous_quant=fallback_source,
+                            effective_quant=quant_stage_label,
+                            quantization_fallback=fallback_details,
+                        )
+                        _check_abort()
+                        try:
+                            _snapshot_download(**download_kwargs)
+                        except Exception as fallback_exc:
+                            combined_message = (
+                                f"{revision_exc} (fallback para compute_type 'float16' também falhou: {fallback_exc})"
+                            )
+                            revision_exc.args = (combined_message,)
+                            raise revision_exc from fallback_exc
+                    else:
+                        raise
             else:
                 raise ValueError(f"Unknown backend: {backend_label}")
             _check_abort()
@@ -1891,14 +1965,19 @@ def ensure_download(
             MODEL_LOGGER.debug(
                 "Unable to persist metadata for model %s at %s", model_id, local_dir, exc_info=True
             )
-        _emit_stage(
-            "success",
-            path=str(local_dir),
-            bytes_downloaded=installed_bytes,
-            files=installed_files,
-            duration_seconds=elapsed_seconds,
-            throughput_bps=throughput_bps,
-        )
+        success_metadata = {
+            "path": str(local_dir),
+            "bytes_downloaded": installed_bytes,
+            "files": installed_files,
+            "duration_seconds": elapsed_seconds,
+            "throughput_bps": throughput_bps,
+            "effective_quant": quant_stage_label,
+            "requested_quant": requested_quant_label,
+            "fallback_applied": fallback_triggered,
+        }
+        if fallback_details is not None:
+            success_metadata["quantization_fallback"] = fallback_details
+        _emit_stage("success", **success_metadata)
         MODEL_LOGGER.info(
             "[METRIC] stage=model_download status=success model=%s backend=%s duration_ms=%.2f path=%s",
             model_id,
@@ -1913,6 +1992,9 @@ def ensure_download(
             bytes_downloaded=installed_bytes,
             duration_seconds=elapsed_seconds,
             target_dir=str(local_dir),
+            quantization=quant_stage_label,
+            fallback_applied=fallback_triggered,
+            requested_quantization=requested_quant_label,
         )
 
 def _make_cancellable_progress(check_abort, progress_callback: Callable[[int, int], None] | None = None):

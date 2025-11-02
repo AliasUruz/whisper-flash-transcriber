@@ -88,6 +88,12 @@ except Exception:  # pragma: no cover - fallback se a exceção não existir
     class _DefaultModelDownloadResult:
         path: str = ""
         downloaded: bool = False
+        bytes_downloaded: Optional[int] = None
+        duration_seconds: Optional[float] = None
+        target_dir: Optional[str] = None
+        quantization: Optional[str] = None
+        fallback_applied: bool = False
+        requested_quantization: Optional[str] = None
 
     class _DefaultDownloadCancelledError(Exception):
         """Fallback exception when model_manager is unavailable."""
@@ -575,12 +581,29 @@ class UIManager:
             bytes_downloaded = entry.get("bytes_downloaded")
             throughput = entry.get("throughput_bps")
             duration = entry.get("duration_seconds")
+            quantization = entry.get("quantization") or entry.get("effective_quant")
+            requested_quant = entry.get("requested_quantization") or entry.get("requested_quant")
+            fallback_flag = entry.get("fallback_applied")
+            fallback_active = False
+            if isinstance(fallback_flag, str):
+                fallback_active = fallback_flag.strip().lower() in {"true", "1", "yes"}
+            elif isinstance(fallback_flag, bool):
+                fallback_active = fallback_flag
             if bytes_downloaded:
                 details_parts.append(f"Size {self._format_bytes(int(bytes_downloaded))}")
             if throughput:
                 details_parts.append(f"Throughput {self._format_throughput(float(throughput))}")
             if duration:
                 details_parts.append(f"Duration {self._format_eta(float(duration))}")
+            if quantization:
+                quant_text = f"Quantization {quantization}"
+                requested_clean = str(requested_quant).strip() if requested_quant else ""
+                quant_clean = str(quantization).strip()
+                if fallback_active and requested_clean and requested_clean != quant_clean:
+                    quant_text = f"Quantization {quant_clean} (fallback from {requested_clean})"
+                else:
+                    quant_text = f"Quantization {quant_clean}" if quant_clean else quant_text
+                details_parts.append(quant_text)
             if target_dir:
                 details_parts.append(f"Target {target_dir}")
             if message:

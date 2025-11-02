@@ -227,6 +227,9 @@ DEFAULT_CONFIG = {
         "bytes_downloaded": 0,
         "throughput_bps": 0.0,
         "duration_seconds": 0.0,
+        "quantization": "",
+        "requested_quantization": "",
+        "fallback_applied": False,
     },
     "asr_download_history": [],
     "asr_last_prompt_decision": {
@@ -1793,6 +1796,7 @@ class ConfigManager:
             stored_status = default_download_status
         sanitized_status = copy.deepcopy(default_download_status)
         numeric_status_keys = {"bytes_downloaded", "throughput_bps", "duration_seconds"}
+        boolean_status_keys = {"fallback_applied"}
         if isinstance(stored_status, dict):
             for key, value in stored_status.items():
                 if key not in sanitized_status:
@@ -1808,6 +1812,8 @@ class ConfigManager:
                         )
                     except (TypeError, ValueError):
                         sanitized_status[key] = None if key != "bytes_downloaded" else 0
+                elif key in boolean_status_keys:
+                    sanitized_status[key] = bool(value)
                 else:
                     sanitized_status[key] = str(value)
         if not sanitized_status.get("status"):
@@ -3277,10 +3283,27 @@ class ConfigManager:
             self.default_config.get(ASR_LAST_DOWNLOAD_STATUS_KEY, {})
         )
         sanitized = copy.deepcopy(default_status)
+        numeric_status_keys = {"bytes_downloaded", "throughput_bps", "duration_seconds"}
+        boolean_status_keys = {"fallback_applied"}
         if isinstance(value, dict):
             for key, raw in value.items():
-                normalized = "" if raw is None else str(raw)
-                sanitized[key] = normalized
+                if raw is None and key in numeric_status_keys:
+                    sanitized[key] = None if key != "bytes_downloaded" else 0
+                    continue
+                if key in numeric_status_keys:
+                    try:
+                        sanitized[key] = (
+                            int(raw)
+                            if key == "bytes_downloaded"
+                            else float(raw)
+                        )
+                    except (TypeError, ValueError):
+                        sanitized[key] = None if key != "bytes_downloaded" else 0
+                    continue
+                if key in boolean_status_keys:
+                    sanitized[key] = bool(raw)
+                    continue
+                sanitized[key] = "" if raw is None else str(raw)
         if not sanitized.get("status"):
             sanitized["status"] = default_status.get("status", "unknown")
         self.config[ASR_LAST_DOWNLOAD_STATUS_KEY] = sanitized
@@ -3301,6 +3324,9 @@ class ConfigManager:
         timestamp: datetime | None = None,
         save: bool = True,
         history_limit: int = 50,
+        quantization: str | None = None,
+        requested_quantization: str | None = None,
+        fallback_applied: bool | None = None,
     ) -> None:
         """Capture and persist metadata about the last model download attempt."""
 
@@ -3335,6 +3361,12 @@ class ConfigManager:
                 payload["duration_seconds"] = None
         if task_id:
             payload["task_id"] = str(task_id)
+        if quantization:
+            payload["quantization"] = str(quantization)
+        if requested_quantization:
+            payload["requested_quantization"] = str(requested_quantization)
+        if fallback_applied is not None:
+            payload["fallback_applied"] = bool(fallback_applied)
         self.set_last_asr_download_status(payload)
 
         history_payload = dict(payload)

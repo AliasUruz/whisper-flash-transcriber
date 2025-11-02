@@ -133,6 +133,8 @@ class ModelDownloadController:
             quant=quant,
             timeout=timeout,
         )
+        if quant is not None:
+            task.metadata["requested_quant"] = quant
         with self._lock:
             self._tasks[task.task_id] = task
             self._task_order.append(task.task_id)
@@ -256,6 +258,29 @@ class ModelDownloadController:
                 task.throughput_bps = None
                 if not message:
                     message = "Model already present"
+            elif stage_id == "quantization_fallback":
+                fallback_meta = metadata.get("quantization_fallback")
+                if isinstance(fallback_meta, dict):
+                    task.metadata["quantization_fallback"] = dict(fallback_meta)
+                    fallback_message = fallback_meta.get("message")
+                    if fallback_message and not message:
+                        message = str(fallback_message)
+                previous_quant = None
+                effective_quant = None
+                if isinstance(fallback_meta, dict):
+                    previous_quant = fallback_meta.get("previous_quant")
+                    effective_quant = fallback_meta.get("effective_quant")
+                if previous_quant is None:
+                    previous_quant = metadata.get("previous_quant")
+                if effective_quant is None:
+                    effective_quant = metadata.get("effective_quant")
+                if not message and effective_quant:
+                    if previous_quant and previous_quant != effective_quant:
+                        message = (
+                            f"Fallback automático para {effective_quant} (solicitado {previous_quant})."
+                        )
+                    else:
+                        message = f"Fallback automático para {effective_quant}."
             elif stage_id == "success":
                 bytes_downloaded = metadata.get("bytes_downloaded")
                 if isinstance(bytes_downloaded, (int, float)):
@@ -266,6 +291,15 @@ class ModelDownloadController:
                     task.throughput_bps = float(throughput)
                 if not message:
                     message = "Download finished"
+            requested_quant = metadata.get("requested_quant")
+            if requested_quant is not None:
+                task.metadata["requested_quant"] = requested_quant
+            effective_quant = metadata.get("effective_quant")
+            if effective_quant is not None:
+                task.metadata["effective_quant"] = effective_quant
+            fallback_applied = metadata.get("fallback_applied")
+            if fallback_applied is not None:
+                task.metadata["fallback_applied"] = bool(fallback_applied)
             if message:
                 task.message = str(message)
             self._publish(task)
@@ -307,7 +341,6 @@ class ModelDownloadController:
         task.finished_at = time.time()
         task.result = result
         task.status = "skipped" if not result.downloaded else "completed"
-        task.message = "Model already present" if task.status == "skipped" else "Download finished"
         if result.target_dir is not None:
             task.target_dir = result.target_dir
         if result.bytes_downloaded is not None:
@@ -317,6 +350,57 @@ class ModelDownloadController:
             duration = max(result.duration_seconds, 1e-6)
             if result.bytes_downloaded is not None and duration > 0:
                 task.throughput_bps = result.bytes_downloaded / duration
+        if result.quantization:
+            task.metadata["effective_quant"] = result.quantization
+        if result.requested_quantization:
+            task.metadata.setdefault("requested_quant", result.requested_quantization)
+        if result.fallback_applied:
+            task.metadata["fallback_applied"] = True
+            if "quantization_fallback" not in task.metadata and result.quantization:
+                requested_quant = task.metadata.get("requested_quant")
+                task.metadata["quantization_fallback"] = {
+                    "previous_quant": requested_quant,
+                    "effective_quant": result.quantization,
+                }
+        default_message = "Model already present" if task.status == "skipped" else "Download finished"
+        fallback_flag = bool(task.metadata.get("fallback_applied"))
+        effective_quant = task.metadata.get("effective_quant") or result.quantization
+        requested_quant = (
+            task.metadata.get("requested_quant")
+            or result.requested_quantization
+            or task.quant
+        )
+        fallback_meta = task.metadata.get("quantization_fallback")
+        fallback_message = None
+        if isinstance(fallback_meta, dict):
+            fallback_message = fallback_meta.get("message")
+            effective_quant = effective_quant or fallback_meta.get("effective_quant")
+            requested_quant = requested_quant or fallback_meta.get("previous_quant")
+        effective_display = str(effective_quant).strip() if effective_quant else ""
+        requested_display = str(requested_quant).strip() if requested_quant else ""
+        if effective_display:
+            task.metadata["effective_quant"] = effective_display
+        if requested_display:
+            task.metadata["requested_quant"] = requested_display
+        if fallback_flag and effective_display:
+            fallback_note = fallback_message.strip() if fallback_message else ""
+            if not fallback_note:
+                if requested_display and requested_display != effective_display:
+                    fallback_note = (
+                        f"Quantização efetiva: {effective_display} (fallback automático a partir de {requested_display})."
+                    )
+                else:
+                    fallback_note = f"Quantização efetiva: {effective_display}."
+            else:
+                if requested_display and requested_display != effective_display:
+                    fallback_note = (
+                        f"{fallback_note} — Quantização efetiva: {effective_display} (fallback automático a partir de {requested_display})."
+                    )
+                else:
+                    fallback_note = f"{fallback_note} — Quantização efetiva: {effective_display}."
+            task.message = f"{default_message} — {fallback_note}".strip()
+        else:
+            task.message = default_message
         self._publish(task)
         self._finalize(task)
 
@@ -378,6 +462,21 @@ class ModelDownloadController:
             status_value = "success"
         elif status_value == "timed_out":
             status_value = "timeout"
+        effective_quant = None
+        requested_quant = None
+        fallback_applied = False
+        if task.result and task.result.quantization:
+            effective_quant = task.result.quantization
+        elif isinstance(task.metadata.get("effective_quant"), str):
+            effective_quant = str(task.metadata["effective_quant"])
+        if task.result and task.result.requested_quantization:
+            requested_quant = task.result.requested_quantization
+        elif isinstance(task.metadata.get("requested_quant"), str):
+            requested_quant = str(task.metadata["requested_quant"])
+        fallback_applied = bool(
+            (task.result.fallback_applied if task.result else False)
+            or task.metadata.get("fallback_applied")
+        )
         try:
             self._config_manager.record_model_download_status(
                 status=status_value,
@@ -390,6 +489,9 @@ class ModelDownloadController:
                 throughput_bytes_per_sec=throughput,
                 duration_seconds=duration_seconds,
                 task_id=task.task_id,
+                quantization=effective_quant,
+                requested_quantization=requested_quant,
+                fallback_applied=fallback_applied,
             )
         except Exception:  # pragma: no cover - persistence best effort
             LOGGER.debug(

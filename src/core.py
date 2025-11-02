@@ -345,6 +345,9 @@ class AppCore:
         throughput_bps: float | None = None,
         duration_seconds: float | None = None,
         task_id: str | None = None,
+        quantization: str | None = None,
+        requested_quantization: str | None = None,
+        fallback_applied: bool | None = None,
     ) -> None:
         """Persist the latest download status and keep the history updated."""
 
@@ -360,6 +363,9 @@ class AppCore:
                 throughput_bytes_per_sec=throughput_bps,
                 duration_seconds=duration_seconds,
                 task_id=task_id,
+                quantization=quantization,
+                requested_quantization=requested_quantization,
+                fallback_applied=fallback_applied,
                 save=False,
             )
         except Exception:  # pragma: no cover - diagnostics only
@@ -1232,6 +1238,11 @@ class AppCore:
                 backend,
                 message=message,
                 details=result_path,
+                quantization=getattr(result, "quantization", None),
+                requested_quantization=(
+                    getattr(result, "requested_quantization", None) or quant
+                ),
+                fallback_applied=bool(getattr(result, "fallback_applied", False)),
             )
 
             # If download was not cancelled and did not raise an error, reload
