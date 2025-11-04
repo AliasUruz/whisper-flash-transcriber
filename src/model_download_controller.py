@@ -180,8 +180,12 @@ class ModelDownloadController:
         task.stage = "queued"
         task.bytes_done = 0
         task.bytes_total = 0
+        task.eta_seconds = None
+        task.throughput_bps = None
         task.started_at = None
         task.finished_at = None
+        task.result = None
+        task.error = None
         task.message = "Rescheduled"
         self._publish(task)
         future = self._executor.submit(self._task_wrapper, task.task_id)
