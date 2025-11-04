@@ -2393,29 +2393,88 @@ class AppCore:
 
     def _reload_keyboard_and_suppress(self):
         with self.keyboard_lock:
+            manager = getattr(self, "ahk_manager", None)
+            if manager is None:
+                LOGGER.error("Cannot reload hotkeys because KeyboardHotkeyManager is unavailable.")
+                return False
+
             max_attempts = 3
             attempt = 0
-            last_error = None
+            last_error: Exception | None = None
+            restart_success = False
+
             self._cleanup_hotkeys()
             time.sleep(0.3)
-            while attempt < max_attempts:
+
+            while attempt < max_attempts and not restart_success:
                 attempt += 1
                 try:
-                    if self.ahk_running:
-                        self.ahk_manager.stop()
-                        self.ahk_running = False
-                        time.sleep(0.2)
-                    self.ahk_manager = KeyboardHotkeyManager(config_file=HOTKEY_CONFIG_FILE)
-                    LOGGER.info("KeyboardHotkeyManager reload completed successfully.")
-                    break
-                except Exception as e:
-                    last_error = e
-                    LOGGER.error(f"Reload attempt {attempt} failed: {e}")
+                    manager.update_config(
+                        record_key=self.record_key,
+                        agent_key=self.agent_key,
+                        record_mode=self.record_mode,
+                    )
+                    manager.set_callbacks(
+                        toggle=self.toggle_recording,
+                        start=self.start_recording,
+                        stop=self.stop_recording_if_needed,
+                        agent=self.start_agent_command,
+                    )
+                    restart_success = manager.restart()
+                    self.ahk_running = bool(restart_success)
+                    self._refresh_hotkey_driver_ui()
+                    if restart_success:
+                        driver_name = manager.get_active_driver_name()
+                        driver_label = driver_name or "desconhecido"
+                        fallback_active = manager.is_using_fallback()
+                        LOGGER.info("KeyboardHotkeyManager restart completed successfully.")
+                        self._log_status(
+                            f"Hotkey registered via {driver_label}: {self.record_key.upper()} (mode: {self.record_mode})",
+                            event="core.hotkeys.registered.global",
+                            driver=driver_label,
+                            fallback=fallback_active,
+                        )
+                        if fallback_active:
+                            self._log_status(
+                                f"Driver de fallback para atalhos ativado ({driver_label}).",
+                                event="core.hotkeys.driver_fallback",
+                                driver=driver_label,
+                                fallback=True,
+                            )
+                        break
+
+                    last_error = RuntimeError("KeyboardHotkeyManager.restart returned False")
+                    LOGGER.warning(
+                        "KeyboardHotkeyManager restart attempt %d did not succeed; retrying.",
+                        attempt,
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    self.ahk_running = False
+                    LOGGER.error(
+                        "KeyboardHotkeyManager restart attempt %d raised an exception: %s",
+                        attempt,
+                        exc,
+                        exc_info=True,
+                    )
+                if not restart_success:
                     time.sleep(1)
-            if attempt >= max_attempts and last_error is not None:
-                LOGGER.error(f"KeyboardHotkeyManager reload exhausted {max_attempts} attempts. Last error: {last_error}")
+
+            if not restart_success:
+                if last_error is not None:
+                    LOGGER.error(
+                        "KeyboardHotkeyManager restart exhausted %d attempts. Last error: %s",
+                        max_attempts,
+                        last_error,
+                    )
+                else:
+                    LOGGER.error(
+                        "KeyboardHotkeyManager restart exhausted %d attempts without success.",
+                        max_attempts,
+                    )
                 return False
-            return self.register_hotkeys()
+
+            return True
 
     def _periodic_reregister_task(self):
         while not self.stop_reregister_event.wait(REREGISTER_INTERVAL_SECONDS):

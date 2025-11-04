@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from collections import deque
 from collections.abc import Mapping
@@ -24,6 +25,9 @@ from src.model_manager import (
 from src import state_manager as sm
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if "sounddevice" not in sys.modules:
+    sys.modules["sounddevice"] = ModuleType("sounddevice")
 
 
 @contextlib.contextmanager
@@ -79,6 +83,7 @@ def isolated_config_environment(profile_dir: str, working_dir: str | None = None
             del sys.modules["src.config_manager"]
 
 try:
+    from src.core import AppCore
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
     from src.model_manager import (
@@ -89,6 +94,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - fallback when running directly
     if PROJECT_ROOT not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
+    from src.core import AppCore
     from src.vad_manager import VADManager
     from src.keyboard_hotkey_manager import KeyboardHotkeyManager
     from src.model_manager import (
@@ -937,6 +943,73 @@ class TestStateManagerDuplicateSuppression(unittest.TestCase):
         self.assertEqual(len(notifications), 1)
         self.assertEqual(notifications[0].details["percent"], 0.3)
         self.assertEqual(notifications[0].state, sm.STATE_LOADING_MODEL)
+
+
+class TestHotkeyManagerReregistration(unittest.TestCase):
+    def _build_core(self):
+        core = AppCore.__new__(AppCore)
+        core.keyboard_lock = threading.RLock()
+        core.hotkey_lock = threading.RLock()
+        core._cleanup_hotkeys = mock.Mock(name="cleanup")
+        core._refresh_hotkey_driver_ui = mock.Mock(name="refresh_ui")
+        core._log_status = mock.Mock(name="log_status")
+        core.toggle_recording = mock.Mock(name="toggle_cb")
+        core.start_recording = mock.Mock(name="start_cb")
+        core.stop_recording_if_needed = mock.Mock(name="stop_cb")
+        core.start_agent_command = mock.Mock(name="agent_cb")
+        core.record_key = "f9"
+        core.agent_key = "f10"
+        core.record_mode = "toggle"
+        core.ahk_running = False
+        core.state_manager = mock.Mock(name="state_manager")
+
+        manager = mock.create_autospec(KeyboardHotkeyManager, instance=True)
+        manager.update_config.return_value = True
+        manager.restart.return_value = True
+        manager.get_active_driver_name.return_value = "keyboard"
+        manager.is_using_fallback.return_value = False
+        core.ahk_manager = manager
+        return core, manager
+
+    def test_reload_reuses_existing_manager_instance(self):
+        core, manager = self._build_core()
+        with mock.patch("src.core.time.sleep", return_value=None):
+            result = AppCore._reload_keyboard_and_suppress(core)
+
+        self.assertTrue(result)
+        self.assertIs(core.ahk_manager, manager)
+        manager.update_config.assert_called_once_with(
+            record_key="f9", agent_key="f10", record_mode="toggle"
+        )
+        manager.set_callbacks.assert_called_once_with(
+            toggle=core.toggle_recording,
+            start=core.start_recording,
+            stop=core.stop_recording_if_needed,
+            agent=core.start_agent_command,
+        )
+        manager.restart.assert_called_once()
+        core._cleanup_hotkeys.assert_called_once()
+        core._refresh_hotkey_driver_ui.assert_called()
+        core._log_status.assert_called_once()
+        message, *_ = core._log_status.call_args[0]
+        self.assertIn(core.record_key.upper(), message)
+        self.assertTrue(core.ahk_running)
+
+    def test_reload_failure_keeps_instance_and_reports_error(self):
+        core, manager = self._build_core()
+        manager.restart.side_effect = [False, False, False]
+
+        with mock.patch("src.core.time.sleep", return_value=None):
+            result = AppCore._reload_keyboard_and_suppress(core)
+
+        self.assertFalse(result)
+        self.assertIs(core.ahk_manager, manager)
+        self.assertEqual(manager.restart.call_count, 3)
+        self.assertEqual(manager.update_config.call_count, 3)
+        self.assertEqual(manager.set_callbacks.call_count, 3)
+        core._cleanup_hotkeys.assert_called_once()
+        core._log_status.assert_not_called()
+        self.assertFalse(core.ahk_running)
 
 
 if __name__ == "__main__":
