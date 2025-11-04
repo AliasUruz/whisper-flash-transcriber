@@ -1282,7 +1282,7 @@ class KeyboardHotkeyManager:
     def _on_release_key(self):
         """Handler para o evento de soltar a tecla no modo press."""
         try:
-            if self.callback_stop:
+            if self.callback_stop and self._should_process_event("release"):
                 threading.Thread(target=self.callback_stop, daemon=True, name="StopCallback").start()
                 self._log(
                     logging.INFO,
