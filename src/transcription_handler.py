@@ -1382,7 +1382,7 @@ class TranscriptionHandler:
                             break
                     else:
                         stable_iterations = 0
-                        last_size = size
+                    last_size = size
                     time.sleep(0.05)
                 metrics["prepare_checks"] = stable_iterations
             return audio_source
