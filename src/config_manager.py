@@ -3500,25 +3500,49 @@ class ConfigManager:
                     },
                 )
             )
-            if is_list and all_have_ids:
-                self.set_asr_curated_catalog(data)
-                LOGGER.info(
-                    log_context(
-                        "Curated ASR catalog updated from remote source.",
-                        event="config.catalog.bootstrap.success",
-                        url=url,
-                        entries=len(data),
-                    )
+            return False
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            LOGGER.warning(
+                StructuredMessage(
+                    "Invalid JSON received while refreshing curated ASR catalog; keeping existing entries.",
+                    event="config.asr_catalog.invalid_json",
+                    details={
+                        "url": url,
+                        "reason": str(exc),
+                    },
                 )
-                try:
-                    self.save_config()
-                except Exception:
-                    logging.warning("Falha ao salvar config após atualizar catálogo curado.")
-                return True
+            )
+            return False
+
+        is_list = isinstance(data, list)
+        all_have_ids = is_list and all(
+            isinstance(item, dict) and item.get("model_id") for item in data
+        )
+        if not (is_list and all_have_ids):
             logging.warning("Formato inválido de catálogo obtido de %s", url)
+            return False
+
+        try:
+            self.set_asr_curated_catalog(data)
+            LOGGER.info(
+                log_context(
+                    "Curated ASR catalog updated from remote source.",
+                    event="config.catalog.bootstrap.success",
+                    url=url,
+                    entries=len(data),
+                )
+            )
+            try:
+                self.save_config()
+            except Exception:
+                logging.warning("Falha ao salvar config após atualizar catálogo curado.")
+            return True
         except Exception as e:
             logging.error("Erro ao atualizar catálogo curado de %s: %s", url, e)
-        return False
+            return False
 
     def get_use_vad(self):
         return self.config.get(USE_VAD_CONFIG_KEY, self.default_config[USE_VAD_CONFIG_KEY])
