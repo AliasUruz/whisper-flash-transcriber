@@ -1651,6 +1651,9 @@ def ensure_download(
     quant_label: str | None = None
     requested_quant_label: str | None = None
     quant_revision: str | None = None
+    quant_stage_label: str | None = None
+    fallback_triggered = False
+    fallback_details: dict[str, Any] | None = None
 
     def _emit_stage(stage_id: str, **metadata) -> None:
         if on_stage_change is None:
@@ -1701,6 +1704,8 @@ def ensure_download(
         requested_quant_label = (
             resolution.requested or resolution.normalized or ""
         ) or None
+        if quant_stage_label is None:
+            quant_stage_label = quant_label
         if resolution.fallback_applied and requested_quant_label:
             reason_label = (
                 "unsupported_quantization"
@@ -1730,7 +1735,7 @@ def ensure_download(
                 bytes_downloaded=0,
                 bytes_total=installed_bytes,
                 files=installed_files,
-                effective_quant=quant_stage_label,
+                effective_quant=quant_stage_label or quant_label,
                 requested_quant=requested_quant_label,
                 fallback_applied=fallback_triggered,
             )
@@ -1763,7 +1768,7 @@ def ensure_download(
                 bytes_downloaded=0,
                 duration_seconds=0.0,
                 target_dir=str(ready_path),
-                quantization=quant_stage_label,
+                quantization=quant_stage_label or quant_label,
                 fallback_applied=fallback_triggered,
                 requested_quantization=requested_quant_label,
             )
@@ -1922,14 +1927,13 @@ def ensure_download(
                         fallback_target = "float16"
                         fallback_triggered = True
                         quant_label = fallback_target
-                        quant_stage_label = quant_label
                         fallback_summary = (
                             f"Quantização '{fallback_source}' indisponível para {model_id}; "
                             f"alternando automaticamente para '{fallback_target}'."
                         )
-                        fallback_details = {
+                        pending_fallback_details = {
                             "previous_quant": fallback_source,
-                            "effective_quant": quant_stage_label or fallback_target,
+                            "effective_quant": fallback_target,
                             "message": fallback_summary,
                         }
                         logging.warning(fallback_summary)
@@ -1944,8 +1948,8 @@ def ensure_download(
                             "quantization_fallback",
                             message=fallback_summary,
                             previous_quant=fallback_source,
-                            effective_quant=quant_stage_label,
-                            quantization_fallback=fallback_details,
+                            effective_quant=fallback_target,
+                            quantization_fallback=pending_fallback_details,
                         )
                         _check_abort()
                         try:
@@ -1956,6 +1960,9 @@ def ensure_download(
                             )
                             revision_exc.args = (combined_message,)
                             raise revision_exc from fallback_exc
+                        else:
+                            quant_stage_label = fallback_target
+                            fallback_details = pending_fallback_details
                     else:
                         raise
             else:
@@ -2016,7 +2023,7 @@ def ensure_download(
                 local_dir,
                 model_id=model_id,
                 backend_label=backend_label,
-                quant_label=quant_label,
+                quant_label=quant_stage_label or quant_label,
             )
         except Exception:  # pragma: no cover - metadata persistence best effort
             MODEL_LOGGER.debug(
@@ -2028,7 +2035,7 @@ def ensure_download(
             "files": installed_files,
             "duration_seconds": elapsed_seconds,
             "throughput_bps": throughput_bps,
-            "effective_quant": quant_stage_label,
+            "effective_quant": quant_stage_label or quant_label,
             "requested_quant": requested_quant_label,
             "fallback_applied": fallback_triggered,
         }
@@ -2049,7 +2056,7 @@ def ensure_download(
             bytes_downloaded=installed_bytes,
             duration_seconds=elapsed_seconds,
             target_dir=str(local_dir),
-            quantization=quant_stage_label,
+            quantization=quant_stage_label or quant_label,
             fallback_applied=fallback_triggered,
             requested_quantization=requested_quant_label,
         )
