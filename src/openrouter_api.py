@@ -476,19 +476,27 @@ class OpenRouterAPI:
         return corrected_text
 
     def correct_text_async(
-        self, text: str, prompt: str, api_key: str, model: str
+        self,
+        text: str,
+        prompt: str,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> str:
         """Corrige texto usando prompt customizado de forma assíncrona.
 
         Esta função reusa a lógica de :py:meth:`correct_text`, mas permite
         especificar um *prompt* diferente, do qual são derivados tanto a
-        mensagem de sistema quanto a do usuário.
+        mensagem de sistema quanto a do usuário. Quando ``api_key`` ou
+        ``model`` são informados, o cliente é reconfigurado antes de
+        executar a chamada, preservando a compatibilidade com versões
+        anteriores que repassavam esses parâmetros explicitamente.
 
         Returns:
             Texto revisado quando a chamada é bem-sucedida; caso contrário,
             devolve ``text`` sem alterações.
         """
-        self.reinitialize_client(api_key=api_key, model_id=model)
+        if api_key is not None or model is not None:
+            self.reinitialize_client(api_key=api_key, model_id=model)
 
         normalized_input = text.strip() if isinstance(text, str) else ""
         if not normalized_input:
@@ -497,7 +505,8 @@ class OpenRouterAPI:
             )
             return normalized_input
 
-        system_message = prompt.replace("{text}", "").strip()
+        normalized_prompt = prompt if isinstance(prompt, str) else ""
+        system_message = normalized_prompt.replace("{text}", "").strip()
         user_message = normalized_input
 
         payload = {

@@ -2022,8 +2022,6 @@ class TranscriptionHandler:
                             self.openrouter_api.correct_text_async,
                             transcribed_text,
                             prompt,
-                            api_key,
-                            model,
                             timeout=self.text_correction_timeout,
                             description="OpenRouter text correction",
                         )
