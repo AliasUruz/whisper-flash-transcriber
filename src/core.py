@@ -1950,6 +1950,7 @@ class AppCore:
     def _on_model_load_failed(self, error_msg):
         """Callback do TranscriptionHandler quando o modelo falha ao carregar."""
         LOGGER.error(f"AppCore: model load failed: {error_msg}")
+        self._cleanup_hotkeys()
         self.state_manager.set_state(
             sm.StateEvent.MODEL_LOADING_FAILED,
             details=error_msg,
