@@ -1572,6 +1572,7 @@ class ConfigManager:
             if gpu_idx_val < -1:
                 logging.warning(f"Invalid GPU index '{gpu_idx_val}'. Must be -1 (auto) or >= 0. Using auto (-1).")
                 self.config[GPU_INDEX_CONFIG_KEY] = -1
+                self.config["gpu_index_specified"] = False
             else:
                 self.config[GPU_INDEX_CONFIG_KEY] = gpu_idx_val
         except (ValueError, TypeError):
