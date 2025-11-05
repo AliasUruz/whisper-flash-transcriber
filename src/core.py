@@ -3445,15 +3445,46 @@ class AppCore:
         except Exception:
             LOGGER.error("Error during startup audio file cleanup.", exc_info=True)
 
-    def _delete_temp_audio_file(self):
-        path = getattr(self.audio_handler, "temp_file_path", None)
-        if path and os.path.exists(path):
+    def _delete_temp_audio_file(
+        self, path: str | os.PathLike[str] | None = None
+    ) -> None:
+        handler = getattr(self, "audio_handler", None)
+        if handler is None:
+            return
+
+        cleanup = getattr(handler, "_cleanup_temp_file", None)
+        if callable(cleanup):
             try:
-                os.remove(path)
-                LOGGER.info(f"Deleted temp audio file: {path}")
-            except OSError as e:
-                LOGGER.warning(f"Could not delete temp audio file '{path}': {e}")
-        self.audio_handler.temp_file_path = None
+                cleanup(target_path=path)
+            except TypeError:
+                cleanup()
+            return
+
+        candidate = path or getattr(handler, "temp_file_path", None)
+        if not candidate:
+            return
+
+        try:
+            candidate_path = os.fspath(candidate)
+        except TypeError:
+            candidate_path = str(candidate)
+
+        if os.path.exists(candidate_path):
+            try:
+                os.remove(candidate_path)
+                LOGGER.info(f"Deleted temp audio file: {candidate_path}")
+            except OSError as exc:
+                LOGGER.warning(
+                    f"Could not delete temp audio file '{candidate_path}': {exc}"
+                )
+
+        current_temp = getattr(handler, "temp_file_path", None)
+        if current_temp and path is not None:
+            try:
+                if os.path.samefile(os.fspath(current_temp), os.fspath(path)):
+                    handler.temp_file_path = None
+            except (OSError, TypeError, ValueError):
+                pass
 
     def shutdown(self):
         if self.shutting_down:

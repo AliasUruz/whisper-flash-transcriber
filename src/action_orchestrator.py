@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -33,7 +36,8 @@ class ActionOrchestrator:
         close_ui_callback: Callable[[], None] | None = None,
         fallback_text_provider: Callable[[], str] | None = None,
         reset_transcription_buffer: Callable[[], None] | None = None,
-        delete_temp_audio_callback: Callable[[], None] | None = None,
+        delete_temp_audio_callback: Callable[[str | os.PathLike[str] | None], None]
+        | None = None,
     ) -> None:
         self._state_manager = state_manager
         self._config_manager = config_manager
@@ -48,6 +52,8 @@ class ActionOrchestrator:
         self._delete_temp_audio_callback = delete_temp_audio_callback
 
         self._agent_mode_active = False
+        self._pending_temp_recordings: dict[str | None, deque[str]] = {}
+        self._pending_temp_lock = threading.RLock()
 
     def bind_transcription_handler(self, handler: Any) -> None:
         """Associa o ``TranscriptionHandler`` responsável pelas transcrições."""
@@ -115,6 +121,11 @@ class ActionOrchestrator:
         agent_mode = self._agent_mode_active
 
         handler = self._transcription_handler
+        cleanup_key = operation_id
+        dispatched_path: str | None = audio_source if isinstance(audio_source, str) else None
+        if dispatched_path:
+            self._queue_temp_recording(cleanup_key, dispatched_path)
+
         if handler is None:
             LOGGER.error(
                 log_context(
@@ -130,6 +141,8 @@ class ActionOrchestrator:
                     "Agent mode unavailable: wait for the model to finish loading and try again.",
                     error=True,
                 )
+            if dispatched_path:
+                self._discard_temp_recording(cleanup_key, dispatched_path)
             self._state_manager.set_state(
                 sm.StateEvent.AUDIO_ERROR,
                 details="Transcription handler unavailable",
@@ -161,6 +174,8 @@ class ActionOrchestrator:
                 )
             else:
                 self._agent_mode_active = False
+            if dispatched_path:
+                self._discard_temp_recording(cleanup_key, dispatched_path)
             return
 
         if not enqueued:
@@ -180,6 +195,8 @@ class ActionOrchestrator:
                 )
             else:
                 self._agent_mode_active = False
+            if dispatched_path:
+                self._discard_temp_recording(cleanup_key, dispatched_path)
             return
 
         self._agent_mode_active = False
@@ -233,8 +250,7 @@ class ActionOrchestrator:
         self._close_live_transcription_ui()
         if self._reset_transcription_buffer:
             self._reset_transcription_buffer()
-        if self._delete_temp_audio_callback:
-            self._delete_temp_audio_callback()
+        self._cleanup_temp_recordings(operation_id)
 
         LOGGER.info(
             "Transcription ready for consumption.",
@@ -277,12 +293,49 @@ class ActionOrchestrator:
             operation_id=operation_id,
         )
         self._close_live_transcription_ui()
-        if self._delete_temp_audio_callback:
-            self._delete_temp_audio_callback()
+        self._cleanup_temp_recordings(operation_id)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _queue_temp_recording(self, operation_id: str | None, path: str) -> None:
+        if not path:
+            return
+        with self._pending_temp_lock:
+            queue = self._pending_temp_recordings.setdefault(operation_id, deque())
+            queue.append(path)
+
+    def _discard_temp_recording(self, operation_id: str | None, path: str) -> None:
+        with self._pending_temp_lock:
+            queue = self._pending_temp_recordings.get(operation_id)
+            if not queue:
+                return
+            try:
+                queue.remove(path)
+            except ValueError:
+                pass
+            if not queue:
+                self._pending_temp_recordings.pop(operation_id, None)
+        self._invoke_temp_cleanup(path)
+
+    def _cleanup_temp_recordings(self, operation_id: str | None) -> None:
+        with self._pending_temp_lock:
+            queue = self._pending_temp_recordings.pop(operation_id, None)
+        if not queue:
+            return
+        while queue:
+            path = queue.popleft()
+            self._invoke_temp_cleanup(path)
+
+    def _invoke_temp_cleanup(self, path: str | None) -> None:
+        callback = self._delete_temp_audio_callback
+        if not callback:
+            return
+        try:
+            callback(path)
+        except TypeError:
+            callback()
+
     def _compute_duration_seconds(self, audio_source: str | np.ndarray) -> float:
         if isinstance(audio_source, str):
             try:
