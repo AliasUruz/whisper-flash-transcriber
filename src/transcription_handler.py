@@ -1485,9 +1485,19 @@ class TranscriptionHandler:
         ):
             if agent_mode:
                 try:
-                    callback(processed_text, operation_id=operation_id)
+                    callback(
+                        processed_text,
+                        raw_text,
+                        operation_id=operation_id,
+                    )
                 except TypeError:
-                    callback(processed_text)
+                    try:
+                        callback(processed_text, raw_text)
+                    except TypeError:
+                        try:
+                            callback(processed_text, operation_id=operation_id)
+                        except TypeError:
+                            callback(processed_text)
             else:
                 corrected_payload = processed_text if processed_text != raw_text else None
                 try:

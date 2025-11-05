@@ -264,31 +264,68 @@ class ActionOrchestrator:
     def handle_agent_result(
         self,
         agent_response_text: str,
+        raw_text: str | None = None,
         *,
         operation_id: str | None = None,
     ) -> None:
         """Trata o resultado do modo agente."""
 
         response = (agent_response_text or "").strip()
+        fallback_text = (raw_text or "").strip()
+        fallback_used = False
         if not response:
-            self._log_status("Agent command returned an empty response.", error=True)
-            LOGGER.warning(
-                "Agent command returned an empty response.",
-                extra={"event": "agent_response_empty", "operation_id": operation_id},
-            )
-            return
+            if fallback_text:
+                fallback_used = True
+                response = fallback_text
+                status_message = (
+                    "Agent response unavailable. Raw transcription will be used instead."
+                )
+                self._log_status(status_message, error=True)
+                LOGGER.warning(
+                    "Agent response empty; falling back to raw transcription.",
+                    extra={
+                        "event": "agent_response_fallback",
+                        "operation_id": operation_id,
+                        "fallback_chars": len(response),
+                    },
+                )
+            else:
+                self._log_status("Agent command returned an empty response.", error=True)
+                LOGGER.warning(
+                    "Agent command returned an empty response (no fallback available).",
+                    extra={
+                        "event": "agent_response_empty",
+                        "operation_id": operation_id,
+                        "fallback_available": False,
+                    },
+                )
+                return
 
         self._copy_to_clipboard(response)
 
         if self._config_manager.get("agent_auto_paste", True):
-            self._paste_and_log(success_message="Agent command executed and pasted.")
+            if fallback_used:
+                self._paste_and_log(
+                    success_message="Raw transcription pasted (agent response unavailable)."
+                )
+            else:
+                self._paste_and_log(success_message="Agent command executed and pasted.")
         else:
-            self._log_status("Agent command executed (auto-paste disabled).")
+            if fallback_used:
+                self._log_status(
+                    "Raw transcription ready (agent response unavailable; auto-paste disabled)."
+                )
+            else:
+                self._log_status("Agent command executed (auto-paste disabled).")
 
         self._state_manager.transition_if(
             (sm.STATE_TRANSCRIBING, sm.STATE_IDLE),
             sm.StateEvent.AGENT_COMMAND_COMPLETED,
-            details=f"Agent response delivered ({len(response)} chars)",
+            details=(
+                f"Fallback delivered from raw transcription ({len(response)} chars)"
+                if fallback_used
+                else f"Agent response delivered ({len(response)} chars)"
+            ),
             source="agent_mode",
             operation_id=operation_id,
         )
