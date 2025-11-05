@@ -29,6 +29,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if "sounddevice" not in sys.modules:
     sys.modules["sounddevice"] = ModuleType("sounddevice")
 
+from src.action_orchestrator import ActionOrchestrator
+
 
 @contextlib.contextmanager
 def isolated_config_environment(profile_dir: str, *, working_dir: str | None = None):
@@ -1010,6 +1012,71 @@ class TestHotkeyManagerReregistration(unittest.TestCase):
         core._cleanup_hotkeys.assert_called_once()
         core._log_status.assert_not_called()
         self.assertFalse(core.ahk_running)
+
+
+class TestActionOrchestratorAgentFallback(unittest.TestCase):
+    def test_agent_empty_response_falls_back_to_raw_transcription(self):
+        clipboard_events: list[tuple[str, str | None]] = []
+        clipboard_module = SimpleNamespace(
+            copy=mock.Mock(side_effect=lambda text: clipboard_events.append(("copy", text)))
+        )
+        paste_callback = mock.Mock(side_effect=lambda: clipboard_events.append(("paste", None)))
+        state_manager = mock.Mock()
+        state_manager.transition_if.return_value = True
+
+        config_values = {"agent_auto_paste": True}
+        config_manager = mock.Mock()
+        config_manager.get.side_effect = lambda key, default=None: config_values.get(key, default)
+
+        fallback_provider = mock.Mock(return_value="  raw agent transcript  ")
+        log_messages: list[tuple[str, bool]] = []
+
+        def log_status(message: str, error: bool = False) -> None:
+            log_messages.append((message, error))
+
+        reset_buffer = mock.Mock()
+        delete_temp_audio = mock.Mock()
+
+        orchestrator = ActionOrchestrator(
+            state_manager=state_manager,
+            config_manager=config_manager,
+            clipboard_module=clipboard_module,
+            paste_callback=paste_callback,
+            log_status_callback=log_status,
+            fallback_text_provider=fallback_provider,
+            reset_transcription_buffer=reset_buffer,
+            delete_temp_audio_callback=delete_temp_audio,
+        )
+
+        orchestrator.handle_agent_result("", operation_id="agent-op")
+
+        self.assertEqual(
+            clipboard_events,
+            [("copy", "raw agent transcript"), ("paste", None)],
+        )
+        config_manager.get.assert_called_with("agent_auto_paste", True)
+
+        state_manager.transition_if.assert_called_once()
+        args, kwargs = state_manager.transition_if.call_args
+        self.assertEqual(args[0], (sm.STATE_TRANSCRIBING, sm.STATE_IDLE))
+        self.assertEqual(args[1], sm.StateEvent.AGENT_COMMAND_COMPLETED)
+        self.assertIn("fallback", kwargs["details"].lower())
+        self.assertEqual(kwargs["source"], "agent_mode")
+        self.assertEqual(kwargs["operation_id"], "agent-op")
+
+        fallback_provider.assert_called_once()
+        reset_buffer.assert_called_once()
+        delete_temp_audio.assert_called_once()
+
+        self.assertGreaterEqual(len(log_messages), 2)
+        self.assertEqual(
+            log_messages[0],
+            ("Agent response was empty. Using the raw transcription instead.", True),
+        )
+        self.assertIn(
+            ("Raw transcription pasted after empty agent response.", False),
+            log_messages,
+        )
 
 
 if __name__ == "__main__":

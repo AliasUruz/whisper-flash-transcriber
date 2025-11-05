@@ -274,32 +274,59 @@ class ActionOrchestrator:
         fallback_text = (raw_text or "").strip()
         fallback_used = False
         if not response:
-            if fallback_text:
-                fallback_used = True
-                response = fallback_text
-                status_message = (
-                    "Agent response unavailable. Raw transcription will be used instead."
-                )
-                self._log_status(status_message, error=True)
-                LOGGER.warning(
-                    "Agent response empty; falling back to raw transcription.",
-                    extra={
-                        "event": "agent_response_fallback",
-                        "operation_id": operation_id,
-                        "fallback_chars": len(response),
-                    },
-                )
-            else:
+            fallback_text = ""
+            if self._fallback_text_provider:
+                try:
+                    fallback_text = (self._fallback_text_provider() or "").strip()
+                except Exception:  # pragma: no cover - fallback defensivo
+                    LOGGER.debug(
+                        "Fallback text provider raised an exception while recovering agent response.",
+                        exc_info=True,
+                    )
+                    fallback_text = ""
+
+            if not fallback_text:
                 self._log_status("Agent command returned an empty response.", error=True)
                 LOGGER.warning(
-                    "Agent command returned an empty response (no fallback available).",
-                    extra={
-                        "event": "agent_response_empty",
-                        "operation_id": operation_id,
-                        "fallback_available": False,
-                    },
+                    "Agent command returned an empty response.",
+                    extra={"event": "agent_response_empty", "operation_id": operation_id},
                 )
                 return
+
+            LOGGER.warning(
+                "Agent response empty; falling back to raw transcription.",
+                extra={"event": "agent_response_fallback", "operation_id": operation_id},
+            )
+            self._log_status(
+                "Agent response was empty. Using the raw transcription instead.",
+                error=True,
+            )
+            self._copy_to_clipboard(fallback_text)
+
+            if self._config_manager.get("agent_auto_paste", True):
+                self._paste_and_log(
+                    success_message="Raw transcription pasted after empty agent response.",
+                )
+            else:
+                self._log_status(
+                    "Raw transcription available (agent auto-paste disabled).",
+                )
+
+            self._state_manager.transition_if(
+                (sm.STATE_TRANSCRIBING, sm.STATE_IDLE),
+                sm.StateEvent.AGENT_COMMAND_COMPLETED,
+                details=(
+                    f"Agent fallback applied ({len(fallback_text)} chars)"
+                ),
+                source="agent_mode",
+                operation_id=operation_id,
+            )
+            self._close_live_transcription_ui()
+            if self._reset_transcription_buffer:
+                self._reset_transcription_buffer()
+            if self._delete_temp_audio_callback:
+                self._delete_temp_audio_callback()
+            return
 
         self._copy_to_clipboard(response)
 
