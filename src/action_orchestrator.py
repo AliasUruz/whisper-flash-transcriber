@@ -324,8 +324,7 @@ class ActionOrchestrator:
             self._close_live_transcription_ui()
             if self._reset_transcription_buffer:
                 self._reset_transcription_buffer()
-            if self._delete_temp_audio_callback:
-                self._delete_temp_audio_callback()
+            self._cleanup_temp_recordings(operation_id)
             return
 
         self._copy_to_clipboard(response)
@@ -387,6 +386,14 @@ class ActionOrchestrator:
             queue = self._pending_temp_recordings.pop(operation_id, None)
         if not queue:
             return
+        try:
+            if self._config_manager.get("save_temp_recordings", False):
+                return
+        except Exception:
+            LOGGER.debug(
+                "Unable to read 'save_temp_recordings' flag during cleanup; proceeding with deletion.",
+                exc_info=True,
+            )
         while queue:
             path = queue.popleft()
             self._invoke_temp_cleanup(path)

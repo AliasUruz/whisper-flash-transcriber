@@ -1048,13 +1048,17 @@ class TestActionOrchestratorAgentFallback(unittest.TestCase):
             delete_temp_audio_callback=delete_temp_audio,
         )
 
+        fake_recording = "/tmp/agent-op.wav"
+        orchestrator._queue_temp_recording("agent-op", fake_recording)
+
         orchestrator.handle_agent_result("", operation_id="agent-op")
 
         self.assertEqual(
             clipboard_events,
             [("copy", "raw agent transcript"), ("paste", None)],
         )
-        config_manager.get.assert_called_with("agent_auto_paste", True)
+        config_manager.get.assert_any_call("agent_auto_paste", True)
+        config_manager.get.assert_any_call("save_temp_recordings", False)
 
         state_manager.transition_if.assert_called_once()
         args, kwargs = state_manager.transition_if.call_args
@@ -1066,7 +1070,7 @@ class TestActionOrchestratorAgentFallback(unittest.TestCase):
 
         fallback_provider.assert_called_once()
         reset_buffer.assert_called_once()
-        delete_temp_audio.assert_called_once()
+        delete_temp_audio.assert_called_once_with(fake_recording)
 
         self.assertGreaterEqual(len(log_messages), 2)
         self.assertEqual(

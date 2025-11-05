@@ -1,5 +1,10 @@
 # Changelog
 
+## 2025-10-30
+- Fixed the agent fallback cleanup path to reuse the shared temporary recording
+  handler, ensuring disk retention honors the `save_temp_recordings` flag even
+  when the agent response is empty.
+
 ## 2025-10-29
 - Corrigido o registro da seção avançada na janela de configurações para que o
   painel de IA obedeça ao alternador "Mostrar avançado" sem gerar conflitos de
