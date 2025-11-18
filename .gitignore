@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.class
+
+# Virtual Environment
+venv/
+env/
+.env
+
+# IDEs
+.vscode/
+.idea/
+
+# Project Specific
+*.log
+config.json
+.whisper_flash_transcriber/
+
+# Whisper Models & Audio
+tmp_audio/
+*.wav
