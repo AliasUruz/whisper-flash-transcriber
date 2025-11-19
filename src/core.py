@@ -5,6 +5,8 @@ import logging
 import tempfile
 import os
 from pathlib import Path
+from hotkeys import HotkeyManager
+from mouse_handler import MouseHandler
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
@@ -27,6 +29,7 @@ class CoreService:
         self.ui_update_callback = None
         self.error_popup_callback = None
         self.hotkey_manager = None
+        self.mouse_handler = MouseHandler(self)
 
         # Audio buffers and control
         self.audio_stream = None
@@ -60,6 +63,7 @@ class CoreService:
         logging.info(f"Creating default settings file at {self.config_path}")
         default_settings = {
             "hotkey": "f3",
+            "mouse_hotkey": False,
             "auto_paste": True,
             "input_device_index": None,
             "model_path": "",
@@ -166,7 +170,11 @@ class CoreService:
             self.audio_stream = None
 
         self.stop_recording()
+        self.stop_recording()
         self.model = None
+        
+        if self.mouse_handler:
+            self.mouse_handler.stop_listening()
 
     def toggle_recording(self):
         if self.state == "shutdown": return
@@ -397,3 +405,10 @@ class CoreService:
         # Restart hotkey in background to avoid UI freeze
         if old_hotkey != new_hotkey and self.hotkey_manager:
             threading.Thread(target=self.hotkey_manager.restart_listening, daemon=True).start()
+
+        # Update Mouse Handler
+        if self.mouse_handler:
+            if settings.get("mouse_hotkey", False):
+                self.mouse_handler.start_listening()
+            else:
+                self.mouse_handler.stop_listening()

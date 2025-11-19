@@ -14,6 +14,7 @@ An ultra-fast, lightweight audio transcription utility for Windows, powered by t
     2.  Speak.
     3.  Press the Hotkey again.
     4.  The text magically appears where you were typing!
+*   **Mouse Chord Trigger** (New!): Start recording by holding the **Left Mouse Button** and clicking the **Right Mouse Button**. Perfect for when your hand is already on the mouse.
 *   **Smart System Tray**: Runs silently in the system tray. The icon changes color to indicate status (Recording/Processing).
 *   **Minimalist Interface**: A clean settings window that stays out of your way when you don't need it.
 *   **Resource Management**: Records to RAM for speed but automatically switches to disk for long recordings, protecting your memory.
@@ -58,6 +59,7 @@ An ultra-fast, lightweight audio transcription utility for Windows, powered by t
 
 ## ⚙️ Advanced Configuration
 
+*   **Mouse Shortcut**: Enable the "LMB + RMB" trigger in settings. Disabled by default to avoid conflicts with games/apps.
 *   **Auto-paste**: If enabled, the app simulates `Ctrl+V` to paste the text. If disabled, the text is copied to the clipboard only.
 *   **Temporary Files**: Long recordings are temporarily saved in `tmp_audio` within the model folder to save RAM.
 

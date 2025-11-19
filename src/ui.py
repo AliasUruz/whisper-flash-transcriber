@@ -35,6 +35,7 @@ class AppUI:
         self.page.title = "Whisper Flash"
         
         self.hotkey_field: ft.TextField | None = None
+        self.mouse_hotkey_switch: ft.Switch | None = None
         self.auto_paste_switch: ft.Switch | None = None
         self.mic_dropdown: ft.Dropdown | None = None
         self.model_path_field: ft.TextField | None = None
@@ -75,6 +76,14 @@ class AppUI:
             on_change=lambda e: self._trigger_auto_save()
         )
 
+        # Mouse Hotkey Switch
+        self.mouse_hotkey_switch = ft.Switch(
+            label="Mouse Shortcut (LMB + RMB)", 
+            value=self.core.settings.get("mouse_hotkey", False),
+            active_color=ft.colors.BLUE_400,
+            on_change=lambda e: self._trigger_auto_save()
+        )
+
         # Model Path Field
         self.model_path_field = ft.TextField(
             label="Custom Model Path (Optional)",
@@ -90,6 +99,8 @@ class AppUI:
                 self.hotkey_field,
                 self.mic_dropdown,
                 self.auto_paste_switch,
+                self.mouse_hotkey_switch,
+                ft.Divider(),
                 ft.Divider(),
                 self.model_path_field,
                 ft.Text("Note: Restart app if hotkey fails to register.", size=11, color=ft.colors.GREY_400),
@@ -156,10 +167,12 @@ class AppUI:
             new_hotkey = self.hotkey_field.value.strip()
             new_mic = int(self.mic_dropdown.value) if self.mic_dropdown.value else None
             new_paste = self.auto_paste_switch.value
+            new_mouse = self.mouse_hotkey_switch.value
             new_model_path = self.model_path_field.value.strip()
 
             settings = {
                 "hotkey": new_hotkey,
+                "mouse_hotkey": new_mouse,
                 "input_device_index": new_mic,
                 "auto_paste": new_paste,
                 "model_path": new_model_path
