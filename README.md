@@ -2,9 +2,6 @@
 
 An ultra-fast, lightweight audio transcription utility for Windows, powered by the `faster-whisper` model (Large V3 Turbo). Designed for productivity, it allows you to record, transcribe, and automatically paste text into any application with a single hotkey.
 
-![Whisper Flash UI](https://via.placeholder.com/800x450.png?text=Whisper+Flash+Transcriber+Preview)
-*(Replace with a real screenshot of your application)*
-
 ## ✨ Features
 
 *   **High-Precision Local Transcription**: Uses the `large-v3-turbo` model running locally. Your data never leaves your PC.
