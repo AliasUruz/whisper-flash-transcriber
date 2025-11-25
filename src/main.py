@@ -101,6 +101,10 @@ def main(page: ft.Page):
     threading.Thread(target=core.load_model_async, daemon=True, name="Loader").start()
     hotkey_manager.start_listening()
 
+    # Start mouse handler if enabled in settings
+    if core.settings.get("mouse_hotkey", False):
+        core.mouse_handler.start_listening()
+
     ui.update_status("transcribing", "Booting engine...")
     page.update()
 
