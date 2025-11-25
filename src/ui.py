@@ -39,7 +39,6 @@ class AppUI:
         self.auto_paste_switch: ft.Switch | None = None
         self.mic_dropdown: ft.Dropdown | None = None
         self.model_path_field: ft.TextField | None = None
-        self.model_path_field: ft.TextField | None = None
         
         # Tray is now handled by pystray in main.py
         self.tray_supported = False 
