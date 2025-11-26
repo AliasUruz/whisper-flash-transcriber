@@ -125,22 +125,22 @@ class CoreService:
             except Exception as e_gpu_int8:
                 logging.warning(f"GPU (int8) Load failed: {e_gpu_int8}")
                 logging.info("Falling back to CPU (Int8)...")
-            try:
-                download_root = self.settings.get("model_path")
-                if download_root and not download_root.strip(): download_root = None
-                
-                self.model = WhisperModel(model_name, device="cpu", compute_type="int8", download_root=download_root)
-                self.device_used = "cpu"
-                logging.info("Success! Model loaded on CPU.")
-            except Exception as e_cpu:
-                msg = f"Fatal: Failed to load model.\nGPU: {e_gpu}\nCPU: {e_cpu}"
-                logging.error(msg)
-                self.state = "error"
-                if self.ui_update_callback:
-                    self.ui_update_callback("error", "Model Load Failed")
-                if self.error_popup_callback:
-                    self.error_popup_callback("Critical Error", msg)
-                return
+                try:
+                    download_root = self.settings.get("model_path")
+                    if download_root and not download_root.strip(): download_root = None
+
+                    self.model = WhisperModel(model_name, device="cpu", compute_type="int8", download_root=download_root)
+                    self.device_used = "cpu"
+                    logging.info("Success! Model loaded on CPU.")
+                except Exception as e_cpu:
+                    msg = f"Fatal: Failed to load model.\nGPU: {e_gpu}\nCPU: {e_cpu}"
+                    logging.error(msg)
+                    self.state = "error"
+                    if self.ui_update_callback:
+                        self.ui_update_callback("error", "Model Load Failed")
+                    if self.error_popup_callback:
+                        self.error_popup_callback("Critical Error", msg)
+                    return
 
         if self.state != "shutdown":
             self.state = "idle"
@@ -169,7 +169,6 @@ class CoreService:
             except Exception: pass
             self.audio_stream = None
 
-        self.stop_recording()
         self.stop_recording()
         self.model = None
         
