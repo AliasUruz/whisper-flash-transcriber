@@ -4,13 +4,13 @@ An ultra-fast, lightweight audio transcription utility for Windows, powered by t
 
 ## ✨ Features
 
-*   **High-Precision Local Transcription**: Uses the `large-v3-turbo` model running locally. Your data never leaves your PC.
-*   **GPU Acceleration**: Automatically detects and uses your graphics card (NVIDIA CUDA) for near-instant transcriptions. Smart fallback to CPU if needed.
-*   **"Flash" Workflow**:
-    1.  Press the Hotkey (Default: `F3`).
-    2.  Speak.
-    3.  Press the Hotkey again.
-    4.  The text magically appears where you were typing!
+- **Global Hotkey:** Press `F3` (default) anywhere to toggle recording.
+- **Mouse Hotkey:** Optional `LMB + RMB` chord to toggle recording.
+- **AI Text Correction:** Optional integration with Google Gemini AI to correct grammar and punctuation automatically.
+- **Auto-Paste:** Automatically types the transcribed text into the active window.
+- **Local Processing:** Uses `faster-whisper` for high-performance local transcription.
+- **GPU Acceleration:** Auto-detects CUDA for blazing fast performance.
+
 *   **Mouse Chord Trigger** (New!): Start recording by holding the **Left Mouse Button** and clicking the **Right Mouse Button**. Perfect for when your hand is already on the mouse.
 *   **Smart System Tray**: Runs silently in the system tray. The icon changes color to indicate status (Recording/Processing).
 *   **Minimalist Interface**: A clean settings window that stays out of your way when you don't need it.

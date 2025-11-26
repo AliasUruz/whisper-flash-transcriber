@@ -24,6 +24,7 @@ This document describes the technical architecture and current state of the Whis
 | **Audio Handling**| `sounddevice`, `numpy`, `soundfile` | (See `requirements.txt`) |
 | **OS Interaction** | `pyperclip` | For clipboard access |
 | **System Tray** | `pystray` | For background operation |
+| **AI Correction** | `google-generativeai` | Gemini 1.5 Flash API |
 
 ## 4. Configuration Specification
 
@@ -35,6 +36,11 @@ Configuration is stored in `config.json` in the user's home directory: `~/.whisp
   "auto_paste": true,
   "input_device_index": null,
   "model_path": "",
+  "input_device_index": null,
+  "model_path": "",
+  "gemini_enabled": false,
+  "gemini_api_key": "",
+  "gemini_prompt": "...",
   "first_run": false
 }
 ```
@@ -63,7 +69,9 @@ The UI provides feedback primarily through the System Tray icon.
 │   ├── core.py       # Business Logic (Audio, AI)
 │   ├── tray.py       # System Tray (Pystray)
 │   ├── hotkeys.py    # Global Keyboard Listener
+│   ├── hotkeys.py    # Global Keyboard Listener
 │   ├── mouse_handler.py # Global Mouse Listener (LMB+RMB)
+│   ├── ai_corrector.py # Gemini AI Integration
 │   └── icons.py      # Dynamic Icon Generation
 └── requirements.txt
 ```
@@ -100,7 +108,15 @@ The UI provides feedback primarily through the System Tray icon.
 - **Logic:**
   - Runs in a separate thread via `pynput`.
   - Only active if enabled in settings.
+  - Only active if enabled in settings.
   - Triggers `core.toggle_recording()`.
+
+#### `src/ai_corrector.py`
+- **Responsibility:** Handles communication with Google Gemini API.
+- **Logic:**
+  - **Timeout:** Enforces a 5-second timeout to ensure "Flash" speed.
+  - **Cleaning:** Strips markdown and quotes from AI response.
+  - **Fallback:** Returns original text if API fails or times out.
 
 ## 7. Logging
 

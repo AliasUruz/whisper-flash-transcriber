@@ -39,9 +39,13 @@ class AppUI:
         self.auto_paste_switch: ft.Switch | None = None
         self.mic_dropdown: ft.Dropdown | None = None
         self.model_path_field: ft.TextField | None = None
+        self.gemini_switch: ft.Switch | None = None
+        self.gemini_key_field: ft.TextField | None = None
+        self.gemini_model_dropdown: ft.Dropdown | None = None
+        self.gemini_prompt_field: ft.TextField | None = None
         
         # Tray is now handled by pystray in main.py
-        self.tray_supported = False 
+        self.tray_supported = False
 
     def build_controls(self) -> ft.Column:
         # Hotkey Field
@@ -49,7 +53,8 @@ class AppUI:
             label="Global Hotkey",
             value=self.core.settings.get("hotkey", "f3"),
             hint_text="ex: ctrl+f3, alt+space",
-            width=250, text_size=14
+            width=250, text_size=11, label_style=ft.TextStyle(size=11),
+            dense=True, content_padding=10
         )
         
         # Microphone Selector
@@ -63,7 +68,8 @@ class AppUI:
             options=mic_options,
             value=str(current_mic) if current_mic is not None else None,
             width=250,
-            text_size=12,
+            text_size=11, label_style=ft.TextStyle(size=11),
+            dense=True, content_padding=10,
             on_change=lambda e: self._trigger_auto_save()
         )
 
@@ -88,13 +94,57 @@ class AppUI:
             label="Custom Model Path (Optional)",
             value=self.core.settings.get("model_path", ""),
             hint_text="e.g. D:\\WhisperModels",
-            width=250, text_size=12,
+            width=250, text_size=11, label_style=ft.TextStyle(size=11),
+            dense=True, content_padding=10,
+            on_blur=lambda e: self._trigger_auto_save()
+        )
+
+        # Gemini Controls
+        self.gemini_switch = ft.Switch(
+            label="Enable Gemini AI Correction",
+            value=self.core.settings.get("gemini_enabled", False),
+            active_color=ft.colors.INDIGO_400,
+            on_change=lambda e: self._toggle_gemini_fields()
+        )
+
+        self.gemini_key_field = ft.TextField(
+            label="Gemini API Key",
+            value=self.core.settings.get("gemini_api_key", ""),
+            password=True,
+            can_reveal_password=True,
+            width=250, text_size=11, label_style=ft.TextStyle(size=11),
+            dense=True, content_padding=10,
+            visible=self.gemini_switch.value,
+            on_blur=lambda e: self._trigger_auto_save()
+        )
+
+        self.gemini_model_dropdown = ft.Dropdown(
+            label="AI Model",
+            options=[
+                ft.dropdown.Option("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite (Faster)"),
+                ft.dropdown.Option("gemini-2.5-flash", "Gemini 2.5 Flash (Smarter)"),
+            ],
+            value=self.core.settings.get("gemini_model", "gemini-2.5-flash-lite"),
+            width=250, text_size=11, label_style=ft.TextStyle(size=11),
+            dense=True, content_padding=10,
+            visible=self.gemini_switch.value,
+            on_change=lambda e: self._trigger_auto_save()
+        )
+
+        self.gemini_prompt_field = ft.TextField(
+            label="System Prompt",
+            value=self.core.settings.get("gemini_prompt", ""),
+            multiline=True,
+            min_lines=2, max_lines=4,
+            width=250, text_size=11, label_style=ft.TextStyle(size=11),
+            dense=True, content_padding=10,
+            visible=self.gemini_switch.value,
             on_blur=lambda e: self._trigger_auto_save()
         )
         
         settings_col = ft.Column(
             [
-                ft.Text("Configuration", size=18, weight=ft.FontWeight.BOLD),
+                ft.Text("Configuration", size=16, weight=ft.FontWeight.BOLD),
                 self.hotkey_field,
                 self.mic_dropdown,
                 self.auto_paste_switch,
@@ -102,9 +152,16 @@ class AppUI:
                 ft.Divider(),
                 ft.Divider(),
                 self.model_path_field,
-                ft.Text("Note: Restart app if hotkey fails to register.", size=11, color=ft.colors.GREY_400),
+                ft.Divider(),
+                ft.Text("AI Correction", size=14, weight=ft.FontWeight.BOLD),
+                self.gemini_switch,
+                self.gemini_key_field,
+                self.gemini_model_dropdown,
+                self.gemini_prompt_field,
+
+                ft.Text("Note: Restart app if hotkey fails to register.", size=10, color=ft.colors.GREY_400),
             ],
-            spacing=10
+            spacing=8
         )
 
         # Simplified Main Layout
@@ -174,7 +231,11 @@ class AppUI:
                 "mouse_hotkey": new_mouse,
                 "input_device_index": new_mic,
                 "auto_paste": new_paste,
-                "model_path": new_model_path
+                "model_path": new_model_path,
+                "gemini_enabled": self.gemini_switch.value,
+                "gemini_api_key": self.gemini_key_field.value.strip(),
+                "gemini_model": self.gemini_model_dropdown.value,
+                "gemini_prompt": self.gemini_prompt_field.value.strip()
             }
             
             self.core.save_settings(settings)
@@ -200,3 +261,20 @@ class AppUI:
             self.on_exit_callback()
         else:
             self.page.window_destroy()
+
+    def _toggle_gemini_fields(self):
+        visible = self.gemini_switch.value
+        self.gemini_key_field.visible = visible
+        self.gemini_model_dropdown.visible = visible
+        self.gemini_prompt_field.visible = visible
+        self.page.update()
+        self._trigger_auto_save()
+
+    def refresh_ui_from_settings(self):
+        """Updates UI elements from core settings (e.g. after Tray change)."""
+        try:
+            self.gemini_switch.value = self.core.settings.get("gemini_enabled", False)
+            self.gemini_model_dropdown.value = self.core.settings.get("gemini_model", "gemini-2.5-flash-lite")
+            self._toggle_gemini_fields() # Updates visibility and page
+        except Exception as e:
+            logging.error(f"UI Refresh failed: {e}")

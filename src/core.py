@@ -13,6 +13,7 @@ import numpy as np
 import pyperclip
 from pynput.keyboard import Controller, Key
 from faster_whisper import WhisperModel
+from ai_corrector import AICorrector
 
 # Basic logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,6 +31,7 @@ class CoreService:
         self.error_popup_callback = None
         self.hotkey_manager = None
         self.mouse_handler = MouseHandler(self)
+        self.ai_corrector = AICorrector()
 
         # Audio buffers and control
         self.audio_stream = None
@@ -51,27 +53,57 @@ class CoreService:
 
     def _load_or_create_settings(self) -> dict:
         self.config_path = Path.home() / ".whisper_flash_transcriber" / "config.json"
+        self.secrets_path = Path.home() / ".whisper_flash_transcriber" / "secrets.json"
+        
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        settings = {}
         if self.config_path.exists():
             logging.info(f"Loading settings from {self.config_path}")
             with open(self.config_path, "r") as f:
                 try:
-                    return json.load(f)
+                    settings = json.load(f)
                 except json.JSONDecodeError:
                     logging.error("Config file corrupted, creating new.")
+
+        # Load secrets if exist
+        if self.secrets_path.exists():
+            try:
+                with open(self.secrets_path, "r") as f:
+                    secrets = json.load(f)
+                    settings["gemini_api_key"] = secrets.get("gemini_api_key", "")
+            except Exception as e:
+                logging.error(f"Failed to load secrets: {e}")
         
-        logging.info(f"Creating default settings file at {self.config_path}")
+        # Merge with defaults
         default_settings = {
             "hotkey": "f3",
             "mouse_hotkey": False,
             "auto_paste": True,
             "input_device_index": None,
             "model_path": "",
+            "gemini_enabled": False,
+            "gemini_api_key": "",
+            "gemini_model": "gemini-2.5-flash-lite",
+            "gemini_prompt": "Correct only the grammar and punctuation of the following text, keeping the original language. Return ONLY the corrected text, without introductions.",
             "first_run": True
         }
-        with open(self.config_path, "w") as f:
-            json.dump(default_settings, f, indent=2)
-        return default_settings
+        
+        # Validate model name
+        valid_models = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
+        if settings.get("gemini_model") not in valid_models:
+            logging.warning(f"Invalid model '{settings.get('gemini_model')}' found. Resetting to default.")
+            settings["gemini_model"] = default_settings["gemini_model"]
+        
+        # Update settings with defaults for missing keys
+        for key, value in default_settings.items():
+            if key not in settings:
+                settings[key] = value
+                
+        # Save back to ensure consistency (excluding secrets)
+        self.save_settings(settings)
+        
+        return settings
 
     def get_audio_devices(self):
         """Returns list of available microphones."""
@@ -327,7 +359,23 @@ class CoreService:
         try:
             if self.state == "shutdown": return
             text = self._run_transcription(audio_source)
+            
             if self.state == "shutdown": return
+
+            # AI Correction Hook
+            if text and self.settings.get("gemini_enabled") and self.settings.get("gemini_api_key"):
+                if self.ui_update_callback:
+                    self.ui_update_callback("transcribing", "AI Correcting...")
+                
+                corrected = self.ai_corrector.correct_text(
+                    text, 
+                    self.settings.get("gemini_api_key"), 
+                    self.settings.get("gemini_prompt"),
+                    self.settings.get("gemini_model", "gemini-2.5-flash-lite")
+                )
+                if corrected:
+                    text = corrected
+
             self._handle_result(text)
         finally:
             if processing_path:
@@ -394,19 +442,37 @@ class CoreService:
         if settings is None:
             settings = self.settings
 
-        old_hotkey = self.settings.get("hotkey")
+        if hasattr(self, 'settings') and self.settings:
+            old_hotkey = self.settings.get("hotkey")
+        else:
+            old_hotkey = None
+
         new_hotkey = settings.get("hotkey")
         
         self.settings = settings
+        
+        # Separate secrets
+        secrets = {"gemini_api_key": settings.get("gemini_api_key", "")}
+        
+        # Create public config copy without secrets
+        public_config = settings.copy()
+        if "gemini_api_key" in public_config:
+            del public_config["gemini_api_key"]
+            
         with open(self.config_path, "w") as f:
-            json.dump(self.settings, f, indent=2)
+            json.dump(public_config, f, indent=2)
+            
+        # Save secrets securely
+        with open(self.secrets_path, "w") as f:
+            json.dump(secrets, f, indent=2)
 
         # Restart hotkey in background to avoid UI freeze
-        if old_hotkey != new_hotkey and self.hotkey_manager:
+        # Restart hotkey in background to avoid UI freeze
+        if old_hotkey != new_hotkey and hasattr(self, 'hotkey_manager') and self.hotkey_manager:
             threading.Thread(target=self.hotkey_manager.restart_listening, daemon=True).start()
 
         # Update Mouse Handler
-        if self.mouse_handler:
+        if hasattr(self, 'mouse_handler') and self.mouse_handler:
             if settings.get("mouse_hotkey", False):
                 self.mouse_handler.start_listening()
             else:

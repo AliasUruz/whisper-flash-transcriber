@@ -5,10 +5,11 @@ import logging
 from icons import create_icon
 
 class SystemTray:
-    def __init__(self, core_service, restore_callback, quit_callback):
+    def __init__(self, core_service, restore_callback, quit_callback, menu_factory=None):
         self.core = core_service
         self.restore_callback = restore_callback
         self.quit_callback = quit_callback
+        self.menu_factory = menu_factory
         self.icon = None
         self.running = False
 
@@ -19,13 +20,12 @@ class SystemTray:
 
     def _run_icon(self):
         image = create_icon("idle")
-        self.icon = pystray.Icon("whisper_flash", image, "Whisper Flash", self._create_menu())
+        menu = self.menu_factory() if self.menu_factory else self._create_default_menu()
+        self.icon = pystray.Icon("whisper_flash", image, "Whisper Flash", menu)
         self.icon.run()
 
-    def _create_menu(self):
+    def _create_default_menu(self):
         # Determine label based on core state
-        # Note: We access core.state directly. Ensure thread safety if needed, 
-        # but for reading a string it's generally fine in this context.
         is_recording = self.core.state == "recording"
         toggle_label = "Stop & Transcribe" if is_recording else "Start Recording"
         
@@ -41,7 +41,20 @@ class SystemTray:
             if self.icon:
                 self.icon.icon = create_icon(state)
                 # Refresh menu to update label
-                self.icon.menu = self._create_menu()
+                if self.menu_factory:
+                    self.icon.menu = self.menu_factory()
+                else:
+                    self.icon.menu = self._create_default_menu()
+        except Exception as e:
+            logging.error(f"Tray update failed: {e}")
+
+    def update_menu(self):
+        """Force menu refresh (e.g. when settings change)."""
+        try:
+            if self.icon and self.menu_factory:
+                self.icon.menu = self.menu_factory()
+        except Exception as e:
+            logging.error(f"Menu update failed: {e}")
         except Exception as e:
             logging.error(f"Tray update failed: {e}")
 
