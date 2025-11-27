@@ -17,11 +17,12 @@ logging.basicConfig(
 
 def main(page: ft.Page):
     page.title = "Whisper Flash Transcriber"
-    page.window_width = 420
+    page.window_width = 600 # Increased width for better visibility
     page.window_height = 850 # Adjusted for generous space
     page.scroll = ft.ScrollMode.AUTO # Enable auto-scroll to prevent cutting content
     page.theme_mode = ft.ThemeMode.DARK
-    page.padding = 20
+    page.padding = 0 # Edge-to-edge content
+    page.bgcolor = "#202028" # Mica Alt Dark background
     page.window_resizable = True
 
     # Initialization
@@ -43,6 +44,9 @@ def main(page: ft.Page):
     def cleanup_and_exit():
         logging.info("App shutting down...")
         try:
+            # Trigger auto-save to capture any pending edits (e.g. focused field)
+            if ui: ui._trigger_auto_save()
+
             ui.update_status("shutdown", "Closing app...")
             page.update()
         except Exception:
@@ -105,6 +109,7 @@ def main(page: ft.Page):
                 pystray.MenuItem("Gemini 2.5 Flash", lambda: set_ai_model("gemini-2.5-flash"), checked=is_checked, radio=True)
             )),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Settings", restore_window),
             pystray.MenuItem("Exit", quit_app)
         )
 
