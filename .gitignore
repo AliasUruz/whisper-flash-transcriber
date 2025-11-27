@@ -47,3 +47,4 @@ config.json
 # Whisper Models & Audio
 tmp_audio/
 *.wav
+start_admin.bat

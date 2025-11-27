@@ -62,6 +62,11 @@ class AppUI:
                     content=self._build_general_tab_content()
                 ),
                 ft.Tab(
+                    text="Sound",
+                    icon=ft.icons.VOLUME_UP,
+                    content=self._build_sound_tab_content()
+                ),
+                ft.Tab(
                     text="AI",
                     icon=ft.icons.AUTO_AWESOME,
                     content=self._build_ai_tab_content()
@@ -172,6 +177,61 @@ class AppUI:
                     self.mouse_hotkey_switch,
                 ],
                 spacing=15,
+                scroll=ft.ScrollMode.AUTO
+            ),
+            padding=10
+        )
+
+    def _build_sound_tab_content(self):
+        # Sound Feedback Controls
+        self.sound_switch = ft.Switch(
+            label="Enable Sound Feedback", 
+            value=self.core.settings.get("sound_enabled", True),
+            active_color=COLOR_ACCENT,
+            label_style=ft.TextStyle(color=COLOR_TEXT_PRIMARY, size=14),
+            on_change=lambda e: self._trigger_auto_save()
+        )
+
+        self.volume_slider = ft.Slider(
+            min=0, max=100, divisions=20,
+            value=self.core.settings.get("sound_volume", 50),
+            label="Volume: {value}%",
+            active_color=COLOR_ACCENT,
+            on_change_end=lambda e: self._trigger_auto_save()
+        )
+
+        self.start_freq_slider = ft.Slider(
+            min=200, max=2000, divisions=18, 
+            value=self.core.settings.get("sound_freq_start", 800),
+            label="Start Tone: {value}Hz",
+            active_color=COLOR_ACCENT,
+            on_change_end=lambda e: self._trigger_auto_save()
+        )
+
+        self.stop_freq_slider = ft.Slider(
+            min=200, max=2000, divisions=18, 
+            value=self.core.settings.get("sound_freq_stop", 500),
+            label="Stop Tone: {value}Hz",
+            active_color=COLOR_ACCENT,
+            on_change_end=lambda e: self._trigger_auto_save()
+        )
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Container(height=10),
+                    self.sound_switch,
+                    ft.Divider(color=COLOR_BORDER),
+                    ft.Text("Volume", size=12, color=COLOR_TEXT_SECONDARY),
+                    self.volume_slider,
+                    ft.Container(height=5),
+                    ft.Text("Start Tone Frequency", size=12, color=COLOR_TEXT_SECONDARY),
+                    self.start_freq_slider,
+                    ft.Container(height=5),
+                    ft.Text("Stop Tone Frequency", size=12, color=COLOR_TEXT_SECONDARY),
+                    self.stop_freq_slider,
+                ],
+                spacing=10,
                 scroll=ft.ScrollMode.AUTO
             ),
             padding=10
@@ -330,28 +390,45 @@ class AppUI:
     def _trigger_auto_save(self):
         """Saves settings silently."""
         try:
+            # General
             new_hotkey = self.hotkey_field.value.strip()
             new_mic = int(self.mic_dropdown.value) if self.mic_dropdown.value else None
             new_paste = self.auto_paste_switch.value
             new_mouse = self.mouse_hotkey_switch.value
             
-            # Note: model_path field was removed in mockup, assuming user doesn't need it or it's advanced.
-            # Preserving existing value if not in UI.
-            new_model_path = self.core.settings.get("model_path", "")
+            # Sound
+            new_sound_enabled = self.sound_switch.value
+            new_sound_volume = int(self.volume_slider.value)
+            new_start_freq = int(self.start_freq_slider.value)
+            new_stop_freq = int(self.stop_freq_slider.value)
+            
+            # AI
+            new_gemini_enabled = self.gemini_switch.value
+            new_gemini_key = self.gemini_key_field.value.strip()
+            new_gemini_model = self.gemini_model_dropdown.value
+            new_gemini_prompt = self.gemini_prompt_field.value.strip()
 
             settings = {
                 "hotkey": new_hotkey,
                 "mouse_hotkey": new_mouse,
                 "input_device_index": new_mic,
                 "auto_paste": new_paste,
-                "model_path": new_model_path,
-                "gemini_enabled": self.gemini_switch.value,
-                "gemini_api_key": self.gemini_key_field.value.strip(),
-                "gemini_model": self.gemini_model_dropdown.value,
-                "gemini_prompt": self.gemini_prompt_field.value.strip()
+                "sound_enabled": new_sound_enabled,
+                "sound_volume": new_sound_volume,
+                "sound_freq_start": new_start_freq,
+                "sound_freq_stop": new_stop_freq,
+                "gemini_enabled": new_gemini_enabled,
+                "gemini_api_key": new_gemini_key,
+                "gemini_model": new_gemini_model,
+                "gemini_prompt": new_gemini_prompt
             }
             
-            self.core.save_settings(settings)
+            # Create a full copy of settings to preserve other keys (like first_run)
+            # and pass to save_settings so it can detect changes (e.g. hotkey)
+            full_settings = self.core.settings.copy()
+            full_settings.update(settings)
+            
+            self.core.save_settings(full_settings)
             logging.info("Auto-save triggered.")
             
         except Exception as e:
@@ -381,6 +458,12 @@ class AppUI:
             
             self.auto_paste_switch.value = self.core.settings.get("auto_paste", True)
             self.mouse_hotkey_switch.value = self.core.settings.get("mouse_hotkey", False)
+
+            # Sync Sound Section
+            self.sound_switch.value = self.core.settings.get("sound_enabled", True)
+            self.volume_slider.value = self.core.settings.get("sound_volume", 50)
+            self.start_freq_slider.value = self.core.settings.get("sound_freq_start", 800)
+            self.stop_freq_slider.value = self.core.settings.get("sound_freq_stop", 500)
 
             # Sync AI Section
             self.gemini_switch.value = self.core.settings.get("gemini_enabled", False)

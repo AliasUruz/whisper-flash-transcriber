@@ -5,16 +5,10 @@ An ultra-fast, lightweight audio transcription utility for Windows, powered by t
 ## ✨ Features
 
 - **Global Hotkey:** Press `F3` (default) anywhere to toggle recording.
-- **Mouse Hotkey:** Optional `LMB + RMB` chord to toggle recording.
-- **AI Text Correction:** Optional integration with Google Gemini AI to correct grammar and punctuation automatically.
-- **Auto-Paste:** Automatically types the transcribed text into the active window.
-- **Local Processing:** Uses `faster-whisper` for high-performance local transcription.
-- **GPU Acceleration:** Auto-detects CUDA for blazing fast performance.
-
-*   **Mouse Chord Trigger** (New!): Start recording by holding the **Left Mouse Button** and clicking the **Right Mouse Button**. Perfect for when your hand is already on the mouse.
-*   **Smart System Tray**: Runs silently in the system tray. The icon changes color to indicate status (Recording/Processing).
-*   **Minimalist Interface**: A clean settings window that stays out of your way when you don't need it.
-*   **Resource Management**: Records to RAM for speed but automatically switches to disk for long recordings, protecting your memory.
+- **Native Mouse Hotkey:** Hold `Left Mouse Button` + Click `Right Mouse Button` (Strict Mode).
+- **AI Text Correction:** Optional integration with Google Gemini AI.
+- **Auto-Paste:** Automatically types the transcribed text.
+- **Local Processing:** High-performance local transcription with `faster-whisper`.
 
 ## 🚀 Installation
 

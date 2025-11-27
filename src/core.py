@@ -5,15 +5,17 @@ import logging
 import tempfile
 import os
 from pathlib import Path
-from hotkeys import HotkeyManager
-from mouse_handler import MouseHandler
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
 import pyperclip
 from pynput.keyboard import Controller, Key
 from faster_whisper import WhisperModel
+import winsound
+import math
+import struct
 from ai_corrector import AICorrector
+from native_mouse import NativeMouseHook
 
 # Basic logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,7 +32,7 @@ class CoreService:
         self.ui_update_callback = None
         self.error_popup_callback = None
         self.hotkey_manager = None
-        self.mouse_handler = MouseHandler(self)
+        self.mouse_hook = NativeMouseHook(self)
         self.ai_corrector = AICorrector()
 
         # Audio buffers and control
@@ -86,7 +88,11 @@ class CoreService:
             "gemini_api_key": "",
             "gemini_model": "gemini-2.5-flash-lite",
             "gemini_prompt": "Correct the text's punctuation and grammar without altering its meaning. Make it more expressive where appropriate, remove unnecessary repetitions, and improve flow. Combine sentences that make sense together. Maintain the original language and tone.",
-            "first_run": True
+            "first_run": True,
+            "sound_enabled": True,
+            "sound_volume": 50,
+            "sound_freq_start": 800,
+            "sound_freq_stop": 500
         }
         
         # Validate model name
@@ -199,13 +205,16 @@ class CoreService:
                 self.audio_stream.stop()
                 self.audio_stream.close()
             except Exception: pass
-            self.audio_stream = None
+        self.audio_stream = None
 
         self.stop_recording()
         self.model = None
         
-        if self.mouse_handler:
-            self.mouse_handler.stop_listening()
+        if hasattr(self, 'mouse_hook') and self.mouse_hook:
+            self.mouse_hook.stop()
+
+        if self.hotkey_manager:
+            self.hotkey_manager.stop_listening()
 
     def toggle_recording(self):
         if self.state == "shutdown": return
@@ -236,6 +245,8 @@ class CoreService:
 
         if self.ui_update_callback:
             self.ui_update_callback("recording", "Listening...")
+            
+        self.play_sound(self.settings.get("sound_freq_start", 800))
 
         try:
             # Device selection
@@ -337,6 +348,8 @@ class CoreService:
         if self.ui_update_callback:
             mode = "GPU" if self.device_used == "cuda" else "CPU"
             self.ui_update_callback("transcribing", f"Processing ({mode})...")
+
+        self.play_sound(self.settings.get("sound_freq_stop", 500))
 
         threading.Thread(target=self._process_audio, daemon=True).start()
 
@@ -467,13 +480,57 @@ class CoreService:
             json.dump(secrets, f, indent=2)
 
         # Restart hotkey in background to avoid UI freeze
-        # Restart hotkey in background to avoid UI freeze
         if old_hotkey != new_hotkey and hasattr(self, 'hotkey_manager') and self.hotkey_manager:
             threading.Thread(target=self.hotkey_manager.restart_listening, daemon=True).start()
 
-        # Update Mouse Handler
-        if hasattr(self, 'mouse_handler') and self.mouse_handler:
+        # Update Mouse Hook
+        if hasattr(self, 'mouse_hook') and self.mouse_hook:
             if settings.get("mouse_hotkey", False):
-                self.mouse_handler.start_listening()
+                self.mouse_hook.start()
             else:
-                self.mouse_handler.stop_listening()
+                self.mouse_hook.stop()
+
+    def _generate_tone(self, frequency, duration_ms, volume):
+        """Generates a WAV byte string for a sine wave."""
+        # Audio parameters
+        sample_rate = 44100
+        num_samples = int(sample_rate * (duration_ms / 1000.0))
+        amplitude = int(32767 * (volume / 100.0))
+        
+        # Header generation (WAVE format)
+        data_size = num_samples * 2
+        
+        header = b'RIFF' + struct.pack('<I', 36 + data_size) + b'WAVE'
+        header += b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, sample_rate, sample_rate * 2, 2, 16)
+        header += b'data' + struct.pack('<I', data_size)
+        
+        data = bytearray(header)
+        
+        # Sample generation
+        for i in range(num_samples):
+            t = float(i) / sample_rate
+            sample = int(amplitude * math.sin(2 * math.pi * frequency * t))
+            data.extend(struct.pack('<h', sample))
+            
+        return bytes(data)
+
+    def play_sound(self, frequency):
+        """Plays a tone with volume control."""
+        if self.settings.get("sound_enabled", True):
+            try:
+                volume = self.settings.get("sound_volume", 50)
+                wav_data = self._generate_tone(frequency, 150, volume)
+                
+                # Use a thread to play synchronously (SND_MEMORY) without blocking the main thread.
+                # We avoid SND_ASYNC because the wav_data buffer might be garbage collected 
+                # before playback finishes, causing silence.
+                def _play():
+                    try:
+                        winsound.PlaySound(wav_data, winsound.SND_MEMORY)
+                    except Exception as err:
+                        logging.error(f"PlaySound error: {err}")
+                        
+                threading.Thread(target=_play, daemon=True).start()
+                
+            except Exception as e:
+                logging.error(f"Sound setup error: {e}")

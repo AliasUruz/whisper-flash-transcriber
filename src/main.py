@@ -16,9 +16,9 @@ logging.basicConfig(
 )
 
 def main(page: ft.Page):
-    page.title = "Whisper Flash Transcriber"
-    page.window_width = 420 # Compact width for Tabbed UI
-    page.window_height = 550 # Compact height
+    page.title = "Whisper Flash"
+    page.window_width = 400 # Intermediate Size
+    page.window_height = 520 # Intermediate Size
     page.scroll = ft.ScrollMode.AUTO # Enable auto-scroll to prevent cutting content
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 0 # Edge-to-edge content
@@ -52,6 +52,9 @@ def main(page: ft.Page):
         except Exception:
             pass
             
+        # Ensure hooks are removed and threads stopped
+        if core: core.shutdown()
+
         # Fast exit: Don't wait for threads, just kill process
         if tray: 
             try:
@@ -157,7 +160,7 @@ def main(page: ft.Page):
 
     # Start mouse handler if enabled in settings
     if core.settings.get("mouse_hotkey", False):
-        core.mouse_handler.start_listening()
+        core.mouse_hook.start()
 
     ui.update_status("transcribing", "Booting engine...")
     page.update()

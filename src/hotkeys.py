@@ -1,4 +1,4 @@
-from pynput import keyboard
+import keyboard
 import logging
 import threading
 import time
@@ -6,39 +6,9 @@ import time
 class HotkeyManager:
     def __init__(self, core):
         self.core = core
-        self.listener = None
+        self.current_hotkey = None
         self.error_callback = None
-        logging.info("HotkeyManager initialized.")
-
-    def _get_pynput_hotkey_string(self):
-        raw = self.core.settings.get('hotkey', 'f3')
-        if not raw: return None
-
-        parts = raw.lower().split('+')
-        formatted = []
-        
-        map_keys = {
-            'ctrl': '<ctrl>', 'control': '<ctrl>', 'lctrl': '<ctrl_l>', 'rctrl': '<ctrl_r>',
-            'alt': '<alt>', 'lalt': '<alt_l>', 'ralt': '<alt_gr>',
-            'shift': '<shift>', 'lshift': '<shift>', 'rshift': '<shift_r>',
-            'cmd': '<cmd>', 'win': '<cmd>', 'command': '<cmd>',
-            'esc': '<esc>', 'enter': '<enter>', 'space': '<space>', 'tab': '<tab>'
-        }
-
-        for part in parts:
-            part = part.strip()
-            if not part: continue
-            
-            if part in map_keys:
-                formatted.append(map_keys[part])
-            elif len(part) > 1: 
-                formatted.append(f'<{part}>')
-            else:
-                formatted.append(part)
-        
-        result = '+'.join(formatted)
-        logging.info(f"Parsed hotkey: '{result}'")
-        return result
+        logging.info("HotkeyManager initialized (Keyboard Lib Edition).")
 
     def _on_activate(self):
         try:
@@ -47,19 +17,26 @@ class HotkeyManager:
             logging.error(f"Hotkey action failed: {e}")
 
     def start_listening(self):
-        if self.listener: return
-
-        hk_str = self._get_pynput_hotkey_string()
+        # Get hotkey from settings
+        hk_str = self.core.settings.get('hotkey', 'f3')
         if not hk_str: return
 
+        # Avoid re-binding if same
+        if self.current_hotkey == hk_str:
+            return
+
+        self.stop_listening() # Clean up old
+
+        logging.info(f"Binding hotkey: '{hk_str}' with suppression...")
         try:
-            self.listener = keyboard.GlobalHotKeys({hk_str: self._on_activate})
-            self.listener.start()
-            logging.info("Hotkey listener started.")
+            # suppress=True prevents the key from reaching other apps
+            keyboard.add_hotkey(hk_str, self._on_activate, suppress=True)
+            self.current_hotkey = hk_str
+            logging.info("Hotkey bound successfully.")
         except Exception as e:
             msg = f"Bind failed for '{hk_str}': {e}"
             logging.error(msg)
-            self.listener = None
+            self.current_hotkey = None
             if self.error_callback:
                 self.error_callback("Hotkey Error", f"Could not bind '{hk_str}'.\nReason: {e}")
 
@@ -67,15 +44,15 @@ class HotkeyManager:
         self.error_callback = callback
 
     def stop_listening(self):
-        if self.listener:
-            logging.info("Stopping listener...")
+        if self.current_hotkey:
+            logging.info(f"Unbinding hotkey: {self.current_hotkey}")
             try:
-                self.listener.stop()
+                keyboard.remove_hotkey(self.current_hotkey)
             except Exception: pass
-            self.listener = None
+            self.current_hotkey = None
 
     def restart_listening(self):
         logging.info("Restarting listener...")
         self.stop_listening()
-        time.sleep(0.3) # Espera OS liberar
+        time.sleep(0.1)
         self.start_listening()
