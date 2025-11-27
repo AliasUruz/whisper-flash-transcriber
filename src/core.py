@@ -85,7 +85,7 @@ class CoreService:
             "gemini_enabled": False,
             "gemini_api_key": "",
             "gemini_model": "gemini-2.5-flash-lite",
-            "gemini_prompt": "Correct only the grammar and punctuation of the following text, keeping the original language. Return ONLY the corrected text, without introductions.",
+            "gemini_prompt": "Correct the text's punctuation and grammar without altering its meaning. Make it more expressive where appropriate, remove unnecessary repetitions, and improve flow. Combine sentences that make sense together. Maintain the original language and tone.",
             "first_run": True
         }
         

@@ -17,8 +17,8 @@ logging.basicConfig(
 
 def main(page: ft.Page):
     page.title = "Whisper Flash Transcriber"
-    page.window_width = 600 # Increased width for better visibility
-    page.window_height = 850 # Adjusted for generous space
+    page.window_width = 420 # Compact width for Tabbed UI
+    page.window_height = 550 # Compact height
     page.scroll = ft.ScrollMode.AUTO # Enable auto-scroll to prevent cutting content
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 0 # Edge-to-edge content

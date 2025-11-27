@@ -46,19 +46,36 @@ class AppUI:
         self.tray_supported = False
 
     def build_controls(self) -> ft.Container:
+        # Define Tabs
+        self.tabs = ft.Tabs(
+            selected_index=0,
+            animation_duration=300,
+            indicator_color=COLOR_ACCENT,
+            label_color=COLOR_ACCENT,
+            unselected_label_color=COLOR_TEXT_SECONDARY,
+            divider_color=COLOR_BORDER,
+            expand=True,
+            tabs=[
+                ft.Tab(
+                    text="General",
+                    icon=ft.icons.SETTINGS,
+                    content=self._build_general_tab_content()
+                ),
+                ft.Tab(
+                    text="AI",
+                    icon=ft.icons.AUTO_AWESOME,
+                    content=self._build_ai_tab_content()
+                ),
+            ]
+        )
+
         header = self._build_header()
-        general_section = self._build_general_section()
-        ai_section = self._build_ai_section()
         status_footer = self._build_status_footer()
 
         main_col = ft.Column(
             [
                 header,
-                ft.Container(height=10), # Spacer
-                general_section,
-                ft.Container(height=10), # Spacer
-                ai_section,
-                ft.Container(expand=True), # Push footer down
+                ft.Container(content=self.tabs, expand=True), # Tabs take available space
                 status_footer
             ],
             spacing=0,
@@ -68,7 +85,7 @@ class AppUI:
 
         return ft.Container(
             content=main_col, 
-            padding=25, 
+            padding=15, # Reduced padding
             expand=True,
             bgcolor=COLOR_BG
         )
@@ -76,28 +93,29 @@ class AppUI:
     def _build_header(self):
         return ft.Container(
             content=ft.Text(
-                "Whisper Flash Configuration", 
-                size=24, 
+                "Whisper Flash", 
+                size=20, # Reduced size
                 weight=ft.FontWeight.BOLD, 
                 color=COLOR_TEXT_PRIMARY
             ),
-            padding=ft.padding.only(bottom=10)
+            padding=ft.padding.only(bottom=5, top=5),
+            alignment=ft.alignment.center
         )
 
-    def _build_general_section(self):
+    def _build_general_tab_content(self):
         # Hotkey Field
         self.hotkey_field = ft.TextField(
             label="Global Hotkey",
             value=self.core.settings.get("hotkey", "f3"),
             hint_text="ex: f3, ctrl+space",
-            text_size=14,
+            text_size=13,
             color=COLOR_TEXT_PRIMARY,
-            label_style=ft.TextStyle(color=COLOR_TEXT_SECONDARY, size=12),
+            label_style=ft.TextStyle(color=COLOR_TEXT_SECONDARY, size=11),
             border_color=COLOR_BORDER,
             focused_border_color=COLOR_ACCENT,
             border_radius=BORDER_RADIUS,
             dense=True,
-            content_padding=15,
+            content_padding=12,
             on_blur=lambda e: self._trigger_auto_save()
         )
         
@@ -106,7 +124,6 @@ class AppUI:
         current_mic = self.core.settings.get("input_device_index")
         mic_options = [ft.dropdown.Option(key=str(d['id']), text=d['name']) for d in devices]
         
-        # Validate current_mic index exists in available devices
         valid_keys = [opt.key for opt in mic_options]
         if current_mic is not None and str(current_mic) not in valid_keys:
             logging.warning(f"Saved mic index {current_mic} not found. Resetting to default.")
@@ -116,14 +133,14 @@ class AppUI:
             label="Microphone",
             options=mic_options,
             value=str(current_mic) if current_mic is not None else None,
-            text_size=14,
+            text_size=13,
             color=COLOR_TEXT_PRIMARY,
-            label_style=ft.TextStyle(color=COLOR_TEXT_SECONDARY, size=12),
+            label_style=ft.TextStyle(color=COLOR_TEXT_SECONDARY, size=11),
             border_color=COLOR_BORDER,
             focused_border_color=COLOR_ACCENT,
             border_radius=BORDER_RADIUS,
             dense=True,
-            content_padding=15,
+            content_padding=12,
             on_change=lambda e: self._trigger_auto_save()
         )
 
@@ -132,45 +149,49 @@ class AppUI:
             label="Auto-paste result", 
             value=self.core.settings.get("auto_paste", True),
             active_color=COLOR_ACCENT,
-            label_style=ft.TextStyle(color=COLOR_TEXT_PRIMARY),
+            label_style=ft.TextStyle(color=COLOR_TEXT_PRIMARY, size=13),
             on_change=lambda e: self._trigger_auto_save()
         )
 
         self.mouse_hotkey_switch = ft.Switch(
-            label="Mouse Shortcut (LMB + RMB)", 
+            label="Mouse Shortcut (LMB+RMB)", 
             value=self.core.settings.get("mouse_hotkey", False),
             active_color=COLOR_ACCENT,
-            label_style=ft.TextStyle(color=COLOR_TEXT_PRIMARY),
+            label_style=ft.TextStyle(color=COLOR_TEXT_PRIMARY, size=13),
             on_change=lambda e: self._trigger_auto_save()
         )
 
-        return ft.Column(
-            [
-                ft.Text("General", size=16, weight=ft.FontWeight.W_600, color=COLOR_TEXT_PRIMARY),
-                ft.Container(height=5),
-                self.hotkey_field,
-                self.mic_dropdown,
-                ft.Container(height=5),
-                ft.Row([self.auto_paste_switch, self.mouse_hotkey_switch], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            ],
-            spacing=15
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Container(height=10),
+                    self.hotkey_field,
+                    self.mic_dropdown,
+                    ft.Divider(color=COLOR_BORDER),
+                    self.auto_paste_switch,
+                    self.mouse_hotkey_switch,
+                ],
+                spacing=15,
+                scroll=ft.ScrollMode.AUTO
+            ),
+            padding=10
         )
 
-    def _build_ai_section(self):
+    def _build_ai_tab_content(self):
         # API Key
         self.gemini_key_field = ft.TextField(
             label="Gemini API Key",
             value=self.core.settings.get("gemini_api_key", ""),
             password=True,
             can_reveal_password=True,
-            text_size=14,
+            text_size=13,
             color=COLOR_TEXT_PRIMARY,
-            label_style=ft.TextStyle(color=COLOR_TEXT_SECONDARY, size=12),
+            label_style=ft.TextStyle(color=COLOR_TEXT_SECONDARY, size=11),
             border_color=COLOR_BORDER,
             focused_border_color=COLOR_ACCENT,
             border_radius=BORDER_RADIUS,
             dense=True,
-            content_padding=15,
+            content_padding=12,
             visible=self.core.settings.get("gemini_enabled", False),
             on_blur=lambda e: self._trigger_auto_save()
         )
@@ -183,32 +204,55 @@ class AppUI:
                 ft.dropdown.Option("gemini-2.5-flash", "Gemini 2.5 Flash"),
             ],
             value=self.core.settings.get("gemini_model", "gemini-2.5-flash-lite"),
-            text_size=14,
+            text_size=13,
             color=COLOR_TEXT_PRIMARY,
-            label_style=ft.TextStyle(color=COLOR_TEXT_SECONDARY, size=12),
+            label_style=ft.TextStyle(color=COLOR_TEXT_SECONDARY, size=11),
             border_color=COLOR_BORDER,
             focused_border_color=COLOR_ACCENT,
             border_radius=BORDER_RADIUS,
             dense=True,
-            content_padding=15,
+            content_padding=12,
             visible=self.core.settings.get("gemini_enabled", False),
             on_change=lambda e: self._trigger_auto_save()
         )
         
-        # Prompt Field
+        # Prompt Field with Custom Label Row
+        def reset_prompt(e):
+            default_prompt = "Correct the text's punctuation and grammar without altering its meaning. Make it more expressive where appropriate, remove unnecessary repetitions, and improve flow. Combine sentences that make sense together. Maintain the original language and tone."
+            self.gemini_prompt_field.value = default_prompt
+            self.gemini_prompt_field.update()
+            self._trigger_auto_save()
+
+        prompt_label = ft.Row(
+            [
+                ft.Text("System Prompt", size=12, color=COLOR_TEXT_SECONDARY),
+                ft.IconButton(
+                    icon=ft.icons.RESTORE, 
+                    icon_size=16, 
+                    icon_color=COLOR_ACCENT,
+                    tooltip="Reset to Default", 
+                    on_click=reset_prompt,
+                    style=ft.ButtonStyle(padding=0)
+                )
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            visible=self.core.settings.get("gemini_enabled", False)
+        )
+        
+        # Keep reference to label row to toggle visibility
+        self.prompt_label_row = prompt_label
+
         self.gemini_prompt_field = ft.TextField(
-            label="System Prompt",
             value=self.core.settings.get("gemini_prompt", ""),
             multiline=True,
-            min_lines=2, max_lines=3,
-            text_size=14,
+            min_lines=3, max_lines=5,
+            text_size=13,
             color=COLOR_TEXT_PRIMARY,
-            label_style=ft.TextStyle(color=COLOR_TEXT_SECONDARY, size=12),
             border_color=COLOR_BORDER,
             focused_border_color=COLOR_ACCENT,
             border_radius=BORDER_RADIUS,
             dense=True,
-            content_padding=15,
+            content_padding=12,
             visible=self.core.settings.get("gemini_enabled", False),
             on_blur=lambda e: self._trigger_auto_save()
         )
@@ -218,27 +262,25 @@ class AppUI:
             label="Enable AI Correction",
             value=self.core.settings.get("gemini_enabled", False),
             active_color=COLOR_ACCENT,
-            label_style=ft.TextStyle(color=COLOR_TEXT_PRIMARY),
+            label_style=ft.TextStyle(color=COLOR_TEXT_PRIMARY, weight=ft.FontWeight.BOLD),
             on_change=lambda e: self._toggle_gemini_fields()
         )
 
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Row([
-                        ft.Text("AI Correction", size=16, weight=ft.FontWeight.W_600, color=COLOR_TEXT_PRIMARY),
-                        self.gemini_switch
-                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.Container(height=5),
+                    ft.Container(height=10),
+                    self.gemini_switch,
+                    ft.Divider(color=COLOR_BORDER),
                     self.gemini_key_field,
                     self.gemini_model_dropdown,
+                    self.prompt_label_row,
                     self.gemini_prompt_field
                 ],
-                spacing=15
+                spacing=12,
+                scroll=ft.ScrollMode.AUTO
             ),
-            bgcolor=COLOR_SECTION_BG,
-            border_radius=BORDER_RADIUS,
-            padding=20
+            padding=10
         )
 
     def _build_status_footer(self):
@@ -323,6 +365,8 @@ class AppUI:
         self.gemini_key_field.visible = visible
         self.gemini_model_dropdown.visible = visible
         self.gemini_prompt_field.visible = visible
+        if hasattr(self, 'prompt_label_row'):
+            self.prompt_label_row.visible = visible
         self.page.update()
         self._trigger_auto_save()
 
