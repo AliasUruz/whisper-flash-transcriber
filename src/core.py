@@ -141,50 +141,48 @@ class CoreService:
         if self.ui_update_callback:
             self.ui_update_callback("transcribing", "Loading/Downloading Model...")
 
-        try:
-            logging.info("Attempting to load on GPU (CUDA)...")
-            
-            download_root = self.settings.get("model_path")
-            if download_root and not download_root.strip(): download_root = None
-            
-            self.model = WhisperModel(model_name, device="cuda", compute_type="float16", download_root=download_root)
-            self.device_used = "cuda"
-            logging.info("Success! Model loaded on GPU (VRAM).")
-        except Exception as e_gpu:
-            logging.warning(f"GPU (float16) Load failed: {e_gpu}")
-            logging.info("Attempting GPU (int8) fallback...")
+        # Fallback Strategy Configuration
+        strategies = [
+            {"device": "cuda", "compute_type": "float16", "desc": "GPU (Float16)"},
+            {"device": "cuda", "compute_type": "int8", "desc": "GPU (Int8)"},
+            {"device": "cpu", "compute_type": "int8", "desc": "CPU (Int8)"}
+        ]
+
+        download_root = self.settings.get("model_path")
+        if download_root and not download_root.strip(): download_root = None
+
+        for strategy in strategies:
             try:
-                download_root = self.settings.get("model_path")
-                if download_root and not download_root.strip(): download_root = None
+                logging.info(f"Attempting load: {strategy['desc']}...")
+                self.model = WhisperModel(
+                    model_name, 
+                    device=strategy["device"], 
+                    compute_type=strategy["compute_type"], 
+                    download_root=download_root
+                )
+                self.device_used = strategy["device"]
+                logging.info(f"Success! Model loaded on {strategy['desc']}.")
                 
-                self.model = WhisperModel(model_name, device="cuda", compute_type="int8", download_root=download_root)
-                self.device_used = "cuda"
-                logging.info("Success! Model loaded on GPU (VRAM) with INT8 quantization.")
-            except Exception as e_gpu_int8:
-                logging.warning(f"GPU (int8) Load failed: {e_gpu_int8}")
-                logging.info("Falling back to CPU (Int8)...")
-                try:
-                    download_root = self.settings.get("model_path")
-                    if download_root and not download_root.strip(): download_root = None
-
-                    self.model = WhisperModel(model_name, device="cpu", compute_type="int8", download_root=download_root)
-                    self.device_used = "cpu"
-                    logging.info("Success! Model loaded on CPU.")
-                except Exception as e_cpu:
-                    msg = f"Fatal: Failed to load model.\nGPU: {e_gpu}\nCPU: {e_cpu}"
-                    logging.error(msg)
-                    self.state = "error"
+                # Success - Update State and Exit Loop
+                if self.state != "shutdown":
+                    self.state = "idle"
                     if self.ui_update_callback:
-                        self.ui_update_callback("error", "Model Load Failed")
-                    if self.error_popup_callback:
-                        self.error_popup_callback("Critical Error", msg)
-                    return
+                        device_label = "GPU" if self.device_used == "cuda" else "CPU"
+                        self.ui_update_callback("idle", f"Ready ({device_label})")
+                return
 
-        if self.state != "shutdown":
-            self.state = "idle"
-            if self.ui_update_callback:
-                device_label = "GPU" if self.device_used == "cuda" else "CPU"
-                self.ui_update_callback("idle", f"Ready ({device_label})")
+            except Exception as e:
+                logging.warning(f"Load failed for {strategy['desc']}: {e}")
+                continue
+
+        # If we reach here, all strategies failed
+        msg = "Fatal: Failed to load model on all available devices."
+        logging.error(msg)
+        self.state = "error"
+        if self.ui_update_callback:
+            self.ui_update_callback("error", "Model Load Failed")
+        if self.error_popup_callback:
+            self.error_popup_callback("Critical Error", msg)
 
     def set_ui_update_callback(self, callback):
         self.ui_update_callback = callback
@@ -514,6 +512,13 @@ class CoreService:
             
         return bytes(data)
 
+    def _play_sound_worker(self, wav_data):
+        """Worker method to play sound in a separate thread."""
+        try:
+            winsound.PlaySound(wav_data, winsound.SND_MEMORY)
+        except Exception as err:
+            logging.error(f"PlaySound error: {err}")
+
     def play_sound(self, frequency):
         """Plays a tone with volume control."""
         if self.settings.get("sound_enabled", True):
@@ -522,15 +527,7 @@ class CoreService:
                 wav_data = self._generate_tone(frequency, 150, volume)
                 
                 # Use a thread to play synchronously (SND_MEMORY) without blocking the main thread.
-                # We avoid SND_ASYNC because the wav_data buffer might be garbage collected 
-                # before playback finishes, causing silence.
-                def _play():
-                    try:
-                        winsound.PlaySound(wav_data, winsound.SND_MEMORY)
-                    except Exception as err:
-                        logging.error(f"PlaySound error: {err}")
-                        
-                threading.Thread(target=_play, daemon=True).start()
+                threading.Thread(target=self._play_sound_worker, args=(wav_data,), daemon=True).start()
                 
             except Exception as e:
                 logging.error(f"Sound setup error: {e}")

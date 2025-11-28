@@ -20,11 +20,12 @@ This document describes the technical architecture and current state of the Whis
 | **Language** | Python | 3.11+ |
 | **UI Framework** | Flet | (See `requirements.txt`) |
 | **Transcription Engine**| `faster-whisper` | `deepdml/faster-whisper-large-v3-turbo-ct2` |
-| **Global Hotkeys** | `pynput` | Keyboard and Mouse listeners |
+| **Global Hotkeys** | `keyboard` | Global hotkey with suppression support |
+| **Mouse Handling** | `ctypes` (Win32 API) | Low-level hooks for RMB suppression |
 | **Audio Handling**| `sounddevice`, `numpy`, `soundfile` | (See `requirements.txt`) |
 | **OS Interaction** | `pyperclip` | For clipboard access |
 | **System Tray** | `pystray` | For background operation |
-| **AI Correction** | `google-generativeai` | Gemini 1.5 Flash API |
+| **AI Correction** | `google-generativeai` | Gemini 2.5 Flash API |
 
 ## 4. Configuration Specification
 
@@ -69,10 +70,11 @@ The UI provides feedback primarily through the System Tray icon.
 │   ├── core.py       # Business Logic (Audio, AI)
 │   ├── tray.py       # System Tray (Pystray)
 │   ├── hotkeys.py    # Global Keyboard Listener
-│   ├── hotkeys.py    # Global Keyboard Listener
-│   ├── mouse_handler.py # Global Mouse Listener (LMB+RMB)
+│   ├── native_mouse.py # Global Mouse Listener (Win32 Hooks)
 │   ├── ai_corrector.py # Gemini AI Integration
 │   └── icons.py      # Dynamic Icon Generation
+├── tools/
+│   └── diagnose_gpu.py # GPU Diagnostic Tool
 └── requirements.txt
 ```
 
@@ -103,13 +105,13 @@ The UI provides feedback primarily through the System Tray icon.
   - **Auto-Save:** Settings are saved immediately upon change.
   - **Minimalist:** Only essential controls are shown.
 
-#### `src/mouse_handler.py`
+#### `src/native_mouse.py`
 - **Responsibility:** Monitors mouse clicks for the "Chord" pattern (Hold Left + Click Right).
 - **Logic:**
-  - Runs in a separate thread via `pynput`.
-  - Only active if enabled in settings.
-  - Only active if enabled in settings.
-  - Triggers `core.toggle_recording()`.
+  - **Technology:** Uses `ctypes` to implement a low-level Windows Hook (`WH_MOUSE_LL`).
+  - **Suppression:** Intercepts `WM_RBUTTONUP` when the chord is active to prevent the context menu from appearing.
+  - **Thread Safety:** Runs the hook in a dedicated thread with a Windows message pump.
+  - **Action:** Triggers `core.toggle_recording()` via a safe thread call.
 
 #### `src/ai_corrector.py`
 - **Responsibility:** Handles communication with Google Gemini API.

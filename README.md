@@ -12,6 +12,15 @@ An ultra-fast, lightweight audio transcription utility for Windows, powered by t
 
 ## 🚀 Installation
 
+### ⚡ Quick Install (Recommended)
+1.  **Download** the project code.
+2.  Double-click **`install.bat`**.
+3.  Wait for the installation to finish.
+4.  A shortcut **"Whisper Flash"** will appear on your Desktop.
+
+### Manual Installation (Advanced)
+If you prefer to install manually:
+
 ### Prerequisites
 *   Python 3.11 or higher.
 *   (Optional) NVIDIA CUDA drivers installed for GPU acceleration.
@@ -60,7 +69,9 @@ An ultra-fast, lightweight audio transcription utility for Windows, powered by t
 *   `src/core.py`: System brain (Audio management, Whisper, Threads).
 *   `src/ui.py`: GUI built with Flet.
 *   `src/tray.py`: System tray icon and menu management.
-*   `src/hotkeys.py`: Global keyboard listener.
+*   `src/hotkeys.py`: Global keyboard listener (using `keyboard` lib).
+*   `src/native_mouse.py`: Low-level mouse hook for "LMB+RMB" chord.
+*   `tools/`: Utility scripts (e.g., GPU diagnosis).
 
 ## 🤝 Contribution
 
