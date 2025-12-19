@@ -48,3 +48,9 @@ config.json
 tmp_audio/
 *.wav
 start_admin.bat
+.agent/workflows/research.md
+.agent/workflows/gosu_setup.md
+.agent/workflows/feature.md
+.agent/workflows/docs.md
+.agent/workflows/bugfix.md
+.agent/workflows/auto.md
