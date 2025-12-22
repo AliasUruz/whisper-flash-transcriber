@@ -5,9 +5,10 @@ import sys
 import os
 import time
 from ui import AppUI
-from core import CoreService
+from core import CoreService, AppState
 from hotkeys import HotkeyManager
 from tray import SystemTray
+from settings import VALID_MODELS
 
 logging.basicConfig(
     level=logging.INFO, 
@@ -17,119 +18,143 @@ logging.basicConfig(
 
 def main(page: ft.Page):
     page.title = "Whisper Flash"
-    page.window_width = 400 # Intermediate Size
-    page.window_height = 520 # Intermediate Size
-    page.scroll = ft.ScrollMode.AUTO # Enable auto-scroll to prevent cutting content
+    page.window_width = 460 # Slightly wider for tabs
+    page.window_height = 650 # Taller for modern UI
+    page.scroll = ft.ScrollMode.AUTO 
     page.theme_mode = ft.ThemeMode.DARK
-    page.padding = 0 # Edge-to-edge content
-    page.bgcolor = "#202028" # Mica Alt Dark background
+    page.padding = 0 
+    page.bgcolor = "#202028" 
     page.window_resizable = True
 
     # Initialization
-    tray = None # Initialize early to prevent UnboundLocalError in cleanup
+    tray = None 
     core = CoreService()
     
-    # Check first run logic
-    if not core.settings.get("first_run", True):
+    # Check first run logic - Object Access
+    if not core.settings.first_run:
         page.window_visible = False
     else:
         # If first run, update setting so next time it starts hidden
-        core.settings["first_run"] = False
-        core.save_settings()
+        core.save_settings({"first_run": False})
 
     ui = AppUI(page, core)
     hotkey_manager = HotkeyManager(core)
     
-    # Shutdown Control (Defined early to be available for Tray)
+    # Shutdown Control
     def cleanup_and_exit():
         logging.info("App shutting down...")
         try:
-            # Trigger auto-save to capture any pending edits (e.g. focused field)
-            if ui: ui._trigger_auto_save()
-
-            ui.update_status("shutdown", "Closing app...")
-            page.update()
-        except Exception:
-            pass
+            # We don't need ui._trigger_auto_save() anymore as new tabs use active on_change listeners
             
-        # Ensure hooks are removed and threads stopped
-        if core: core.shutdown()
+            if page:
+                ui.update_status("shutdown", "Closing app...")
+                try: page.update()
+                except Exception: pass
+        except Exception as e:
+            logging.error(f"UI Cleanup error: {e}")
+            
+        if core: 
+            logging.info("Stopping Core...")
+            core.shutdown()
 
-        # Fast exit: Don't wait for threads, just kill process
         if tray: 
-            try:
-                tray.stop()
+            try: tray.stop()
             except Exception: pass
-            
-        page.window_destroy()
-        time.sleep(0.5) # Give Flet time to send the destroy command
+        
+        try: page.window_destroy()
+        except Exception: pass
+        
+        time.sleep(0.5)
+        logging.info("Bye.")
         os._exit(0)
 
     # System Tray Integration
     def restore_window():
         page.window_visible = True
         page.update()
-        # Refresh UI in case settings changed via Tray while minimized
         ui.refresh_ui_from_settings()
 
     def quit_app():
         cleanup_and_exit()
 
     def set_ai_model(model_name):
-        core.settings["gemini_enabled"] = True
-        core.settings["gemini_model"] = model_name
-        core.save_settings()
+        # Update via method to ensure persistence
+        core.save_settings({
+            "gemini_enabled": True,
+            "gemini_model": model_name
+        })
         ui.refresh_ui_from_settings()
         tray.update_menu()
 
     def toggle_ai_off():
-        core.settings["gemini_enabled"] = False
-        core.save_settings()
+        core.save_settings({"gemini_enabled": False})
         ui.refresh_ui_from_settings()
         tray.update_menu()
 
     # Custom Menu Builder for Tray
     def create_tray_menu():
         import pystray
-        from PIL import Image
         
-        # Helper to check state for radio buttons
         def is_checked(item):
             if item.text == "Off":
-                return not core.settings.get("gemini_enabled", False)
-            elif item.text == "Gemini 2.5 Flash Lite":
-                return core.settings.get("gemini_enabled") and core.settings.get("gemini_model") == "gemini-2.5-flash-lite"
-            elif item.text == "Gemini 2.5 Flash":
-                return core.settings.get("gemini_enabled") and core.settings.get("gemini_model") == "gemini-2.5-flash"
-            return False
+                return not core.settings.gemini_enabled
+            
+            current_model = core.settings.gemini_model
+            is_enabled = core.settings.gemini_enabled
+            
+            if not is_enabled: return False
+            
+            display_name = current_model.replace("-", " ").title()
+            return item.text == display_name
+
+        ai_menu_items = []
+        
+        def make_model_callback(m_id):
+            return lambda icon, item: set_ai_model(m_id)
+
+        ai_menu_items.append(
+            pystray.MenuItem(
+                "Off", 
+                lambda icon, item: toggle_ai_off(), 
+                checked=is_checked, 
+                radio=True
+            )
+        )
+        
+        for model in VALID_MODELS:
+            display_name = model.replace("-", " ").title()
+            ai_menu_items.append(
+                pystray.MenuItem(
+                    display_name, 
+                    make_model_callback(model), 
+                    checked=is_checked, 
+                    radio=True
+                )
+            )
 
         return pystray.Menu(
             pystray.MenuItem("Open", restore_window, default=True),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("AI Correction", pystray.Menu(
-                pystray.MenuItem("Off", lambda: toggle_ai_off(), checked=is_checked, radio=True),
-                pystray.MenuItem("Gemini 2.5 Flash Lite", lambda: set_ai_model("gemini-2.5-flash-lite"), checked=is_checked, radio=True),
-                pystray.MenuItem("Gemini 2.5 Flash", lambda: set_ai_model("gemini-2.5-flash"), checked=is_checked, radio=True)
-            )),
+            pystray.MenuItem("AI Correction", pystray.Menu(*ai_menu_items)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Settings", restore_window),
             pystray.MenuItem("Exit", quit_app)
         )
 
-    # Initialize Tray with custom menu factory
+    # Initialize Tray
     tray = SystemTray(core, restore_window, quit_app, menu_factory=create_tray_menu)
     tray.run()
+    ui.tray_supported = True
 
     # Wiring
     def update_status_wrapper(status, tooltip):
+        # status comes as Enum string value from CoreService
         ui.update_status(status, tooltip)
         tray.update_state(status)
 
     core.set_ui_update_callback(update_status_wrapper)
     core.set_error_popup_callback(ui.show_error_popup)
     core.set_hotkey_manager(hotkey_manager)
-    
-    # New wiring for bug fixes
     hotkey_manager.set_error_callback(ui.show_error_popup)
 
     def window_event(e):
@@ -138,15 +163,11 @@ def main(page: ft.Page):
         elif e.data == "minimize":
             page.window_visible = False
             page.update()
-            # Ensure settings are saved on minimize
-            ui._trigger_auto_save()
 
     page.window_prevent_close = True
     page.on_window_event = window_event
     
-    # Fix for Zombie Process: Ensure UI exit button triggers full cleanup
     ui.set_exit_callback(cleanup_and_exit)
-
     page.add(ui.build_controls())
 
     if ui.tray_supported:
@@ -158,11 +179,10 @@ def main(page: ft.Page):
     threading.Thread(target=core.load_model_async, daemon=True, name="Loader").start()
     hotkey_manager.start_listening()
 
-    # Start mouse handler if enabled in settings
-    if core.settings.get("mouse_hotkey", False):
+    if core.settings.mouse_hotkey:
         core.mouse_hook.start()
 
-    ui.update_status("transcribing", "Booting engine...")
+    ui.update_status(AppState.LOADING.value, "Booting engine...")
     page.update()
 
 if __name__ == "__main__":

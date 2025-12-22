@@ -1,533 +1,236 @@
-import json
 import time
 import threading
 import logging
-import tempfile
 import os
-from pathlib import Path
-import sounddevice as sd
-import soundfile as sf
-import numpy as np
 import pyperclip
 from pynput.keyboard import Controller, Key
-from faster_whisper import WhisperModel
-import winsound
-import math
-import struct
+
+from audio_engine import AudioEngine
 from ai_corrector import AICorrector
 from native_mouse import NativeMouseHook
-
-# Basic logging configuration
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from settings import SettingsManager, AppState, AppSettings
+from services.transcription_service import TranscriptionService
+from services.sound_service import SoundService
 
 class CoreService:
     def __init__(self):
-        logging.info("Initializing CoreService (Final Edition)...")
-        self.settings = self._load_or_create_settings()
-        self.model = None
-        self.device_used = "cpu"
-        self.state = "loading"
+        logging.info("Initializing CoreService (Orchestrator Edition)...")
+        self.settings_manager = SettingsManager()
+        self.settings: AppSettings = self.settings_manager.get_settings()
         
-        # UI Callbacks
+        # State Management
+        self.state = AppState.LOADING
+        
+        # Services
+        self.sound_service = SoundService()
+        self.transcription_service = TranscriptionService(model_path=self.settings.model_path)
+        self.audio_engine = AudioEngine()
+        self.ai_corrector = AICorrector()
+        
+        # Input Hooks
+        self.mouse_hook = NativeMouseHook(self)
+        self.hotkey_manager = None # Injected later
+        self.keyboard = None # Lazy init
+
+        # Callbacks
         self.ui_update_callback = None
         self.error_popup_callback = None
-        self.hotkey_manager = None
-        self.mouse_hook = NativeMouseHook(self)
-        self.ai_corrector = AICorrector()
-
-        # Audio buffers and control
-        self.audio_stream = None
-        self.audio_frames = []
-        
-        # Temp File Control
-        self.temp_file_path = None
-        self.temp_file_writer = None
-        
-        self.sample_rate = 16000
-        
-        # Buffer Control
-        self.current_ram_duration = 0.0 
-        
-        # Hardware and IO Control
-        self.keyboard = None # Lazy init
-        self._lock = threading.Lock()
-        self.RAM_FLUSH_THRESHOLD_SECONDS = 30
-
-    def _load_or_create_settings(self) -> dict:
-        self.config_path = Path.home() / ".whisper_flash_transcriber" / "config.json"
-        self.secrets_path = Path.home() / ".whisper_flash_transcriber" / "secrets.json"
-        
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        settings = {}
-        if self.config_path.exists():
-            logging.info(f"Loading settings from {self.config_path}")
-            with open(self.config_path, "r") as f:
-                try:
-                    settings = json.load(f)
-                except json.JSONDecodeError:
-                    logging.error("Config file corrupted, creating new.")
-
-        # Load secrets if exist
-        if self.secrets_path.exists():
-            try:
-                with open(self.secrets_path, "r") as f:
-                    secrets = json.load(f)
-                    settings["gemini_api_key"] = secrets.get("gemini_api_key", "")
-            except Exception as e:
-                logging.error(f"Failed to load secrets: {e}")
-        
-        # Merge with defaults
-        default_settings = {
-            "hotkey": "f3",
-            "mouse_hotkey": False,
-            "auto_paste": True,
-            "input_device_index": None,
-            "model_path": "",
-            "gemini_enabled": False,
-            "gemini_api_key": "",
-            "gemini_model": "gemini-2.5-flash-lite",
-            "gemini_prompt": "Correct the text's punctuation and grammar without altering its meaning. Make it more expressive where appropriate, remove unnecessary repetitions, and improve flow. Combine sentences that make sense together. Maintain the original language and tone.",
-            "first_run": True,
-            "sound_enabled": True,
-            "sound_volume": 50,
-            "sound_freq_start": 800,
-            "sound_freq_stop": 500
-        }
-        
-        # Validate model name
-        valid_models = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
-        if settings.get("gemini_model") not in valid_models:
-            logging.warning(f"Invalid model '{settings.get('gemini_model')}' found. Resetting to default.")
-            settings["gemini_model"] = default_settings["gemini_model"]
-        
-        # Update settings with defaults for missing keys
-        for key, value in default_settings.items():
-            if key not in settings:
-                settings[key] = value
-                
-        # Save back to ensure consistency (excluding secrets)
-        self.save_settings(settings)
-        
-        return settings
-
-    def get_audio_devices(self):
-        """Returns list of available microphones."""
-        devices = []
-        try:
-            info = sd.query_devices()
-            for i, dev in enumerate(info):
-                if dev['max_input_channels'] > 0:
-                    # Filter input devices only
-                    devices.append({"id": i, "name": f"{dev['name']} ({dev['hostapi']})"})
-        except Exception as e:
-            logging.error(f"Error listing devices: {e}")
-        return devices
-
-    def _get_temp_dir(self):
-        """Returns temp directory, respecting model_path."""
-        model_path = self.settings.get("model_path")
-        if model_path and os.path.isdir(model_path):
-            # Create tmp_audio folder inside model path
-            tmp_dir = os.path.join(model_path, "tmp_audio")
-            os.makedirs(tmp_dir, exist_ok=True)
-            return tmp_dir
-        return None # Use system default tempfile
 
     def load_model_async(self):
-        model_name = "deepdml/faster-whisper-large-v3-turbo-ct2"
-        logging.info(f"Starting asynchronous model load: {model_name}")
-        
+        """Delegates model loading to service."""
         if self.ui_update_callback:
-            self.ui_update_callback("transcribing", "Loading/Downloading Model...")
+            self.ui_update_callback(AppState.TRANSCRIBING.value, "Loading Model...")
 
-        # Fallback Strategy Configuration
-        strategies = [
-            {"device": "cuda", "compute_type": "float16", "desc": "GPU (Float16)"},
-            {"device": "cuda", "compute_type": "int8", "desc": "GPU (Int8)"},
-            {"device": "cpu", "compute_type": "int8", "desc": "CPU (Int8)"}
-        ]
+        def on_success(strategy_id, strategy_desc):
+            logging.info(f"Core: Model loaded via {strategy_id}")
+            self.settings_manager.update(last_device_strategy=strategy_id)
+            self._set_state(AppState.IDLE, f"Ready ({strategy_desc})")
 
-        download_root = self.settings.get("model_path")
-        if download_root and not download_root.strip(): download_root = None
+        def on_fail(error_msg):
+            logging.error(f"Core: Model load failed - {error_msg}")
+            self._set_state(AppState.ERROR, "Load Failed")
+            if self.error_popup_callback:
+                self.error_popup_callback("Model Error", error_msg)
 
-        for strategy in strategies:
-            try:
-                logging.info(f"Attempting load: {strategy['desc']}...")
-                self.model = WhisperModel(
-                    model_name, 
-                    device=strategy["device"], 
-                    compute_type=strategy["compute_type"], 
-                    download_root=download_root
-                )
-                self.device_used = strategy["device"]
-                logging.info(f"Success! Model loaded on {strategy['desc']}.")
-                
-                # Success - Update State and Exit Loop
-                if self.state != "shutdown":
-                    self.state = "idle"
-                    if self.ui_update_callback:
-                        device_label = "GPU" if self.device_used == "cuda" else "CPU"
-                        self.ui_update_callback("idle", f"Ready ({device_label})")
-                return
+        self.transcription_service.load_model_async(
+            callback_success=on_success,
+            callback_fail=on_fail,
+            preferred_strategy=self.settings.last_device_strategy
+        )
 
-            except Exception as e:
-                logging.warning(f"Load failed for {strategy['desc']}: {e}")
-                continue
-
-        # If we reach here, all strategies failed
-        msg = "Fatal: Failed to load model on all available devices."
-        logging.error(msg)
-        self.state = "error"
+    def _set_state(self, new_state: AppState, status_text: str = None):
+        """Centralized state mutation."""
+        if self.state == AppState.SHUTDOWN: return
+        
+        self.state = new_state
         if self.ui_update_callback:
-            self.ui_update_callback("error", "Model Load Failed")
-        if self.error_popup_callback:
-            self.error_popup_callback("Critical Error", msg)
-
-    def set_ui_update_callback(self, callback):
-        self.ui_update_callback = callback
-
-    def set_error_popup_callback(self, callback):
-        self.error_popup_callback = callback
-
-    def set_hotkey_manager(self, manager):
-        self.hotkey_manager = manager
-
-    def shutdown(self):
-        logging.info("Core shutting down...")
-        self.state = "shutdown"
-        
-        # Force cleanup audio stream
-        if self.audio_stream:
-            try:
-                self.audio_stream.stop()
-                self.audio_stream.close()
-            except Exception: pass
-        self.audio_stream = None
-
-        self.stop_recording()
-        self.model = None
-        
-        if hasattr(self, 'mouse_hook') and self.mouse_hook:
-            self.mouse_hook.stop()
-
-        if self.hotkey_manager:
-            self.hotkey_manager.stop_listening()
+            # UI expects string values currently
+            txt = status_text if status_text else new_state.value.title()
+            self.ui_update_callback(new_state.value, txt)
 
     def toggle_recording(self):
-        if self.state == "shutdown": return
+        if self.state == AppState.SHUTDOWN: return
 
-        if not self.model:
-            if self.state == "loading":
-                if self.ui_update_callback:
-                    self.ui_update_callback("transcribing", "Wait: Loading...") 
-                    threading.Timer(1.5, lambda: self.ui_update_callback("idle", "Wait...") if self.state == "loading" else None).start()
+        if self.transcription_service.is_loading:
+            self.ui_update_callback(AppState.TRANSCRIBING.value, "Wait: Loading...")
             return
 
-        if self.state == "recording":
+        if self.state == AppState.RECORDING:
             self.stop_recording()
-        elif self.state == "idle":
+        elif self.state == AppState.IDLE:
             self.start_recording()
 
     def start_recording(self):
-        if self.state != "idle": return
+        if self.state != AppState.IDLE: return
 
-        logging.info("Starting audio recording...")
-        self.state = "recording"
-        
-        with self._lock:
-            self.audio_frames = []
-            self.current_ram_duration = 0.0 
-            self.temp_file_path = None
-            self.temp_file_writer = None
-
-        if self.ui_update_callback:
-            self.ui_update_callback("recording", "Listening...")
-            
-        self.play_sound(self.settings.get("sound_freq_start", 800))
+        logging.info("Core: Starting recording...")
+        self._set_state(AppState.RECORDING, "Listening...")
+        self.sound_service.play_tone(
+            self.settings.sound_freq_start, 
+            volume=self.settings.sound_volume, 
+            enabled=self.settings.sound_enabled
+        )
 
         try:
-            # Device selection
-            device_index = self.settings.get("input_device_index")
-            # If device_index is None, sounddevice uses OS default
-            
-            self.audio_stream = sd.InputStream(
-                callback=self._audio_callback,
-                samplerate=self.sample_rate,
-                channels=1,
-                dtype="float32",
-                device=device_index 
-            )
-            self.audio_stream.start()
+            self.audio_engine.start_capture(self.settings.input_device_index)
         except Exception as e:
-            msg = f"Microphone init failed: {e}"
-            logging.error(msg)
-            self.state = "error"
-            self._reset_to_idle()
-            if self.ui_update_callback:
-                self.ui_update_callback("error", "Mic Error")
+            self._set_state(AppState.ERROR, "Mic Error")
+            logging.error(f"Mic fail: {e}")
             if self.error_popup_callback:
-                self.error_popup_callback("Audio Error", msg)
-
-    def _audio_callback(self, indata, frames, time_info, status):
-        if status:
-            logging.warning(f"Audio status: {status}")
-
-        with self._lock:
-            if self.state != "recording": return
-
-            if self.temp_file_writer:
-                try:
-                    self.temp_file_writer.write(indata)
-                except Exception as e:
-                    logging.error(f"Disk write failed: {e}")
-                    self.state = "error"
-                    if self.ui_update_callback: self.ui_update_callback("error", "Disk Error")
-                return
-
-            self.audio_frames.append(indata.copy())
-            chunk_duration = len(indata) / self.sample_rate
-            self.current_ram_duration += chunk_duration
-            
-            if self.current_ram_duration > self.RAM_FLUSH_THRESHOLD_SECONDS:
-                logging.info(f"RAM full. Flushing to disk.")
-                try:
-                    custom_temp_dir = self._get_temp_dir()
-                    tf = tempfile.NamedTemporaryFile(
-                        delete=False, 
-                        suffix=".wav", 
-                        mode="w+b",
-                        dir=custom_temp_dir
-                    )
-                    self.temp_file_path = tf.name
-                    tf.close() 
-
-                    self.temp_file_writer = sf.SoundFile(
-                        self.temp_file_path,
-                        mode="w",
-                        samplerate=self.sample_rate,
-                        channels=1,
-                    )
-                    
-                    ram_buffer = np.concatenate(self.audio_frames)
-                    self.temp_file_writer.write(ram_buffer)
-                    
-                    self.audio_frames = [] 
-                    self.current_ram_duration = 0.0 
-                except Exception as e:
-                    logging.error(f"Flush failed: {e}")
-                    self.state = "error"
-                    if self.ui_update_callback: self.ui_update_callback("error", "IO Error")
+                self.error_popup_callback("Audio Error", str(e))
+            self._reset_to_idle_delayed()
 
     def stop_recording(self):
-        if self.state != "recording": return
+        if self.state != AppState.RECORDING: return
 
-        logging.info("Stopping recording sequence...")
+        logging.info("Core: Stopping recording...")
+        self._set_state(AppState.TRANSCRIBING, "Processing...")
         
-        # Change state immediately to prevent race in audio callback
-        self.state = "transcribing"
-
-        if self.audio_stream:
-            try:
-                self.audio_stream.stop()
-                self.audio_stream.close()
-            except Exception as e:
-                logging.error(f"Stream stop error: {e}")
-            self.audio_stream = None
-
-        with self._lock:
-            if self.temp_file_writer:
-                try:
-                    self.temp_file_writer.flush()
-                    self.temp_file_writer.close()
-                except Exception as e:
-                    logging.error(f"Writer close error: {e}")
-                self.temp_file_writer = None
-        if self.ui_update_callback:
-            mode = "GPU" if self.device_used == "cuda" else "CPU"
-            self.ui_update_callback("transcribing", f"Processing ({mode})...")
-
-        self.play_sound(self.settings.get("sound_freq_stop", 500))
-
-        threading.Thread(target=self._process_audio, daemon=True).start()
-
-    def _process_audio(self):
-        audio_source = None
-        processing_path = None
-
-        with self._lock:
-            if self.temp_file_path and os.path.exists(self.temp_file_path):
-                processing_path = self.temp_file_path
-                audio_source = processing_path
-                self.temp_file_path = None 
-            elif self.audio_frames:
-                audio_source = np.concatenate(self.audio_frames, axis=0).flatten()
-            else:
-                logging.warning("Empty buffer.")
-                self._reset_to_idle()
-                return
-
+        # Stop capture
         try:
-            if self.state == "shutdown": return
-            text = self._run_transcription(audio_source)
-            
-            if self.state == "shutdown": return
-
-            # AI Correction Hook
-            if text and self.settings.get("gemini_enabled") and self.settings.get("gemini_api_key"):
-                if self.ui_update_callback:
-                    self.ui_update_callback("transcribing", "AI Correcting...")
-                
-                corrected = self.ai_corrector.correct_text(
-                    text, 
-                    self.settings.get("gemini_api_key"), 
-                    self.settings.get("gemini_prompt"),
-                    self.settings.get("gemini_model", "gemini-2.5-flash-lite")
-                )
-                if corrected:
-                    text = corrected
-
-            self._handle_result(text)
-        finally:
-            if processing_path:
-                try:
-                    os.remove(processing_path)
-                    logging.info(f"Deleted temp file: {processing_path}")
-                except Exception as e:
-                    logging.error(f"Cleanup error: {e}")
-        
-        if self.state not in ["error", "shutdown"]:
-            self._reset_to_idle()
-
-    def _reset_to_idle(self):
-        if self.state == "shutdown": return
-        self.state = "idle"
-        if self.ui_update_callback:
-            mode = "GPU" if self.device_used == "cuda" else "CPU"
-            self.ui_update_callback("idle", f"Ready ({mode}).")
-
-    def _run_transcription(self, audio_source) -> str:
-        if not self.model: return ""
-        try:
-            segments, _ = self.model.transcribe(
-                audio_source, beam_size=5, vad_filter=True
-            )
-            result = " ".join([s.text.strip() for s in segments])
-            logging.info(f"Result: {result}")
-            return result.strip()
+            file_path, ram_data = self.audio_engine.stop_capture()
         except Exception as e:
-            logging.error(f"Transcription failed: {e}")
-            self.state = "error"
-            if self.ui_update_callback:
-                self.ui_update_callback("error", "Engine Error")
-            return ""
-
-    def _handle_result(self, text: str):
-        if not text: return
-
-        try:
-            pyperclip.copy(text)
-        except Exception as e:
-            logging.error(f"Copy failed: {e}")
+            logging.error(f"Stop capture error: {e}")
+            self._set_state(AppState.ERROR, "Capture Error")
+            self._reset_to_idle_delayed()
             return
 
-        if self.settings.get("auto_paste", True):
-            logging.info("Auto-pasting...")
-            time.sleep(0.4) 
-            try:
-                # Safe Lazy Init
-                if self.keyboard is None:
-                    self.keyboard = Controller()
+        self.sound_service.play_tone(
+            self.settings.sound_freq_stop, 
+            volume=self.settings.sound_volume, 
+            enabled=self.settings.sound_enabled
+        )
 
-                self.keyboard.release(Key.alt)
-                self.keyboard.release(Key.ctrl)
-                
-                with self.keyboard.pressed(Key.ctrl):
-                    self.keyboard.press("v")
-                    self.keyboard.release("v")
-            except Exception as e:
-                logging.error(f"Paste failed: {e}")
+        # Process in thread
+        threading.Thread(
+            target=self._process_pipeline, 
+            args=(ram_data, file_path), 
+            daemon=True
+        ).start()
 
-    def save_settings(self, settings: dict = None):
-        logging.info("Saving settings...")
-        if settings is None:
-            settings = self.settings
-
-        if hasattr(self, 'settings') and self.settings:
-            old_hotkey = self.settings.get("hotkey")
-        else:
-            old_hotkey = None
-
-        new_hotkey = settings.get("hotkey")
-        
-        self.settings = settings
-        
-        # Separate secrets
-        secrets = {"gemini_api_key": settings.get("gemini_api_key", "")}
-        
-        # Create public config copy without secrets
-        public_config = settings.copy()
-        if "gemini_api_key" in public_config:
-            del public_config["gemini_api_key"]
-            
-        with open(self.config_path, "w") as f:
-            json.dump(public_config, f, indent=2)
-            
-        # Save secrets securely
-        with open(self.secrets_path, "w") as f:
-            json.dump(secrets, f, indent=2)
-
-        # Restart hotkey in background to avoid UI freeze
-        if old_hotkey != new_hotkey and hasattr(self, 'hotkey_manager') and self.hotkey_manager:
-            threading.Thread(target=self.hotkey_manager.restart_listening, daemon=True).start()
-
-        # Update Mouse Hook
-        if hasattr(self, 'mouse_hook') and self.mouse_hook:
-            if settings.get("mouse_hotkey", False):
-                self.mouse_hook.start()
-            else:
-                self.mouse_hook.stop()
-
-    def _generate_tone(self, frequency, duration_ms, volume):
-        """Generates a WAV byte string for a sine wave."""
-        # Audio parameters
-        sample_rate = 44100
-        num_samples = int(sample_rate * (duration_ms / 1000.0))
-        amplitude = int(32767 * (volume / 100.0))
-        
-        # Header generation (WAVE format)
-        data_size = num_samples * 2
-        
-        header = b'RIFF' + struct.pack('<I', 36 + data_size) + b'WAVE'
-        header += b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, sample_rate, sample_rate * 2, 2, 16)
-        header += b'data' + struct.pack('<I', data_size)
-        
-        data = bytearray(header)
-        
-        # Sample generation
-        for i in range(num_samples):
-            t = float(i) / sample_rate
-            sample = int(amplitude * math.sin(2 * math.pi * frequency * t))
-            data.extend(struct.pack('<h', sample))
-            
-        return bytes(data)
-
-    def _play_sound_worker(self, wav_data):
-        """Worker method to play sound in a separate thread."""
+    def _process_pipeline(self, ram_data, file_path):
         try:
-            winsound.PlaySound(wav_data, winsound.SND_MEMORY)
-        except Exception as err:
-            logging.error(f"PlaySound error: {err}")
+            if self.state == AppState.SHUTDOWN: return
 
-    def play_sound(self, frequency):
-        """Plays a tone with volume control."""
-        if self.settings.get("sound_enabled", True):
-            try:
-                volume = self.settings.get("sound_volume", 50)
-                wav_data = self._generate_tone(frequency, 150, volume)
+            # 1. Transcribe
+            raw_text = self.transcription_service.transcribe(ram_data if ram_data is not None else file_path)
+            
+            # 2. AI Correction (Optional)
+            final_text = raw_text
+            if final_text and self.settings.gemini_enabled and self.settings.gemini_api_key:
+                if self.ui_update_callback:
+                    self.ui_update_callback(AppState.TRANSCRIBING.value, "AI Correcting...")
                 
-                # Use a thread to play synchronously (SND_MEMORY) without blocking the main thread.
-                threading.Thread(target=self._play_sound_worker, args=(wav_data,), daemon=True).start()
+                corrected = self.ai_corrector.correct_text(
+                    final_text,
+                    self.settings.gemini_api_key,
+                    self.settings.gemini_prompt,
+                    self.settings.gemini_model
+                )
+                if corrected:
+                    final_text = corrected
+
+            # 3. Post-Process & Output
+            if final_text:
+                if self.settings.append_space:
+                    final_text += " "
                 
-            except Exception as e:
-                logging.error(f"Sound setup error: {e}")
+                self._handle_output(final_text)
+
+        except Exception as e:
+            logging.error(f"Pipeline error: {e}")
+            self._set_state(AppState.ERROR, "Error")
+        finally:
+            # Cleanup temp file if exists
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception: pass
+            
+            self._reset_to_idle()
+
+    def _handle_output(self, text: str):
+        try:
+            pyperclip.copy(text)
+            if self.settings.auto_paste:
+                self._perform_paste()
+        except Exception as e:
+            logging.error(f"Output error: {e}")
+
+    def _perform_paste(self):
+        logging.info("Auto-pasting...")
+        time.sleep(0.3)
+        try:
+            if not self.keyboard: self.keyboard = Controller()
+            with self.keyboard.pressed(Key.ctrl):
+                self.keyboard.press('v')
+                self.keyboard.release('v')
+        except Exception as e:
+            logging.error(f"Paste error: {e}")
+
+    def _reset_to_idle(self):
+        if self.state == AppState.SHUTDOWN: return
+        self._set_state(AppState.IDLE, "Ready")
+
+    def _reset_to_idle_delayed(self):
+        threading.Timer(2.0, self._reset_to_idle).start()
+
+    # --- External Control ---
+    def set_ui_update_callback(self, cb): self.ui_update_callback = cb
+    def set_error_popup_callback(self, cb): self.error_popup_callback = cb
+    def set_hotkey_manager(self, mgr): self.hotkey_manager = mgr
+
+    def get_audio_devices(self):
+        # Pass-through or move logic here later if needed. 
+        # Keeping minimal logic inside core directly for now or use sounddevice
+        import sounddevice as sd
+        devices = []
+        try:
+            for i, dev in enumerate(sd.query_devices()):
+                if dev['max_input_channels'] > 0:
+                    devices.append({"id": i, "name": f"{dev['name']} ({dev['hostapi']})"})
+        except Exception: pass
+        return devices
+
+    def save_settings(self, updates: dict):
+        """Update settings and trigger side effects."""
+        old_hotkey = self.settings.hotkey
+        
+        # Commit to manager
+        self.settings_manager.update(**updates)
+        
+        # Side Effects
+        if "hotkey" in updates and updates["hotkey"] != old_hotkey:
+            if self.hotkey_manager:
+                threading.Thread(target=self.hotkey_manager.restart_listening, daemon=True).start()
+
+        if "mouse_hotkey" in updates:
+            if updates["mouse_hotkey"]: self.mouse_hook.start()
+            else: self.mouse_hook.stop()
+
+    def shutdown(self):
+        self.state = AppState.SHUTDOWN
+        if self.audio_engine: self.audio_engine.stop_capture()
+        if self.mouse_hook: self.mouse_hook.stop()
+        if self.hotkey_manager: self.hotkey_manager.stop_listening()
+        self.transcription_service.unload()

@@ -26,7 +26,9 @@ class SystemTray:
 
     def _create_default_menu(self):
         # Determine label based on core state
-        is_recording = self.core.state == "recording"
+        # core.state is Enum, so checking .value is safer if type is not guaranteed
+        current_val = self.core.state.value if hasattr(self.core.state, 'value') else str(self.core.state)
+        is_recording = current_val == "recording"
         toggle_label = "Stop & Transcribe" if is_recording else "Start Recording"
         
         return Menu(
@@ -55,8 +57,6 @@ class SystemTray:
                 self.icon.menu = self.menu_factory()
         except Exception as e:
             logging.error(f"Menu update failed: {e}")
-        except Exception as e:
-            logging.error(f"Tray update failed: {e}")
 
     def stop(self):
         if self.icon:

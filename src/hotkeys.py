@@ -17,9 +17,12 @@ class HotkeyManager:
             logging.error(f"Hotkey action failed: {e}")
 
     def start_listening(self):
-        # Get hotkey from settings
-        hk_str = self.core.settings.get('hotkey', 'f3')
-        if not hk_str: return
+        # Get hotkey from settings object
+        hk_str = self.core.settings.hotkey
+        
+        # Validation
+        if not hk_str or hk_str.lower() == "none":
+            return
 
         # Avoid re-binding if same
         if self.current_hotkey == hk_str:

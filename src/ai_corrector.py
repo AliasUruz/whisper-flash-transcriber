@@ -1,62 +1,43 @@
 import google.generativeai as genai
 import logging
-import time
-import threading
+from typing import Optional
 
 class AICorrector:
+    """Text correction service using the Google Gemini API."""
+    
     def __init__(self):
-        self.model = None
-        self.current_api_key = None
-        self.model_name = None
+        self.model: Optional[genai.GenerativeModel] = None
+        self.current_api_key: Optional[str] = None
+        self.model_name: Optional[str] = None
 
-    def _configure(self, api_key: str, model_name: str):
-        if api_key != self.current_api_key or self.model_name != model_name:
-            genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel(model_name)
-            self.current_api_key = api_key
-            self.model_name = model_name
-
-    def correct_text(self, text: str, api_key: str, prompt: str, model_name: str = "gemini-2.5-flash-lite", timeout: float = 7.0) -> str:
-        if not text or not text.strip():
-            return text
-
-        if not api_key:
-            logging.warning("AI Correction skipped: No API Key provided.")
+    def correct_text(self, text: str, api_key: str, prompt: str, model_name: str, timeout: float = 30.0) -> str:
+        if not text or not text.strip() or not api_key:
             return text
 
         try:
-            self._configure(api_key, model_name)
+            # Configure only if needed (Lazy + Cache)
+            if api_key != self.current_api_key or self.model_name != model_name:
+                genai.configure(api_key=api_key)
+                self.model = genai.GenerativeModel(model_name)
+                self.current_api_key = api_key
+                self.model_name = model_name
             
-            # System Instruction Injection for robustness
-            system_instruction = (
-                "You are a precise text correction engine. Your ONLY task is to correct grammar, spelling, "
-                "and punctuation of the user's text. Maintain the original language. "
-                "Do NOT add introductions, explanations, or markdown formatting. "
-                "Do NOT wrap the output in quotes. Return strictly the corrected text."
+            # Robust Prompt Construction
+            full_prompt = (
+                "You are a text correction engine. Return ONLY the corrected text.\n"
+                f"Instructions: {prompt}\n"
+                f"Input: {text}"
             )
-            
-            full_prompt = f"{system_instruction}\n\nUser Instructions: {prompt}\n\nText to correct:\n{text}"
-            
-            # Use native timeout if available, otherwise rely on library default
-            # Note: The python library might not expose a direct timeout param in generate_content easily 
-            # without request_options. Let's use the cleaner approach if possible, but for now, 
-            # to ensure 100% compatibility with the installed version, we'll stick to the thread 
-            # approach but make it cleaner, or use the request_options if we are sure.
-            # Let's assume standard usage.
             
             response = self.model.generate_content(
                 full_prompt, 
                 request_options={'timeout': timeout}
             )
             
-            corrected_text = response.text
-            if corrected_text:
-                return self._clean_output(corrected_text)
-            
-            return text
+            return self._clean_output(response.text)
 
         except Exception as e:
-            logging.error(f"AI Correction failed: {e}")
+            logging.error(f"AI Correction failed ({model_name}): {type(e).__name__}: {e}")
             return text
 
     def _clean_output(self, text: str) -> str:

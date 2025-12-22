@@ -2,7 +2,6 @@ import ctypes
 from ctypes import wintypes
 import threading
 import logging
-import time
 
 # --- Win32 Constants ---
 WH_MOUSE_LL = 14
@@ -93,15 +92,7 @@ class NativeMouseHook:
         # Store thread ID for PostThreadMessage
         self.thread_id = kernel32.GetCurrentThreadId()
         
-        # Install Hook
-        # For WH_MOUSE_LL, hMod is usually NULL if the hook proc is in the current process?
-        # Actually, for low-level hooks, hMod should be the handle to the module containing the hook proc.
-        # But in Python ctypes, passing None (NULL) often works or we need user32.
-        # Error 126 is ERROR_MOD_NOT_FOUND.
-        # Let's try passing GetModuleHandleW(None) which we are doing.
-        # Maybe we need to load user32 explicitly as the module?
-        
-        # Try 1: Pass None.
+        # Install Hook (hMod=None works for low-level hooks in Python)
         self.hook_id = SetWindowsHookEx(WH_MOUSE_LL, self.hook_proc, None, 0)
         
         if not self.hook_id:
