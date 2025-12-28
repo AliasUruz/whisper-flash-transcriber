@@ -30,12 +30,8 @@ def main(page: ft.Page):
     tray = None 
     core = CoreService()
     
-    # Check first run logic - Object Access
-    if not core.settings.first_run:
-        page.window_visible = False
-    else:
-        # If first run, update setting so next time it starts hidden
-        core.save_settings({"first_run": False})
+    # Window always starts hidden (tray-first approach)
+    page.window_visible = False
 
     ui = AppUI(page, core)
     hotkey_manager = HotkeyManager(core)
@@ -70,7 +66,11 @@ def main(page: ft.Page):
 
     # System Tray Integration
     def restore_window():
+        # Restore window to foreground (small centered window)
         page.window_visible = True
+        page.window_minimized = False
+        page.window_center()
+        page.window_to_front()
         page.update()
         ui.refresh_ui_from_settings()
 
@@ -170,10 +170,8 @@ def main(page: ft.Page):
     ui.set_exit_callback(cleanup_and_exit)
     page.add(ui.build_controls())
 
-    if ui.tray_supported:
-        page.window_visible = False
-    else:
-        page.window_center()
+    # Window always starts hidden (tray icon visible)
+    page.window_visible = False
 
     # Start Threads
     threading.Thread(target=core.load_model_async, daemon=True, name="Loader").start()
